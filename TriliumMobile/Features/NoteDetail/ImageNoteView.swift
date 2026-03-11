@@ -1,0 +1,60 @@
+import SwiftUI
+
+struct ImageNoteView: View {
+    let data: Data
+    let title: String
+
+    @State private var showShareSheet = false
+
+    var body: some View {
+        if let uiImage = UIImage(data: data) {
+            VStack(spacing: 12) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal)
+                    .accessibilityLabel("Image: \(title)")
+
+                HStack(spacing: 16) {
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button {
+                        UIPasteboard.general.image = uiImage
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            .padding(.vertical)
+            .sheet(isPresented: $showShareSheet) {
+                ShareSheet(items: [uiImage])
+            }
+        } else {
+            ContentUnavailableView {
+                Label("Cannot Display Image", systemImage: "photo.badge.exclamationmark")
+            } description: {
+                Text("The image format is not supported for preview.")
+            }
+        }
+    }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}

@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #1c1c1e;
+  --toolbar-bg: #f2f2f7;
+  --toolbar-border: #c6c6c8;
+  --btn-bg: transparent;
+  --btn-active: #007aff;
+  --btn-active-bg: rgba(0,122,255,0.12);
+  --editor-bg: #ffffff;
+  --border: #e5e5ea;
+  --placeholder: #8e8e93;
+  --popup-bg: #ffffff;
+  --popup-shadow: rgba(0,0,0,0.15);
+  --table-border: #d1d1d6;
+  --icon-filter: brightness(0);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e;
+    --fg: #aaaaaa;
+    --toolbar-bg: #2c2c2e;
+    --toolbar-border: #38383a;
+    --btn-active-bg: rgba(10,132,255,0.2);
+    --btn-active: #0a84ff;
+    --editor-bg: #1c1c1e;
+    --border: #38383a;
+    --placeholder: #636366;
+    --popup-bg: #2c2c2e;
+    --popup-shadow: rgba(0,0,0,0.4);
+    --table-border: #48484a;
+    --icon-filter: brightness(0) invert(0.67);
+  }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+body { display: flex; flex-direction: column; }
+
+/* Toolbar */
+.toolbar-wrap { flex-shrink: 0; border-bottom: 1px solid var(--toolbar-border); background: var(--toolbar-bg); }
+.toolbar {
+  display: flex; align-items: center; gap: 1px;
+  padding: 4px 6px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
+.toolbar::-webkit-scrollbar { display: none; }
+.toolbar button {
+  flex-shrink: 0; border: none; background: var(--btn-bg);
+  color: var(--fg); font-size: 15px; font-weight: 600;
+  width: 36px; height: 34px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.toolbar button:active { opacity: 0.6; }
+.toolbar button.active { color: var(--btn-active); background: var(--btn-active-bg); }
+.toolbar button svg { width: 18px; height: 18px; fill: currentColor; }
+.toolbar button img.icon { width: 18px; height: 18px; object-fit: contain; filter: var(--icon-filter); }
+.toolbar .sep { width: 1px; height: 22px; background: var(--toolbar-border); margin: 0 3px; flex-shrink: 0; }
+.toolbar select {
+  flex-shrink: 0; border: 1px solid var(--border); background: var(--toolbar-bg);
+  color: var(--fg); font-size: 13px; height: 34px; border-radius: 6px; padding: 0 6px;
+  -webkit-appearance: none; appearance: none; cursor: pointer;
+}
+
+/* Color popup */
+.color-popup {
+  display: none; position: absolute; top: 44px; left: 0; z-index: 100;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px; box-shadow: 0 4px 20px var(--popup-shadow);
+}
+.color-popup.visible { display: block; }
+.color-grid { display: grid; grid-template-columns: repeat(7, 30px); gap: 4px; }
+.color-swatch {
+  width: 30px; height: 30px; border-radius: 6px; border: 2px solid transparent;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.color-swatch:active { opacity: 0.7; }
+.color-swatch.clear-color { border: 2px solid var(--border); position: relative; }
+.color-swatch.clear-color::after {
+  content: ''; position: absolute; top: 50%; left: 0; width: 100%; height: 2px;
+  background: red; transform: rotate(-45deg);
+}
+
+/* Editor area */
+#editor-container { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.tiptap {
+  padding: 16px; outline: none; min-height: 100%; font-size: 16px; line-height: 1.6; color: var(--fg);
+}
+.tiptap p { margin: 0.4em 0; }
+.tiptap h1 { font-size: 1.8em; margin: 0.6em 0 0.3em; }
+.tiptap h2 { font-size: 1.5em; margin: 0.5em 0 0.3em; }
+.tiptap h3 { font-size: 1.3em; margin: 0.5em 0 0.3em; }
+.tiptap h4 { font-size: 1.15em; margin: 0.4em 0 0.2em; }
+.tiptap h5 { font-size: 1.05em; margin: 0.4em 0 0.2em; }
+.tiptap h6 { font-size: 1em; margin: 0.4em 0 0.2em; }
+.tiptap ul, .tiptap ol { padding-left: 24px; }
+.tiptap ul[data-type="taskList"] { list-style: none; padding-left: 4px; }
+.tiptap ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 8px; }
+.tiptap ul[data-type="taskList"] li label { flex-shrink: 0; margin-top: 3px; }
+.tiptap blockquote { border-left: 4px solid var(--border); margin: 0.5em 0; padding: 4px 16px; opacity: 0.85; }
+.tiptap pre { background: rgba(128,128,128,0.1); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }
+.tiptap code { background: rgba(128,128,128,0.1); padding: 2px 6px; border-radius: 4px; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }
+.tiptap pre code { background: none; padding: 0; }
+.tiptap img { max-width: 100%; height: auto; border-radius: 6px; }
+.tiptap hr { border: none; border-top: 2px solid var(--border); margin: 1em 0; }
+.tiptap a { color: var(--btn-active); text-decoration: underline; }
+.tiptap table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
+.tiptap th, .tiptap td { border: 1px solid var(--table-border); padding: 6px 10px; min-width: 60px; vertical-align: top; }
+.tiptap th { background: rgba(128,128,128,0.08); font-weight: 600; }
+.tiptap .selectedCell { background: var(--btn-active-bg); }
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder); color: var(--placeholder); float: left; height: 0; pointer-events: none;
+}
+
+/* Loading state */
+#loading { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--placeholder); font-size: 15px; }
+</style>
+</head>
+<body>
+
+<div class="toolbar-wrap" id="toolbar-wrap" style="display:none">
+<div class="toolbar" id="toolbar"></div>
+</div>
+<div id="editor-container">
+  <div id="loading">Loading editor…</div>
+  <div id="editor" style="display:none"></div>
+</div>
+
+<script type="module">
+import { Editor } from 'https://esm.sh/@tiptap/core@2'
+import StarterKit from 'https://esm.sh/@tiptap/starter-kit@2'
+import Underline from 'https://esm.sh/@tiptap/extension-underline@2'
+import TextAlign from 'https://esm.sh/@tiptap/extension-text-align@2'
+import { Color } from 'https://esm.sh/@tiptap/extension-color@2'
+import TextStyle from 'https://esm.sh/@tiptap/extension-text-style@2'
+import Highlight from 'https://esm.sh/@tiptap/extension-highlight@2'
+import Table from 'https://esm.sh/@tiptap/extension-table@2'
+import TableRow from 'https://esm.sh/@tiptap/extension-table-row@2'
+import TableCell from 'https://esm.sh/@tiptap/extension-table-cell@2'
+import TableHeader from 'https://esm.sh/@tiptap/extension-table-header@2'
+import Link from 'https://esm.sh/@tiptap/extension-link@2'
+import TaskList from 'https://esm.sh/@tiptap/extension-task-list@2'
+import TaskItem from 'https://esm.sh/@tiptap/extension-task-item@2'
+import Placeholder from 'https://esm.sh/@tiptap/extension-placeholder@2'
+import Subscript from 'https://esm.sh/@tiptap/extension-subscript@2'
+import Superscript from 'https://esm.sh/@tiptap/extension-superscript@2'
+import Image from 'https://esm.sh/@tiptap/extension-image@2'
+
+const COLORS = [
+  '#000000','#434343','#666666','#999999','#b7b7b7','#cccccc','#ffffff',
+  '#980000','#ff0000','#ff9900','#ffff00','#00ff00','#00ffff','#0000ff',
+  '#9900ff','#ff00ff','#e6b8af','#f4cccc','#fce5cd','#fff2cc','#d9ead3',
+  '#d0e0e3','#cfe2f3','#d9d2e9','#ead1dc',
+];
+
+const editor = new Editor({
+  element: document.getElementById('editor'),
+  extensions: [
+    StarterKit.configure({ heading: { levels: [1,2,3,4,5,6] } }),
+    Underline,
+    TextStyle,
+    Color,
+    Highlight.configure({ multicolor: true }),
+    TextAlign.configure({ types: ['heading','paragraph'] }),
+    Table.configure({ resizable: false }),
+    TableRow,
+    TableCell,
+    TableHeader,
+    Link.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
+    TaskList,
+    TaskItem.configure({ nested: true }),
+    Placeholder.configure({ placeholder: 'Start writing…' }),
+    Subscript,
+    Superscript,
+    Image.configure({ inline: true, allowBase64: true, HTMLAttributes: { class: '' } }),
+  ],
+  content: '',
+  onUpdate({ editor }) {
+    try { window.webkit.messageHandlers.contentChanged.postMessage(editor.getHTML()); } catch(e) {}
+  },
+  onSelectionUpdate() { updateToolbarState(); },
+  onTransaction() { updateToolbarState(); },
+});
+
+// --- Toolbar Setup ---
+const toolbar = document.getElementById('toolbar');
+function ic(name) { return '<img class="icon" src="' + name + '" width="18" height="18" alt="" />'; }
+function btn(title, icon, action, isActive) {
+  const b = document.createElement('button');
+  b.title = title; b.innerHTML = icon;
+  b.addEventListener('click', (e) => { e.preventDefault(); action(); });
+  b._isActive = isActive || (() => false);
+  toolbar.appendChild(b);
+  return b;
+}
+function sep() { const s = document.createElement('div'); s.className='sep'; toolbar.appendChild(s); }
+function heading() {
+  const sel = document.createElement('select');
+  sel.title = 'Block type';
+  ['Paragraph','H1','H2','H3','H4','H5','H6'].forEach((label, i) => {
+    const o = document.createElement('option'); o.value = i; o.textContent = label; sel.appendChild(o);
+  });
+  sel.addEventListener('change', () => {
+    const v = parseInt(sel.value);
+    if (v === 0) editor.chain().focus().setParagraph().run();
+    else editor.chain().focus().toggleHeading({ level: v }).run();
+  });
+  sel._updateState = () => {
+    for (let l = 1; l <= 6; l++) { if (editor.isActive('heading', { level: l })) { sel.value = l; return; } }
+    sel.value = 0;
+  };
+  toolbar.appendChild(sel);
+  return sel;
+}
+
+// Text formatting
+btn('Bold', ic('foundation--bold.svg'), () => editor.chain().focus().toggleBold().run(), () => editor.isActive('bold'));
+btn('Italic', ic('foundation--italic.svg'), () => editor.chain().focus().toggleItalic().run(), () => editor.isActive('italic'));
+btn('Underline', ic('foundation--underline.svg'), () => editor.chain().focus().toggleUnderline().run(), () => editor.isActive('underline'));
+btn('Strike', ic('foundation--strikethrough.svg'), () => editor.chain().focus().toggleStrike().run(), () => editor.isActive('strike'));
+btn('Code', ic('brackets-curly-fill-svgrepo-com.svg'), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
+btn('Superscript', ic('foundation--superscript.svg'), () => editor.chain().focus().toggleSuperscript().run(), () => editor.isActive('superscript'));
+btn('Subscript', ic('foundation--subscript.svg'), () => editor.chain().focus().toggleSubscript().run(), () => editor.isActive('subscript'));
+sep();
+
+// Headings
+const headingSel = heading();
+sep();
+
+// Lists
+btn('Bullet list', ic('foundation--list-bullet.svg'), () => editor.chain().focus().toggleBulletList().run(), () => editor.isActive('bulletList'));
+btn('Ordered list', ic('foundation--list-number.svg'), () => editor.chain().focus().toggleOrderedList().run(), () => editor.isActive('orderedList'));
+btn('Task list', ic('foundation--list-thumbnails.svg'), () => editor.chain().focus().toggleTaskList().run(), () => editor.isActive('taskList'));
+sep();
+
+// Alignment
+btn('Left', ic('foundation--align-left.svg'), () => editor.chain().focus().setTextAlign('left').run(), () => editor.isActive({ textAlign:'left' }));
+btn('Center', ic('foundation--align-center.svg'), () => editor.chain().focus().setTextAlign('center').run(), () => editor.isActive({ textAlign:'center' }));
+btn('Right', ic('foundation--align-right.svg'), () => editor.chain().focus().setTextAlign('right').run(), () => editor.isActive({ textAlign:'right' }));
+btn('Justify', ic('foundation--align-justify.svg'), () => editor.chain().focus().setTextAlign('justify').run(), () => editor.isActive({ textAlign:'justify' }));
+sep();
+
+// Indent
+btn('Outdent', ic('foundation--indent-less.svg'), () => { if(editor.isActive('bulletList')||editor.isActive('orderedList')||editor.isActive('taskList')) editor.chain().focus().liftListItem('listItem').run(); }, () => false);
+btn('Indent', ic('foundation--indent-more.svg'), () => { if(editor.isActive('bulletList')||editor.isActive('orderedList')||editor.isActive('taskList')) editor.chain().focus().sinkListItem('listItem').run(); }, () => false);
+sep();
+
+// Color pickers
+function makeColorPicker(title, icon, applyFn, clearFn) {
+  const wrapper = document.createElement('div');
+  wrapper.style.position = 'relative'; wrapper.style.display = 'inline-flex';
+  const b = document.createElement('button');
+  b.title = title; b.innerHTML = icon;
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;width:36px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;';
+  const popup = document.createElement('div');
+  popup.className = 'color-popup';
+  const grid = document.createElement('div');
+  grid.className = 'color-grid';
+  const clearBtn = document.createElement('div');
+  clearBtn.className = 'color-swatch clear-color';
+  clearBtn.title = 'Remove color';
+  clearBtn.addEventListener('click', () => { clearFn(); popup.classList.remove('visible'); });
+  grid.appendChild(clearBtn);
+  COLORS.forEach(c => {
+    const sw = document.createElement('div');
+    sw.className = 'color-swatch'; sw.style.background = c;
+    sw.addEventListener('click', () => { applyFn(c); popup.classList.remove('visible'); });
+    grid.appendChild(sw);
+  });
+  popup.appendChild(grid);
+  b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); popup.classList.toggle('visible'); });
+  wrapper.appendChild(b); wrapper.appendChild(popup);
+  toolbar.appendChild(wrapper);
+  document.addEventListener('click', (e) => { if (!wrapper.contains(e.target)) popup.classList.remove('visible'); });
+}
+
+makeColorPicker('Text color', ic('foundation--text-color.svg'),
+  (c) => editor.chain().focus().setColor(c).run(),
+  () => editor.chain().focus().unsetColor().run());
+makeColorPicker('Background', ic('foundation--background-color.svg'),
+  (c) => editor.chain().focus().toggleHighlight({ color: c }).run(),
+  () => editor.chain().focus().unsetHighlight().run());
+sep();
+
+// Insert
+btn('Link', ic('foundation--link.svg'), () => {
+  if (editor.isActive('link')) { editor.chain().focus().unsetLink().run(); return; }
+  const url = prompt('Enter URL:');
+  if (url) editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+}, () => editor.isActive('link'));
+btn('Table', ic('grid-1524-svgrepo-com.svg'), () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(), () => false);
+btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () => false);
+btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
+btn('Code block', ic('brackets-curly-fill-svgrepo-com.svg'), () => editor.chain().focus().toggleCodeBlock().run(), () => editor.isActive('codeBlock'));
+btn('Image', ic('foundation--photo.svg'), () => {
+  try { window.webkit.messageHandlers.pickImage.postMessage('pick'); } catch(e) {}
+}, () => false);
+sep();
+
+// Undo/Redo
+btn('Undo', ic('undo-left-svgrepo-com.svg'), () => editor.chain().focus().undo().run(), () => false);
+btn('Redo', ic('redo-svgrepo-com.svg'), () => editor.chain().focus().redo().run(), () => false);
+sep();
+
+// Clear formatting
+btn('Clear', ic('remove-format-svgrepo-com.svg'), () => editor.chain().focus().unsetAllMarks().clearNodes().run(), () => false);
+
+function updateToolbarState() {
+  toolbar.querySelectorAll('button').forEach(b => {
+    if (b._isActive) b.classList.toggle('active', b._isActive());
+  });
+  toolbar.querySelectorAll('select').forEach(s => { if (s._updateState) s._updateState(); });
+}
+
+// --- Bridge ---
+window.editorBridge = {
+  setContent(html) { editor.commands.setContent(html || '', false); },
+  getContent() { return editor.getHTML(); },
+  focus() { editor.commands.focus('end'); },
+  insertHTML(html) { editor.commands.insertContent(html); },
+  insertImage(src) { editor.chain().focus().setImage({ src }).run(); },
+};
+
+// Show editor, hide loading
+document.getElementById('loading').style.display = 'none';
+document.getElementById('editor').style.display = 'block';
+document.getElementById('toolbar-wrap').style.display = 'block';
+updateToolbarState();
+
+try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch(e) {}
+</script>
+</body>
+</html>
