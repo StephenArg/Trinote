@@ -4,6 +4,7 @@ import Foundation
 actor MockTriliumClient: TriliumClientProtocol {
     let baseURL: URL
     private var token: String?
+    var currentToken: String? { token }
 
     // Stubs
     var appInfoResult: Result<AppInfoResponse, Error> = .success(AppInfoResponse(appVersion: "0.63.7", dbVersion: 227, syncVersion: 32, buildDate: "2024-01-15", buildRevision: "abc", dataDirectory: nil, clipperProtocolVersion: nil, utcDateTime: nil))

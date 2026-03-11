@@ -5,6 +5,7 @@ import UIKit
 
 protocol TriliumClientProtocol: Actor, Sendable {
     var baseURL: URL { get }
+    var currentToken: String? { get }
     func setToken(_ token: String?)
     func login(password: String, tokenName: String?) async throws -> String
     func logout() async throws
@@ -36,6 +37,7 @@ protocol TriliumClientProtocol: Actor, Sendable {
 actor TriliumClient: TriliumClientProtocol {
     let baseURL: URL
     private var token: String?
+    var currentToken: String? { token }
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder

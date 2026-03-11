@@ -35,6 +35,9 @@ final class NoteDetailViewModel {
     // Delete
     var showDeleteConfirm = false
 
+    // Details panel
+    var showDetails = false
+
     // Draft discard
     var showDiscardDraft = false
 
@@ -52,6 +55,7 @@ final class NoteDetailViewModel {
     var client: (any TriliumClientProtocol)? { appState.client }
     var serverProfileId: String? { appState.activeProfile?.id }
     var isOnline: Bool { appState.isOnline }
+    var serverBaseURL: URL? { (appState.client as? TriliumClient)?.baseURL }
 
     // MARK: - Loading
 
@@ -105,8 +109,13 @@ final class NoteDetailViewModel {
         do {
             let data = try await client.getNoteContent(nid)
             self.content = data
-            self.contentString = String(data: data, encoding: .utf8)
-            self.serverContentHash = self.contentString?.hashValue
+            var htmlString = String(data: data, encoding: .utf8)
+            self.serverContentHash = htmlString?.hashValue
+
+            if let html = htmlString {
+                htmlString = await self.inlineAttachmentImages(in: html, client: client)
+            }
+            self.contentString = htmlString
 
             if let profileId = self.serverProfileId {
                 try? self.persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId)
@@ -120,6 +129,41 @@ final class NoteDetailViewModel {
             Log.api.error("Failed to load note content")
             self.loadContentFromCache()
         }
+    }
+
+    /// Finds attachment image `src` URLs in HTML and replaces them with
+    /// base64 data URIs downloaded via the authenticated API client.
+    private func inlineAttachmentImages(in html: String, client: any TriliumClientProtocol) async -> String {
+        var result = html
+
+        let pattern = try! NSRegularExpression(
+            pattern: #"src=["'](?:/?api/attachments/([a-zA-Z0-9_]+)/image/[^"']*)["']"#,
+            options: []
+        )
+        let nsHTML = html as NSString
+        let matches = pattern.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
+
+        for match in matches.reversed() {
+            guard match.numberOfRanges >= 2 else { continue }
+            let attachmentId = nsHTML.substring(with: match.range(at: 1))
+            let fullMatch = nsHTML.substring(with: match.range)
+
+            do {
+                let imageData = try await client.getAttachmentContent(attachmentId)
+                let mime = imageData.detectImageMIME()
+                let b64 = imageData.base64EncodedString()
+                let dataURI = "data:\(mime);base64,\(b64)"
+                let replacement = "src=\"\(dataURI)\""
+                result = (result as NSString).replacingCharacters(
+                    in: (result as NSString).range(of: fullMatch),
+                    with: replacement
+                )
+            } catch {
+                Log.api.error("Failed to download attachment image \(attachmentId)")
+            }
+        }
+
+        return result
     }
 
     func loadAttachments() async {

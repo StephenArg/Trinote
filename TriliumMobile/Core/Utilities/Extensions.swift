@@ -86,6 +86,24 @@ extension View {
     }
 }
 
+// MARK: - Data
+
+extension Data {
+    /// Sniff the image MIME type from the first few bytes; falls back to `image/png`.
+    func detectImageMIME() -> String {
+        guard count >= 2 else { return "image/png" }
+        var header = [UInt8](repeating: 0, count: Swift.min(12, count))
+        copyBytes(to: &header, count: header.count)
+
+        if header[0] == 0xFF && header[1] == 0xD8 { return "image/jpeg" }
+        if header.count >= 8 && header[0...3] == [0x89, 0x50, 0x4E, 0x47] { return "image/png" }
+        if header.count >= 4 && header[0...3] == [0x47, 0x49, 0x46, 0x38] { return "image/gif" }
+        if header.count >= 12 && header[0...3] == [0x52, 0x49, 0x46, 0x46] && header[8...11] == [0x57, 0x45, 0x42, 0x50] { return "image/webp" }
+
+        return "image/png"
+    }
+}
+
 // MARK: - Task Debounce
 
 extension Task where Success == Never, Failure == Never {

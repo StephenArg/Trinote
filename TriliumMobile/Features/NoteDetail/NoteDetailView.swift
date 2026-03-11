@@ -71,8 +71,11 @@ struct NoteDetailView: View {
                             titleSection(vm, note: note)
                             Divider()
                             noteBody(vm, note: note)
-                            attachmentsSection(vm)
-                            metadataSection(note)
+
+                            if vm.showDetails {
+                                attachmentsSection(vm)
+                                metadataSection(note)
+                            }
                         }
                     }
                 }
@@ -248,10 +251,12 @@ struct NoteDetailView: View {
         switch note.type {
         case .text:
             if let html = vm.contentString {
-                HTMLNoteView(html: html, baseURL: (appState.client as? TriliumClient)?.baseURL) { linkedNoteId in
+                HTMLNoteView(
+                    html: html,
+                    baseURL: vm.serverBaseURL
+                ) { linkedNoteId in
                     navigateToNoteId = linkedNoteId
                 }
-                .frame(minHeight: 200)
             }
         case .code, .mermaid:
             if let code = vm.contentString {
@@ -461,6 +466,12 @@ struct NoteDetailView: View {
                     vm.editingTitle = true
                 } label: {
                     Label("Rename", systemImage: "pencil")
+                }
+
+                Button {
+                    withAnimation { vm.showDetails.toggle() }
+                } label: {
+                    Label(vm.showDetails ? "Hide Details" : "Note Details", systemImage: vm.showDetails ? "info.circle.fill" : "info.circle")
                 }
 
                 Divider()

@@ -1,13 +1,32 @@
 import SwiftUI
 import WebKit
 
-struct HTMLNoteView: UIViewRepresentable {
+struct HTMLNoteView: View {
     let html: String
     let baseURL: URL?
     var onNoteLinkTapped: ((String) -> Void)?
 
+    @State private var contentHeight: CGFloat = 200
+
+    var body: some View {
+        HTMLNoteWebView(
+            html: html,
+            baseURL: baseURL,
+            onNoteLinkTapped: onNoteLinkTapped,
+            onHeightChanged: { contentHeight = $0 }
+        )
+        .frame(height: contentHeight)
+    }
+}
+
+private struct HTMLNoteWebView: UIViewRepresentable {
+    let html: String
+    let baseURL: URL?
+    var onNoteLinkTapped: ((String) -> Void)?
+    var onHeightChanged: ((CGFloat) -> Void)?
+
     func makeCoordinator() -> Coordinator {
-        Coordinator(onNoteLinkTapped: onNoteLinkTapped)
+        Coordinator(onNoteLinkTapped: onNoteLinkTapped, onHeightChanged: onHeightChanged)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -42,6 +61,7 @@ struct HTMLNoteView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onNoteLinkTapped = onNoteLinkTapped
+        coordinator.onHeightChanged = onHeightChanged
 
         guard html != coordinator.loadedHTML else { return }
         coordinator.loadedHTML = html
@@ -93,6 +113,11 @@ struct HTMLNoteView: UIViewRepresentable {
         blockquote { border-left: 4px solid var(--border); margin: 8px 0; padding: 4px 16px; opacity: 0.85; }
         h1, h2, h3, h4, h5, h6 { margin-top: 1em; margin-bottom: 0.5em; }
         ul, ol { padding-left: 24px; }
+        ul.todo-list { list-style: none; padding-left: 0; }
+        ul.todo-list li { margin: 4px 0; }
+        .todo-list__label { display: flex; align-items: flex-start; gap: 6px; cursor: default; }
+        .todo-list__label input[type="checkbox"] { margin-top: 4px; flex-shrink: 0; }
+        .todo-list__label__description { flex: 1; }
         hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
         .math-tex { overflow-x: auto; }
         </style>
@@ -127,23 +152,18 @@ struct HTMLNoteView: UIViewRepresentable {
         weak var webView: WKWebView?
         var loadedHTML: String?
         var onNoteLinkTapped: ((String) -> Void)?
-        var contentHeight: CGFloat = 0
+        var onHeightChanged: ((CGFloat) -> Void)?
 
-        init(onNoteLinkTapped: ((String) -> Void)?) {
+        init(onNoteLinkTapped: ((String) -> Void)?, onHeightChanged: ((CGFloat) -> Void)?) {
             self.onNoteLinkTapped = onNoteLinkTapped
+            self.onHeightChanged = onHeightChanged
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "heightUpdate":
                 if let height = message.body as? CGFloat, height > 0 {
-                    contentHeight = height
-                    webView?.invalidateIntrinsicContentSize()
-                    if let webView {
-                        var frame = webView.frame
-                        frame.size.height = height
-                        webView.frame = frame
-                    }
+                    onHeightChanged?(height)
                 }
             case "noteLink":
                 if let noteId = message.body as? String {
@@ -160,7 +180,6 @@ struct HTMLNoteView: UIViewRepresentable {
             if navigationAction.navigationType == .linkActivated {
                 let urlString = url.absoluteString
 
-                // Internal Trilium links
                 if urlString.contains("#/") {
                     let parts = urlString.components(separatedBy: "#/")
                     if let noteId = parts.last?.components(separatedBy: "/").first, !noteId.isEmpty {
@@ -169,7 +188,6 @@ struct HTMLNoteView: UIViewRepresentable {
                     }
                 }
 
-                // External links → Safari
                 await UIApplication.shared.open(url)
                 return .cancel
             }

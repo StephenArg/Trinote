@@ -180,7 +180,7 @@ const editor = new Editor({
   ],
   content: '',
   onUpdate({ editor }) {
-    try { window.webkit.messageHandlers.contentChanged.postMessage(editor.getHTML()); } catch(e) {}
+    try { window.webkit.messageHandlers.contentChanged.postMessage(tiptapToCk(editor.getHTML())); } catch(e) {}
   },
   onSelectionUpdate() { updateToolbarState(); },
   onTransaction() { updateToolbarState(); },
@@ -316,10 +316,104 @@ function updateToolbarState() {
   toolbar.querySelectorAll('select').forEach(s => { if (s._updateState) s._updateState(); });
 }
 
+// --- CKEditor ↔ TipTap HTML conversion ---
+//
+// CKEditor:  <ul class="todo-list"><li>
+//              <label class="todo-list__label">
+//                <input type="checkbox" disabled [checked]>
+//                <span class="todo-list__label__description">text</span>
+//              </label></li></ul>
+//
+// TipTap getHTML():  <ul data-type="taskList"><li data-type="taskItem" data-checked="false">
+//                      <label><input type="checkbox"><span></span></label>
+//                      <div><p>text</p></div></li></ul>
+//
+// TipTap setContent() expects:  <ul data-type="taskList">
+//                                 <li data-type="taskItem" data-checked="false">text</li></ul>
+
+function ckToTiptap(html) {
+  if (!html) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  doc.querySelectorAll('ul.todo-list').forEach(ul => {
+    ul.removeAttribute('class');
+    ul.setAttribute('data-type', 'taskList');
+
+    ul.querySelectorAll(':scope > li').forEach(li => {
+      const cb = li.querySelector('input[type="checkbox"]');
+      const checked = cb && cb.hasAttribute('checked') ? 'true' : 'false';
+      li.setAttribute('data-type', 'taskItem');
+      li.setAttribute('data-checked', checked);
+
+      const desc = li.querySelector('.todo-list__label__description');
+      const textHTML = desc ? desc.innerHTML : '';
+
+      // Strip the entire CKEditor label; leave only plain inline text for TipTap to parse
+      const label = li.querySelector('label.todo-list__label');
+      if (label) label.remove();
+      li.innerHTML = textHTML;
+    });
+  });
+
+  return doc.body.innerHTML;
+}
+
+function tiptapToCk(html) {
+  if (!html) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  doc.querySelectorAll('ul[data-type="taskList"]').forEach(ul => {
+    ul.removeAttribute('data-type');
+    ul.classList.add('todo-list');
+
+    ul.querySelectorAll(':scope > li[data-type="taskItem"]').forEach(li => {
+      const checked = li.getAttribute('data-checked') === 'true';
+      li.removeAttribute('data-type');
+      li.removeAttribute('data-checked');
+
+      // Extract only the real text, stripping TipTap's own <label> and <div><p> wrappers
+      const tiptapLabel = li.querySelector(':scope > label');
+      if (tiptapLabel) tiptapLabel.remove();
+
+      // Unwrap <div><p>text</p></div> → just "text"
+      let textHTML = '';
+      const contentDiv = li.querySelector(':scope > div');
+      if (contentDiv) {
+        const p = contentDiv.querySelector('p');
+        textHTML = p ? p.innerHTML : contentDiv.innerHTML;
+      } else {
+        // Fallback: strip any remaining <p> wrappers
+        const p = li.querySelector(':scope > p');
+        textHTML = p ? p.innerHTML : li.innerHTML;
+      }
+
+      // Rebuild in CKEditor format
+      const label = doc.createElement('label');
+      label.className = 'todo-list__label';
+
+      const cb = doc.createElement('input');
+      cb.type = 'checkbox';
+      cb.disabled = true;
+      if (checked) cb.setAttribute('checked', 'checked');
+
+      const span = doc.createElement('span');
+      span.className = 'todo-list__label__description';
+      span.innerHTML = textHTML;
+
+      label.appendChild(cb);
+      label.appendChild(span);
+      li.innerHTML = '';
+      li.appendChild(label);
+    });
+  });
+
+  return doc.body.innerHTML;
+}
+
 // --- Bridge ---
 window.editorBridge = {
-  setContent(html) { editor.commands.setContent(html || '', false); },
-  getContent() { return editor.getHTML(); },
+  setContent(html) { editor.commands.setContent(ckToTiptap(html) || '', false); },
+  getContent() { return tiptapToCk(editor.getHTML()); },
   focus() { editor.commands.focus('end'); },
   insertHTML(html) { editor.commands.insertContent(html); },
   insertImage(src) { editor.chain().focus().setImage({ src }).run(); },
