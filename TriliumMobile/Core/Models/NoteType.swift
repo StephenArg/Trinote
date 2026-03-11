@@ -45,7 +45,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
 
     var iconName: String {
         switch self {
-        case .text: return "doc.richtext"
+        case .text: return "note.text"
         case .code: return "chevron.left.forwardslash.chevron.right"
         case .file: return "doc"
         case .image: return "photo"

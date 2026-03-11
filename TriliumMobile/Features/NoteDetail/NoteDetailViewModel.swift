@@ -41,6 +41,9 @@ final class NoteDetailViewModel {
     // Draft discard
     var showDiscardDraft = false
 
+    // Protected notes
+    var needsProtectedSession = false
+
     let noteId: String
     private let appState: AppState
     private let persistence = PersistenceManager.shared
@@ -103,6 +106,12 @@ final class NoteDetailViewModel {
             loadContentFromCache()
             return
         }
+
+        if let note = self.note, note.isProtected {
+            self.needsProtectedSession = true
+            return
+        }
+
         isLoadingContent = true
         defer { isLoadingContent = false }
 
@@ -131,25 +140,36 @@ final class NoteDetailViewModel {
         }
     }
 
-    /// Finds attachment image `src` URLs in HTML and replaces them with
+    /// Finds Trilium image `src` URLs in HTML and replaces them with
     /// base64 data URIs downloaded via the authenticated API client.
+    ///
+    /// Handles two formats:
+    ///   - `api/attachments/{attachmentId}/image/{filename}` (attachment images)
+    ///   - `api/images/{noteId}/{filename}` (image notes)
     private func inlineAttachmentImages(in html: String, client: any TriliumClientProtocol) async -> String {
         var result = html
 
+        // Match both attachment images and note images
         let pattern = try! NSRegularExpression(
-            pattern: #"src=["'](?:/?api/attachments/([a-zA-Z0-9_]+)/image/[^"']*)["']"#,
+            pattern: #"src=["'](?:/?api/(attachments|images)/([a-zA-Z0-9_]+)/[^"']*)["']"#,
             options: []
         )
         let nsHTML = html as NSString
         let matches = pattern.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
 
         for match in matches.reversed() {
-            guard match.numberOfRanges >= 2 else { continue }
-            let attachmentId = nsHTML.substring(with: match.range(at: 1))
+            guard match.numberOfRanges >= 3 else { continue }
+            let routeType = nsHTML.substring(with: match.range(at: 1))
+            let entityId = nsHTML.substring(with: match.range(at: 2))
             let fullMatch = nsHTML.substring(with: match.range)
 
             do {
-                let imageData = try await client.getAttachmentContent(attachmentId)
+                let imageData: Data
+                if routeType == "attachments" {
+                    imageData = try await client.getAttachmentContent(entityId)
+                } else {
+                    imageData = try await client.getNoteContent(entityId)
+                }
                 let mime = imageData.detectImageMIME()
                 let b64 = imageData.base64EncodedString()
                 let dataURI = "data:\(mime);base64,\(b64)"
@@ -159,7 +179,7 @@ final class NoteDetailViewModel {
                     with: replacement
                 )
             } catch {
-                Log.api.error("Failed to download attachment image \(attachmentId)")
+                Log.api.error("Failed to download image \(routeType)/\(entityId)")
             }
         }
 

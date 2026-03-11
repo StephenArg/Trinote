@@ -10,6 +10,7 @@
 		007C4AA895BBE01AF5484E05 /* foundation--superscript.svg in Resources */ = {isa = PBXBuildFile; fileRef = 6ADB8DAE31087CC333837561 /* foundation--superscript.svg */; };
 		0EFA08D054931AF55FD0F8E2 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7D5454615A8E35D022D4BD7 /* AppState.swift */; };
 		11701E4391A0E77B9B967EA7 /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2059BA98942ABD1D27472D9C /* PersistenceManager.swift */; };
+		147471014F56ABCFA799F3D3 /* NoteIconMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A663A048E025ECCE9C78614C /* NoteIconMapper.swift */; };
 		1F148C1A978D79FE7C4D0FC9 /* foundation--align-right.svg in Resources */ = {isa = PBXBuildFile; fileRef = D63BD554835C83476696F59B /* foundation--align-right.svg */; };
 		2008F53F6385F3DD6BB8ED46 /* foundation--indent-more.svg in Resources */ = {isa = PBXBuildFile; fileRef = D483BB2FEA4B6ACC058CA9DD /* foundation--indent-more.svg */; };
 		21AB6A3E3BAD176604265326 /* TriliumClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 249E7C91F07B5FD3497BD03B /* TriliumClient.swift */; };
@@ -131,6 +132,7 @@
 		9E3AB2A20E06C69EFF2C5524 /* foundation--text-color.svg */ = {isa = PBXFileReference; path = "foundation--text-color.svg"; sourceTree = "<group>"; };
 		9F25E751790AEBB67409085F /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		A490F444F007B481DE77966E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A663A048E025ECCE9C78614C /* NoteIconMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIconMapper.swift; sourceTree = "<group>"; };
 		A98259A6DF368095134B61CA /* PersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTests.swift; sourceTree = "<group>"; };
 		AE7597C94909420E94C9077D /* FileNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileNoteView.swift; sourceTree = "<group>"; };
 		B393DECB1E6BF4DEC5571146 /* foundation--bold.svg */ = {isa = PBXFileReference; path = "foundation--bold.svg"; sourceTree = "<group>"; };
@@ -390,6 +392,7 @@
 				DC5A541DB5BB96A0C4140B84 /* Extensions.swift */,
 				5F8E5D882D6DDA31878895DD /* Logger.swift */,
 				3929428A84176EDED9880427 /* NetworkMonitor.swift */,
+				A663A048E025ECCE9C78614C /* NoteIconMapper.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -577,6 +580,7 @@
 				6C3A8B954D4BD234D17929C9 /* NetworkMonitor.swift in Sources */,
 				2508336DDF81992B24C7022B /* NoteDetailView.swift in Sources */,
 				F414518B2D2A1CAB40F8F409 /* NoteDetailViewModel.swift in Sources */,
+				147471014F56ABCFA799F3D3 /* NoteIconMapper.swift in Sources */,
 				9131135FA6420E0CC16654A9 /* NoteType.swift in Sources */,
 				11701E4391A0E77B9B967EA7 /* PersistenceManager.swift in Sources */,
 				3A8D0A8A9AA14A59D6E8759F /* RecentsView.swift in Sources */,

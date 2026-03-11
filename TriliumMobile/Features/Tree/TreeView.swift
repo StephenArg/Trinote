@@ -109,7 +109,7 @@ struct TreeView: View {
                 }
 
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(vm.visibleNodes) { flat in
                             TreeNodeRow(
                                 node: flat.node,
@@ -120,6 +120,7 @@ struct TreeView: View {
                                     drillDownTarget = SubTreeTarget(noteId: noteId, title: title)
                                 }
                             )
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 8)
                             .padding(.leading, CGFloat(flat.depth) * 20 + 16)
                             .padding(.trailing, 16)
@@ -199,28 +200,40 @@ struct TreeNodeRow: View {
         }
     }
 
+    private var displayTitle: String {
+        guard node.note.isProtected else { return node.title }
+        let t = node.title.trimmingCharacters(in: .whitespaces)
+        let hasNonASCII = t.unicodeScalars.contains { !$0.isASCII && !CharacterSet.whitespaces.contains($0) }
+        return (t.isEmpty || hasNonASCII) ? "Protected note" : t
+    }
+
     private var noteLabel: some View {
         Button {
             onSelect(node.note)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: node.note.type.iconName)
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
-                    .frame(width: 20)
-                    .accessibilityHidden(true)
+                ZStack(alignment: .bottomTrailing) {
+                    Image(systemName: node.note.resolvedIconName)
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                        .frame(width: 20)
+                        .accessibilityHidden(true)
+
+                    if node.note.isProtected {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.yellow)
+                            .offset(x: 4, y: 2)
+                    }
+                }
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(node.title)
+                    Text(displayTitle)
                         .font(.body)
                         .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                         .foregroundStyle(node.note.isProtected ? .secondary : .primary)
-
-                    if node.note.type != .text {
-                        Text(node.note.type.displayName)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
                 }
 
                 Spacer()
@@ -239,7 +252,7 @@ struct TreeNodeRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        .accessibilityLabel("\(node.title), \(node.note.type.displayName) note")
+        .accessibilityLabel("\(displayTitle), \(node.note.type.displayName) note")
     }
 }
 

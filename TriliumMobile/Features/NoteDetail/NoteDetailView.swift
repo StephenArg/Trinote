@@ -60,7 +60,9 @@ struct NoteDetailView: View {
             }
         } else if let note = vm.note {
             VStack(spacing: 0) {
-                if vm.isEditing && note.type == .text {
+                if vm.needsProtectedSession {
+                    protectedNoteOverlay(vm, note: note)
+                } else if vm.isEditing && note.type == .text {
                     richTextEditingView(vm)
                 } else {
                     ScrollView {
@@ -106,6 +108,35 @@ struct NoteDetailView: View {
                 Text("You have an unsaved draft for this note. Would you like to restore it?")
             }
         }
+    }
+
+    @ViewBuilder
+    private func protectedNoteOverlay(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        VStack(spacing: 20) {
+            Spacer()
+
+            Image(systemName: "lock.shield")
+                .font(.system(size: 56))
+                .foregroundStyle(.secondary)
+
+            Text("Protected Note")
+                .font(.title2.bold())
+
+            Text("This note is encrypted and cannot be viewed in the mobile app yet. Trilium's external API (ETAPI) does not currently support reading or writing protected notes.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            Text("You can view this note in the Trilium web interface or desktop app.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -198,7 +229,7 @@ struct NoteDetailView: View {
                 }
             } else {
                 HStack {
-                    Image(systemName: note.type.iconName)
+                    Image(systemName: note.resolvedIconName)
                         .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
                     Text(note.title)
@@ -213,9 +244,9 @@ struct NoteDetailView: View {
             }
 
             HStack(spacing: 12) {
-                Label(note.type.displayName, systemImage: note.type.iconName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // Label(note.type.displayName, systemImage: note.type.iconName)
+                //     .font(.caption)
+                //     .foregroundStyle(.secondary)
 
                 if note.parentNoteIds.count > 1 {
                     Label("Cloned (\(note.parentNoteIds.count) parents)", systemImage: "arrow.triangle.branch")

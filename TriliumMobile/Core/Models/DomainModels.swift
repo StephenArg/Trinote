@@ -21,8 +21,13 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     var hasChildren: Bool { !childNoteIds.isEmpty }
     var isRoot: Bool { noteId == "root" }
 
-    var iconLabel: String? {
+    var iconClass: String? {
         attributes.first { $0.type == .label && $0.name == "iconClass" }?.value
+    }
+
+    /// SF Symbol name: uses custom Trilium icon if set, otherwise falls back to note type default.
+    var resolvedIconName: String {
+        NoteIconMapper.sfSymbol(for: iconClass) ?? type.iconName
     }
 
     var sortableTitle: String { title.lowercased() }

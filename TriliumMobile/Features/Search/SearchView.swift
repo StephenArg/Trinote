@@ -176,7 +176,7 @@ struct SearchResultRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: note.type.iconName)
+            Image(systemName: note.resolvedIconName)
                 .foregroundStyle(.secondary)
                 .frame(width: 24)
                 .accessibilityHidden(true)

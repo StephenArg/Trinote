@@ -18,6 +18,9 @@ final class TreeViewModel {
     var error: String?
     var isFromCache = false
 
+    /// Trilium system notes that should not appear in the tree.
+    private static let hiddenNoteIds: Set<String> = ["_hidden", "_share", "_lbRoot", "_lbAvailableLaunchers", "_lbVisibleLaunchers"]
+
     private var noteCache: [String: NoteItem] = [:]
     private var branchCache: [String: BranchItem] = [:]
     private var expandedBranches: Set<String> = []
@@ -225,6 +228,8 @@ final class TreeViewModel {
             guard let branch = branchCache[branchId],
                   let childNote = noteCache[branch.noteId] else { continue }
 
+            if Self.hiddenNoteIds.contains(childNote.noteId) { continue }
+
             var node = TreeNode(branch: branch, note: childNote)
             if expandedBranches.contains(branchId), childNote.hasChildren {
                 node.children = try await loadChildren(of: childNote, client: client)
@@ -374,7 +379,8 @@ final class TreeViewModel {
         guard let profileId = serverProfileId else { return [] }
         do {
             let pairs = try persistence.fetchCachedChildren(parentNoteId: parentNoteId, serverProfileId: profileId)
-            return pairs.map { branch, note in
+            return pairs.compactMap { branch, note -> TreeNode? in
+                if Self.hiddenNoteIds.contains(note.noteId) { return nil }
                 let branchItem = BranchItem(
                     branchId: branch.branchId,
                     noteId: branch.noteId,
