@@ -44,6 +44,10 @@ final class NoteDetailViewModel {
     // Protected notes
     var needsProtectedSession = false
 
+    // Child notes
+    var childNotes: [ChildNoteSummary] = []
+    var isLoadingChildren = false
+
     let noteId: String
     private let appState: AppState
     private let persistence = PersistenceManager.shared
@@ -436,6 +440,32 @@ final class NoteDetailViewModel {
         }
     }
 
+    // MARK: - Child Notes
+
+    func loadChildNotes() async {
+        guard let note, !note.childNoteIds.isEmpty, let client else { return }
+        isLoadingChildren = true
+        defer { isLoadingChildren = false }
+
+        var results: [ChildNoteSummary] = []
+        for childId in note.childNoteIds {
+            do {
+                let response = try await client.getNote(childId)
+                results.append(ChildNoteSummary(
+                    noteId: response.noteId,
+                    title: response.title,
+                    type: NoteType(rawValue: response.type) ?? .text,
+                    iconClass: response.attributes.first { $0.name == "iconClass" }?.value,
+                    childCount: response.childNoteIds.count
+                ))
+            } catch {
+                let apiError = APIError.from(error)
+                if case .cancelled = apiError { return }
+            }
+        }
+        self.childNotes = results
+    }
+
     // MARK: - Cache Fallback
 
     private func loadFromCache() {
@@ -482,5 +512,19 @@ final class NoteDetailViewModel {
             isFromCache = true
             checkForDraft()
         }
+    }
+}
+
+struct ChildNoteSummary: Identifiable, Sendable {
+    let noteId: String
+    let title: String
+    let type: NoteType
+    let iconClass: String?
+    let childCount: Int
+
+    var id: String { noteId }
+
+    var resolvedIconName: String {
+        NoteIconMapper.sfSymbol(for: iconClass) ?? type.iconName
     }
 }

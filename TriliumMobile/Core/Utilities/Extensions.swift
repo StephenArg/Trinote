@@ -100,7 +100,17 @@ extension Data {
         if header.count >= 4 && header[0...3] == [0x47, 0x49, 0x46, 0x38] { return "image/gif" }
         if header.count >= 12 && header[0...3] == [0x52, 0x49, 0x46, 0x46] && header[8...11] == [0x57, 0x45, 0x42, 0x50] { return "image/webp" }
 
+        if isSVG { return "image/svg+xml" }
+
         return "image/png"
+    }
+
+    /// Checks whether the data looks like an SVG (text starting with `<svg` or `<?xml` containing `<svg`).
+    var isSVG: Bool {
+        guard let str = String(data: prefix(512), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return str.hasPrefix("<svg") || (str.hasPrefix("<?xml") && str.contains("<svg"))
     }
 }
 

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; background: transparent; }
+    body { padding: 16px; }
+    #diagram { width: 100%; }
+    #diagram svg { max-width: 100%; height: auto; display: block; }
+    #error { color: #e55; font-family: -apple-system, system-ui; font-size: 14px;
+             padding: 16px; white-space: pre-wrap; display: none; }
+    #loading { font-family: -apple-system, system-ui; color: #888; font-size: 15px;
+               text-align: center; padding: 40px; }
+</style>
+</head>
+<body>
+<div id="loading">Rendering diagram...</div>
+<div id="diagram"></div>
+<div id="error"></div>
+
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+
+const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+mermaid.initialize({
+    startOnLoad: false,
+    theme: isDark ? 'dark' : 'default',
+    securityLevel: 'strict',
+    fontFamily: '-apple-system, system-ui, sans-serif'
+});
+
+window.mermaidViewer = {
+    async render(source) {
+        const loadEl = document.getElementById('loading');
+        const diagEl = document.getElementById('diagram');
+        const errEl = document.getElementById('error');
+
+        try {
+            const { svg } = await mermaid.render('mermaid-graph', source);
+            loadEl.style.display = 'none';
+            diagEl.innerHTML = svg;
+            reportHeight();
+        } catch (e) {
+            loadEl.style.display = 'none';
+            errEl.style.display = 'block';
+            errEl.textContent = 'Diagram error: ' + (e.message || e);
+            reportHeight();
+        }
+    }
+};
+
+function reportHeight() {
+    var h = document.body.scrollHeight;
+    if (h > 0) {
+        try { window.webkit.messageHandlers.heightUpdate.postMessage(String(h)); } catch(e) {}
+    }
+}
+new ResizeObserver(reportHeight).observe(document.body);
+
+try {
+    window.webkit.messageHandlers.mermaidReady.postMessage('ready');
+} catch(e) {}
+</script>
+</body>
+</html>

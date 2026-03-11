@@ -35,6 +35,7 @@ struct NoteDetailView: View {
                 await vm.load()
                 await vm.loadContent()
                 await vm.loadAttachments()
+                await vm.loadChildNotes()
             }
         }
         .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
@@ -73,6 +74,7 @@ struct NoteDetailView: View {
                             titleSection(vm, note: note)
                             Divider()
                             noteBody(vm, note: note)
+                            childNotesSection(vm)
 
                             if vm.showDetails {
                                 attachmentsSection(vm)
@@ -289,7 +291,11 @@ struct NoteDetailView: View {
                     navigateToNoteId = linkedNoteId
                 }
             }
-        case .code, .mermaid:
+        case .mermaid:
+            if let source = vm.contentString {
+                MermaidNoteView(source: source)
+            }
+        case .code:
             if let code = vm.contentString {
                 CodeNoteView(content: code, mime: note.mime)
             }
@@ -299,10 +305,70 @@ struct NoteDetailView: View {
             }
         case .file:
             FileNoteView(note: note, attachments: vm.attachments, viewModel: vm)
+        case .canvas:
+            CanvasNoteView(noteId: note.noteId, attachments: vm.attachments, client: vm.client, excalidrawJSON: vm.contentString)
         case .book:
             BookNoteView(note: note)
         default:
             UnsupportedNoteView(note: note, serverURL: appState.activeProfile?.normalizedBaseURL)
+        }
+    }
+
+    @ViewBuilder
+    private func childNotesSection(_ vm: NoteDetailViewModel) -> some View {
+        if !vm.childNotes.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                Divider()
+                Text("Sub-notes")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+                    .padding(.bottom, 4)
+
+                ForEach(vm.childNotes) { child in
+                    Button {
+                        navigateToNoteId = child.noteId
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: child.resolvedIconName)
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22)
+                            Text(child.title)
+                                .font(.body)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            Spacer()
+                            if child.childCount > 0 {
+                                Text("\(child.childCount)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 10)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    if child.id != vm.childNotes.last?.id {
+                        Divider().padding(.leading, 48)
+                    }
+                }
+            }
+            .padding(.bottom, 8)
+        } else if vm.isLoadingChildren {
+            HStack {
+                Spacer()
+                ProgressView()
+                    .controlSize(.small)
+                Spacer()
+            }
+            .padding()
         }
     }
 
