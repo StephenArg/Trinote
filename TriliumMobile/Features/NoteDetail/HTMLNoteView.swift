@@ -5,6 +5,7 @@ struct HTMLNoteView: View {
     let html: String
     let baseURL: URL?
     var onNoteLinkTapped: ((String) -> Void)?
+    var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
 
     @State private var contentHeight: CGFloat = 200
 
@@ -13,6 +14,7 @@ struct HTMLNoteView: View {
             html: html,
             baseURL: baseURL,
             onNoteLinkTapped: onNoteLinkTapped,
+            onCheckboxToggled: onCheckboxToggled,
             onHeightChanged: { contentHeight = $0 }
         )
         .frame(height: contentHeight)
@@ -23,10 +25,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     let html: String
     let baseURL: URL?
     var onNoteLinkTapped: ((String) -> Void)?
+    var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
     var onHeightChanged: ((CGFloat) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onNoteLinkTapped: onNoteLinkTapped, onHeightChanged: onHeightChanged)
+        Coordinator(onNoteLinkTapped: onNoteLinkTapped, onCheckboxToggled: onCheckboxToggled, onHeightChanged: onHeightChanged)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -34,6 +37,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let contentController = WKUserContentController()
         contentController.add(handler, name: "heightUpdate")
         contentController.add(handler, name: "noteLink")
+        contentController.add(handler, name: "checkboxToggle")
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
@@ -61,6 +65,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onNoteLinkTapped = onNoteLinkTapped
+        coordinator.onCheckboxToggled = onCheckboxToggled
         coordinator.onHeightChanged = onHeightChanged
 
         guard html != coordinator.loadedHTML else { return }
@@ -70,8 +75,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "heightUpdate")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "noteLink")
+        let uc = webView.configuration.userContentController
+        uc.removeScriptMessageHandler(forName: "heightUpdate")
+        uc.removeScriptMessageHandler(forName: "noteLink")
+        uc.removeScriptMessageHandler(forName: "checkboxToggle")
     }
 
     static func wrapHTML(_ body: String) -> String {
@@ -116,8 +123,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         ul.todo-list { list-style: none; padding-left: 0; }
         ul.todo-list li { margin: 4px 0; }
         .todo-list__label { display: flex; align-items: flex-start; gap: 6px; cursor: default; }
-        .todo-list__label input[type="checkbox"] { margin-top: 4px; flex-shrink: 0; }
-        .todo-list__label__description { flex: 1; }
+        .todo-list__label input[type="checkbox"] { margin-top: 4px; flex-shrink: 0; pointer-events: auto; cursor: pointer;
+            width: 18px; height: 18px; }
+        .todo-list__label__description { flex: 1; transition: opacity 0.15s, text-decoration 0.15s; }
+        .todo-list__label--checked .todo-list__label__description { text-decoration: line-through; opacity: 0.5; }
         hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
         .math-tex { overflow-x: auto; }
         </style>
@@ -142,6 +151,29 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 if (noteId) window.webkit.messageHandlers.noteLink.postMessage(noteId);
             }
         });
+
+        // Enable todo checkboxes for interactive toggling
+        (function() {
+            function updateStrikethrough(cb) {
+                var label = cb.closest('.todo-list__label');
+                if (!label) return;
+                if (cb.checked) label.classList.add('todo-list__label--checked');
+                else label.classList.remove('todo-list__label--checked');
+            }
+            const boxes = document.querySelectorAll('input[type="checkbox"]');
+            boxes.forEach(function(cb, idx) {
+                cb.removeAttribute('disabled');
+                cb.dataset.cbIndex = idx;
+                updateStrikethrough(cb);
+                cb.addEventListener('change', function() {
+                    updateStrikethrough(this);
+                    window.webkit.messageHandlers.checkboxToggle.postMessage({
+                        index: parseInt(this.dataset.cbIndex),
+                        checked: this.checked
+                    });
+                });
+            });
+        })();
         </script>
         </body>
         </html>
@@ -152,10 +184,12 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         weak var webView: WKWebView?
         var loadedHTML: String?
         var onNoteLinkTapped: ((String) -> Void)?
+        var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
         var onHeightChanged: ((CGFloat) -> Void)?
 
-        init(onNoteLinkTapped: ((String) -> Void)?, onHeightChanged: ((CGFloat) -> Void)?) {
+        init(onNoteLinkTapped: ((String) -> Void)?, onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?, onHeightChanged: ((CGFloat) -> Void)?) {
             self.onNoteLinkTapped = onNoteLinkTapped
+            self.onCheckboxToggled = onCheckboxToggled
             self.onHeightChanged = onHeightChanged
         }
 
@@ -168,6 +202,12 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             case "noteLink":
                 if let noteId = message.body as? String {
                     onNoteLinkTapped?(noteId)
+                }
+            case "checkboxToggle":
+                if let dict = message.body as? [String: Any],
+                   let index = dict["index"] as? Int,
+                   let checked = dict["checked"] as? Bool {
+                    onCheckboxToggled?(index, checked)
                 }
             default:
                 break

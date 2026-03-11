@@ -8,6 +8,7 @@ final class NoteDetailViewModel {
     var note: NoteItem?
     var content: Data?
     var contentString: String?
+    private var rawContentString: String?
     var attachments: [AttachmentItem] = []
     var breadcrumbs: [BreadcrumbItem] = []
     var isLoading = false
@@ -124,6 +125,7 @@ final class NoteDetailViewModel {
             self.content = data
             var htmlString = String(data: data, encoding: .utf8)
             self.serverContentHash = htmlString?.hashValue
+            self.rawContentString = htmlString
 
             if let html = htmlString {
                 htmlString = await self.inlineAttachmentImages(in: html, client: client)
@@ -207,6 +209,80 @@ final class NoteDetailViewModel {
         let nid = self.noteId
         if let treeVM {
             self.breadcrumbs = await treeVM.breadcrumbs(for: nid)
+        }
+    }
+
+    // MARK: - Checkbox Toggle
+
+    func toggleCheckbox(index: Int, checked: Bool) {
+        guard let raw = rawContentString else { return }
+
+        let checkboxPattern = try! NSRegularExpression(
+            pattern: #"<input\s+[^>]*type\s*=\s*["']checkbox["'][^>]*/?\s*>"#,
+            options: .caseInsensitive
+        )
+        let nsRaw = raw as NSString
+        let matches = checkboxPattern.matches(in: raw, range: NSRange(location: 0, length: nsRaw.length))
+
+        guard index < matches.count else { return }
+        let matchRange = matches[index].range
+        let original = nsRaw.substring(with: matchRange)
+
+        var updated: String
+        if checked {
+            if original.contains("checked") { return }
+            updated = original.replacingOccurrences(of: ">", with: " checked=\"checked\">")
+            // Handle self-closing tags
+            updated = updated.replacingOccurrences(of: "/ checked=\"checked\">", with: " checked=\"checked\" />")
+        } else {
+            updated = original
+                .replacingOccurrences(of: " checked=\"checked\"", with: "")
+                .replacingOccurrences(of: " checked", with: "")
+                .replacingOccurrences(of: "checked=\"checked\" ", with: "")
+                .replacingOccurrences(of: "checked ", with: "")
+        }
+
+        let newRaw = (raw as NSString).replacingCharacters(in: matchRange, with: updated)
+        self.rawContentString = newRaw
+        self.serverContentHash = newRaw.hashValue
+
+        if let display = contentString {
+            let nsDisplay = display as NSString
+            let displayMatches = checkboxPattern.matches(in: display, range: NSRange(location: 0, length: nsDisplay.length))
+            if index < displayMatches.count {
+                let displayOriginal = nsDisplay.substring(with: displayMatches[index].range)
+                var displayUpdated: String
+                if checked {
+                    displayUpdated = displayOriginal.replacingOccurrences(of: ">", with: " checked=\"checked\">")
+                    displayUpdated = displayUpdated.replacingOccurrences(of: "/ checked=\"checked\">", with: " checked=\"checked\" />")
+                } else {
+                    displayUpdated = displayOriginal
+                        .replacingOccurrences(of: " checked=\"checked\"", with: "")
+                        .replacingOccurrences(of: " checked", with: "")
+                        .replacingOccurrences(of: "checked=\"checked\" ", with: "")
+                        .replacingOccurrences(of: "checked ", with: "")
+                }
+                self.contentString = (display as NSString).replacingCharacters(in: displayMatches[index].range, with: displayUpdated)
+            }
+        }
+
+        Task {
+            await saveCheckboxChange(newRaw)
+        }
+    }
+
+    private func saveCheckboxChange(_ html: String) async {
+        guard let client, note != nil else { return }
+        let nid = self.noteId
+        do {
+            let data = Data(html.utf8)
+            try await client.updateNoteContent(nid, content: data, contentType: "text/html")
+            self.content = data
+            if let profileId = self.serverProfileId {
+                try? self.persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId)
+            }
+        } catch {
+            Log.api.error("Failed to save checkbox state: \(error)")
         }
     }
 

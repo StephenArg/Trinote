@@ -286,10 +286,14 @@ struct NoteDetailView: View {
             if let html = vm.contentString {
                 HTMLNoteView(
                     html: html,
-                    baseURL: vm.serverBaseURL
-                ) { linkedNoteId in
-                    navigateToNoteId = linkedNoteId
-                }
+                    baseURL: vm.serverBaseURL,
+                    onNoteLinkTapped: { linkedNoteId in
+                        navigateToNoteId = linkedNoteId
+                    },
+                    onCheckboxToggled: { index, checked in
+                        vm.toggleCheckbox(index: index, checked: checked)
+                    }
+                )
             }
         case .mermaid:
             if let source = vm.contentString {
