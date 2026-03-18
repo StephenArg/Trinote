@@ -2,7 +2,7 @@ import Foundation
 import os
 
 enum Log {
-    private static let subsystem = "com.trilium.mobile"
+    private static let subsystem = "com.trinote"
 
     static let api = Logger(subsystem: subsystem, category: "API")
     static let auth = Logger(subsystem: subsystem, category: "Auth")

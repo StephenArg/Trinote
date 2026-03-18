@@ -11,7 +11,7 @@ protocol KeychainManaging: Actor {
 actor KeychainManager: KeychainManaging {
     static let shared = KeychainManager()
 
-    private let servicePrefix = "com.trilium.mobile"
+    private let servicePrefix = "com.trinote"
 
     private init() {}
 

@@ -18,7 +18,7 @@ final class NetworkMonitor {
     }
 
     private let monitor = NWPathMonitor()
-    private let queue = DispatchQueue(label: "com.trilium.mobile.networkmonitor")
+    private let queue = DispatchQueue(label: "com.trinote.networkmonitor")
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
