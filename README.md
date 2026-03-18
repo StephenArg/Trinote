@@ -1,4 +1,4 @@
-# Trilium Mobile — iOS Client
+# Trinote — iOS Trilium Client
 
 A native iOS client for self-hosted [TriliumNext](https://github.com/TriliumNext/Trilium) note-taking servers.
 
