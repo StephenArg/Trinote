@@ -15,9 +15,26 @@ struct TreeView: View {
     }
 
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
     @State private var viewModel: TreeViewModel?
     @State private var navigateToNote: NoteItem?
     @State private var drillDownTarget: SubTreeTarget?
+
+    @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
+    @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
+    @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
+    @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#ffffff"
+    @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
+
+    private var treeTextColor: Color? {
+        guard useCustomTreeColors else { return nil }
+        return colorScheme == .dark ? Color(hex: treeDarkTextColor) : Color(hex: treeLightTextColor)
+    }
+
+    private var treeBgColor: Color? {
+        guard useCustomTreeColors else { return nil }
+        return colorScheme == .dark ? Color(hex: treeDarkBgColor) : Color(hex: treeLightBgColor)
+    }
 
     var body: some View {
         Group {
@@ -31,11 +48,11 @@ struct TreeView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    Task { await viewModel?.refresh() }
+                    triggerSyncAndReload()
                 } label: {
                     Image(systemName: "arrow.trianglehead.2.clockwise")
                 }
-                .disabled(viewModel?.isRefreshing ?? false)
+                .disabled(viewModel?.isRefreshing ?? false || appState.syncManager.isSyncing)
                 .accessibilityLabel("Refresh tree")
             }
         }
@@ -52,6 +69,66 @@ struct TreeView: View {
         .navigationDestination(item: $drillDownTarget) { target in
             TreeView(parentNoteId: target.noteId, parentTitle: target.title)
         }
+    }
+
+    @ViewBuilder
+    private var syncProgressBanner: some View {
+        let sync = appState.syncManager
+        if sync.isSyncing {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.mini)
+                Group {
+                    switch sync.phase {
+                    case .walkingTree:
+                        Text("Discovering notes…")
+                    case .fetchingChanges:
+                        Text("Checking for changes…")
+                    case .downloadingContent:
+                        if sync.totalNoteCount > 0 {
+                            Text("Syncing \(sync.syncedNoteCount)/\(sync.totalNoteCount) notes…")
+                        } else {
+                            Text("Downloading content…")
+                        }
+                    case .cleaningUp:
+                        Text("Cleaning up…")
+                    default:
+                        Text("Syncing…")
+                    }
+                }
+                .font(.caption)
+
+                Spacer()
+
+                if sync.totalNoteCount > 0 && sync.phase == .downloadingContent {
+                    Text("\(Int(sync.syncProgress * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .foregroundStyle(.blue)
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+            .background(.blue.opacity(0.08))
+        }
+    }
+
+    private func triggerSyncAndReload() {
+        guard let client = appState.client, let profileId = appState.activeProfile?.id else {
+            Task { await viewModel?.refresh() }
+            return
+        }
+        appState.syncManager.incrementalSync(client: client, profileId: profileId)
+        Task { await viewModel?.refresh() }
+    }
+
+    private func refreshWithSync() async {
+        guard let client = appState.client, let profileId = appState.activeProfile?.id else {
+            await viewModel?.refresh()
+            return
+        }
+        appState.syncManager.incrementalSync(client: client, profileId: profileId)
+        await viewModel?.refresh()
     }
 
     @ViewBuilder
@@ -76,7 +153,7 @@ struct TreeView: View {
             }
         } else {
             VStack(spacing: 0) {
-                if vm.isFromCache {
+                if vm.isFromCache && !appState.syncManager.isSyncing {
                     HStack(spacing: 6) {
                         Image(systemName: "icloud.slash")
                             .font(.caption)
@@ -92,6 +169,8 @@ struct TreeView: View {
                     .padding(.vertical, 6)
                     .background(.orange.opacity(0.1))
                 }
+
+                syncProgressBanner
 
                 if let error = vm.error, !vm.rootChildren.isEmpty {
                     HStack(spacing: 6) {
@@ -115,6 +194,7 @@ struct TreeView: View {
                                 node: flat.node,
                                 depth: flat.depth,
                                 viewModel: vm,
+                                customTextColor: treeTextColor,
                                 onSelect: { note in navigateToNote = note },
                                 onDrillDown: { noteId, title in
                                     drillDownTarget = SubTreeTarget(noteId: noteId, title: title)
@@ -130,7 +210,8 @@ struct TreeView: View {
                         }
                     }
                 }
-                .refreshable { await vm.refresh() }
+                .refreshable { await refreshWithSync() }
+                .background(treeBgColor ?? Color.clear)
             }
             .overlay {
                 if vm.isRefreshing && !vm.isFromCache {
@@ -151,11 +232,13 @@ struct TreeNodeRow: View {
     let node: TreeNode
     let depth: Int
     let viewModel: TreeViewModel
+    var customTextColor: Color?
     let onSelect: (NoteItem) -> Void
     let onDrillDown: (String, String) -> Void
 
     private var isExpanded: Bool { node.children != nil }
     private var shouldDrillDown: Bool { depth >= Self.maxInlineDepth }
+    private var textColor: Color { customTextColor ?? .primary }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -233,7 +316,7 @@ struct TreeNodeRow: View {
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
-                        .foregroundStyle(node.note.isProtected ? .secondary : .primary)
+                        .foregroundStyle(node.note.isProtected ? .secondary : textColor)
                 }
 
                 Spacer()

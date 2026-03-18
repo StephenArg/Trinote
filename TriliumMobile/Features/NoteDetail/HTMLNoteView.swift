@@ -8,11 +8,35 @@ struct HTMLNoteView: View {
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
 
     @State private var contentHeight: CGFloat = 200
+    @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
+    @AppStorage("useCustomTextColor") private var useCustomTextColor: Bool = false
+    @AppStorage("customLightTextColor") private var customLightTextColor: String = "#1c1c1e"
+    @AppStorage("customDarkTextColor") private var customDarkTextColor: String = "#aaaaaa"
+
+    private var themeColors: HTMLThemeColors {
+        let theme = ColorTheme(rawValue: colorTheme) ?? .default
+        if useCustomTextColor {
+            return HTMLThemeColors(
+                lightText: customLightTextColor,
+                darkText: customDarkTextColor,
+                lightLink: theme.lightLinkColor,
+                darkLink: theme.darkLinkColor
+            )
+        } else {
+            return HTMLThemeColors(
+                lightText: theme.lightTextColor,
+                darkText: theme.darkTextColor,
+                lightLink: theme.lightLinkColor,
+                darkLink: theme.darkLinkColor
+            )
+        }
+    }
 
     var body: some View {
         HTMLNoteWebView(
             html: html,
             baseURL: baseURL,
+            themeColors: themeColors,
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
             onHeightChanged: { contentHeight = $0 }
@@ -21,9 +45,17 @@ struct HTMLNoteView: View {
     }
 }
 
+struct HTMLThemeColors: Equatable {
+    let lightText: String
+    let darkText: String
+    let lightLink: String
+    let darkLink: String
+}
+
 private struct HTMLNoteWebView: UIViewRepresentable {
     let html: String
     let baseURL: URL?
+    let themeColors: HTMLThemeColors
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
     var onHeightChanged: ((CGFloat) -> Void)?
@@ -55,7 +87,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
 
         handler.webView = webView
-        let wrapped = Self.wrapHTML(html)
+        handler.themeColors = themeColors
+        let wrapped = Self.wrapHTML(html, theme: themeColors)
         webView.loadHTMLString(wrapped, baseURL: baseURL)
         handler.loadedHTML = html
 
@@ -68,9 +101,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.onCheckboxToggled = onCheckboxToggled
         coordinator.onHeightChanged = onHeightChanged
 
-        guard html != coordinator.loadedHTML else { return }
+        let needsReload = html != coordinator.loadedHTML || themeColors != coordinator.themeColors
+        guard needsReload else { return }
         coordinator.loadedHTML = html
-        let wrapped = Self.wrapHTML(html)
+        coordinator.themeColors = themeColors
+        let wrapped = Self.wrapHTML(html, theme: themeColors)
         webView.loadHTMLString(wrapped, baseURL: baseURL)
     }
 
@@ -81,7 +116,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "checkboxToggle")
     }
 
-    static func wrapHTML(_ body: String) -> String {
+    static func wrapHTML(_ body: String, theme: HTMLThemeColors) -> String {
         """
         <!DOCTYPE html>
         <html>
@@ -101,14 +136,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             background: transparent;
         }
         @media (prefers-color-scheme: dark) {
-            :root { --text-color: #e5e5e7; --code-bg: rgba(255,255,255,0.06); --border: rgba(255,255,255,0.15); }
-            body { color: #e5e5e7; }
-            a { color: #5ac8fa; }
+            :root { --text-color: \(theme.darkText); --code-bg: rgba(255,255,255,0.06); --border: rgba(255,255,255,0.15); }
+            body { color: \(theme.darkText); }
+            a { color: \(theme.darkLink); }
         }
         @media (prefers-color-scheme: light) {
-            :root { --text-color: #1c1c1e; --code-bg: rgba(0,0,0,0.04); --border: rgba(0,0,0,0.12); }
-            body { color: #1c1c1e; }
-            a { color: #007AFF; }
+            :root { --text-color: \(theme.lightText); --code-bg: rgba(0,0,0,0.04); --border: rgba(0,0,0,0.12); }
+            body { color: \(theme.lightText); }
+            a { color: \(theme.lightLink); }
         }
         img { max-width: 100%; height: auto; border-radius: 6px; }
         pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 14px; }
@@ -183,6 +218,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var loadedHTML: String?
+        var themeColors: HTMLThemeColors?
         var onNoteLinkTapped: ((String) -> Void)?
         var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
         var onHeightChanged: ((CGFloat) -> Void)?

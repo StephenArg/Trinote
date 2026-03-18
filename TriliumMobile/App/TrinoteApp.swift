@@ -26,13 +26,18 @@ extension ShapeStyle where Self == Color {
 }
 
 @main
-struct TriliumMobileApp: App {
+struct TrinoteApp: App {
     @State private var appState = AppState()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearanceMode") private var appearanceMode: String = AppearanceMode.device.rawValue
+    @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
 
     private var resolvedColorScheme: ColorScheme? {
         AppearanceMode(rawValue: appearanceMode)?.colorScheme
+    }
+
+    private var resolvedAccentColor: Color {
+        (ColorTheme(rawValue: colorTheme) ?? .default).accentColor
     }
 
     var body: some Scene {
@@ -41,6 +46,7 @@ struct TriliumMobileApp: App {
                 .environment(appState)
                 .modelContainer(PersistenceManager.shared.container)
                 .preferredColorScheme(resolvedColorScheme)
+                .tint(resolvedAccentColor)
                 .foregroundStyle(Color.appText)
                 .task { await appState.bootstrap() }
                 .onChange(of: scenePhase) { _, newPhase in

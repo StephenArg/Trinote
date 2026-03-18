@@ -15,6 +15,7 @@ final class CachedNote {
     @Attribute(.externalStorage) var content: Data?
     var contentFetchedAt: Date?
     var metadataFetchedAt: Date
+    var utcDateModified: String?
     var serverProfileId: String
 
     init(
@@ -30,6 +31,7 @@ final class CachedNote {
         content: Data? = nil,
         contentFetchedAt: Date? = nil,
         metadataFetchedAt: Date = .now,
+        utcDateModified: String? = nil,
         serverProfileId: String
     ) {
         self.noteId = noteId
@@ -44,6 +46,7 @@ final class CachedNote {
         self.content = content
         self.contentFetchedAt = contentFetchedAt
         self.metadataFetchedAt = metadataFetchedAt
+        self.utcDateModified = utcDateModified
         self.serverProfileId = serverProfileId
     }
 
@@ -180,6 +183,27 @@ final class SyncStatus {
         self.domain = domain
         self.lastSyncedAt = .now
         self.lastError = nil
+        self.serverProfileId = serverProfileId
+    }
+}
+
+@Model
+final class CachedImageData {
+    @Attribute(.unique) var id: String
+    var entityId: String
+    var entityType: String
+    @Attribute(.externalStorage) var data: Data
+    var mime: String
+    var fetchedAt: Date
+    var serverProfileId: String
+
+    init(entityId: String, entityType: String, data: Data, mime: String, serverProfileId: String) {
+        self.id = "\(serverProfileId):\(entityType):\(entityId)"
+        self.entityId = entityId
+        self.entityType = entityType
+        self.data = data
+        self.mime = mime
+        self.fetchedAt = .now
         self.serverProfileId = serverProfileId
     }
 }

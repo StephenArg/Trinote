@@ -26,16 +26,31 @@ struct NoteDetailView: View {
                 ProgressView()
             }
         }
-        .navigationTitle(viewModel?.note?.title ?? title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    if viewModel?.serverVerified == false && viewModel?.note != nil {
+                        Image(systemName: "icloud.slash")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(viewModel?.note?.title ?? title)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
+            }
+        }
         .task {
             if viewModel == nil {
                 let vm = NoteDetailViewModel(noteId: noteId, appState: appState)
                 viewModel = vm
+                // Cache loads are instant; server refreshes run concurrently
                 await vm.load()
-                await vm.loadContent()
-                await vm.loadAttachments()
+                async let contentTask: () = vm.loadContent()
+                async let attachTask: () = vm.loadAttachments()
                 await vm.loadChildNotes()
+                _ = await (contentTask, attachTask)
             }
         }
         .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
@@ -68,7 +83,6 @@ struct NoteDetailView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            offlineBanner(vm)
                             draftBanner(vm)
                             breadcrumbsBar(vm)
                             titleSection(vm, note: note)
@@ -82,6 +96,7 @@ struct NoteDetailView: View {
                             }
                         }
                     }
+                    .refreshable { await vm.refresh() }
                 }
             }
             .toolbar { noteToolbar(vm, note: note) }
@@ -139,22 +154,6 @@ struct NoteDetailView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
-    }
-
-    @ViewBuilder
-    private func offlineBanner(_ vm: NoteDetailViewModel) -> some View {
-        if vm.isFromCache {
-            HStack(spacing: 6) {
-                Image(systemName: "icloud.slash")
-                    .font(.caption)
-                Text("Showing cached version")
-                    .font(.caption)
-            }
-            .foregroundStyle(.orange)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(.orange.opacity(0.1))
-        }
     }
 
     @ViewBuilder
@@ -398,7 +397,7 @@ struct NoteDetailView: View {
 
             RichTextEditorView(
                 initialHTML: vm.editableContent,
-                onContentChanged: { html in vm.editableContent = html },
+                onContentChanged: { html in vm.receiveEditorUpdate(html) },
                 onPickImage: { showEditorImageSourceDialog = true },
                 imageToInsert: $imageToInsert
             )

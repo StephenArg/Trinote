@@ -66,7 +66,7 @@ actor TriliumClient: TriliumClientProtocol {
     // MARK: - Auth
 
     func login(password: String, tokenName: String? = nil) async throws -> String {
-        let name = tokenName ?? "TriliumMobile-\(Self.deviceName())"
+        let name = tokenName ?? "Trinote-\(Self.deviceName())"
         let body = LoginRequest(password: password, tokenName: name)
         let response: LoginResponse = try await post("/etapi/auth/login", body: body, authenticated: false)
         self.token = response.authToken
@@ -268,7 +268,12 @@ actor TriliumClient: TriliumClientProtocol {
     // MARK: - Raw data methods
 
     private func getRaw(_ path: String) async throws -> Data {
-        let request = try buildRequest(path: path, method: "GET")
+        var request = try buildRequest(path: path, method: "GET")
+        // For raw content endpoints (note/attachment bodies), avoid URL cache
+        // so pull-to-refresh always reflects server-side edits immediately.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         let (data, response) = try await performRequest(request)
         try validateResponse(response, data: data)
         return data

@@ -152,6 +152,12 @@ final class TreeViewModel {
         await loadTree()
     }
 
+    func reloadFromCache() {
+        noteCache.removeAll()
+        branchCache.removeAll()
+        loadTreeFromCache()
+    }
+
     // MARK: - Breadcrumbs
 
     func breadcrumbs(for noteId: String) async -> [BreadcrumbItem] {

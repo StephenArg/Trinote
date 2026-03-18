@@ -18,6 +18,7 @@ final class PersistenceManager {
             RecentSearch.self,
             DraftContent.self,
             SyncStatus.self,
+            CachedImageData.self,
         ])
 
         var usedMemoryFallback = false
@@ -102,6 +103,9 @@ final class PersistenceManager {
             existing.childNoteIds = response.childNoteIds
             existing.parentBranchIds = response.parentBranchIds
             existing.childBranchIds = response.childBranchIds
+            // Don't update utcDateModified here — it's updated in
+            // cacheNoteContent so that fetchNotesNeedingContent can
+            // correctly detect stale content by comparing dates.
             existing.metadataFetchedAt = .now
         } else {
             let cached = CachedNote(
@@ -114,16 +118,20 @@ final class PersistenceManager {
                 childNoteIds: response.childNoteIds,
                 parentBranchIds: response.parentBranchIds,
                 childBranchIds: response.childBranchIds,
+                utcDateModified: nil,
                 serverProfileId: serverProfileId
             )
             context.insert(cached)
         }
     }
 
-    func cacheNoteContent(_ noteId: String, content: Data, serverProfileId: String) throws {
+    func cacheNoteContent(_ noteId: String, content: Data, serverProfileId: String, utcDateModified: String? = nil) throws {
         if let existing = try fetchCachedNote(id: noteId, serverProfileId: serverProfileId) {
             existing.content = content
             existing.contentFetchedAt = .now
+            if let date = utcDateModified {
+                existing.utcDateModified = date
+            }
             try context.save()
         }
     }
@@ -397,6 +405,91 @@ final class PersistenceManager {
         )
     }
 
+    // MARK: - Sync Helpers
+
+    func fetchAllCachedNoteIds(serverProfileId: String) throws -> [String] {
+        let profileId = serverProfileId
+        let notes = try context.fetch(
+            FetchDescriptor<CachedNote>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        return notes.map(\.noteId)
+    }
+
+    func deleteCachedNotes(noteIds: Set<String>, serverProfileId: String) throws {
+        let profileId = serverProfileId
+        for noteId in noteIds {
+            let nid = noteId
+            let pid = profileId
+
+            let notes = try context.fetch(FetchDescriptor<CachedNote>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
+            ))
+            notes.forEach { context.delete($0) }
+
+            let branches = try context.fetch(FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
+            ))
+            branches.forEach { context.delete($0) }
+
+            let attrs = try context.fetch(FetchDescriptor<CachedAttribute>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
+            ))
+            attrs.forEach { context.delete($0) }
+        }
+        try context.save()
+    }
+
+    /// Returns note IDs from `serverModifiedAfter` that need their content downloaded.
+    /// A note needs content if: it has no cached content, or the server's
+    /// `utcDateModified` is newer than the cached version.
+    func fetchNotesNeedingContent(serverProfileId: String, serverModifiedAfter: [String: String]) throws -> [String] {
+        let profileId = serverProfileId
+        let notes = try context.fetch(
+            FetchDescriptor<CachedNote>(
+                predicate: #Predicate { $0.serverProfileId == profileId && $0.isProtected == false }
+            )
+        )
+        let notesByID = Dictionary(uniqueKeysWithValues: notes.map { ($0.noteId, $0) })
+
+        return serverModifiedAfter.compactMap { (noteId, serverDate) in
+            guard let cached = notesByID[noteId] else {
+                return noteId
+            }
+            if cached.content == nil { return noteId }
+            guard let cachedDate = cached.utcDateModified else { return noteId }
+            return serverDate > cachedDate ? noteId : nil
+        }
+    }
+
+    // MARK: - Image Cache
+
+    func fetchCachedImage(entityId: String, entityType: String, serverProfileId: String) throws -> CachedImageData? {
+        let id = "\(serverProfileId):\(entityType):\(entityId)"
+        var descriptor = FetchDescriptor<CachedImageData>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
+    func cacheImage(entityId: String, entityType: String, data: Data, mime: String, serverProfileId: String) throws {
+        let id = "\(serverProfileId):\(entityType):\(entityId)"
+        var descriptor = FetchDescriptor<CachedImageData>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        if let existing = try context.fetch(descriptor).first {
+            existing.data = data
+            existing.mime = mime
+            existing.fetchedAt = .now
+        } else {
+            let cached = CachedImageData(
+                entityId: entityId, entityType: entityType,
+                data: data, mime: mime, serverProfileId: serverProfileId
+            )
+            context.insert(cached)
+        }
+        try context.save()
+    }
+
     // MARK: - Cleanup
 
     func clearCache(for serverProfileId: String) throws {
@@ -426,6 +519,11 @@ final class PersistenceManager {
             predicate: #Predicate { $0.serverProfileId == profileId }
         ))
         syncs.forEach { context.delete($0) }
+
+        let images = try context.fetch(FetchDescriptor<CachedImageData>(
+            predicate: #Predicate { $0.serverProfileId == profileId }
+        ))
+        images.forEach { context.delete($0) }
 
         try context.save()
     }

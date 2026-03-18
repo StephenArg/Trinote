@@ -5,7 +5,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
-    <string>Trilium</string>
+    <string>Trinote</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -28,9 +28,9 @@
         <true/>
     </dict>
     <key>NSCameraUsageDescription</key>
-    <string>Trilium needs camera access to capture photos for notes.</string>
+    <string>Trinote needs camera access to capture photos for notes.</string>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>Trilium needs access to your photos to upload image attachments.</string>
+    <string>Trinote needs access to your photos to upload image attachments.</string>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>

@@ -14,11 +14,15 @@ final class NoteDetailViewModel {
     var isLoading = false
     var isLoadingContent = false
     var error: String?
-    var isFromCache = false
+    /// True once any server call has succeeded for this note.
+    /// Only false when the initial load couldn't reach the server
+    /// and only cached data is showing. Never reset to false once true.
+    var serverVerified = false
 
     // Editing
     var isEditing = false
     var editableContent = ""
+    @ObservationIgnored private var _pendingEditorHTML: String?
     var isSaving = false
     var saveError: String?
     var showSaveError = false
@@ -54,6 +58,8 @@ final class NoteDetailViewModel {
     private let persistence = PersistenceManager.shared
     private var draftAutoSaveTask: Task<Void, Never>?
     private var serverContentHash: Int?
+    /// The server's utcDateModified for the current note, set during metadata fetch.
+    private var serverUtcDateModified: String?
 
     init(noteId: String, appState: AppState) {
         self.noteId = noteId
@@ -67,31 +73,40 @@ final class NoteDetailViewModel {
 
     // MARK: - Loading
 
+    /// Loads note from cache instantly, then refreshes from server in the background.
     func load() async {
         let nid = self.noteId
-        guard let client else {
-            loadFromCache()
-            return
+
+        // Show cached data immediately
+        loadFromCache()
+
+        if let note, let profileId = self.serverProfileId {
+            try? self.persistence.recordRecentNote(
+                noteId: nid, title: note.title,
+                noteType: note.type.rawValue, serverProfileId: profileId
+            )
         }
-        isLoading = true
-        error = nil
-        defer { isLoading = false }
+
+        // Background server refresh
+        guard let client else { return }
+        let hadCachedNote = self.note != nil
+        if !hadCachedNote { isLoading = true; error = nil }
+        defer { if !hadCachedNote { isLoading = false } }
 
         do {
             let response = try await client.getNote(nid)
-            self.note = NoteItem(from: response)
-            self.isFromCache = false
+            let fresh = NoteItem(from: response)
+            self.note = fresh
+            self.serverUtcDateModified = response.utcDateModified
+            self.serverVerified = true
 
             if let profileId = self.serverProfileId {
                 try? self.persistence.cacheNote(from: response, serverProfileId: profileId)
                 try? self.persistence.commitBatch()
                 try? self.persistence.recordRecentNote(
-                    noteId: nid,
-                    title: response.title,
-                    noteType: response.type,
-                    serverProfileId: profileId
+                    noteId: nid, title: response.title,
+                    noteType: response.type, serverProfileId: profileId
                 )
-
                 for attr in response.attributes {
                     try? self.persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
                 }
@@ -100,16 +115,26 @@ final class NoteDetailViewModel {
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError { return }
-            self.error = apiError.localizedDescription
-            self.loadFromCache()
+            if !hadCachedNote {
+                self.error = apiError.localizedDescription
+            }
         }
     }
 
+    /// Loads content from cache instantly, then checks the server timestamp.
+    /// Only downloads content if the server's `utcDateModified` is newer than
+    /// the cached version. Images are inlined from the local cache.
     func loadContent() async {
         let nid = self.noteId
-        guard let client else {
-            loadContentFromCache()
-            return
+
+        loadContentFromCache()
+
+        if let raw = self.rawContentString,
+           raw.contains("api/attachments/") || raw.contains("api/images/") {
+            let inlined = await self.inlineAttachmentImages(in: raw)
+            if inlined != self.contentString {
+                self.contentString = inlined
+            }
         }
 
         if let note = self.note, note.isProtected {
@@ -117,23 +142,43 @@ final class NoteDetailViewModel {
             return
         }
 
-        isLoadingContent = true
-        defer { isLoadingContent = false }
+        self.checkForDraft()
+
+        guard let client else { return }
+        let profileId = self.serverProfileId ?? ""
+        let cachedDate = (try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId))?.utcDateModified
+
+        if let serverDate = self.serverUtcDateModified, let cachedDate, serverDate <= cachedDate {
+            self.serverVerified = true
+            return
+        }
+
+        let hadCachedContent = self.contentString != nil
+        if !hadCachedContent { isLoadingContent = true }
+        defer { if !hadCachedContent { isLoadingContent = false } }
 
         do {
             let data = try await client.getNoteContent(nid)
+            let htmlString = String(data: data, encoding: .utf8)
+
             self.content = data
-            var htmlString = String(data: data, encoding: .utf8)
             self.serverContentHash = htmlString?.hashValue
             self.rawContentString = htmlString
 
-            if let html = htmlString {
-                htmlString = await self.inlineAttachmentImages(in: html, client: client)
+            var displayHTML = htmlString
+            if let html = displayHTML,
+               html.contains("api/attachments/") || html.contains("api/images/") {
+                displayHTML = await self.inlineAttachmentImages(in: html)
             }
-            self.contentString = htmlString
+
+            self.contentString = displayHTML
+            self.serverVerified = true
 
             if let profileId = self.serverProfileId {
-                try? self.persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId)
+                try? self.persistence.cacheNoteContent(
+                    nid, content: data, serverProfileId: profileId,
+                    utcDateModified: self.serverUtcDateModified
+                )
             }
 
             self.checkForDraft()
@@ -142,20 +187,15 @@ final class NoteDetailViewModel {
             let apiError = APIError.from(error)
             if case .cancelled = apiError { return }
             Log.api.error("Failed to load note content")
-            self.loadContentFromCache()
         }
     }
 
     /// Finds Trilium image `src` URLs in HTML and replaces them with
-    /// base64 data URIs downloaded via the authenticated API client.
-    ///
-    /// Handles two formats:
-    ///   - `api/attachments/{attachmentId}/image/{filename}` (attachment images)
-    ///   - `api/images/{noteId}/{filename}` (image notes)
-    private func inlineAttachmentImages(in html: String, client: any TriliumClientProtocol) async -> String {
+    /// base64 data URIs. Checks local image cache first; falls back to
+    /// network (and caches the result) only on cache miss.
+    private func inlineAttachmentImages(in html: String) async -> String {
         var result = html
 
-        // Match both attachment images and note images
         let pattern = try! NSRegularExpression(
             pattern: #"src=["'](?:/?api/(attachments|images)/([a-zA-Z0-9_]+)/[^"']*)["']"#,
             options: []
@@ -163,33 +203,155 @@ final class NoteDetailViewModel {
         let nsHTML = html as NSString
         let matches = pattern.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
 
+        let profileId = self.serverProfileId ?? ""
+
         for match in matches.reversed() {
             guard match.numberOfRanges >= 3 else { continue }
             let routeType = nsHTML.substring(with: match.range(at: 1))
             let entityId = nsHTML.substring(with: match.range(at: 2))
             let fullMatch = nsHTML.substring(with: match.range)
 
+            var imageData: Data?
+
+            // Check local image cache first
             do {
-                let imageData: Data
-                if routeType == "attachments" {
-                    imageData = try await client.getAttachmentContent(entityId)
-                } else {
-                    imageData = try await client.getNoteContent(entityId)
+                if let cached = try self.persistence.fetchCachedImage(
+                    entityId: entityId, entityType: routeType, serverProfileId: profileId
+                ) {
+                    imageData = cached.data
+                    Log.api.debug("Image cache hit: \(routeType)/\(entityId)")
                 }
-                let mime = imageData.detectImageMIME()
-                let b64 = imageData.base64EncodedString()
+            } catch {
+                Log.api.warning("Image cache lookup failed: \(error)")
+            }
+
+            // Network fallback on cache miss
+            if imageData == nil, let client {
+                do {
+                    if routeType == "attachments" {
+                        imageData = try await client.getAttachmentContent(entityId)
+                    } else {
+                        imageData = try await client.getNoteContent(entityId)
+                    }
+                    if let data = imageData {
+                        let mime = data.detectImageMIME()
+                        do {
+                            try self.persistence.cacheImage(
+                                entityId: entityId, entityType: routeType,
+                                data: data, mime: mime, serverProfileId: profileId
+                            )
+                            Log.api.debug("Cached image: \(routeType)/\(entityId)")
+                        } catch {
+                            Log.api.warning("Failed to cache image: \(error)")
+                        }
+                    }
+                } catch {
+                    Log.api.error("Failed to download image \(routeType)/\(entityId)")
+                }
+            }
+
+            if let data = imageData {
+                let mime = data.detectImageMIME()
+                let b64 = data.base64EncodedString()
                 let dataURI = "data:\(mime);base64,\(b64)"
                 let replacement = "src=\"\(dataURI)\""
                 result = (result as NSString).replacingCharacters(
                     in: (result as NSString).range(of: fullMatch),
                     with: replacement
                 )
-            } catch {
-                Log.api.error("Failed to download image \(routeType)/\(entityId)")
             }
         }
 
         return result
+    }
+
+    /// Pull-to-refresh: fetches metadata + content into local vars first,
+    /// then applies everything to @Observable state in one batch. This
+    /// prevents mid-flight SwiftUI re-evaluation from cancelling the
+    /// URLSession content request.
+    func refresh() async {
+        guard let client else { return }
+        let nid = self.noteId
+        let profileId = self.serverProfileId ?? ""
+
+        // 1) Fetch metadata into local vars (no @Observable writes yet)
+        var metaResponse: NoteResponse?
+        var serverDate: String?
+        do {
+            let response = try await client.getNote(nid)
+            metaResponse = response
+            serverDate = response.utcDateModified
+        } catch {
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError { return }
+        }
+
+        // 2) Compare timestamps
+        let cachedDate = (try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId))?.utcDateModified
+        let serverIsNewer = serverDate != nil && (cachedDate == nil || serverDate! > cachedDate!)
+
+        if !serverIsNewer {
+            if let response = metaResponse {
+                self.note = NoteItem(from: response)
+                self.serverUtcDateModified = serverDate
+                self.serverVerified = true
+            }
+            if let note, !note.childNoteIds.isEmpty {
+                loadChildNotesFromCache(childNoteIds: note.childNoteIds)
+            }
+            return
+        }
+
+        // 3) Fetch content into local vars (still no @Observable writes)
+        var fetchedData: Data?
+        var fetchedHTML: String?
+        do {
+            let data = try await client.getNoteContent(nid)
+            fetchedData = data
+            fetchedHTML = String(data: data, encoding: .utf8)
+        } catch {
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError { return }
+        }
+
+        // 4) All network done — apply everything to @Observable state
+        if let response = metaResponse {
+            self.note = NoteItem(from: response)
+            self.serverUtcDateModified = serverDate
+            self.serverVerified = true
+            if let pid = self.serverProfileId {
+                try? self.persistence.cacheNote(from: response, serverProfileId: pid)
+                try? self.persistence.commitBatch()
+                for attr in response.attributes {
+                    try? self.persistence.cacheAttributeBatch(from: attr, serverProfileId: pid)
+                }
+                try? self.persistence.commitBatch()
+            }
+        }
+
+        guard let data = fetchedData else { return }
+        self.content = data
+        self.serverContentHash = fetchedHTML?.hashValue
+        self.rawContentString = fetchedHTML
+
+        var displayHTML = fetchedHTML
+        if let html = displayHTML,
+           html.contains("api/attachments/") || html.contains("api/images/") {
+            displayHTML = await self.inlineAttachmentImages(in: html)
+        }
+        self.contentString = displayHTML
+
+        if let pid = self.serverProfileId {
+            try? self.persistence.cacheNoteContent(
+                nid, content: data, serverProfileId: pid,
+                utcDateModified: serverDate
+            )
+        }
+        self.checkForDraft()
+
+        if let note, !note.childNoteIds.isEmpty {
+            loadChildNotesFromCache(childNoteIds: note.childNoteIds)
+        }
     }
 
     func loadAttachments() async {
@@ -313,7 +475,22 @@ final class NoteDetailViewModel {
         self.editableContent = self.contentString ?? ""
     }
 
+    /// Called from the rich text editor's JS bridge on every debounced keystroke.
+    /// Updates a non-observable backing store to avoid SwiftUI re-evaluation.
+    func receiveEditorUpdate(_ html: String) {
+        _pendingEditorHTML = html
+    }
+
+    /// Flushes any pending editor HTML into the observable `editableContent`.
+    private func flushPendingEditorContent() {
+        if let pending = _pendingEditorHTML {
+            editableContent = pending
+            _pendingEditorHTML = nil
+        }
+    }
+
     func startEditing() {
+        _pendingEditorHTML = nil
         if !hasDraft {
             editableContent = contentString ?? ""
         }
@@ -323,6 +500,7 @@ final class NoteDetailViewModel {
 
     func cancelEditing() {
         draftAutoSaveTask?.cancel()
+        flushPendingEditorContent()
         if editableContent != contentString {
             saveDraftLocally()
             hasDraft = true
@@ -342,6 +520,7 @@ final class NoteDetailViewModel {
     }
 
     private func saveDraftLocally() {
+        flushPendingEditorContent()
         guard let profileId = self.serverProfileId else { return }
         try? self.persistence.saveDraft(noteId: self.noteId, content: self.editableContent, serverProfileId: profileId)
     }
@@ -349,6 +528,7 @@ final class NoteDetailViewModel {
     // MARK: - Saving
 
     func saveContent() async {
+        flushPendingEditorContent()
         guard let client, let note else {
             self.saveError = "Cannot save while offline. Your draft has been preserved."
             self.showSaveError = true
@@ -518,28 +698,31 @@ final class NoteDetailViewModel {
 
     // MARK: - Child Notes
 
+    /// Loads child notes purely from cache. The sync keeps the cache fresh.
     func loadChildNotes() async {
-        guard let note, !note.childNoteIds.isEmpty, let client else { return }
-        isLoadingChildren = true
-        defer { isLoadingChildren = false }
+        guard let note, !note.childNoteIds.isEmpty else { return }
+        loadChildNotesFromCache(childNoteIds: note.childNoteIds)
+    }
 
+    private func loadChildNotesFromCache(childNoteIds: [String]) {
+        guard let profileId = self.serverProfileId else { return }
         var results: [ChildNoteSummary] = []
-        for childId in note.childNoteIds {
-            do {
-                let response = try await client.getNote(childId)
+        for childId in childNoteIds {
+            if let cached = try? self.persistence.fetchCachedNote(id: childId, serverProfileId: profileId) {
+                let cachedAttrs = (try? self.persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
+                let iconClass = cachedAttrs.first { $0.name == "iconClass" }?.value
                 results.append(ChildNoteSummary(
-                    noteId: response.noteId,
-                    title: response.title,
-                    type: NoteType(rawValue: response.type) ?? .text,
-                    iconClass: response.attributes.first { $0.name == "iconClass" }?.value,
-                    childCount: response.childNoteIds.count
+                    noteId: cached.noteId,
+                    title: cached.title,
+                    type: NoteType(rawValue: cached.noteType) ?? .text,
+                    iconClass: iconClass,
+                    childCount: cached.childNoteIds.count
                 ))
-            } catch {
-                let apiError = APIError.from(error)
-                if case .cancelled = apiError { return }
             }
         }
-        self.childNotes = results
+        if !results.isEmpty {
+            self.childNotes = results
+        }
     }
 
     // MARK: - Cache Fallback
@@ -574,7 +757,6 @@ final class NoteDetailViewModel {
                 childBranchIds: cached.childBranchIds,
                 attributes: attrs
             )
-            isFromCache = true
         }
     }
 
@@ -584,8 +766,9 @@ final class NoteDetailViewModel {
         if let cached = try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId),
            let data = cached.content {
             content = data
-            contentString = String(data: data, encoding: .utf8)
-            isFromCache = true
+            let html = String(data: data, encoding: .utf8)
+            rawContentString = html
+            contentString = html
             checkForDraft()
         }
     }

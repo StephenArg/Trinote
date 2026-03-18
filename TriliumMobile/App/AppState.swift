@@ -13,6 +13,7 @@ final class AppState {
     var lastRefreshed: Date?
 
     let networkMonitor = NetworkMonitor.shared
+    let syncManager = SyncManager()
     private let persistence = PersistenceManager.shared
     private let keychain = KeychainManager.shared
 
@@ -25,6 +26,7 @@ final class AppState {
         do {
             if let profile = try persistence.activeProfile() {
                 activeProfile = profile
+                syncManager.restoreSyncState(profileId: profile.id)
                 await activateProfileSilently(profile)
             }
         } catch {
@@ -51,8 +53,12 @@ final class AppState {
                 self.lastRefreshed = .now
                 try persistence.setActiveProfile(profile)
                 Log.auth.info("Connected to \(profile.name)")
+                if syncManager.hasCompletedFullSync {
+                    syncManager.incrementalSync(client: newClient, profileId: profile.id)
+                } else {
+                    syncManager.fullSync(client: newClient, profileId: profile.id)
+                }
             } catch {
-                // Still set authenticated if we have a token — user can browse cache
                 self.isAuthenticated = true
                 self.connectionError = APIError.from(error).localizedDescription
                 Log.auth.warning("Validation failed but token exists, allowing cached browsing: \(error)")
@@ -97,6 +103,7 @@ final class AppState {
         self.lastRefreshed = .now
         try persistence.setActiveProfile(profile)
         Log.auth.info("Logged in to \(profile.name) with password")
+        syncManager.fullSync(client: newClient, profileId: profile.id)
     }
 
     func loginWithToken(_ token: String, profile: ServerProfile) async throws {
@@ -113,9 +120,12 @@ final class AppState {
         self.lastRefreshed = .now
         try persistence.setActiveProfile(profile)
         Log.auth.info("Logged in to \(profile.name) with token")
+        syncManager.fullSync(client: newClient, profileId: profile.id)
     }
 
     func logout() async {
+        syncManager.cancel()
+
         if let client {
             try? await client.logout()
         }
@@ -152,6 +162,9 @@ final class AppState {
             _ = try await client.getAppInfo()
             connectionError = nil
             lastRefreshed = .now
+            if let profileId = activeProfile?.id {
+                syncManager.incrementalSync(client: client, profileId: profileId)
+            }
         } catch {
             connectionError = APIError.from(error).localizedDescription
         }

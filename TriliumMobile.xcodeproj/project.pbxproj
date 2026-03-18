@@ -19,6 +19,7 @@
 		26DED1490B2A8F010D1FB147 /* foundation--link.svg in Resources */ = {isa = PBXBuildFile; fileRef = 8C1E58A43D677A77422C60F8 /* foundation--link.svg */; };
 		2823CA06FDC279B3B1CEF6A7 /* ImageNoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39B37BDC43F4BED10FE46D8C /* ImageNoteView.swift */; };
 		28590D18EAFD3460B1F20CFF /* Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC5A541DB5BB96A0C4140B84 /* Extensions.swift */; };
+		2A540F5768BF7E3DABB00D07 /* tiptap-bundle.min.js in Resources */ = {isa = PBXBuildFile; fileRef = B857A5416E4E02EC928F9D4E /* tiptap-bundle.min.js */; };
 		2CC5729ECDB0A2DDEB4D829F /* foundation--italic.svg in Resources */ = {isa = PBXBuildFile; fileRef = 6E892569D816B149CB4FEB17 /* foundation--italic.svg */; };
 		2D17A784AB6314059B5DA224 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E35A95D834F9ED10124E8C /* MainTabView.swift */; };
 		32C5AF94F817CAF4DA9E2C13 /* foundation--align-left.svg in Resources */ = {isa = PBXBuildFile; fileRef = 945D78F7DA24BB3EEFD7856F /* foundation--align-left.svg */; };
@@ -40,10 +41,12 @@
 		5F0DCDF0980DCAC13D415E9C /* TreeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BECDAF56F7CB4A1A4ACAC69C /* TreeView.swift */; };
 		6012013145C42363337DB5C7 /* editor.html in Resources */ = {isa = PBXBuildFile; fileRef = E23FEB5DDF9E5C1E60ECE1DA /* editor.html */; };
 		6321501EBCD8D71B1507C39D /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F8E5D882D6DDA31878895DD /* Logger.swift */; };
+		66D81ED8AC679EC55AC559DA /* ColorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC90F99DC2E0F685420CF348 /* ColorTheme.swift */; };
 		6C3A8B954D4BD234D17929C9 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3929428A84176EDED9880427 /* NetworkMonitor.swift */; };
 		703BAC549597ECEA89DCC500 /* brackets-curly-fill-svgrepo-com.svg in Resources */ = {isa = PBXBuildFile; fileRef = 88909BEFDBF46EE21257326A /* brackets-curly-fill-svgrepo-com.svg */; };
 		715E5F238638BFC7AE473B11 /* ExtensionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8395F0FD4E171E30A6104B54 /* ExtensionsTests.swift */; };
 		7200DFDF0217560192A6E210 /* ServerProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920CD6E3D2E310DF3CFF77D3 /* ServerProfile.swift */; };
+		752D257A5FE7650497D31B13 /* SyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADC78372090A0C5E9677A3A1 /* SyncManager.swift */; };
 		754A879FA1DDA37170AA53EA /* APIError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF31C259EBF673F7FCCDB07 /* APIError.swift */; };
 		77CE8160467A1C1219E65126 /* CanvasNoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70DD2F5B755B2992B776788C /* CanvasNoteView.swift */; };
 		7EF64F1975476BC22F6B875F /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F25E751790AEBB67409085F /* SearchView.swift */; };
@@ -58,7 +61,7 @@
 		933C1C1261D4E8FF7507B591 /* foundation--list-number.svg in Resources */ = {isa = PBXBuildFile; fileRef = 450845F005B73E275668162E /* foundation--list-number.svg */; };
 		95C0EBFDEC9BABF57A0BCDAA /* foundation--background-color.svg in Resources */ = {isa = PBXBuildFile; fileRef = 97E4AD9FF91A5A323378D191 /* foundation--background-color.svg */; };
 		9907D7E173E94B312467F272 /* remove-format-svgrepo-com.svg in Resources */ = {isa = PBXBuildFile; fileRef = D11195780195945D20578DBC /* remove-format-svgrepo-com.svg */; };
-		A102CD1BFC75F601F3CAD320 /* TriliumMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 316BCE41E9CC93253EC42651 /* TriliumMobileApp.swift */; };
+		9B827F096D39C5C62D932ECE /* TrinoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB108C86A70FD87F507D03BD /* TrinoteApp.swift */; };
 		A2966067024870CED7AF6BF3 /* foundation--underline.svg in Resources */ = {isa = PBXBuildFile; fileRef = E080DF540CD7F4B8B591B61B /* foundation--underline.svg */; };
 		A517E2EFD4BA477B742B54E8 /* foundation--align-center.svg in Resources */ = {isa = PBXBuildFile; fileRef = BD365F7D6E21D5DDE091CE2B /* foundation--align-center.svg */; };
 		A98BCF4F35678C3BC26C79F5 /* MermaidNoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74E7B6808B3E4E5B37571814 /* MermaidNoteView.swift */; };
@@ -91,78 +94,81 @@
 
 /* Begin PBXFileReference section */
 		0669C2E01C1A5256D581E41C /* HTMLNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLNoteView.swift; sourceTree = "<group>"; };
-		06C00ADA94016E8FF84DCAF7 /* foundation--strikethrough.svg */ = {isa = PBXFileReference; path = "foundation--strikethrough.svg"; sourceTree = "<group>"; };
-		0D630040CD028DB80C8762B4 /* foundation--subscript.svg */ = {isa = PBXFileReference; path = "foundation--subscript.svg"; sourceTree = "<group>"; };
-		146AB0FD715B2568B8A3E26A /* foundation--list-bullet.svg */ = {isa = PBXFileReference; path = "foundation--list-bullet.svg"; sourceTree = "<group>"; };
-		16363ACC91D7E8D1848BB1D5 /* TriliumMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TriliumMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		06C00ADA94016E8FF84DCAF7 /* foundation--strikethrough.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--strikethrough.svg"; sourceTree = "<group>"; };
+		0D630040CD028DB80C8762B4 /* foundation--subscript.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--subscript.svg"; sourceTree = "<group>"; };
+		146AB0FD715B2568B8A3E26A /* foundation--list-bullet.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--list-bullet.svg"; sourceTree = "<group>"; };
+		16363ACC91D7E8D1848BB1D5 /* TriliumMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TriliumMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1720E54BC8875DE841791639 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		178134F5BCDB4C037350F723 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
-		1C1D51142D13B0BB11842191 /* foundation--photo.svg */ = {isa = PBXFileReference; path = "foundation--photo.svg"; sourceTree = "<group>"; };
+		1C1D51142D13B0BB11842191 /* foundation--photo.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--photo.svg"; sourceTree = "<group>"; };
 		2059BA98942ABD1D27472D9C /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 		249E7C91F07B5FD3497BD03B /* TriliumClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriliumClient.swift; sourceTree = "<group>"; };
-		2A5E4D18E64DBAA3F6546624 /* foundation--align-justify.svg */ = {isa = PBXFileReference; path = "foundation--align-justify.svg"; sourceTree = "<group>"; };
-		316BCE41E9CC93253EC42651 /* TriliumMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriliumMobileApp.swift; sourceTree = "<group>"; };
+		2A5E4D18E64DBAA3F6546624 /* foundation--align-justify.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--align-justify.svg"; sourceTree = "<group>"; };
 		37B2B343CBAA6D9A2FCBAFB1 /* MockTriliumClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTriliumClient.swift; sourceTree = "<group>"; };
 		3929428A84176EDED9880427 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		39B37BDC43F4BED10FE46D8C /* ImageNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageNoteView.swift; sourceTree = "<group>"; };
 		3EBB82DFC0306F6AAF8618E3 /* CodeNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeNoteView.swift; sourceTree = "<group>"; };
-		450845F005B73E275668162E /* foundation--list-number.svg */ = {isa = PBXFileReference; path = "foundation--list-number.svg"; sourceTree = "<group>"; };
+		450845F005B73E275668162E /* foundation--list-number.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--list-number.svg"; sourceTree = "<group>"; };
 		45DE7A2E5DD13B23FCA4BB3D /* SearchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchViewModel.swift; sourceTree = "<group>"; };
 		4DF31C259EBF673F7FCCDB07 /* APIError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIError.swift; sourceTree = "<group>"; };
 		58E35A95D834F9ED10124E8C /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
-		5969F8D00BD34ABC1E9EC8EC /* grid-1524-svgrepo-com.svg */ = {isa = PBXFileReference; path = "grid-1524-svgrepo-com.svg"; sourceTree = "<group>"; };
+		5969F8D00BD34ABC1E9EC8EC /* grid-1524-svgrepo-com.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "grid-1524-svgrepo-com.svg"; sourceTree = "<group>"; };
 		5F8E5D882D6DDA31878895DD /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
 		65E9E10D55EDD3F3F92FFDDA /* AttachmentPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentPickerView.swift; sourceTree = "<group>"; };
 		699221EF7D1A7712BA258AA4 /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
-		6ADB8DAE31087CC333837561 /* foundation--superscript.svg */ = {isa = PBXFileReference; path = "foundation--superscript.svg"; sourceTree = "<group>"; };
+		6ADB8DAE31087CC333837561 /* foundation--superscript.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--superscript.svg"; sourceTree = "<group>"; };
 		6BA2982B3E8F898B17FA792F /* TriliumMobileTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TriliumMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		6E892569D816B149CB4FEB17 /* foundation--italic.svg */ = {isa = PBXFileReference; path = "foundation--italic.svg"; sourceTree = "<group>"; };
+		6E892569D816B149CB4FEB17 /* foundation--italic.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--italic.svg"; sourceTree = "<group>"; };
 		70DD2F5B755B2992B776788C /* CanvasNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasNoteView.swift; sourceTree = "<group>"; };
 		74E7B6808B3E4E5B37571814 /* MermaidNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidNoteView.swift; sourceTree = "<group>"; };
 		77A3D919408CE8E3755F5AE1 /* RecentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentsView.swift; sourceTree = "<group>"; };
 		822FE342C347D84B68B15FE7 /* DomainModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainModels.swift; sourceTree = "<group>"; };
 		8395F0FD4E171E30A6104B54 /* ExtensionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionsTests.swift; sourceTree = "<group>"; };
-		88909BEFDBF46EE21257326A /* brackets-curly-fill-svgrepo-com.svg */ = {isa = PBXFileReference; path = "brackets-curly-fill-svgrepo-com.svg"; sourceTree = "<group>"; };
-		891F490DC2A7950824EDBDA3 /* foundation--list-thumbnails.svg */ = {isa = PBXFileReference; path = "foundation--list-thumbnails.svg"; sourceTree = "<group>"; };
+		88909BEFDBF46EE21257326A /* brackets-curly-fill-svgrepo-com.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "brackets-curly-fill-svgrepo-com.svg"; sourceTree = "<group>"; };
+		891F490DC2A7950824EDBDA3 /* foundation--list-thumbnails.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--list-thumbnails.svg"; sourceTree = "<group>"; };
 		8AC5C7BB1E83A9D79A38E4C4 /* TriliumClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriliumClientTests.swift; sourceTree = "<group>"; };
-		8B4968B5549944ACE5D4380C /* redo-svgrepo-com.svg */ = {isa = PBXFileReference; path = "redo-svgrepo-com.svg"; sourceTree = "<group>"; };
+		8B4968B5549944ACE5D4380C /* redo-svgrepo-com.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "redo-svgrepo-com.svg"; sourceTree = "<group>"; };
 		8BD83219F3744970F227A56F /* AuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthViewModel.swift; sourceTree = "<group>"; };
-		8C1E58A43D677A77422C60F8 /* foundation--link.svg */ = {isa = PBXFileReference; path = "foundation--link.svg"; sourceTree = "<group>"; };
+		8C1E58A43D677A77422C60F8 /* foundation--link.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--link.svg"; sourceTree = "<group>"; };
 		920CD6E3D2E310DF3CFF77D3 /* ServerProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerProfile.swift; sourceTree = "<group>"; };
 		927E684525FD7009875C14D8 /* NoteDetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDetailViewModel.swift; sourceTree = "<group>"; };
 		9351613C3AA5C29DEF32998B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		945D78F7DA24BB3EEFD7856F /* foundation--align-left.svg */ = {isa = PBXFileReference; path = "foundation--align-left.svg"; sourceTree = "<group>"; };
+		945D78F7DA24BB3EEFD7856F /* foundation--align-left.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--align-left.svg"; sourceTree = "<group>"; };
 		95634B23DF7475A4690DB47D /* KeychainManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManagerTests.swift; sourceTree = "<group>"; };
-		97E4AD9FF91A5A323378D191 /* foundation--background-color.svg */ = {isa = PBXFileReference; path = "foundation--background-color.svg"; sourceTree = "<group>"; };
+		97E4AD9FF91A5A323378D191 /* foundation--background-color.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--background-color.svg"; sourceTree = "<group>"; };
 		9C1D451423D16ED02B9D2F08 /* NoteDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDetailView.swift; sourceTree = "<group>"; };
-		9E3AB2A20E06C69EFF2C5524 /* foundation--text-color.svg */ = {isa = PBXFileReference; path = "foundation--text-color.svg"; sourceTree = "<group>"; };
+		9E3AB2A20E06C69EFF2C5524 /* foundation--text-color.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--text-color.svg"; sourceTree = "<group>"; };
 		9F25E751790AEBB67409085F /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		A377AEA5E255F0F13C082957 /* mermaid-viewer.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "mermaid-viewer.html"; sourceTree = "<group>"; };
 		A490F444F007B481DE77966E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A663A048E025ECCE9C78614C /* NoteIconMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIconMapper.swift; sourceTree = "<group>"; };
 		A98259A6DF368095134B61CA /* PersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTests.swift; sourceTree = "<group>"; };
+		AB108C86A70FD87F507D03BD /* TrinoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrinoteApp.swift; sourceTree = "<group>"; };
+		ADC78372090A0C5E9677A3A1 /* SyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncManager.swift; sourceTree = "<group>"; };
 		AE7597C94909420E94C9077D /* FileNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileNoteView.swift; sourceTree = "<group>"; };
-		B393DECB1E6BF4DEC5571146 /* foundation--bold.svg */ = {isa = PBXFileReference; path = "foundation--bold.svg"; sourceTree = "<group>"; };
+		B393DECB1E6BF4DEC5571146 /* foundation--bold.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--bold.svg"; sourceTree = "<group>"; };
 		B658A74BC9AEC680499F07D2 /* CachedNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachedNote.swift; sourceTree = "<group>"; };
-		BD365F7D6E21D5DDE091CE2B /* foundation--align-center.svg */ = {isa = PBXFileReference; path = "foundation--align-center.svg"; sourceTree = "<group>"; };
+		B857A5416E4E02EC928F9D4E /* tiptap-bundle.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "tiptap-bundle.min.js"; sourceTree = "<group>"; };
+		BD365F7D6E21D5DDE091CE2B /* foundation--align-center.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--align-center.svg"; sourceTree = "<group>"; };
 		BDEB7455F735FE8547DA9F22 /* RichTextEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextEditorView.swift; sourceTree = "<group>"; };
 		BECDAF56F7CB4A1A4ACAC69C /* TreeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreeView.swift; sourceTree = "<group>"; };
 		BF35CAAA26B126CB2DCF097E /* TreeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreeViewModel.swift; sourceTree = "<group>"; };
-		D11195780195945D20578DBC /* remove-format-svgrepo-com.svg */ = {isa = PBXFileReference; path = "remove-format-svgrepo-com.svg"; sourceTree = "<group>"; };
-		D483BB2FEA4B6ACC058CA9DD /* foundation--indent-more.svg */ = {isa = PBXFileReference; path = "foundation--indent-more.svg"; sourceTree = "<group>"; };
-		D63BD554835C83476696F59B /* foundation--align-right.svg */ = {isa = PBXFileReference; path = "foundation--align-right.svg"; sourceTree = "<group>"; };
+		D11195780195945D20578DBC /* remove-format-svgrepo-com.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "remove-format-svgrepo-com.svg"; sourceTree = "<group>"; };
+		D483BB2FEA4B6ACC058CA9DD /* foundation--indent-more.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--indent-more.svg"; sourceTree = "<group>"; };
+		D63BD554835C83476696F59B /* foundation--align-right.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--align-right.svg"; sourceTree = "<group>"; };
 		DC5A541DB5BB96A0C4140B84 /* Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Extensions.swift; sourceTree = "<group>"; };
 		E0695672268431416656CCF5 /* TreeLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreeLogicTests.swift; sourceTree = "<group>"; };
-		E080DF540CD7F4B8B591B61B /* foundation--underline.svg */ = {isa = PBXFileReference; path = "foundation--underline.svg"; sourceTree = "<group>"; };
+		E080DF540CD7F4B8B591B61B /* foundation--underline.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--underline.svg"; sourceTree = "<group>"; };
 		E23FEB5DDF9E5C1E60ECE1DA /* editor.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = editor.html; sourceTree = "<group>"; };
 		E765F53E06306CA14E16259C /* TestFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestFixtures.swift; sourceTree = "<group>"; };
 		E7D5454615A8E35D022D4BD7 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
-		EDBF42CDEF8C3511E9C8E7AA /* undo-left-svgrepo-com.svg */ = {isa = PBXFileReference; path = "undo-left-svgrepo-com.svg"; sourceTree = "<group>"; };
-		EDD0BF2D056A986B7778DEC6 /* foundation--indent-less.svg */ = {isa = PBXFileReference; path = "foundation--indent-less.svg"; sourceTree = "<group>"; };
+		EDBF42CDEF8C3511E9C8E7AA /* undo-left-svgrepo-com.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "undo-left-svgrepo-com.svg"; sourceTree = "<group>"; };
+		EDD0BF2D056A986B7778DEC6 /* foundation--indent-less.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--indent-less.svg"; sourceTree = "<group>"; };
 		F2101195DB673E981D8BFF8D /* NoteType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteType.swift; sourceTree = "<group>"; };
 		F4249931C14AD08E0B921E2D /* canvas-viewer.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "canvas-viewer.html"; sourceTree = "<group>"; };
 		F6122E2190A9A71E4B89D6B5 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
-		FB6E2814BE21226A8F2E7C60 /* foundation--quote.svg */ = {isa = PBXFileReference; path = "foundation--quote.svg"; sourceTree = "<group>"; };
+		FB6E2814BE21226A8F2E7C60 /* foundation--quote.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = "foundation--quote.svg"; sourceTree = "<group>"; };
+		FC90F99DC2E0F685420CF348 /* ColorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorTheme.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -258,6 +264,7 @@
 			isa = PBXGroup;
 			children = (
 				B658A74BC9AEC680499F07D2 /* CachedNote.swift */,
+				FC90F99DC2E0F685420CF348 /* ColorTheme.swift */,
 				822FE342C347D84B68B15FE7 /* DomainModels.swift */,
 				F2101195DB673E981D8BFF8D /* NoteType.swift */,
 				920CD6E3D2E310DF3CFF77D3 /* ServerProfile.swift */,
@@ -271,6 +278,14 @@
 				95634B23DF7475A4690DB47D /* KeychainManagerTests.swift */,
 			);
 			path = Security;
+			sourceTree = "<group>";
+		};
+		534223715D9F5E9AB3683FD4 /* editor-vendor */ = {
+			isa = PBXGroup;
+			children = (
+				B857A5416E4E02EC928F9D4E /* tiptap-bundle.min.js */,
+			);
+			path = "editor-vendor";
 			sourceTree = "<group>";
 		};
 		588C646E4849F041FBBD10B9 /* API */ = {
@@ -303,7 +318,7 @@
 			children = (
 				E7D5454615A8E35D022D4BD7 /* AppState.swift */,
 				58E35A95D834F9ED10124E8C /* MainTabView.swift */,
-				316BCE41E9CC93253EC42651 /* TriliumMobileApp.swift */,
+				AB108C86A70FD87F507D03BD /* TrinoteApp.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -315,6 +330,7 @@
 				3FA7D8DBB7AAF9EC3451DE1C /* Models */,
 				758F033D3958D769FA82CDE8 /* Persistence */,
 				962ECF999D61C74776A6505C /* Security */,
+				CFAE4FBF61BE415FA3CD14D6 /* Sync */,
 				B2E0C60549C7FA9771DEC1CE /* Utilities */,
 			);
 			path = Core;
@@ -423,6 +439,14 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		CFAE4FBF61BE415FA3CD14D6 /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				ADC78372090A0C5E9677A3A1 /* SyncManager.swift */,
+			);
+			path = Sync;
+			sourceTree = "<group>";
+		};
 		DC1A463EA6649B7A39BF5EDA /* Auth */ = {
 			isa = PBXGroup;
 			children = (
@@ -436,6 +460,7 @@
 			isa = PBXGroup;
 			children = (
 				A34709343FFF8491ACF32256 /* editor-icons */,
+				534223715D9F5E9AB3683FD4 /* editor-vendor */,
 				A490F444F007B481DE77966E /* Assets.xcassets */,
 				F4249931C14AD08E0B921E2D /* canvas-viewer.html */,
 				E23FEB5DDF9E5C1E60ECE1DA /* editor.html */,
@@ -501,10 +526,6 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
-					9734BE1E0959CAA3C4E8B028 = {
-						DevelopmentTeam = "";
-						ProvisioningStyle = Manual;
-					};
 					FCD8CFE4B038A6C9338FFCAC = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Manual;
@@ -564,6 +585,7 @@
 				927CB9203695D0336F3748AB /* mermaid-viewer.html in Resources */,
 				59A4AE7025EA27912573CA6B /* redo-svgrepo-com.svg in Resources */,
 				9907D7E173E94B312467F272 /* remove-format-svgrepo-com.svg in Resources */,
+				2A540F5768BF7E3DABB00D07 /* tiptap-bundle.min.js in Resources */,
 				81BF8F88AB7C406DA2A1E683 /* undo-left-svgrepo-com.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -583,6 +605,7 @@
 				90DE97BC948538E991977EEC /* CachedNote.swift in Sources */,
 				77CE8160467A1C1219E65126 /* CanvasNoteView.swift in Sources */,
 				E0F077A034E7D1976D6446AD /* CodeNoteView.swift in Sources */,
+				66D81ED8AC679EC55AC559DA /* ColorTheme.swift in Sources */,
 				CFF699CA926E6A669A3FABB3 /* DomainModels.swift in Sources */,
 				28590D18EAFD3460B1F20CFF /* Extensions.swift in Sources */,
 				41090F16C1236D56B925D9EB /* FileNoteView.swift in Sources */,
@@ -605,10 +628,11 @@
 				AADD40CE60536A778D25ABC6 /* SearchViewModel.swift in Sources */,
 				7200DFDF0217560192A6E210 /* ServerProfile.swift in Sources */,
 				52B845F2745DF7B4D2B7EC6E /* SettingsView.swift in Sources */,
+				752D257A5FE7650497D31B13 /* SyncManager.swift in Sources */,
 				5F0DCDF0980DCAC13D415E9C /* TreeView.swift in Sources */,
 				905462682BBDBC46762AE4FE /* TreeViewModel.swift in Sources */,
 				21AB6A3E3BAD176604265326 /* TriliumClient.swift in Sources */,
-				A102CD1BFC75F601F3CAD320 /* TriliumMobileApp.swift in Sources */,
+				9B827F096D39C5C62D932ECE /* TrinoteApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -703,7 +727,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = FZA3GV2SVG;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TriliumMobile/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -712,6 +738,7 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.trilium.mobile;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -721,7 +748,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = FZA3GV2SVG;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TriliumMobile/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -730,6 +759,7 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.trilium.mobile;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

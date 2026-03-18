@@ -130,25 +130,9 @@ body { display: flex; flex-direction: column; }
   <div id="editor" style="display:none"></div>
 </div>
 
-<script type="module">
-import { Editor } from 'https://esm.sh/@tiptap/core@2'
-import StarterKit from 'https://esm.sh/@tiptap/starter-kit@2'
-import Underline from 'https://esm.sh/@tiptap/extension-underline@2'
-import TextAlign from 'https://esm.sh/@tiptap/extension-text-align@2'
-import { Color } from 'https://esm.sh/@tiptap/extension-color@2'
-import TextStyle from 'https://esm.sh/@tiptap/extension-text-style@2'
-import Highlight from 'https://esm.sh/@tiptap/extension-highlight@2'
-import Table from 'https://esm.sh/@tiptap/extension-table@2'
-import TableRow from 'https://esm.sh/@tiptap/extension-table-row@2'
-import TableCell from 'https://esm.sh/@tiptap/extension-table-cell@2'
-import TableHeader from 'https://esm.sh/@tiptap/extension-table-header@2'
-import Link from 'https://esm.sh/@tiptap/extension-link@2'
-import TaskList from 'https://esm.sh/@tiptap/extension-task-list@2'
-import TaskItem from 'https://esm.sh/@tiptap/extension-task-item@2'
-import Placeholder from 'https://esm.sh/@tiptap/extension-placeholder@2'
-import Subscript from 'https://esm.sh/@tiptap/extension-subscript@2'
-import Superscript from 'https://esm.sh/@tiptap/extension-superscript@2'
-import Image from 'https://esm.sh/@tiptap/extension-image@2'
+<script src="tiptap-bundle.min.js"></script>
+<script>
+const { Editor, StarterKit, Underline, TextAlign, Color, TextStyle, Highlight, Table, TableRow, TableCell, TableHeader, Link, TaskList, TaskItem, Placeholder, Subscript, Superscript, Image } = TipTap;
 
 const COLORS = [
   '#000000','#434343','#666666','#999999','#b7b7b7','#cccccc','#ffffff',
@@ -156,6 +140,9 @@ const COLORS = [
   '#9900ff','#ff00ff','#e6b8af','#f4cccc','#fce5cd','#fff2cc','#d9ead3',
   '#d0e0e3','#cfe2f3','#d9d2e9','#ead1dc',
 ];
+
+let _contentTimer = null;
+let _toolbarScheduled = false;
 
 const editor = new Editor({
   element: document.getElementById('editor'),
@@ -180,10 +167,13 @@ const editor = new Editor({
   ],
   content: '',
   onUpdate({ editor }) {
-    try { window.webkit.messageHandlers.contentChanged.postMessage(tiptapToCk(editor.getHTML())); } catch(e) {}
+    clearTimeout(_contentTimer);
+    _contentTimer = setTimeout(() => {
+      try { window.webkit.messageHandlers.contentChanged.postMessage(tiptapToCk(editor.getHTML())); } catch(e) {}
+    }, 300);
   },
-  onSelectionUpdate() { updateToolbarState(); },
-  onTransaction() { updateToolbarState(); },
+  onSelectionUpdate() { scheduleToolbarUpdate(); },
+  onTransaction() { scheduleToolbarUpdate(); },
 });
 
 // --- Toolbar Setup ---
@@ -309,6 +299,15 @@ sep();
 // Clear formatting
 btn('Clear', ic('remove-format-svgrepo-com.svg'), () => editor.chain().focus().unsetAllMarks().clearNodes().run(), () => false);
 
+function scheduleToolbarUpdate() {
+  if (_toolbarScheduled) return;
+  _toolbarScheduled = true;
+  requestAnimationFrame(() => {
+    updateToolbarState();
+    setTimeout(() => { _toolbarScheduled = false; }, 95);
+  });
+}
+
 function updateToolbarState() {
   toolbar.querySelectorAll('button').forEach(b => {
     if (b._isActive) b.classList.toggle('active', b._isActive());
@@ -413,7 +412,10 @@ function tiptapToCk(html) {
 // --- Bridge ---
 window.editorBridge = {
   setContent(html) { editor.commands.setContent(ckToTiptap(html) || '', false); },
-  getContent() { return tiptapToCk(editor.getHTML()); },
+  getContent() {
+    clearTimeout(_contentTimer);
+    return tiptapToCk(editor.getHTML());
+  },
   focus() { editor.commands.focus('end'); },
   insertHTML(html) { editor.commands.insertContent(html); },
   insertImage(src) { editor.chain().focus().setImage({ src }).run(); },

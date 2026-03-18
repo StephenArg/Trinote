@@ -29,6 +29,7 @@ targets:
     resources:
       - path: TriliumMobile/Resources/Assets.xcassets
       - path: TriliumMobile/Resources/editor-icons
+      - path: TriliumMobile/Resources/editor-vendor
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.trilium.mobile

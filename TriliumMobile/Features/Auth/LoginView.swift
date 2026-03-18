@@ -32,7 +32,7 @@ struct LoginView: View {
                 .font(.system(size: 48))
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
-            Text("Trilium Notes")
+            Text("Trinote")
                 .font(.title.bold())
             Text("Connect to your self-hosted server")
                 .font(.subheadline)

@@ -3,6 +3,16 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @AppStorage("appearanceMode") private var appearanceMode: String = AppearanceMode.device.rawValue
+    @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
+    @AppStorage("useCustomTextColor") private var useCustomTextColor: Bool = false
+    @AppStorage("customLightTextColor") private var customLightTextColor: String = "#1c1c1e"
+    @AppStorage("customDarkTextColor") private var customDarkTextColor: String = "#aaaaaa"
+
+    @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
+    @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
+    @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
+    @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#ffffff"
+    @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
     @State private var showLogoutConfirm = false
     @State private var showClearCacheConfirm = false
     @State private var appInfo: AppInfoResponse?
@@ -13,6 +23,7 @@ struct SettingsView: View {
     var body: some View {
         List {
             appearanceSection
+            treeViewSection
             serverSection
             connectionSection
             cacheSection
@@ -26,13 +37,122 @@ struct SettingsView: View {
 
     private var appearanceSection: some View {
         Section("Appearance") {
-            Picker("Theme", selection: $appearanceMode) {
+            Picker("Mode", selection: $appearanceMode) {
                 ForEach(AppearanceMode.allCases) { mode in
                     Text(mode.rawValue).tag(mode.rawValue)
                 }
             }
             .pickerStyle(.segmented)
+
+            Picker("Color Theme", selection: $colorTheme) {
+                ForEach(ColorTheme.allCases) { theme in
+                    HStack {
+                        Text(theme.rawValue)
+                        Spacer()
+                        HStack(spacing: 4) {
+                            Circle().fill(theme.accentColor).frame(width: 12, height: 12)
+                        }
+                    }
+                    .tag(theme.rawValue)
+                }
+            }
+
+            Toggle("Custom Text Colors", isOn: $useCustomTextColor)
+
+            if useCustomTextColor {
+                HStack {
+                    Text("Light Mode Text")
+                    Spacer()
+                    ColorPicker("", selection: lightTextColorBinding)
+                        .labelsHidden()
+                }
+
+                HStack {
+                    Text("Dark Mode Text")
+                    Spacer()
+                    ColorPicker("", selection: darkTextColorBinding)
+                        .labelsHidden()
+                }
+            }
         }
+    }
+
+    private var lightTextColorBinding: Binding<Color> {
+        Binding(
+            get: { Color(hex: customLightTextColor) },
+            set: { customLightTextColor = $0.hexString }
+        )
+    }
+
+    private var darkTextColorBinding: Binding<Color> {
+        Binding(
+            get: { Color(hex: customDarkTextColor) },
+            set: { customDarkTextColor = $0.hexString }
+        )
+    }
+
+    private var treeViewSection: some View {
+        Section("Tree View") {
+            Toggle("Custom Tree Colors", isOn: $useCustomTreeColors)
+
+            if useCustomTreeColors {
+                HStack {
+                    Text("Light Text")
+                    Spacer()
+                    ColorPicker("", selection: treeLightTextBinding)
+                        .labelsHidden()
+                }
+
+                HStack {
+                    Text("Dark Text")
+                    Spacer()
+                    ColorPicker("", selection: treeDarkTextBinding)
+                        .labelsHidden()
+                }
+
+                HStack {
+                    Text("Light Background")
+                    Spacer()
+                    ColorPicker("", selection: treeLightBgBinding)
+                        .labelsHidden()
+                }
+
+                HStack {
+                    Text("Dark Background")
+                    Spacer()
+                    ColorPicker("", selection: treeDarkBgBinding)
+                        .labelsHidden()
+                }
+            }
+        }
+    }
+
+    private var treeLightTextBinding: Binding<Color> {
+        Binding(
+            get: { Color(hex: treeLightTextColor) },
+            set: { treeLightTextColor = $0.hexString }
+        )
+    }
+
+    private var treeDarkTextBinding: Binding<Color> {
+        Binding(
+            get: { Color(hex: treeDarkTextColor) },
+            set: { treeDarkTextColor = $0.hexString }
+        )
+    }
+
+    private var treeLightBgBinding: Binding<Color> {
+        Binding(
+            get: { Color(hex: treeLightBgColor) },
+            set: { treeLightBgColor = $0.hexString }
+        )
+    }
+
+    private var treeDarkBgBinding: Binding<Color> {
+        Binding(
+            get: { Color(hex: treeDarkBgColor) },
+            set: { treeDarkBgColor = $0.hexString }
+        )
     }
 
     private var serverSection: some View {
@@ -90,8 +210,62 @@ struct SettingsView: View {
     }
 
     private var cacheSection: some View {
-        Section("Cache") {
+        Section("Cache & Sync") {
             LabeledContent("Cached Entities", value: "\(cacheEntityCount)")
+
+            if let lastSync = appState.syncManager.lastFullSyncDate {
+                LabeledContent("Last Full Sync", value: lastSync.relativeDisplay)
+            }
+
+            if let lastIncr = appState.syncManager.lastIncrementalSyncDate,
+               lastIncr != appState.syncManager.lastFullSyncDate {
+                LabeledContent("Last Quick Sync", value: lastIncr.relativeDisplay)
+            }
+
+            if appState.syncManager.isSyncing {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    switch appState.syncManager.phase {
+                    case .walkingTree:
+                        Text("Discovering notes…")
+                    case .fetchingChanges:
+                        Text("Checking for changes…")
+                    case .downloadingContent:
+                        let sm = appState.syncManager
+                        if sm.totalNoteCount > 0 {
+                            Text("Syncing \(sm.syncedNoteCount)/\(sm.totalNoteCount) notes…")
+                        } else {
+                            Text("Downloading content…")
+                        }
+                    case .cleaningUp:
+                        Text("Cleaning up…")
+                    default:
+                        Text("Syncing…")
+                    }
+                }
+                .font(.callout)
+                .foregroundStyle(.blue)
+            }
+
+            Button {
+                if let client = appState.client, let profileId = appState.activeProfile?.id {
+                    appState.syncManager.fullSync(client: client, profileId: profileId)
+                }
+            } label: {
+                Label("Full Sync (All Notes)", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(appState.syncManager.isSyncing || appState.client == nil)
+
+            if let error = appState.syncManager.syncError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
 
             if PersistenceManager.shared.isUsingMemoryFallback {
                 HStack {
