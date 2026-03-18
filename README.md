@@ -29,7 +29,7 @@ This project uses [XcodeGen](https://github.com/yonaskolb/XcodeGen) to generate 
 
 ```bash
 brew install xcodegen
-cd TriliumiOS
+cd Trinote
 xcodegen generate
 ```
 
