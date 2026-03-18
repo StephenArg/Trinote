@@ -36,13 +36,13 @@ xcodegen generate
 ### 2. Open in Xcode
 
 ```bash
-open TriliumMobile.xcodeproj
+open Trinote.xcodeproj
 ```
 
 ### 3. Configure signing
 
 - Open the project settings
-- Select the **TriliumMobile** target
+- Select the **Trinote** target
 - Under **Signing & Capabilities**, set your development team
 - Adjust the bundle identifier if needed
 
@@ -75,7 +75,7 @@ Management). The app allows arbitrary HTTP loads via ATS to support local networ
 ## Architecture
 
 ```
-TriliumMobile/
+Trinote/
 ├── App/                     # App entry, state, tab navigation
 ├── Core/
 │   ├── API/                 # TriliumClient, ETAPI models, error types
@@ -106,7 +106,7 @@ TriliumMobile/
 Run tests in Xcode (**Cmd+U**) or from the command line:
 
 ```bash
-xcodebuild test -scheme TriliumMobile -destination 'platform=iOS Simulator,name=iPhone 16'
+xcodebuild test -scheme Trinote -destination 'platform=iOS Simulator,name=iPhone 16'
 ```
 
 Tests cover:

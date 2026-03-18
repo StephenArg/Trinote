@@ -1,4 +1,4 @@
-name: TriliumMobile
+name: Trinote
 options:
   bundleIdPrefix: com.trilium
   deploymentTarget:
@@ -11,45 +11,45 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
-    INFOPLIST_FILE: TriliumMobile/Resources/Info.plist
+    INFOPLIST_FILE: Trinote/Resources/Info.plist
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Manual
     SWIFT_STRICT_CONCURRENCY: complete
 
 targets:
-  TriliumMobile:
+  Trinote:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
     sources:
-      - path: TriliumMobile
+      - path: Trinote
         excludes:
           - "**/*.xcassets/*/Contents.json"
     resources:
-      - path: TriliumMobile/Resources/Assets.xcassets
-      - path: TriliumMobile/Resources/editor-icons
-      - path: TriliumMobile/Resources/editor-vendor
+      - path: Trinote/Resources/Assets.xcassets
+      - path: Trinote/Resources/editor-icons
+      - path: Trinote/Resources/editor-vendor
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.trilium.mobile
-        INFOPLIST_FILE: TriliumMobile/Resources/Info.plist
+        INFOPLIST_FILE: Trinote/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: false
     scheme:
       testTargets:
-        - TriliumMobileTests
+        - TrinoteTests
 
-  TriliumMobileTests:
+  TrinoteTests:
     type: bundle.unit-test
     platform: iOS
     deploymentTarget: "17.0"
     sources:
-      - path: TriliumMobileTests
+      - path: TrinoteTests
     dependencies:
-      - target: TriliumMobile
+      - target: Trinote
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.trilium.mobile.tests
         GENERATE_INFOPLIST_FILE: true
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/TriliumMobile.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TriliumMobile"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Trinote.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Trinote"
         BUNDLE_LOADER: "$(TEST_HOST)"
