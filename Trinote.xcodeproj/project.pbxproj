@@ -52,6 +52,7 @@
 		9B718864F57D15E9E8B73E2F /* foundation--link.svg in Resources */ = {isa = PBXBuildFile; fileRef = 4699E3F9A5D4A151B58139CC /* foundation--link.svg */; };
 		9BF31B50A42694C2850E2051 /* RichTextEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33AD79D46CB51737525739F2 /* RichTextEditorView.swift */; };
 		9EF45612BCB34CA2F63A20B3 /* editor.html in Resources */ = {isa = PBXBuildFile; fileRef = 26EC329D9A4E4809BD949D0E /* editor.html */; };
+		9F9B52C56AD373C88F63538B /* FavoritesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 588770FBB82E521F5D17ECD5 /* FavoritesView.swift */; };
 		A18A16A5F379624AB3C6E483 /* MockTriliumClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60F5A1C63DF96EC4DC3F804F /* MockTriliumClient.swift */; };
 		AB8963CF2C644C97319514F4 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39EAFFEB22644B43EADE181C /* NetworkMonitor.swift */; };
 		AC84023D40DB00F12C9452AA /* KeychainManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5901B87D36D7220BE82EF6C /* KeychainManagerTests.swift */; };
@@ -122,6 +123,7 @@
 		533CFD12EA510A5E31420651 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		5520F8C0286204C690743FFB /* PersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTests.swift; sourceTree = "<group>"; };
 		55B72FB28B06E1BF29404A67 /* mermaid-viewer.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "mermaid-viewer.html"; sourceTree = "<group>"; };
+		588770FBB82E521F5D17ECD5 /* FavoritesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesView.swift; sourceTree = "<group>"; };
 		5B8C284E81EEB812C196E0D7 /* NoteDetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDetailViewModel.swift; sourceTree = "<group>"; };
 		5C34CC201453841383579934 /* TestFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestFixtures.swift; sourceTree = "<group>"; };
 		60F5A1C63DF96EC4DC3F804F /* MockTriliumClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTriliumClient.swift; sourceTree = "<group>"; };
@@ -346,6 +348,7 @@
 			children = (
 				6447EAAAC2B7AD7C83629D80 /* Attachments */,
 				6A4E099C953DDD36346C672B /* Auth */,
+				CDD8DE8F5E45A5B7BEE3D3E0 /* Favorites */,
 				935299CCAA5047047EF9DE22 /* NoteDetail */,
 				E3485F131A79C9EF7120FFC0 /* Search */,
 				E0B8153704EB9F8ED9FA8E50 /* Settings */,
@@ -407,6 +410,14 @@
 				6B0A3E846E590C36EFE614CE /* PersistenceManager.swift */,
 			);
 			path = Persistence;
+			sourceTree = "<group>";
+		};
+		CDD8DE8F5E45A5B7BEE3D3E0 /* Favorites */ = {
+			isa = PBXGroup;
+			children = (
+				588770FBB82E521F5D17ECD5 /* FavoritesView.swift */,
+			);
+			path = Favorites;
 			sourceTree = "<group>";
 		};
 		CF12A13D7C169D98A4463179 /* Trinote */ = {
@@ -622,6 +633,7 @@
 				F7E8D0AC8D4ED0FCF9547220 /* ColorTheme.swift in Sources */,
 				B728EA239A314355781A83DC /* DomainModels.swift in Sources */,
 				B201C844A00FDFC97B04BBF0 /* Extensions.swift in Sources */,
+				9F9B52C56AD373C88F63538B /* FavoritesView.swift in Sources */,
 				6FF83D97A3548DA2B896EEED /* FileNoteView.swift in Sources */,
 				CB41B5B085F840A2BD51680E /* HTMLNoteView.swift in Sources */,
 				68422F2190AED7D3FB92777D /* ImageNoteView.swift in Sources */,

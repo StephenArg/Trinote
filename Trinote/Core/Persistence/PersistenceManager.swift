@@ -25,6 +25,7 @@ final class PersistenceManager {
                 CachedBranch.self,
                 CachedAttribute.self,
                 RecentNote.self,
+                FavoriteNote.self,
                 RecentSearch.self,
                 DraftContent.self,
                 SyncStatus.self,
@@ -317,6 +318,52 @@ final class PersistenceManager {
                 context.delete(item)
             }
             try context.save()
+        }
+    }
+
+    // MARK: - Favorites
+
+    func addFavorite(noteId: String, title: String, noteType: String, serverProfileId: String) throws {
+        let id = "\(serverProfileId):\(noteId)"
+        var descriptor = FetchDescriptor<FavoriteNote>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        if try context.fetch(descriptor).first == nil {
+            let fav = FavoriteNote(noteId: noteId, title: title, noteType: noteType, serverProfileId: serverProfileId)
+            context.insert(fav)
+            try context.save()
+        }
+    }
+
+    func removeFavorite(noteId: String, serverProfileId: String) throws {
+        let id = "\(serverProfileId):\(noteId)"
+        var descriptor = FetchDescriptor<FavoriteNote>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        if let existing = try context.fetch(descriptor).first {
+            context.delete(existing)
+            try context.save()
+        }
+    }
+
+    func isFavorite(noteId: String, serverProfileId: String) throws -> Bool {
+        let id = "\(serverProfileId):\(noteId)"
+        var descriptor = FetchDescriptor<FavoriteNote>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first != nil
+    }
+
+    func fetchFavorites(serverProfileId: String) throws -> [FavoriteNote] {
+        let profileId = serverProfileId
+        var descriptor = FetchDescriptor<FavoriteNote>(
+            predicate: #Predicate { $0.serverProfileId == profileId },
+            sortBy: [SortDescriptor(\.title)]
+        )
+        return try context.fetch(descriptor)
+    }
+
+    func removeFavorites(noteIds: Set<String>, serverProfileId: String) throws {
+        let profileId = serverProfileId
+        for noteId in noteIds {
+            try removeFavorite(noteId: noteId, serverProfileId: profileId)
         }
     }
 

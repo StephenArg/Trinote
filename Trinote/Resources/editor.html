@@ -86,7 +86,7 @@ body { display: flex; flex-direction: column; }
 }
 
 /* Editor area */
-#editor-container { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+#editor-container { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; cursor: text; }
 .tiptap {
   padding: 16px; outline: none; min-height: 100%; font-size: 16px; line-height: 1.6; color: var(--fg);
 }
@@ -426,6 +426,11 @@ document.getElementById('loading').style.display = 'none';
 document.getElementById('editor').style.display = 'block';
 document.getElementById('toolbar-wrap').style.display = 'block';
 updateToolbarState();
+
+// Focus editor when tapping anywhere in the container (not just placeholder text)
+document.getElementById('editor-container').addEventListener('click', function(e) {
+  if (!e.target.closest('a[href]')) editor.commands.focus('end');
+});
 
 try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch(e) {}
 </script>

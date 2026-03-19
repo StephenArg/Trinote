@@ -1,6 +1,13 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Notification Names
+
+extension Notification.Name {
+    /// Posted when a note is deleted so the tree and other views can refresh.
+    static let noteDeleted = Notification.Name("NoteDeleted")
+}
+
 // MARK: - String
 
 extension String {

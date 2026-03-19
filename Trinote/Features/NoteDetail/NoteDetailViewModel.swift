@@ -645,6 +645,11 @@ final class NoteDetailViewModel {
 
         do {
             try await client.deleteNote(nid)
+            if let profileId = serverProfileId {
+                try? persistence.deleteCachedNotes(noteIds: [nid], serverProfileId: profileId)
+                try? persistence.removeFavorite(noteId: nid, serverProfileId: profileId)
+            }
+            NotificationCenter.default.post(name: .noteDeleted, object: nil)
             return true
         } catch {
             self.saveError = APIError.from(error).localizedDescription

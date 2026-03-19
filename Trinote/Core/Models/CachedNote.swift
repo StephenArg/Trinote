@@ -139,6 +139,23 @@ final class RecentNote {
 }
 
 @Model
+final class FavoriteNote {
+    @Attribute(.unique) var id: String
+    var noteId: String
+    var title: String
+    var noteType: String
+    var serverProfileId: String
+
+    init(noteId: String, title: String, noteType: String, serverProfileId: String) {
+        self.id = "\(serverProfileId):\(noteId)"
+        self.noteId = noteId
+        self.title = title
+        self.noteType = noteType
+        self.serverProfileId = serverProfileId
+    }
+}
+
+@Model
 final class RecentSearch {
     @Attribute(.unique) var id: String
     var query: String

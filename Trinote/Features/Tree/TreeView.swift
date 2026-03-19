@@ -33,6 +33,8 @@ struct TreeView: View {
     @State private var createSheetContext: CreateNoteSheetContext?
     @State private var navigateToNoteForEdit: NoteEditTarget?
     @State private var noteToDelete: (note: NoteItem, vm: TreeViewModel)?
+    @State private var showFavoritesSheet = false
+    @State private var favoriteNoteIds: Set<String> = []
 
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
@@ -60,30 +62,6 @@ struct TreeView: View {
         }
         .navigationTitle(parentTitle)
         .toolbar {
-            if parentNoteId == "root", let vm = viewModel {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        let rootNote = NoteItem(
-                            noteId: "root",
-                            title: "Notes",
-                            type: .text,
-                            mime: "text/html",
-                            isProtected: false,
-                            dateCreated: "",
-                            dateModified: "",
-                            parentNoteIds: [],
-                            childNoteIds: [],
-                            parentBranchIds: [],
-                            childBranchIds: [],
-                            attributes: []
-                        )
-                        createSheetContext = CreateNoteSheetContext(parentNote: rootNote, viewModel: vm)
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("New top-level note")
-                }
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     triggerSyncAndReload()
@@ -93,6 +71,40 @@ struct TreeView: View {
                 .disabled(viewModel?.isRefreshing ?? false || appState.syncManager.isSyncing)
                 .accessibilityLabel("Refresh tree")
             }
+            if parentNoteId == "root" {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showFavoritesSheet = true
+                    } label: {
+                        Image(systemName: "star")
+                    }
+                    .accessibilityLabel("Favorites")
+                }
+                if let vm = viewModel {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            let rootNote = NoteItem(
+                                noteId: "root",
+                                title: "Notes",
+                                type: .text,
+                                mime: "text/html",
+                                isProtected: false,
+                                dateCreated: "",
+                                dateModified: "",
+                                parentNoteIds: [],
+                                childNoteIds: [],
+                                parentBranchIds: [],
+                                childBranchIds: [],
+                                attributes: []
+                            )
+                            createSheetContext = CreateNoteSheetContext(parentNote: rootNote, viewModel: vm)
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("New top-level note")
+                    }
+                }
+            }
         }
         .task {
             if viewModel == nil {
@@ -100,6 +112,7 @@ struct TreeView: View {
                 viewModel = vm
                 await vm.loadTree()
             }
+            loadFavoriteIds()
         }
         .navigationDestination(item: $navigateToNote) { note in
             NoteDetailView(noteId: note.noteId, title: note.title)
@@ -128,6 +141,14 @@ struct TreeView: View {
             if let (note, _) = noteToDelete {
                 Text("\"\(note.title)\" and all its subnotes will be permanently deleted. This cannot be undone.")
             }
+        }
+        .sheet(isPresented: $showFavoritesSheet, onDismiss: loadFavoriteIds) {
+            FavoritesView(onNoteDeleted: { triggerSyncAndReload() })
+                .environment(appState)
+        }
+        .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
+        .onReceive(NotificationCenter.default.publisher(for: .noteDeleted)) { _ in
+            triggerSyncAndReload()
         }
         .sheet(item: $createSheetContext) { ctx in
             CreateChildNoteFromTreeSheet(
@@ -180,6 +201,33 @@ struct TreeView: View {
             .padding(.horizontal)
             .padding(.vertical, 6)
             .background(.blue.opacity(0.08))
+        }
+    }
+
+    private func toggleFavorite(_ note: NoteItem, isFav: Bool, onFavoriteChanged: @escaping () -> Void) {
+        guard let profileId = appState.activeProfile?.id else { return }
+        do {
+            if isFav {
+                try PersistenceManager.shared.removeFavorite(noteId: note.noteId, serverProfileId: profileId)
+            } else {
+                try PersistenceManager.shared.addFavorite(noteId: note.noteId, title: note.title, noteType: note.type.rawValue, serverProfileId: profileId)
+            }
+            onFavoriteChanged()
+        } catch {
+            Log.persistence.error("Failed to toggle favorite: \(error)")
+        }
+    }
+
+    private func loadFavoriteIds() {
+        guard let profileId = appState.activeProfile?.id else {
+            favoriteNoteIds = []
+            return
+        }
+        do {
+            let favs = try PersistenceManager.shared.fetchFavorites(serverProfileId: profileId)
+            favoriteNoteIds = Set(favs.map(\.noteId))
+        } catch {
+            Log.persistence.error("Failed to load favorite IDs: \(error)")
         }
     }
 
@@ -291,7 +339,7 @@ struct TreeView: View {
     private func treeList(_ vm: TreeViewModel) -> some View {
         List {
             ForEach(vm.visibleNodes) { flat in
-                treeNodeRow(flat: flat, vm: vm)
+                treeNodeRow(flat: flat, vm: vm, favoriteNoteIds: favoriteNoteIds, onFavoriteChanged: loadFavoriteIds)
             }
             .onMove(perform: vm.handleMove)
         }
@@ -301,8 +349,9 @@ struct TreeView: View {
         .background(treeBgColor ?? Color.clear)
     }
 
-    private func treeNodeRow(flat: FlatTreeNode, vm: TreeViewModel) -> some View {
+    private func treeNodeRow(flat: FlatTreeNode, vm: TreeViewModel, favoriteNoteIds: Set<String>, onFavoriteChanged: @escaping () -> Void) -> some View {
         let leading = CGFloat(flat.depth) * 20 + 16
+        let isFav = favoriteNoteIds.contains(flat.node.note.noteId)
         return TreeNodeRow(
             node: flat.node,
             depth: flat.depth,
@@ -320,6 +369,11 @@ struct TreeView: View {
                 Label("New Note", systemImage: "plus")
             }
             if flat.node.note.noteId != "root" {
+                Button {
+                    toggleFavorite(flat.node.note, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
+                } label: {
+                    Label(isFav ? "Remove from Favorites" : "Add to Favorites", systemImage: isFav ? "star.slash" : "star")
+                }
                 Button(role: .destructive) {
                     noteToDelete = (flat.node.note, vm)
                 } label: {
