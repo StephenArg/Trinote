@@ -5,6 +5,17 @@ private struct SubTreeTarget: Hashable {
     let title: String
 }
 
+private struct NoteEditTarget: Hashable {
+    let noteId: String
+    let title: String
+}
+
+private struct CreateNoteSheetContext: Identifiable {
+    let id = UUID()
+    let parentNote: NoteItem
+    let viewModel: TreeViewModel
+}
+
 struct TreeView: View {
     let parentNoteId: String
     let parentTitle: String
@@ -19,6 +30,9 @@ struct TreeView: View {
     @State private var viewModel: TreeViewModel?
     @State private var navigateToNote: NoteItem?
     @State private var drillDownTarget: SubTreeTarget?
+    @State private var createSheetContext: CreateNoteSheetContext?
+    @State private var navigateToNoteForEdit: NoteEditTarget?
+    @State private var noteToDelete: (note: NoteItem, vm: TreeViewModel)?
 
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
@@ -46,6 +60,30 @@ struct TreeView: View {
         }
         .navigationTitle(parentTitle)
         .toolbar {
+            if parentNoteId == "root", let vm = viewModel {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        let rootNote = NoteItem(
+                            noteId: "root",
+                            title: "Notes",
+                            type: .text,
+                            mime: "text/html",
+                            isProtected: false,
+                            dateCreated: "",
+                            dateModified: "",
+                            parentNoteIds: [],
+                            childNoteIds: [],
+                            parentBranchIds: [],
+                            childBranchIds: [],
+                            attributes: []
+                        )
+                        createSheetContext = CreateNoteSheetContext(parentNote: rootNote, viewModel: vm)
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("New top-level note")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     triggerSyncAndReload()
@@ -66,8 +104,40 @@ struct TreeView: View {
         .navigationDestination(item: $navigateToNote) { note in
             NoteDetailView(noteId: note.noteId, title: note.title)
         }
+        .navigationDestination(item: $navigateToNoteForEdit) { target in
+            NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
+        }
         .navigationDestination(item: $drillDownTarget) { target in
             TreeView(parentNoteId: target.noteId, parentTitle: target.title)
+        }
+        .alert("Delete Note", isPresented: Binding(
+            get: { noteToDelete != nil },
+            set: { if !$0 { noteToDelete = nil } }
+        )) {
+            Button("Delete Note and Subnotes", role: .destructive) {
+                guard let (note, treeVm) = noteToDelete else { return }
+                Task {
+                    _ = await treeVm.deleteNoteAndSubnotes(noteId: note.noteId)
+                }
+                noteToDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                noteToDelete = nil
+            }
+        } message: {
+            if let (note, _) = noteToDelete {
+                Text("\"\(note.title)\" and all its subnotes will be permanently deleted. This cannot be undone.")
+            }
+        }
+        .sheet(item: $createSheetContext) { ctx in
+            CreateChildNoteFromTreeSheet(
+                parentNote: ctx.parentNote,
+                viewModel: ctx.viewModel,
+                onDismiss: { createSheetContext = nil },
+                onNoteCreated: { noteId, title in
+                    navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
+                }
+            )
         }
     }
 
@@ -243,6 +313,20 @@ struct TreeView: View {
                 drillDownTarget = SubTreeTarget(noteId: noteId, title: title)
             }
         )
+        .contextMenu {
+            Button {
+                createSheetContext = CreateNoteSheetContext(parentNote: flat.node.note, viewModel: vm)
+            } label: {
+                Label("New Note", systemImage: "plus")
+            }
+            if flat.node.note.noteId != "root" {
+                Button(role: .destructive) {
+                    noteToDelete = (flat.node.note, vm)
+                } label: {
+                    Label("Delete Note", systemImage: "trash")
+                }
+            }
+        }
         .listRowInsets(EdgeInsets(top: 8, leading: leading, bottom: 8, trailing: 16))
         .listRowBackground(treeBgColor ?? Color(.systemBackground))
         .listRowSeparatorTint(Color(.separator))
@@ -413,6 +497,68 @@ struct TreeNodeRow: View {
         }
         .buttonStyle(.borderless)
         .accessibilityLabel("\(displayTitle), \(node.note.type.displayName) note")
+    }
+}
+
+// MARK: - Create Child Note Sheet (from Tree)
+
+private struct CreateChildNoteFromTreeSheet: View {
+    let parentNote: NoteItem
+    let viewModel: TreeViewModel
+    let onDismiss: () -> Void
+    var onNoteCreated: ((String, String) -> Void)?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var newNoteTitle = ""
+    @State private var newNoteType: NoteType = .text
+    @State private var isCreating = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Note Title", text: $newNoteTitle)
+                    .textInputAutocapitalization(.sentences)
+
+                Picker("Type", selection: $newNoteType) {
+                    Text("Text").tag(NoteType.text)
+                    Text("Code").tag(NoteType.code)
+                }
+            }
+            .navigationTitle("New Note")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        onDismiss()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        Task { await createAndDismiss() }
+                    }
+                    .disabled(newNoteTitle.trimmingCharacters(in: .whitespaces).isEmpty || isCreating)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func createAndDismiss() async {
+        guard !newNoteTitle.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        isCreating = true
+        defer { isCreating = false }
+
+        let noteId = await viewModel.createChildNote(
+            parentNoteId: parentNote.noteId,
+            title: newNoteTitle,
+            type: newNoteType
+        )
+        onDismiss()
+        dismiss()
+        if let noteId {
+            onNoteCreated?(noteId, newNoteTitle)
+        }
     }
 }
 

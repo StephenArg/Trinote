@@ -279,6 +279,62 @@ final class TreeViewModel {
         await loadTree()
     }
 
+    func deleteNoteAndSubnotes(noteId: String) async -> Bool {
+        guard let client, noteId != "root" else { return false }
+        do {
+            try await client.deleteNote(noteId)
+            if let profileId = serverProfileId {
+                try? persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
+            }
+            await refresh()
+            return true
+        } catch {
+            self.error = APIError.from(error).localizedDescription
+            Log.api.error("Failed to delete note: \(error)")
+            return false
+        }
+    }
+
+    func createChildNote(parentNoteId: String, title: String, type: NoteType = .text) async -> String? {
+        guard let client, !title.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+
+        let mime: String
+        switch type {
+        case .code: mime = "text/plain"
+        case .file: mime = "application/octet-stream"
+        default: mime = "text/html"
+        }
+
+        do {
+            let request = CreateNoteRequest(
+                parentNoteId: parentNoteId,
+                title: title,
+                type: type.rawValue,
+                mime: mime,
+                content: "",
+                notePosition: nil,
+                prefix: nil,
+                isProtected: nil,
+                noteId: nil,
+                branchId: nil
+            )
+            let response = try await client.createNote(request)
+
+            if let profileId = serverProfileId {
+                try? persistence.cacheNote(from: response.note, serverProfileId: profileId)
+                try? persistence.cacheBranch(from: response.branch, serverProfileId: profileId)
+                try? persistence.commitBatch()
+            }
+
+            await refresh()
+            return response.note.noteId
+        } catch {
+            self.error = APIError.from(error).localizedDescription
+            Log.api.error("Failed to create note: \(error)")
+            return nil
+        }
+    }
+
     func reloadFromCache() {
         noteCache.removeAll()
         branchCache.removeAll()

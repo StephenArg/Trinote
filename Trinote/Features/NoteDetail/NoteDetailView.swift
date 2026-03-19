@@ -5,6 +5,7 @@ import UIKit
 struct NoteDetailView: View {
     let noteId: String
     let title: String
+    var startInEditMode: Bool = false
 
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
@@ -51,6 +52,9 @@ struct NoteDetailView: View {
                 async let attachTask: () = vm.loadAttachments()
                 await vm.loadChildNotes()
                 _ = await (contentTask, attachTask)
+                if startInEditMode, vm.note != nil {
+                    vm.isEditing = true
+                }
             }
         }
         .navigationDestination(item: $navigateToNoteId) { linkedNoteId in

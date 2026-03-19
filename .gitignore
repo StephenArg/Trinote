@@ -1,11 +1,10 @@
 .DS_Store
 local_notes
-Trinote.xcodeproj
-Trinote.xcworkspace
-Trinote.xcuserdata
-Trinote.xctestplan
-Trinote.xctestrun
-Trinote.xctestplan
+*.xcodeproj
+*.xcworkspace
+**/*.xcuserdata
+**/*.xctestplan
+**/*.xctestrun
 .env
 .env.local
 .env.development
