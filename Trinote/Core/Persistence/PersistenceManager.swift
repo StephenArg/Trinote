@@ -374,6 +374,11 @@ final class PersistenceManager {
         return NoteIconMapper.sfSymbol(for: iconClass) ?? type.iconName
     }
 
+    /// Top-level child of `root` on the path to `noteId` (the notebook / root segment used for tree grouping).
+    func topLevelNotebookId(noteId: String, serverProfileId: String) -> String? {
+        topLevelNoteIdUnderRoot(noteId: noteId, serverProfileId: serverProfileId)
+    }
+
     /// Walks parents from `noteId` until the parent is `root`; returns that note’s id (the top-level child of root on this branch).
     /// Uses `CachedBranch` when `parentNoteIds` is empty (common after incremental sync).
     private func topLevelNoteIdUnderRoot(noteId: String, serverProfileId: String) -> String? {

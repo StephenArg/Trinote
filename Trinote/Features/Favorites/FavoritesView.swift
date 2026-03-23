@@ -6,6 +6,13 @@ private enum FavoritesSortOrder: String, CaseIterable {
     case titleDescending = "Z–A"
 }
 
+/// One top-level notebook (child of `root`) and its favorited descendants.
+private struct FavoriteNotebookSection: Identifiable {
+    let id: String
+    let title: String
+    let items: [FavoriteNote]
+}
+
 struct FavoritesView: View {
     var onNoteDeleted: (() -> Void)?
 
@@ -41,12 +48,48 @@ struct FavoritesView: View {
         return "Create \(selectedCount) duplicate(s) under “\(p.title)”?"
     }
 
-    private var sortedFavorites: [FavoriteNote] {
-        switch sortOrder {
-        case .titleAscending:
-            favorites.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        case .titleDescending:
-            favorites.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+    private var groupedFavoriteSections: [FavoriteNotebookSection] {
+        guard let profileId = appState.activeProfile?.id, !favorites.isEmpty else { return [] }
+        let pm = PersistenceManager.shared
+        var buckets: [String: [FavoriteNote]] = [:]
+        var titles: [String: String] = [:]
+
+        for fav in favorites {
+            let key: String
+            if let topId = pm.topLevelNotebookId(noteId: fav.noteId, serverProfileId: profileId) {
+                key = topId
+                if titles[key] == nil {
+                    if let cached = try? pm.fetchCachedNote(id: topId, serverProfileId: profileId) {
+                        let t = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        titles[key] = t.isEmpty ? "Notebook" : t
+                    } else {
+                        titles[key] = "Notebook"
+                    }
+                }
+            } else {
+                key = "__other__"
+                titles[key] = "Other"
+            }
+            buckets[key, default: []].append(fav)
+        }
+
+        let sortedItems: ([FavoriteNote]) -> [FavoriteNote] = { notes in
+            switch sortOrder {
+            case .titleAscending:
+                notes.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            case .titleDescending:
+                notes.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+            }
+        }
+
+        let keys = buckets.keys.sorted { a, b in
+            if a == "__other__" { return false }
+            if b == "__other__" { return true }
+            return (titles[a] ?? "").localizedCaseInsensitiveCompare(titles[b] ?? "") == .orderedAscending
+        }
+
+        return keys.map { k in
+            FavoriteNotebookSection(id: k, title: titles[k] ?? k, items: sortedItems(buckets[k] ?? []))
         }
     }
 
@@ -139,12 +182,40 @@ struct FavoritesView: View {
 
     private var favoritesList: some View {
         List {
-            ForEach(sortedFavorites, id: \.id) { fav in
-                favoriteListItem(fav)
+            ForEach(groupedFavoriteSections) { section in
+                Section {
+                    ForEach(section.items, id: \.id) { fav in
+                        favoriteListItem(fav)
+                    }
+                } header: {
+                    HStack(spacing: 8) {
+                        Image(systemName: sectionHeaderIcon(for: section))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22, alignment: .center)
+                            .accessibilityHidden(true)
+                        Text(section.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    .textCase(nil)
+                }
             }
         }
         .listStyle(.insetGrouped)
         .disabled(isBulkWorking)
+    }
+
+    private func sectionHeaderIcon(for section: FavoriteNotebookSection) -> String {
+        guard let profileId = appState.activeProfile?.id else { return "folder" }
+        if section.id == "__other__" {
+            return "square.grid.2x2"
+        }
+        return PersistenceManager.shared.recentsRowIconSystemName(
+            noteId: section.id,
+            fallbackNoteType: NoteType.text.rawValue,
+            serverProfileId: profileId
+        )
     }
 
     @ViewBuilder
