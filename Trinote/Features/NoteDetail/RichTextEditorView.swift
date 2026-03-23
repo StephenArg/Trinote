@@ -6,10 +6,17 @@ struct RichTextEditorView: UIViewRepresentable {
     let initialHTML: String
     var onContentChanged: ((String) -> Void)?
     var onPickImage: (() -> Void)?
+    /// `#editor-container` `scrollTop` (increases when scrolling down); used for native save/cancel chip visibility.
+    var onEditorScroll: ((CGFloat) -> Void)?
     @Binding var imageToInsert: String?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(initialHTML: initialHTML, onContentChanged: onContentChanged, onPickImage: onPickImage)
+        Coordinator(
+            initialHTML: initialHTML,
+            onContentChanged: onContentChanged,
+            onPickImage: onPickImage,
+            onEditorScroll: onEditorScroll
+        )
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -18,6 +25,7 @@ struct RichTextEditorView: UIViewRepresentable {
         contentController.add(coordinator, name: "editorReady")
         contentController.add(coordinator, name: "contentChanged")
         contentController.add(coordinator, name: "pickImage")
+        contentController.add(coordinator, name: "editorScroll")
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
@@ -58,6 +66,7 @@ struct RichTextEditorView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.onContentChanged = onContentChanged
         coordinator.onPickImage = onPickImage
+        coordinator.onEditorScroll = onEditorScroll
         Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
@@ -91,6 +100,7 @@ struct RichTextEditorView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "editorReady")
         uc.removeScriptMessageHandler(forName: "contentChanged")
         uc.removeScriptMessageHandler(forName: "pickImage")
+        uc.removeScriptMessageHandler(forName: "editorScroll")
     }
 
     // MARK: - Remove iOS form navigation bar (up/down/done)
@@ -126,14 +136,21 @@ struct RichTextEditorView: UIViewRepresentable {
         weak var webView: WKWebView?
         var onContentChanged: ((String) -> Void)?
         var onPickImage: (() -> Void)?
+        var onEditorScroll: ((CGFloat) -> Void)?
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
 
-        init(initialHTML: String, onContentChanged: ((String) -> Void)?, onPickImage: (() -> Void)?) {
+        init(
+            initialHTML: String,
+            onContentChanged: ((String) -> Void)?,
+            onPickImage: (() -> Void)?,
+            onEditorScroll: ((CGFloat) -> Void)?
+        ) {
             self.initialHTML = initialHTML
             self.onContentChanged = onContentChanged
             self.onPickImage = onPickImage
+            self.onEditorScroll = onEditorScroll
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -151,6 +168,22 @@ struct RichTextEditorView: UIViewRepresentable {
 
             case "pickImage":
                 onPickImage?()
+
+            case "editorScroll":
+                let y: CGFloat?
+                if let d = message.body as? Double {
+                    y = CGFloat(d)
+                } else if let n = message.body as? NSNumber {
+                    y = CGFloat(truncating: n)
+                } else {
+                    y = nil
+                }
+                if let y {
+                    let callback = onEditorScroll
+                    DispatchQueue.main.async {
+                        callback?(y)
+                    }
+                }
 
             default:
                 break

@@ -4,8 +4,9 @@ import UIKit
 
 /// Which ⋯ menu command to mirror on the trailing toolbar; stored in `UserDefaults` via `@AppStorage`.
 
-/// Tracked ⋯ menu actions mirrored on the trailing toolbar (delete and edit are never tracked).
+/// Tracked ⋯ menu actions mirrored on the trailing toolbar (delete, edit, and cancel editing are never tracked).
 private enum NoteDetailToolbarQuickAction: String, CaseIterable {
+    case cancelEditing
     case newChild
     case duplicate
     case rename
@@ -40,6 +41,11 @@ struct NoteDetailView: View {
     @State private var showFloatingEditButton = false
     @State private var lastScrollContentOffsetY: CGFloat = 0
     @State private var floatingEditScrollBaselineReady = false
+
+    /// Save/cancel chip while editing: hide on scroll up, show on scroll down (same rules as read-mode edit FAB).
+    @State private var showEditorSaveCancelChip = true
+    @State private var lastEditorScrollOffsetY: CGFloat = 0
+    @State private var editorSaveCancelScrollBaselineReady = false
 
     private var principalTitleText: String {
         if let n = viewModel?.note {
@@ -105,6 +111,34 @@ struct NoteDetailView: View {
         }
     }
 
+    /// Uses the same delta rules as `updateFloatingEditVisibility` (`contentOffset.y` / `scrollTop` increases when scrolling down).
+    private func updateEditorSaveCancelChipVisibility(contentOffsetY: CGFloat) {
+        if !editorSaveCancelScrollBaselineReady {
+            editorSaveCancelScrollBaselineReady = true
+            lastEditorScrollOffsetY = contentOffsetY
+            return
+        }
+
+        let directionalThreshold: CGFloat = 10
+        let delta = contentOffsetY - lastEditorScrollOffsetY
+        lastEditorScrollOffsetY = contentOffsetY
+
+        let nextVisible: Bool
+        if delta < -directionalThreshold {
+            nextVisible = false
+        } else if delta > directionalThreshold {
+            nextVisible = true
+        } else {
+            return
+        }
+
+        if nextVisible != showEditorSaveCancelChip {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                showEditorSaveCancelChip = nextVisible
+            }
+        }
+    }
+
     @ViewBuilder
     private func floatingEditFAB(vm: NoteDetailViewModel) -> some View {
         Button {
@@ -122,6 +156,34 @@ struct NoteDetailView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(String(localized: "Edit note", comment: "Floating scroll edit button"))
+    }
+
+    /// Save-only floating chip (cancel is in the note toolbar menu / quick action while editing).
+    @ViewBuilder
+    private func editorSaveChip(vm: NoteDetailViewModel) -> some View {
+        Button {
+            Task { await vm.saveContent() }
+        } label: {
+            ZStack {
+                if vm.isSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image("SaveNoteFloating")
+                        .resizable()
+                        .renderingMode(.template)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 24, height: 24)
+                }
+            }
+            .foregroundStyle(.primary)
+            .frame(width: 48, height: 48)
+            .background(.ultraThinMaterial, in: Circle())
+            .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+        }
+        .buttonStyle(.plain)
+        .disabled(vm.isSaving)
+        .accessibilityLabel(String(localized: "Save", comment: "Editor save chip"))
     }
 
     var body: some View {
@@ -629,38 +691,37 @@ struct NoteDetailView: View {
 
     @ViewBuilder
     private func richTextEditingView(_ vm: NoteDetailViewModel) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                if vm.isSaving {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-                Button("Save") { Task { await vm.saveContent() } }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(vm.isSaving)
-                Button("Cancel") { vm.cancelEditing() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity)
-            .background(Color(uiColor: .trinoteEditorCanvas))
-
+        ZStack(alignment: .bottomTrailing) {
             RichTextEditorView(
                 initialHTML: vm.editableContent,
                 onContentChanged: { html in vm.receiveEditorUpdate(html) },
                 onPickImage: { showEditorImageSourceDialog = true },
+                onEditorScroll: { y in
+                    updateEditorSaveCancelChipVisibility(contentOffsetY: y)
+                },
                 imageToInsert: $imageToInsert
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
             // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).
             .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
+
+            if showEditorSaveCancelChip {
+                editorSaveChip(vm: vm)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 12)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                    .zIndex(2)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+        .onAppear {
+            editorSaveCancelScrollBaselineReady = false
+            lastEditorScrollOffsetY = 0
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                showEditorSaveCancelChip = true
+            }
+        }
         .confirmationDialog("Add Image", isPresented: $showEditorImageSourceDialog) {
             Button("Photo Library") { showEditorImagePicker = true }
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
@@ -704,33 +765,45 @@ struct NoteDetailView: View {
     @ViewBuilder
     private func codeEditingView(_ vm: NoteDetailViewModel) -> some View {
         @Bindable var vm = vm
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Source")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if vm.isSaving {
-                    ProgressView()
-                        .controlSize(.small)
+        ZStack(alignment: .bottomTrailing) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Source")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
                 }
-                Button("Save") { Task { await vm.saveContent() } }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(vm.isSaving)
-                Button("Cancel") { vm.cancelEditing() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-            .padding(.horizontal)
-            .padding(.top, 8)
+                .padding(.horizontal)
+                .padding(.top, 8)
 
-            TextEditor(text: $vm.editableContent)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 300)
-                .padding(.horizontal, 8)
-                .scrollContentBackground(.hidden)
-                .background(Color(.systemGroupedBackground))
+                TextEditor(text: $vm.editableContent)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 300)
+                    .padding(.horizontal, 8)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(.systemGroupedBackground))
+                    .background(
+                        NoteDetailScrollOffsetReader { y in
+                            updateEditorSaveCancelChipVisibility(contentOffsetY: y)
+                        }
+                        .frame(width: 0, height: 0)
+                    )
+            }
+
+            if showEditorSaveCancelChip {
+                editorSaveChip(vm: vm)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 12)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                    .zIndex(2)
+            }
+        }
+        .onAppear {
+            editorSaveCancelScrollBaselineReady = false
+            lastEditorScrollOffsetY = 0
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                showEditorSaveCancelChip = true
+            }
         }
     }
 
@@ -836,11 +909,22 @@ struct NoteDetailView: View {
                     .disabled(vm.needsProtectedSession)
                 }
 
-                Button {
-                    recordToolbarQuickAction(.newChild)
-                    vm.showCreateChild = true
-                } label: {
-                    Label("New Child Note", systemImage: "plus")
+                if vm.isEditing {
+                    Button {
+                        vm.cancelEditing()
+                    } label: {
+                        Label(
+                            String(localized: "Cancel Editing", comment: "Leave note editor from overflow menu"),
+                            systemImage: "xmark"
+                        )
+                    }
+                } else {
+                    Button {
+                        recordToolbarQuickAction(.newChild)
+                        vm.showCreateChild = true
+                    } label: {
+                        Label("New Child Note", systemImage: "plus")
+                    }
                 }
 
                 if !note.isProtected || appState.protectedSessionActive {
@@ -930,7 +1014,14 @@ struct NoteDetailView: View {
     private func firstAvailableToolbarQuickAction(vm: NoteDetailViewModel, note: NoteItem) -> NoteDetailToolbarQuickAction? {
         // Legacy "edit" raw value no longer matches a case → falls back to .rename.
         let preferred = NoteDetailToolbarQuickAction(rawValue: lastToolbarQuickActionRaw) ?? .rename
-        for action in toolbarQuickActionCandidates(preferred: preferred) where isToolbarQuickActionAvailable(action, vm: vm, note: note) {
+        let candidates: [NoteDetailToolbarQuickAction]
+        if vm.isEditing {
+            // Same slot as “New Child” in the menu: prefer cancel while editing.
+            candidates = [.cancelEditing] + toolbarQuickActionCandidates(preferred: preferred).filter { $0 != .cancelEditing }
+        } else {
+            candidates = toolbarQuickActionCandidates(preferred: preferred)
+        }
+        for action in candidates where isToolbarQuickActionAvailable(action, vm: vm, note: note) {
             return action
         }
         return nil
@@ -938,7 +1029,9 @@ struct NoteDetailView: View {
 
     private func isToolbarQuickActionAvailable(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel, note: NoteItem) -> Bool {
         switch action {
-        case .rename, .newChild, .noteDetails: return true
+        case .cancelEditing: return vm.isEditing
+        case .newChild: return !vm.isEditing
+        case .rename, .noteDetails: return true
         case .duplicate: return !note.isProtected || appState.protectedSessionActive
         case .findOnPage: return !vm.isEditing && note.type.supportsReadOnlyOnPageFind
         case .favorite: return appState.activeProfile != nil
@@ -954,6 +1047,8 @@ struct NoteDetailView: View {
 
     private func performToolbarQuickAction(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel, note: NoteItem) {
         switch action {
+        case .cancelEditing:
+            vm.cancelEditing()
         case .newChild:
             vm.showCreateChild = true
         case .rename:
@@ -981,6 +1076,9 @@ struct NoteDetailView: View {
     @ViewBuilder
     private func toolbarQuickActionLabel(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel, note: NoteItem) -> some View {
         switch action {
+        case .cancelEditing:
+            Image(systemName: "xmark")
+                .font(.system(size: 16, weight: .semibold))
         case .newChild:
             Image(systemName: "plus")
         case .rename:
@@ -998,6 +1096,8 @@ struct NoteDetailView: View {
 
     private func toolbarQuickActionAccessibilityLabel(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel, note: NoteItem) -> String {
         switch action {
+        case .cancelEditing:
+            return String(localized: "Cancel editing", comment: "Toolbar quick action while editing note")
         case .newChild:
             return String(localized: "New child note", comment: "Toolbar repeat last action")
         case .rename:

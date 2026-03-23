@@ -833,6 +833,17 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
 (function attachColorPopupDismiss() {
   const ec = document.getElementById('editor-container');
   if (!ec) return;
+  let editorScrollReportScheduled = false;
+  function reportEditorScrollOffset() {
+    if (editorScrollReportScheduled) return;
+    editorScrollReportScheduled = true;
+    requestAnimationFrame(() => {
+      editorScrollReportScheduled = false;
+      try {
+        window.webkit.messageHandlers.editorScroll.postMessage(ec.scrollTop);
+      } catch (e) {}
+    });
+  }
   ec.addEventListener('scroll', () => {
     document.querySelectorAll('.color-popup.visible').forEach(popup => {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
@@ -854,6 +865,7 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
       hideListStylePopup(popup);
     });
+    reportEditorScrollOffset();
   }, { passive: true });
   window.addEventListener('resize', () => {
     document.querySelectorAll('.color-popup.visible').forEach(popup => {
@@ -1728,6 +1740,10 @@ document.getElementById('editor-container').addEventListener('click', function(e
 }, true);
 
 try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch(e) {}
+try {
+  const _ecScroll = document.getElementById('editor-container');
+  if (_ecScroll) window.webkit.messageHandlers.editorScroll.postMessage(_ecScroll.scrollTop);
+} catch (e) {}
 </script>
 </body>
 </html>
