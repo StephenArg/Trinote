@@ -185,7 +185,22 @@ private struct HTMLNoteWebView: UIViewRepresentable {
           aside.admonition, .tiptap-callout, div[data-callout-type] { background: rgba(255,255,255,0.05); }
         }
         h1, h2, h3, h4, h5, h6 { margin-top: 1em; margin-bottom: 0.5em; }
-        ul, ol { padding-left: 24px; }
+        /* Paragraphs + lists: match editor spacing; CKEditor/Trilium often use empty <p> for “double break” between lists */
+        p { margin: 0.65em 0; }
+        ul, ol {
+          padding-left: 24px;
+          margin: 0.75em 0;
+        }
+        li > ul, li > ol {
+          margin-top: 0.35em;
+          margin-bottom: 0.35em;
+        }
+        p:empty {
+          min-height: 1.5em;
+        }
+        p:has(> br:only-child) {
+          min-height: 1.5em;
+        }
         ul.todo-list { list-style: none; padding-left: 0; }
         ul.todo-list li { margin: 4px 0; }
         .todo-list__label { display: flex; align-items: flex-start; gap: 8px; cursor: default; }
@@ -204,6 +219,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
         .todo-list__label__description { flex: 1; transition: opacity 0.15s, text-decoration 0.15s; }
         .todo-list__label--checked .todo-list__label__description { text-decoration: line-through; opacity: 0.5; }
+        /* Trilium / CKEditor font-size spans */
+        .text-tiny { font-size: 0.7em; }
+        .text-small { font-size: 0.85em; }
+        .text-big { font-size: 1.4em; }
+        .text-huge { font-size: 1.8em; }
         hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
         .math-tex { overflow-x: auto; }
         </style>

@@ -4,9 +4,13 @@
   "type": "module",
   "devDependencies": {
     "@tiptap/core": "^2.11.5",
+    "@tiptap/extension-bullet-list": "^2.11.5",
+    "@tiptap/extension-ordered-list": "^2.11.5",
     "esbuild": "^0.25.0"
   },
   "scripts": {
-    "build:callout": "esbuild callout-entry.mjs --bundle --format=iife --global-name=TipTapCallout --outfile=callout-extension.js --platform=browser"
+    "build:callout": "esbuild callout-entry.mjs --bundle --format=iife --global-name=TipTapCallout --outfile=callout-extension.js --platform=browser",
+    "build:font-size": "esbuild font-size-entry.mjs --bundle --format=iife --global-name=TipTapTriliumFontSize --outfile=font-size-extension.js --platform=browser",
+    "build:list-styles": "esbuild list-styles-entry.mjs --bundle --format=iife --global-name=TipTapListStyles --outfile=list-styles-extension.js --platform=browser"
   }
 }

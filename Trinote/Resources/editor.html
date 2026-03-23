@@ -107,6 +107,11 @@ body { display: flex; flex-direction: column; }
   width: 23px;
   height: 23px;
 }
+.toolbar button.toolbar-font-size-btn svg.toolbar-font-size-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
 .toolbar button img.icon { width: 18px; height: 18px; object-fit: contain; filter: var(--icon-filter); }
 .toolbar button .toolbar-code-glyph {
   font-size: 12px;
@@ -149,6 +154,28 @@ body { display: flex; flex-direction: column; }
   min-width: min(92vw, 300px); max-width: min(92vw, 360px);
 }
 .link-popup.visible { display: block; }
+/* Font size picker (same positioning / dismiss model as .callout-popup) */
+.font-size-popup {
+  display: none; position: fixed; left: 0; top: 0; z-index: 10000;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 8px; box-shadow: 0 4px 20px var(--popup-shadow);
+  min-width: 200px; max-width: min(92vw, 300px);
+}
+.font-size-popup.visible { display: block; }
+.font-size-popup .text-tiny { font-size: 0.7em; }
+.font-size-popup .text-small { font-size: 0.85em; }
+.font-size-popup .text-big { font-size: 1.4em; }
+.font-size-popup .text-huge { font-size: 1.8em; }
+/* Bullet / numbered list style picker */
+.list-style-popup {
+  display: none; position: fixed; left: 0; top: 0; z-index: 10000;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 8px; box-shadow: 0 4px 20px var(--popup-shadow);
+  min-width: min(92vw, 280px); max-width: min(92vw, 340px);
+}
+.list-style-popup.visible { display: block; }
+.list-style-row-label { font-size: 14px; font-weight: 600; line-height: 1.25; }
+.list-style-row-hint { font-size: 12px; font-weight: 500; opacity: 0.65; margin-top: 2px; }
 .link-popup label.link-popup-label {
   display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; opacity: 0.75; color: var(--fg);
 }
@@ -280,6 +307,11 @@ body { display: flex; flex-direction: column; }
 .tiptap p.is-editor-empty:first-child::before {
   content: attr(data-placeholder); color: var(--placeholder); float: left; height: 0; pointer-events: none;
 }
+/* Trilium / CKEditor font-size classes (relative to parent, same ratios as ck-content) */
+.tiptap .text-tiny { font-size: 0.7em; }
+.tiptap .text-small { font-size: 0.85em; }
+.tiptap .text-big { font-size: 1.4em; }
+.tiptap .text-huge { font-size: 1.8em; }
 
 /* Loading state */
 #loading { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--placeholder); font-size: 15px; }
@@ -297,9 +329,22 @@ body { display: flex; flex-direction: column; }
 
 <script src="tiptap-bundle.min.js"></script>
 <script src="callout-extension.js"></script>
+<script src="font-size-extension.js"></script>
+<script src="list-styles-extension.js"></script>
 <script>
+if (typeof TipTap === 'undefined') {
+  const le = document.getElementById('loading');
+  if (le) le.textContent = 'Could not load editor scripts. If they live in editor-vendor/, update the <script src> paths in editor.html.';
+  try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch (e) {}
+  throw new Error('TipTap bundle missing');
+}
 const { Editor, StarterKit, Underline, TextAlign, Color, TextStyle, Highlight, Table, TableRow, TableCell, TableHeader, Link, TaskList, TaskItem, Placeholder, Subscript, Superscript, Image } = TipTap;
 const CalloutExt = (typeof TipTapCallout !== 'undefined' && TipTapCallout && TipTapCallout.Callout) ? TipTapCallout.Callout : null;
+const FontSizeExt = (typeof TipTapTriliumFontSize !== 'undefined' && TipTapTriliumFontSize && TipTapTriliumFontSize.TriliumFontSize) ? TipTapTriliumFontSize.TriliumFontSize : null;
+const ListStylesMod = (typeof TipTapListStyles !== 'undefined' && TipTapListStyles) ? TipTapListStyles : null;
+const TriliumBulletListExt = ListStylesMod && ListStylesMod.TriliumBulletList ? ListStylesMod.TriliumBulletList : null;
+const TriliumOrderedListExt = ListStylesMod && ListStylesMod.TriliumOrderedList ? ListStylesMod.TriliumOrderedList : null;
+const useTriliumListStyles = !!(TriliumBulletListExt && TriliumOrderedListExt);
 
 const COLORS = [
   '#000000','#434343','#666666','#999999','#b7b7b7','#cccccc','#ffffff',
@@ -308,11 +353,37 @@ const COLORS = [
   '#d0e0e3','#cfe2f3','#d9d2e9','#ead1dc',
 ];
 
+const FONT_SIZE_KINDS = [
+  { id: 'tiny', label: 'Tiny' },
+  { id: 'small', label: 'Small' },
+  { id: 'default', label: 'Default' },
+  { id: 'big', label: 'Big' },
+  { id: 'huge', label: 'Huge' },
+];
+
+/* CKEditor / Trilium list properties (list-style-type on ul / ol) */
+const BULLET_LIST_STYLE_OPTIONS = [
+  { id: 'disc', label: 'Disc', hint: '• Default bullet' },
+  { id: 'circle', label: 'Circle', hint: '○ Hollow bullet' },
+  { id: 'square', label: 'Square', hint: '■ Square bullet' },
+];
+const ORDERED_LIST_STYLE_OPTIONS = [
+  { id: 'decimal', label: 'Decimal', hint: '1, 2, 3' },
+  { id: 'decimal-leading-zero', label: 'Decimal (leading zero)', hint: '01, 02, 03' },
+  { id: 'lower-latin', label: 'Lower Latin', hint: 'a, b, c' },
+  { id: 'upper-latin', label: 'Upper Latin', hint: 'A, B, C' },
+  { id: 'lower-roman', label: 'Lower Roman', hint: 'i, ii, iii' },
+  { id: 'upper-roman', label: 'Upper Roman', hint: 'I, II, III' },
+];
+
 let _contentTimer = null;
 let _toolbarScheduled = false;
 
 const editorExtensions = [
-  StarterKit.configure({ heading: { levels: [1,2,3,4,5,6] } }),
+  StarterKit.configure({
+    heading: { levels: [1,2,3,4,5,6] },
+    ...(useTriliumListStyles ? { bulletList: false, orderedList: false } : {}),
+  }),
   Underline,
   TextStyle,
   Color,
@@ -331,6 +402,11 @@ const editorExtensions = [
   Image.configure({ inline: true, allowBase64: true, HTMLAttributes: { class: '' } }),
 ];
 if (CalloutExt) editorExtensions.push(CalloutExt);
+if (FontSizeExt) editorExtensions.push(FontSizeExt);
+if (useTriliumListStyles) {
+  editorExtensions.push(TriliumBulletListExt);
+  editorExtensions.push(TriliumOrderedListExt);
+}
 
 const editor = new Editor({
   element: document.getElementById('editor'),
@@ -358,7 +434,7 @@ editor.on('selectionUpdate', ({ editor }) => {
 // IMPORTANT: Do not refocus on a timer/hold — that runs when tapping the color *button* (before the
 // panel is visible) and steals the tap so the synthetic click never opens the picker.
 function refocusEditorIfNeeded() {
-  if (!document.querySelector('.color-popup.visible') && !document.querySelector('.callout-popup.visible')) return;
+  if (!document.querySelector('.color-popup.visible') && !document.querySelector('.callout-popup.visible') && !document.querySelector('.font-size-popup.visible') && !document.querySelector('.list-style-popup.visible')) return;
   requestAnimationFrame(() => {
     try {
       if (editor.view && editor.view.dom) {
@@ -375,6 +451,8 @@ function ic(name) { return '<img class="icon" src="' + name + '" width="18" heig
 const TOOLBAR_CHEVRON_SVG = '<svg class="toolbar-btn-chevron" width="10" height="10" viewBox="0 0 12 12" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2 4l4 4 4-4"/></svg>';
 /* Task list: inline SVG (viewBox 48×48); toolbar .toolbar button svg → ~18×18 like other icons */
 const TASK_LIST_TOOLBAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" aria-hidden="true"><g fill="none"><path d="M20 24h24z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M20 24h24"/><path d="M20 38h24z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M20 38h24"/><path d="M20 10h24z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M20 10h24"/><path stroke="currentColor" stroke-linejoin="round" stroke-width="4" d="M4 34h8v8H4zm0-14h8v8H4zM4 6h8v8H4z"/></g></svg>';
+/* Trilium font-size toolbar icon (viewBox 15×15; sized via .toolbar-font-size-icon) */
+const FONT_SIZE_TOOLBAR_SVG = '<svg class="toolbar-font-size-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 15 15" fill="currentColor" aria-hidden="true"><path d="M2.5 2.1a.4.4 0 0 1 .283.117l2 2l.05.064a.4.4 0 0 1-.05.503a.4.4 0 0 1-.503.05l-.063-.05L2.9 3.467v8.067l1.317-1.317a.4.4 0 0 1 .566.566l-2 2a.4.4 0 0 1-.566 0l-2-2l-.051-.063a.4.4 0 0 1 .554-.554l.063.051l1.316 1.316V3.467L.783 4.784a.401.401 0 0 1-.566-.567l2-2l.061-.05A.4.4 0 0 1 2.5 2.1m5.47 9.64a.501.501 0 0 1-.94-.34zm2.53-8.99a.5.5 0 0 1 .47.33l3 8.32a.5.5 0 0 1-.94.34l-.983-2.724H8.953l-.982 2.724l-.471-.17l-.47-.17l3-8.32l.031-.07a.5.5 0 0 1 .439-.26M9.259 8.166h2.482L10.5 4.725z"/></svg>';
 function codeInlineGlyph() {
   return '<span class="toolbar-code-glyph" aria-hidden="true">&lt;/&gt;</span>';
 }
@@ -425,15 +503,21 @@ btn('Strike', ic('foundation--strikethrough.svg'), () => editor.chain().focus().
 btn('Code', codeInlineGlyph(), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
 btn('Superscript', ic('foundation--superscript.svg'), () => editor.chain().focus().toggleSuperscript().run(), () => editor.isActive('superscript'));
 btn('Subscript', ic('foundation--subscript.svg'), () => editor.chain().focus().toggleSubscript().run(), () => editor.isActive('subscript'));
+makeFontSizeToolbar();
 sep();
 
 // Headings
 const headingSel = heading();
 sep();
 
-// Lists
-btnWithChevron('Bullet list', ic('foundation--list-bullet.svg'), () => editor.chain().focus().toggleBulletList().run(), () => editor.isActive('bulletList'));
-btnWithChevron('Ordered list', ic('foundation--list-number.svg'), () => editor.chain().focus().toggleOrderedList().run(), () => editor.isActive('orderedList'));
+// Lists — bullet/ordered style popups match CKEditor / Trilium list properties when list-styles-extension.js loads
+if (useTriliumListStyles) {
+  makeBulletListToolbar();
+  makeOrderedListToolbar();
+} else {
+  btnWithChevron('Bullet list', ic('foundation--list-bullet.svg'), () => editor.chain().focus().toggleBulletList().run(), () => editor.isActive('bulletList'));
+  btnWithChevron('Ordered list', ic('foundation--list-number.svg'), () => editor.chain().focus().toggleOrderedList().run(), () => editor.isActive('orderedList'));
+}
 btn('Task list', TASK_LIST_TOOLBAR_SVG, () => editor.chain().focus().toggleTaskList().run(), () => editor.isActive('taskList'));
 sep();
 
@@ -610,6 +694,40 @@ function hideLinkPopup(popup) {
   popup._ignoreScrollUntil = 0;
 }
 
+const FONT_SIZE_POPUP_OUTSIDE_GRACE_MS = 450;
+
+function markFontSizePopupJustOpened(popup) {
+  const t = performance.now();
+  popup._ignoreOutsideUntil = t + FONT_SIZE_POPUP_OUTSIDE_GRACE_MS;
+  popup._ignoreScrollUntil = t + COLOR_POPUP_SCROLL_GRACE_MS;
+}
+
+function hideFontSizePopup(popup) {
+  popup.classList.remove('visible');
+  popup.style.left = '';
+  popup.style.top = '';
+  popup.style.visibility = '';
+  popup._ignoreOutsideUntil = 0;
+  popup._ignoreScrollUntil = 0;
+}
+
+const LIST_STYLE_POPUP_OUTSIDE_GRACE_MS = 450;
+
+function markListStylePopupJustOpened(popup) {
+  const t = performance.now();
+  popup._ignoreOutsideUntil = t + LIST_STYLE_POPUP_OUTSIDE_GRACE_MS;
+  popup._ignoreScrollUntil = t + COLOR_POPUP_SCROLL_GRACE_MS;
+}
+
+function hideListStylePopup(popup) {
+  popup.classList.remove('visible');
+  popup.style.left = '';
+  popup.style.top = '';
+  popup.style.visibility = '';
+  popup._ignoreOutsideUntil = 0;
+  popup._ignoreScrollUntil = 0;
+}
+
 function layoutColorPopup(anchor, popup) {
   if (!popup.classList.contains('visible')) return;
   popup.style.visibility = 'hidden';
@@ -689,6 +807,8 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
     const willOpen = !popup.classList.contains('visible');
     document.querySelectorAll('.color-popup.visible').forEach(p => { if (p !== popup) hideColorPopup(p); });
     document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
+    document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
+    document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
     if (willOpen) {
       markColorPopupJustOpened(popup);
       popup.classList.add('visible');
@@ -726,6 +846,14 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
       hideLinkPopup(popup);
     });
+    document.querySelectorAll('.font-size-popup.visible').forEach(popup => {
+      if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
+      hideFontSizePopup(popup);
+    });
+    document.querySelectorAll('.list-style-popup.visible').forEach(popup => {
+      if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
+      hideListStylePopup(popup);
+    });
   }, { passive: true });
   window.addEventListener('resize', () => {
     document.querySelectorAll('.color-popup.visible').forEach(popup => {
@@ -739,6 +867,14 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
     document.querySelectorAll('.link-popup.visible').forEach(popup => {
       const anchor = popup._anchorButton;
       if (anchor) layoutColorPopup(anchor, popup);
+    });
+    document.querySelectorAll('.font-size-popup.visible').forEach(popup => {
+      const anchor = popup._anchorButton;
+      if (anchor && typeof layoutCalloutPopup === 'function') layoutCalloutPopup(anchor, popup);
+    });
+    document.querySelectorAll('.list-style-popup.visible').forEach(popup => {
+      const anchor = popup._anchorButton;
+      if (anchor && typeof layoutCalloutPopup === 'function') layoutCalloutPopup(anchor, popup);
     });
   });
 })();
@@ -840,6 +976,8 @@ function makeCalloutToolbar() {
     });
     document.querySelectorAll('.color-popup.visible').forEach(p => hideColorPopup(p));
     document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
+    document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
+    document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
     if (opening) {
       markCalloutPopupJustOpened(popup);
       popup.classList.add('visible');
@@ -858,6 +996,266 @@ function makeCalloutToolbar() {
     if (!popup.classList.contains('visible')) return;
     if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
     if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideCalloutPopup(popup);
+  });
+}
+
+function afterListStyleApply() {
+  const dom = editor.view && editor.view.dom;
+  if (dom) {
+    try { dom.focus({ preventScroll: true }); } catch (e) { dom.focus(); }
+  }
+  scrollEditorRangeIntoView();
+  requestAnimationFrame(() => scrollEditorRangeIntoView());
+  setTimeout(scrollEditorRangeIntoView, 120);
+}
+
+function applyBulletListStyle(styleId) {
+  const chain = editor.chain().focus();
+  if (editor.isActive('orderedList')) chain.toggleOrderedList();
+  if (editor.isActive('taskList')) chain.toggleTaskList();
+  if (!editor.isActive('bulletList')) chain.toggleBulletList();
+  const v = !styleId || styleId === 'disc' ? null : styleId;
+  chain.updateAttributes('bulletList', { listStyleType: v }).run();
+  afterListStyleApply();
+}
+
+function applyOrderedListStyle(styleId) {
+  const chain = editor.chain().focus();
+  if (editor.isActive('bulletList')) chain.toggleBulletList();
+  if (editor.isActive('taskList')) chain.toggleTaskList();
+  if (!editor.isActive('orderedList')) chain.toggleOrderedList();
+  const v = !styleId || styleId === 'decimal' ? null : styleId;
+  chain.updateAttributes('orderedList', { listStyleType: v }).run();
+  afterListStyleApply();
+}
+
+function makeBulletListToolbar() {
+  if (!useTriliumListStyles) return;
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'inline-flex';
+  wrapper.style.alignItems = 'center';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = 'Bullet list style';
+  b.classList.add('toolbar-btn-with-chevron');
+  b.innerHTML = ic('foundation--list-bullet.svg') + TOOLBAR_CHEVRON_SVG;
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;min-width:40px;height:34px;padding:0 5px;border-radius:6px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
+  const popup = document.createElement('div');
+  popup.className = 'list-style-popup';
+  popup._anchorButton = b;
+  BULLET_LIST_STYLE_OPTIONS.forEach((opt) => {
+    const row = document.createElement('div');
+    row.className = 'callout-row';
+    const textWrap = document.createElement('div');
+    const lab = document.createElement('div');
+    lab.className = 'list-style-row-label';
+    lab.textContent = opt.label;
+    textWrap.appendChild(lab);
+    if (opt.hint) {
+      const hint = document.createElement('div');
+      hint.className = 'list-style-row-hint';
+      hint.textContent = opt.hint;
+      textWrap.appendChild(hint);
+    }
+    row.appendChild(textWrap);
+    function pick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      hideListStylePopup(popup);
+      applyBulletListStyle(opt.id);
+    }
+    row.addEventListener('pointerdown', pick, true);
+    row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    popup.appendChild(row);
+  });
+  document.body.appendChild(popup);
+  b.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    if (!popup.classList.contains('visible')) markListStylePopupJustOpened(popup);
+  }, true);
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    document.querySelectorAll('.list-style-popup.visible').forEach((p) => { if (p !== popup) hideListStylePopup(p); });
+    document.querySelectorAll('.color-popup.visible').forEach((p) => hideColorPopup(p));
+    document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
+    document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
+    document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
+    if (opening) {
+      markListStylePopupJustOpened(popup);
+      popup.classList.add('visible');
+      requestAnimationFrame(() => {
+        layoutCalloutPopup(b, popup);
+        requestAnimationFrame(() => layoutCalloutPopup(b, popup));
+      });
+    } else {
+      hideListStylePopup(popup);
+    }
+  });
+  wrapper.appendChild(b);
+  toolbar.appendChild(wrapper);
+  b._isActive = () => editor.isActive('bulletList');
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideListStylePopup(popup);
+  });
+}
+
+function makeOrderedListToolbar() {
+  if (!useTriliumListStyles) return;
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'inline-flex';
+  wrapper.style.alignItems = 'center';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = 'Numbered list style';
+  b.classList.add('toolbar-btn-with-chevron');
+  b.innerHTML = ic('foundation--list-number.svg') + TOOLBAR_CHEVRON_SVG;
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;min-width:40px;height:34px;padding:0 5px;border-radius:6px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
+  const popup = document.createElement('div');
+  popup.className = 'list-style-popup';
+  popup._anchorButton = b;
+  ORDERED_LIST_STYLE_OPTIONS.forEach((opt) => {
+    const row = document.createElement('div');
+    row.className = 'callout-row';
+    const textWrap = document.createElement('div');
+    const lab = document.createElement('div');
+    lab.className = 'list-style-row-label';
+    lab.textContent = opt.label;
+    textWrap.appendChild(lab);
+    if (opt.hint) {
+      const hint = document.createElement('div');
+      hint.className = 'list-style-row-hint';
+      hint.textContent = opt.hint;
+      textWrap.appendChild(hint);
+    }
+    row.appendChild(textWrap);
+    function pick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      hideListStylePopup(popup);
+      applyOrderedListStyle(opt.id);
+    }
+    row.addEventListener('pointerdown', pick, true);
+    row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    popup.appendChild(row);
+  });
+  document.body.appendChild(popup);
+  b.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    if (!popup.classList.contains('visible')) markListStylePopupJustOpened(popup);
+  }, true);
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    document.querySelectorAll('.list-style-popup.visible').forEach((p) => { if (p !== popup) hideListStylePopup(p); });
+    document.querySelectorAll('.color-popup.visible').forEach((p) => hideColorPopup(p));
+    document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
+    document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
+    document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
+    if (opening) {
+      markListStylePopupJustOpened(popup);
+      popup.classList.add('visible');
+      requestAnimationFrame(() => {
+        layoutCalloutPopup(b, popup);
+        requestAnimationFrame(() => layoutCalloutPopup(b, popup));
+      });
+    } else {
+      hideListStylePopup(popup);
+    }
+  });
+  wrapper.appendChild(b);
+  toolbar.appendChild(wrapper);
+  b._isActive = () => editor.isActive('orderedList');
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideListStylePopup(popup);
+  });
+}
+
+function makeFontSizeToolbar() {
+  if (!FontSizeExt) return;
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'inline-flex';
+  wrapper.style.alignItems = 'center';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = 'Font size';
+  b.classList.add('toolbar-font-size-btn', 'toolbar-btn-with-chevron');
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;height:34px;border-radius:6px;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;display:flex;align-items:center;justify-content:center;gap:2px;padding:0 5px;min-width:40px;';
+  b.innerHTML = FONT_SIZE_TOOLBAR_SVG + TOOLBAR_CHEVRON_SVG;
+  const popup = document.createElement('div');
+  popup.className = 'font-size-popup';
+  popup._anchorButton = b;
+  FONT_SIZE_KINDS.forEach((k) => {
+    const row = document.createElement('div');
+    row.className = 'callout-row';
+    const lab = document.createElement('span');
+    lab.textContent = k.label;
+    if (k.id === 'tiny') lab.className = 'text-tiny';
+    else if (k.id === 'small') lab.className = 'text-small';
+    else if (k.id === 'big') lab.className = 'text-big';
+    else if (k.id === 'huge') lab.className = 'text-huge';
+    row.appendChild(lab);
+    function pick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      hideFontSizePopup(popup);
+      const r = colorPickerApplyRange(wrapper);
+      if (!r) return;
+      withColorMarkEdit(() => {
+        const ch = editor.chain().focus().setTextSelection({ from: r.from, to: r.to });
+        if (k.id === 'default') {
+          ch.extendMarkRange('triliumFontSize').unsetTriliumFontSize().run();
+        } else {
+          ch.extendMarkRange('triliumFontSize').setTriliumFontSize(k.id).run();
+        }
+      });
+    }
+    row.addEventListener('pointerdown', pick, true);
+    row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    popup.appendChild(row);
+  });
+  document.body.appendChild(popup);
+  b.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    if (!popup.classList.contains('visible')) markFontSizePopupJustOpened(popup);
+  }, true);
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    document.querySelectorAll('.font-size-popup.visible').forEach((p) => {
+      if (p !== popup) hideFontSizePopup(p);
+    });
+    document.querySelectorAll('.color-popup.visible').forEach((p) => hideColorPopup(p));
+    document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
+    document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
+    document.querySelectorAll('.list-style-popup.visible').forEach((p) => hideListStylePopup(p));
+    if (opening) {
+      const { from, to } = editor.state.selection;
+      wrapper._rangeAtOpen = { from, to };
+      markFontSizePopupJustOpened(popup);
+      popup.classList.add('visible');
+      requestAnimationFrame(() => {
+        layoutCalloutPopup(b, popup);
+        requestAnimationFrame(() => layoutCalloutPopup(b, popup));
+      });
+    } else {
+      hideFontSizePopup(popup);
+    }
+  });
+  wrapper.appendChild(b);
+  toolbar.appendChild(wrapper);
+  b._isActive = () => editor.isActive('triliumFontSize');
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideFontSizePopup(popup);
   });
 }
 
@@ -970,6 +1368,8 @@ function makeLinkToolbar() {
     const opening = !popup.classList.contains('visible');
     document.querySelectorAll('.color-popup.visible').forEach(p => hideColorPopup(p));
     document.querySelectorAll('.callout-popup.visible').forEach(p => hideCalloutPopup(p));
+    document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
+    document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
     document.querySelectorAll('.link-popup.visible').forEach(p => {
       if (p !== popup) hideLinkPopup(p);
     });
