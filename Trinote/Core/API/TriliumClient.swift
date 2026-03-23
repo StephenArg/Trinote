@@ -13,6 +13,13 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func restoreSession() async throws
     func logout() async throws
 
+    /// Unlocks protected-note content for this HTTP session (Trilium document password).
+    func enterProtectedSession(password: String) async throws
+    /// Extends the protected session timeout (call before sensitive writes if needed).
+    func touchProtectedSession() async throws
+    /// Ends the protected session on the server (optional; main `logout` clears cookies too).
+    func exitProtectedSession() async throws
+
     /// Serialized cookie archive for Keychain persistence.
     func exportSessionCookieData() -> Data?
 
@@ -105,6 +112,11 @@ private struct NativeNoteDetailRow: Decodable {
 
 private enum TriliumHTTP {
     static let csrfHeader = "x-csrf-token"
+}
+
+private struct ProtectedSessionLoginResponse: Decodable {
+    let success: Bool
+    let message: String?
 }
 
 // MARK: - Implementation
@@ -301,6 +313,37 @@ actor TriliumClient: TriliumClientProtocol {
         guard (200...399).contains(http.statusCode) else {
             throw APIError.serverError(statusCode: http.statusCode, message: String(data: data, encoding: .utf8))
         }
+    }
+
+    // MARK: - Protected notes (document password)
+
+    func enterProtectedSession(password: String) async throws {
+        if csrfToken == nil {
+            try await refreshCsrfFromAppShell()
+        }
+        guard csrfToken != nil else { throw APIError.noToken }
+        struct Body: Encodable { let password: String }
+        let body = Body(password: password)
+        let resp: ProtectedSessionLoginResponse = try await postJSON("/api/login/protected", body: body, csrf: true)
+        if !resp.success {
+            throw APIError.unknown(resp.message ?? "Incorrect document password.")
+        }
+    }
+
+    func touchProtectedSession() async throws {
+        if csrfToken == nil {
+            try await refreshCsrfFromAppShell()
+        }
+        guard csrfToken != nil else { throw APIError.noToken }
+        try await postWithoutBody(path: "/api/login/protected/touch", method: "POST", csrf: true)
+    }
+
+    func exitProtectedSession() async throws {
+        if csrfToken == nil {
+            try await refreshCsrfFromAppShell()
+        }
+        guard csrfToken != nil else { return }
+        try await postWithoutBody(path: "/api/logout/protected", method: "POST", csrf: true)
     }
 
     private func refreshCsrfFromAppShell() async throws {
@@ -817,6 +860,12 @@ actor TriliumClient: TriliumClientProtocol {
 
     private func putEmpty(_ path: String, csrf: Bool) async throws {
         let request = try buildRequest(path: path, method: "PUT", queryParams: nil, csrf: csrf, jsonBody: false)
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response, data: data)
+    }
+
+    private func postWithoutBody(path: String, method: String, csrf: Bool) async throws {
+        let request = try buildRequest(path: path, method: method, queryParams: nil, csrf: csrf, jsonBody: false)
         let (data, response) = try await session.data(for: request)
         try validateResponse(response, data: data)
     }

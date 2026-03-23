@@ -326,7 +326,16 @@ final class PersistenceManager {
 
     /// Breadcrumb-style path from cached parent chain under root: `Parent -> … -> note` (no `Root` prefix).
     /// Uses `leafTitle` when the leaf row is missing from the cache.
-    func cachedNotePathDisplay(noteId: String, leafTitle: String, serverProfileId: String) -> String {
+    /// When `protectedSessionActive` is false, protected notes show a placeholder instead of possibly stale decrypted titles in SwiftData.
+    func cachedNotePathDisplay(
+        noteId: String,
+        leafTitle: String,
+        leafIsProtected: Bool,
+        serverProfileId: String,
+        protectedSessionActive: Bool
+    ) -> String {
+        let maskProtected = !protectedSessionActive
+        let placeholder = NoteItem.protectedTitlePlaceholder
         var segments: [String] = []
         var currentId = noteId
         var visited = Set<String>()
@@ -337,10 +346,18 @@ final class PersistenceManager {
             let cached = try? fetchCachedNote(id: currentId, serverProfileId: serverProfileId)
             let displayTitle: String
             if let cached {
-                displayTitle = cached.title.isEmpty ? currentId : cached.title
+                if maskProtected, cached.isProtected {
+                    displayTitle = placeholder
+                } else {
+                    displayTitle = cached.title.isEmpty ? currentId : cached.title
+                }
             } else if currentId == noteId {
                 let t = leafTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-                displayTitle = t.isEmpty ? noteId : t
+                if maskProtected, leafIsProtected {
+                    displayTitle = placeholder
+                } else {
+                    displayTitle = t.isEmpty ? noteId : t
+                }
             } else {
                 break
             }

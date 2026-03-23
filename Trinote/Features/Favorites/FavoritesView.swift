@@ -20,6 +20,7 @@ struct FavoritesView: View {
     @State private var favorites: [FavoriteNote] = []
     /// Same row chrome as Recents: path from cache, tree “notebook” icon, last-open time when known.
     @State private var pathByNoteId: [String: String] = [:]
+    @State private var displayTitleByNoteId: [String: String] = [:]
     @State private var iconByNoteId: [String: String] = [:]
     @State private var lastAccessByNoteId: [String: Date] = [:]
     @State private var navigateToNote: (String, String)?
@@ -61,7 +62,12 @@ struct FavoritesView: View {
                 if titles[key] == nil {
                     if let cached = try? pm.fetchCachedNote(id: topId, serverProfileId: profileId) {
                         let t = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        titles[key] = t.isEmpty ? "Notebook" : t
+                        let raw = t.isEmpty ? "Notebook" : t
+                        titles[key] = NoteItem.maskedStoredTitle(
+                            raw,
+                            isProtected: cached.isProtected,
+                            protectedSessionActive: appState.protectedSessionActive
+                        )
                     } else {
                         titles[key] = "Notebook"
                     }
@@ -73,12 +79,17 @@ struct FavoritesView: View {
             buckets[key, default: []].append(fav)
         }
 
+        let session = appState.protectedSessionActive
+        let sortKey: (FavoriteNote) -> String = { fav in
+            let prot = (try? pm.fetchCachedNote(id: fav.noteId, serverProfileId: profileId))?.isProtected ?? false
+            return NoteItem.maskedStoredTitle(fav.title, isProtected: prot, protectedSessionActive: session)
+        }
         let sortedItems: ([FavoriteNote]) -> [FavoriteNote] = { notes in
             switch sortOrder {
             case .titleAscending:
-                notes.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+                notes.sorted { sortKey($0).localizedCaseInsensitiveCompare(sortKey($1)) == .orderedAscending }
             case .titleDescending:
-                notes.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+                notes.sorted { sortKey($0).localizedCaseInsensitiveCompare(sortKey($1)) == .orderedDescending }
             }
         }
 
@@ -100,6 +111,7 @@ struct FavoritesView: View {
             .task { loadFavorites() }
             .onAppear { loadFavorites() }
             .refreshable { loadFavorites() }
+            .onChange(of: appState.protectedSessionActive) { _, _ in loadFavorites() }
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavorites() }
             .alert("Delete Failed", isPresented: deleteErrorBinding) {
                 Button("OK", role: .cancel) { deleteError = nil }
@@ -225,7 +237,10 @@ struct FavoritesView: View {
                 Button { toggleSelection(fav.noteId) } label: { favoriteRow(fav) }
                     .buttonStyle(.plain)
             } else {
-                Button { navigateToNote = (fav.noteId, fav.title) } label: { favoriteRow(fav) }
+                Button {
+                    let navTitle = displayTitleByNoteId[fav.noteId] ?? fav.title
+                    navigateToNote = (fav.noteId, navTitle)
+                } label: { favoriteRow(fav) }
                     .buttonStyle(.plain)
             }
         }
@@ -306,7 +321,7 @@ struct FavoritesView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(fav.title)
+                Text(displayTitleByNoteId[fav.noteId] ?? fav.title)
                     .font(.body)
                     .lineLimit(2)
                     .foregroundStyle(.primary)
@@ -364,6 +379,7 @@ struct FavoritesView: View {
         guard let profileId = appState.activeProfile?.id else {
             favorites = []
             pathByNoteId = [:]
+            displayTitleByNoteId = [:]
             iconByNoteId = [:]
             lastAccessByNoteId = [:]
             return
@@ -372,6 +388,7 @@ struct FavoritesView: View {
         do {
             let raw = try pm.fetchFavorites(serverProfileId: profileId)
             var paths: [String: String] = [:]
+            var titlesOut: [String: String] = [:]
             var icons: [String: String] = [:]
             var access: [String: Date] = [:]
             var visible: [FavoriteNote] = []
@@ -382,12 +399,21 @@ struct FavoritesView: View {
                     continue
                 }
 
+                let leafProtected = (try? pm.fetchCachedNote(id: fav.noteId, serverProfileId: profileId))?.isProtected ?? false
+                let rowTitle = NoteItem.maskedStoredTitle(
+                    fav.title,
+                    isProtected: leafProtected,
+                    protectedSessionActive: appState.protectedSessionActive
+                )
+
                 let pathFull = pm.cachedNotePathDisplay(
                     noteId: fav.noteId,
                     leafTitle: fav.title,
-                    serverProfileId: profileId
+                    leafIsProtected: leafProtected,
+                    serverProfileId: profileId,
+                    protectedSessionActive: appState.protectedSessionActive
                 )
-                let pathUI = (pathFull == fav.title) ? "" : pathFull
+                let pathUI = (pathFull == rowTitle) ? "" : pathFull
 
                 let hasCachedLeaf = (try? pm.fetchCachedNote(id: fav.noteId, serverProfileId: profileId)) != nil
                 if !hasCachedLeaf && pathUI.isEmpty {
@@ -396,6 +422,7 @@ struct FavoritesView: View {
 
                 visible.append(fav)
                 paths[fav.noteId] = pathUI
+                titlesOut[fav.noteId] = rowTitle
 
                 let recent = try? pm.fetchRecentNote(noteId: fav.noteId, serverProfileId: profileId)
                 if let recent {
@@ -420,12 +447,14 @@ struct FavoritesView: View {
 
             favorites = visible
             pathByNoteId = paths
+            displayTitleByNoteId = titlesOut
             iconByNoteId = icons
             lastAccessByNoteId = access
         } catch {
             Log.persistence.error("Failed to load favorites: \(error)")
             favorites = []
             pathByNoteId = [:]
+            displayTitleByNoteId = [:]
             iconByNoteId = [:]
             lastAccessByNoteId = [:]
         }

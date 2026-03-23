@@ -11,11 +11,18 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     private let cookieStorage: HTTPCookieStorage
     private let baseURL: URL
     private let onEvent: @Sendable () -> Void
+    private let onProtectedSessionLogout: (@Sendable () -> Void)?
 
-    init(baseURL: URL, cookieStorage: HTTPCookieStorage, onEvent: @escaping @Sendable () -> Void) {
+    init(
+        baseURL: URL,
+        cookieStorage: HTTPCookieStorage,
+        onEvent: @escaping @Sendable () -> Void,
+        onProtectedSessionLogout: (@Sendable () -> Void)? = nil
+    ) {
         self.baseURL = baseURL
         self.cookieStorage = cookieStorage
         self.onEvent = onEvent
+        self.onProtectedSessionLogout = onProtectedSessionLogout
         super.init()
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = cookieStorage
@@ -70,6 +77,8 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
         switch type {
         case "frontend-update", "sync-finished", "sync-pull-in-progress", "sync-push-in-progress":
             scheduleDebouncedNotify()
+        case "protectedSessionLogout":
+            onProtectedSessionLogout?()
         case "ping":
             sendPingAck()
         default:

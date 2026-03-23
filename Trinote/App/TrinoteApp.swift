@@ -119,6 +119,8 @@ struct TrinoteApp: App {
                         .onChange(of: scenePhase) { _, newPhase in
                             if newPhase == .active {
                                 Task { await appState.onForegroundResume() }
+                            } else if newPhase == .background {
+                                Task { await appState.endServerProtectedSessionAndPersistCookies() }
                             }
                         }
                 } else if let persistenceError {

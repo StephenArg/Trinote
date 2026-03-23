@@ -11,6 +11,8 @@ final class AppState {
     var isLoading = false
     var connectionError: String?
     var lastRefreshed: Date?
+    /// In-memory: whether the user has unlocked protected notes this foreground session. Server session is cleared on background and after restoring the main login (see `endServerProtectedSessionAndPersistCookies()`).
+    var protectedSessionActive = false
 
     let networkMonitor = NetworkMonitor.shared
     let syncManager = SyncManager()
@@ -21,14 +23,29 @@ final class AppState {
 
     var isOnline: Bool { networkMonitor.isConnected }
 
-    /// Runs entity-pull incremental sync when session + instance id exist.
-    /// Waits until the sync task finishes so callers (e.g. tree reload) see deletions applied.
-    func runIncrementalSync() async {
+    /// Ends the Trilium protected-note session on the server and persists cookies. Call after restoring the main session and when the app goes to the background so the document password is required again.
+    func endServerProtectedSessionAndPersistCookies() async {
+        protectedSessionActive = false
+        guard let client, let profile = activeProfile else { return }
+        try? await client.exitProtectedSession()
+        if let tc = client as? TriliumClient {
+            let data = await tc.exportSessionCookieData()
+            try? await keychain.saveSessionCookies(data, forServer: profile.id)
+        }
+    }
+
+    /// Runs entity-pull incremental sync (or full sync if none completed yet) when session + instance id exist.
+    /// Waits until the sync task finishes or `maxWaitSeconds` elapses so callers (e.g. tree reload) see fresh data.
+    func runIncrementalSync(maxWaitSeconds: TimeInterval = 180) async {
         guard let client, let profile = activeProfile else { return }
         guard let iid = try? await keychain.loadTriliumInstanceId(forServer: profile.id) else { return }
         self.syncManager.incrementalSync(client: client, profileId: profile.id, triliumInstanceId: iid)
-        let deadline = Date().addingTimeInterval(180)
-        while self.syncManager.isSyncing, Date() < deadline {
+        await waitWhileSyncing(atMost: maxWaitSeconds)
+    }
+
+    private func waitWhileSyncing(atMost seconds: TimeInterval) async {
+        let deadline = Date().addingTimeInterval(seconds)
+        while syncManager.isSyncing, Date() < deadline {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
@@ -61,19 +78,28 @@ final class AppState {
     private func startRealtimeIfPossible() {
         realtime?.stop()
         guard let client = client as? TriliumClient,
-              let profileId = activeProfile?.id else { return }
+              activeProfile?.id != nil else { return }
 
         let storage = client.httpCookieStorage
         let base = client.baseURL
-        realtime = TriliumWebSocketConnection(baseURL: base, cookieStorage: storage) { [weak self] in
-            guard let self else { return }
-            Task { @MainActor in
-                guard let c = self.client, let pid = self.activeProfile?.id else { return }
-                if let iid = try? await self.keychain.loadTriliumInstanceId(forServer: pid) {
-                    self.syncManager.incrementalSync(client: c, profileId: pid, triliumInstanceId: iid)
+        realtime = TriliumWebSocketConnection(
+            baseURL: base,
+            cookieStorage: storage,
+            onEvent: { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    guard let c = self.client, let pid = self.activeProfile?.id else { return }
+                    if let iid = try? await self.keychain.loadTriliumInstanceId(forServer: pid) {
+                        self.syncManager.incrementalSync(client: c, profileId: pid, triliumInstanceId: iid)
+                    }
+                }
+            },
+            onProtectedSessionLogout: { [weak self] in
+                Task { @MainActor in
+                    self?.protectedSessionActive = false
                 }
             }
-        }
+        )
         realtime?.start()
     }
 
@@ -88,6 +114,7 @@ final class AppState {
 
         do {
             try await newClient.restoreSession()
+            await endServerProtectedSessionAndPersistCookies()
             self.isAuthenticated = true
             self.connectionError = nil
             self.lastRefreshed = .now
@@ -95,12 +122,8 @@ final class AppState {
             let exported = await newClient.exportSessionCookieData()
             try? await keychain.saveSessionCookies(exported, forServer: profile.id)
             Log.auth.info("Connected to \(profile.name)")
-            let iid = try await triliumInstanceId(for: profile)
-            if syncManager.hasCompletedFullSync {
-                syncManager.incrementalSync(client: newClient, profileId: profile.id, triliumInstanceId: iid)
-            } else {
-                syncManager.fullSync(client: newClient, profileId: profile.id)
-            }
+            _ = try await triliumInstanceId(for: profile)
+            await runIncrementalSync(maxWaitSeconds: 180)
             startRealtimeIfPossible()
         } catch {
             self.isAuthenticated = false
@@ -119,12 +142,16 @@ final class AppState {
             try await newClient.restoreSession()
             self.client = newClient
             self.activeProfile = profile
+            await endServerProtectedSessionAndPersistCookies()
             self.isAuthenticated = true
             self.connectionError = nil
             self.lastRefreshed = .now
             try persistence.setActiveProfile(profile)
             let exported = await newClient.exportSessionCookieData()
             try? await keychain.saveSessionCookies(exported, forServer: profile.id)
+            syncManager.restoreSyncState(profileId: profile.id)
+            _ = try await triliumInstanceId(for: profile)
+            await runIncrementalSync(maxWaitSeconds: 180)
             startRealtimeIfPossible()
         } catch {
             self.client = newClient
@@ -147,18 +174,15 @@ final class AppState {
 
         self.client = newClient
         self.activeProfile = profile
+        self.protectedSessionActive = false
         self.isAuthenticated = true
         self.connectionError = nil
         self.lastRefreshed = .now
         try persistence.setActiveProfile(profile)
         Log.auth.info("Logged in to \(profile.name) (session)")
         syncManager.restoreSyncState(profileId: profile.id)
-        let iid = try await triliumInstanceId(for: profile)
-        if syncManager.hasCompletedFullSync {
-            syncManager.incrementalSync(client: newClient, profileId: profile.id, triliumInstanceId: iid)
-        } else {
-            syncManager.fullSync(client: newClient, profileId: profile.id)
-        }
+        _ = try await triliumInstanceId(for: profile)
+        await runIncrementalSync(maxWaitSeconds: 180)
         startRealtimeIfPossible()
     }
 
@@ -166,8 +190,12 @@ final class AppState {
         syncManager.cancel()
         realtime?.stop()
         realtime = nil
+        protectedSessionActive = false
 
         if let client {
+            if let tc = client as? TriliumClient {
+                try? await tc.exitProtectedSession()
+            }
             try? await client.logout()
         }
 
@@ -208,9 +236,7 @@ final class AppState {
                 let data = await tc.exportSessionCookieData()
                 try? await keychain.saveSessionCookies(data, forServer: profile.id)
             }
-            if let iid = try? await keychain.loadTriliumInstanceId(forServer: profile.id) {
-                syncManager.incrementalSync(client: client, profileId: profile.id, triliumInstanceId: iid)
-            }
+            await runIncrementalSync(maxWaitSeconds: 90)
             startRealtimeIfPossible()
         } catch {
             connectionError = APIError.from(error).localizedDescription

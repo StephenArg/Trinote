@@ -18,6 +18,18 @@ struct NoteDetailView: View {
     @State private var showEditorCamera = false
     @State private var editorImageItem: PhotosPickerItem?
     @State private var imageToInsert: String?
+    @State private var protectedDocumentPassword = ""
+
+    private var principalTitleText: String {
+        if let n = viewModel?.note {
+            return n.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+        }
+        return title
+    }
+
+    private func uiTitle(for note: NoteItem) -> String {
+        note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+    }
 
     var body: some View {
         Group {
@@ -36,7 +48,7 @@ struct NoteDetailView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Text(viewModel?.note?.title ?? title)
+                    Text(principalTitleText)
                         .font(.headline)
                         .lineLimit(1)
                 }
@@ -61,7 +73,14 @@ struct NoteDetailView: View {
             NoteDetailView(noteId: linkedNoteId, title: "")
         }
         .toolbar(viewModel?.isEditing == true ? .hidden : .visible, for: .tabBar)
-        .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing)
+            .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing)
+            .onChange(of: viewModel?.needsProtectedSession) { _, needs in
+                if needs == false { protectedDocumentPassword = "" }
+            }
+            .onChange(of: appState.protectedSessionActive) { _, _ in
+                guard let vm = viewModel else { return }
+                Task { await vm.resyncNoteTitlesWithProtectedSession() }
+            }
     }
 
     @ViewBuilder
@@ -120,7 +139,7 @@ struct NoteDetailView: View {
                     }
                 }
             } message: {
-                Text("This will delete \"\(note.title)\" and all its sub-notes. This cannot be undone easily.")
+                Text("This will delete \"\(uiTitle(for: note))\" and all its sub-notes. This cannot be undone easily.")
             }
             .confirmationDialog("Unsaved Draft", isPresented: $vm.showDiscardDraft) {
                 Button("Restore Draft") { vm.restoreDraft() }
@@ -144,17 +163,44 @@ struct NoteDetailView: View {
             Text("Protected Note")
                 .font(.title2.bold())
 
-            Text("This note is encrypted and cannot be viewed in the mobile app yet. Protected-note content is not exposed to this client.")
+            Text("Enter the same document password you use in Trilium for protected notes. It stays active until you sign out or the server ends the session.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+
+            SecureField("Document password", text: $protectedDocumentPassword)
+                .textContentType(.password)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
                 .padding(.horizontal, 32)
 
-            Text("You can view this note in the Trilium web interface or desktop app.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+            if let err = vm.protectedUnlockError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+
+            Button {
+                let pwd = protectedDocumentPassword
+                Task { await vm.unlockProtectedNote(documentPassword: pwd) }
+            } label: {
+                Group {
+                    if vm.isUnlockingProtected {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Text("Unlock")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.vertical, 10)
+                .frame(maxWidth: 280)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(vm.isUnlockingProtected)
 
             Spacer()
         }
@@ -263,7 +309,7 @@ struct NoteDetailView: View {
                                 .foregroundStyle(.secondary)
                                 .frame(width: titleIconColumnWidth, alignment: .center)
                                 .accessibilityHidden(true)
-                            Text(note.title)
+                            Text(uiTitle(for: note))
                                 .font(.title2.bold())
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -285,7 +331,7 @@ struct NoteDetailView: View {
                     vm.editedTitle = note.title
                     vm.editingTitle = true
                 }
-                .accessibilityLabel("Note title: \(note.title). Tap to edit.")
+                .accessibilityLabel("Note title: \(uiTitle(for: note)). Tap to edit.")
             }
 
             HStack(spacing: 12) {
@@ -348,7 +394,7 @@ struct NoteDetailView: View {
             }
         case .image:
             if let data = vm.content {
-                ImageNoteView(data: data, title: note.title)
+                ImageNoteView(data: data, title: uiTitle(for: note))
             }
         case .file:
             FileNoteView(note: note, attachments: vm.attachments, viewModel: vm)
@@ -382,7 +428,7 @@ struct NoteDetailView: View {
                                 .font(.body)
                                 .foregroundStyle(.secondary)
                                 .frame(width: 22)
-                            Text(child.title)
+                            Text(NoteItem.maskedStoredTitle(child.title, isProtected: child.isProtected, protectedSessionActive: appState.protectedSessionActive))
                                 .font(.body)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
@@ -596,6 +642,7 @@ struct NoteDetailView: View {
                     Image(systemName: vm.isEditing ? "eye" : "pencil")
                 }
                 .accessibilityLabel(vm.isEditing ? "Switch to read mode" : "Edit note")
+                .disabled(vm.needsProtectedSession)
             }
 
             Menu {
@@ -618,7 +665,7 @@ struct NoteDetailView: View {
                     Label(vm.showDetails ? "Hide Details" : "Note Details", systemImage: vm.showDetails ? "info.circle.fill" : "info.circle")
                 }
 
-                if !note.isProtected {
+                if !note.isProtected || appState.protectedSessionActive {
                     Button {
                         Task {
                             if let dup = await vm.duplicateNote() {

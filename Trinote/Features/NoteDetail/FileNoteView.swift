@@ -5,6 +5,8 @@ struct FileNoteView: View {
     let attachments: [AttachmentItem]
     let viewModel: NoteDetailViewModel
 
+    @Environment(AppState.self) private var appState
+
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: "doc.fill")
@@ -12,7 +14,7 @@ struct FileNoteView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
 
-            Text(note.title)
+            Text(note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))
                 .font(.headline)
 
             Text(note.mime)

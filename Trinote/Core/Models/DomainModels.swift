@@ -48,6 +48,20 @@ extension NoteItem {
         self.childBranchIds = response.childBranchIds
         self.attributes = response.attributes.map(AttributeItem.init)
     }
+
+    /// Shown in lists when the document-password session is locked but SwiftData still has a decrypted title from a prior session.
+    static let protectedTitlePlaceholder = String(localized: "Protected note", comment: "Title placeholder for protected notes when locked")
+
+    func uiTitle(forProtectedSessionActive sessionActive: Bool) -> String {
+        if isProtected, !sessionActive { return Self.protectedTitlePlaceholder }
+        return title
+    }
+
+    /// For SwiftData-backed rows (recents/favorites) that only store `title` + separate `isProtected`.
+    static func maskedStoredTitle(_ storedTitle: String, isProtected: Bool, protectedSessionActive: Bool) -> String {
+        if isProtected, !protectedSessionActive { return protectedTitlePlaceholder }
+        return storedTitle
+    }
 }
 
 struct BranchItem: Identifiable, Hashable, Sendable {
@@ -143,6 +157,15 @@ struct TreeNode: Identifiable, Sendable {
             return "\(prefix) - \(note.title)"
         }
         return note.title
+    }
+
+    /// Tree row / navigation title with protected-note masking (pass `AppState.protectedSessionActive`).
+    func displayTitle(protectedSessionActive: Bool) -> String {
+        let base = note.uiTitle(forProtectedSessionActive: protectedSessionActive)
+        if let prefix = branch.prefix, !prefix.isEmpty {
+            return "\(prefix) - \(base)"
+        }
+        return base
     }
     var hasChildren: Bool { note.hasChildren }
     var isExpanded: Bool { branch.isExpanded }

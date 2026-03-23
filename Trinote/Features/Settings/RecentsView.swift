@@ -5,6 +5,8 @@ struct RecentsView: View {
     @State private var recentNotes: [RecentNote] = []
     /// Cached breadcrumb path per note (from SwiftData); empty string if unavailable.
     @State private var pathByNoteId: [String: String] = [:]
+    /// Row title with protected-note masking (SwiftData may still hold decrypted titles after restart).
+    @State private var displayTitleByNoteId: [String: String] = [:]
     /// SF Symbol for the top-level-under-root note (same visual grouping as tree).
     @State private var iconByNoteId: [String: String] = [:]
     @State private var navigateToNote: (String, String)?
@@ -21,7 +23,8 @@ struct RecentsView: View {
                 List {
                     ForEach(recentNotes, id: \.id) { recent in
                         Button {
-                            navigateToNote = (recent.noteId, recent.title)
+                            let navTitle = displayTitleByNoteId[recent.noteId] ?? recent.title
+                            navigateToNote = (recent.noteId, navTitle)
                         } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: recentsRowIcon(for: recent))
@@ -30,7 +33,7 @@ struct RecentsView: View {
                                     .accessibilityHidden(true)
 
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(recent.title)
+                                    Text(displayTitleByNoteId[recent.noteId] ?? recent.title)
                                         .font(.body)
                                         .lineLimit(2)
                                         .foregroundStyle(.primary)
@@ -70,6 +73,7 @@ struct RecentsView: View {
         .navigationTitle("Recents")
         .task { loadRecents() }
         .refreshable { loadRecents() }
+        .onChange(of: appState.protectedSessionActive) { _, _ in loadRecents() }
         .navigationDestination(item: Binding(
             get: { navigateToNote.map { NoteNavItem(noteId: $0.0, title: $0.1) } },
             set: { navigateToNote = $0.map { ($0.noteId, $0.title) } }
@@ -84,6 +88,7 @@ struct RecentsView: View {
         do {
             let raw = try pm.fetchRecentNotes(serverProfileId: profileId)
             var paths: [String: String] = [:]
+            var titlesOut: [String: String] = [:]
             var icons: [String: String] = [:]
             var visible: [RecentNote] = []
             visible.reserveCapacity(raw.count)
@@ -95,13 +100,22 @@ struct RecentsView: View {
                     continue
                 }
 
+                let leafProtected = (try? pm.fetchCachedNote(id: recent.noteId, serverProfileId: profileId))?.isProtected ?? false
+                let rowTitle = NoteItem.maskedStoredTitle(
+                    recent.title,
+                    isProtected: leafProtected,
+                    protectedSessionActive: appState.protectedSessionActive
+                )
+
                 let pathFull = pm.cachedNotePathDisplay(
                     noteId: recent.noteId,
                     leafTitle: recent.title,
-                    serverProfileId: profileId
+                    leafIsProtected: leafProtected,
+                    serverProfileId: profileId,
+                    protectedSessionActive: appState.protectedSessionActive
                 )
                 // Avoid duplicating the title line when cache has no ancestors.
-                let pathUI = (pathFull == recent.title) ? "" : pathFull
+                let pathUI = (pathFull == rowTitle) ? "" : pathFull
 
                 let hasCachedLeaf = (try? pm.fetchCachedNote(id: recent.noteId, serverProfileId: profileId)) != nil
                 // Deleted / purged notes: no cache row and no breadcrumb trail — drop from list.
@@ -111,6 +125,7 @@ struct RecentsView: View {
 
                 visible.append(recent)
                 paths[recent.noteId] = pathUI
+                titlesOut[recent.noteId] = rowTitle
                 icons[recent.noteId] = pm.recentsRowIconSystemName(
                     noteId: recent.noteId,
                     fallbackNoteType: recent.noteType,
@@ -120,11 +135,13 @@ struct RecentsView: View {
 
             recentNotes = visible
             pathByNoteId = paths
+            displayTitleByNoteId = titlesOut
             iconByNoteId = icons
         } catch {
             Log.persistence.error("Failed to load recents: \(error)")
             recentNotes = []
             pathByNoteId = [:]
+            displayTitleByNoteId = [:]
             iconByNoteId = [:]
         }
     }

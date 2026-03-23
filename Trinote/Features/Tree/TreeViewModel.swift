@@ -428,7 +428,8 @@ final class TreeViewModel {
             guard let parentNoteId = note.parentNoteIds.first else { break }
 
             let parentBranchId = note.parentBranchIds.first
-            crumbs.insert(BreadcrumbItem(noteId: currentId, title: note.title, branchId: parentBranchId), at: 0)
+            let crumbTitle = note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+            crumbs.insert(BreadcrumbItem(noteId: currentId, title: crumbTitle, branchId: parentBranchId), at: 0)
             currentId = parentNoteId
         }
 
@@ -552,6 +553,14 @@ final class TreeViewModel {
         let response = try await client.getNote(noteId)
         let item = NoteItem(from: response)
         noteCache[noteId] = item
+        if let profileId = serverProfileId {
+            try? persistence.cacheNote(from: response, serverProfileId: profileId)
+            try? persistence.commitBatch()
+            for attr in response.attributes {
+                try? persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
+            }
+            try? persistence.commitBatch()
+        }
         return item
     }
 

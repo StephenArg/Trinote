@@ -55,6 +55,20 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func logout() async throws { logoutCalled = true; isSessionValid = false }
 
+    var enterProtectedSessionResult: Result<Void, Error> = .success(())
+    var touchProtectedSessionCallCount = 0
+
+    func enterProtectedSession(password: String) async throws {
+        _ = password
+        try enterProtectedSessionResult.get()
+    }
+
+    func touchProtectedSession() async throws {
+        touchProtectedSessionCallCount += 1
+    }
+
+    func exitProtectedSession() async throws {}
+
     func getAppInfo() async throws -> AppInfoResponse {
         try appInfoResult.get()
     }
@@ -105,9 +119,6 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse {
         let src = try await getNote(sourceNoteId)
-        if src.isProtected {
-            throw APIError.unknown("Protected notes can’t be duplicated in the app.")
-        }
         let data = try await getNoteContent(sourceNoteId)
         let title = src.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Note (copy)"

@@ -62,6 +62,9 @@ struct TreeView: View {
         Group {
             if let viewModel {
                 treeContent(viewModel)
+                    .onChange(of: appState.protectedSessionActive) { _, _ in
+                        Task { await viewModel.refresh() }
+                    }
             } else {
                 ProgressView("Loading…")
             }
@@ -111,7 +114,7 @@ struct TreeView: View {
             loadFavoriteIds()
         }
         .navigationDestination(item: $navigateToNote) { note in
-            NoteDetailView(noteId: note.noteId, title: note.title)
+            NoteDetailView(noteId: note.noteId, title: note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))
         }
         .navigationDestination(item: $navigateToNoteForEdit) { target in
             NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
@@ -135,7 +138,7 @@ struct TreeView: View {
             }
         } message: {
             if let (note, _) = noteToDelete {
-                Text("\"\(note.title)\" and all its subnotes will be permanently deleted. This cannot be undone.")
+                Text("\"\(note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))\" and all its subnotes will be permanently deleted. This cannot be undone.")
             }
         }
         .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
@@ -361,7 +364,7 @@ struct TreeView: View {
             customTextColor: treeTextColor,
             onSelect: { note in
                 if let pick = onPickParent {
-                    pick(note.noteId, note.title)
+                    pick(note.noteId, note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))
                 } else {
                     navigateToNote = note
                 }
@@ -467,6 +470,8 @@ extension TreeViewModel {
 struct TreeNodeRow: View {
     static let maxInlineDepth = 2
 
+    @Environment(AppState.self) private var appState
+
     let node: TreeNode
     let depth: Int
     let viewModel: TreeViewModel
@@ -491,7 +496,7 @@ struct TreeNodeRow: View {
         if node.note.hasChildren {
             Button {
                 if shouldDrillDown {
-                    onDrillDown(node.note.noteId, node.title)
+                    onDrillDown(node.note.noteId, node.displayTitle(protectedSessionActive: appState.protectedSessionActive))
                 } else {
                     Task { await viewModel.toggleExpand(node) }
                 }
@@ -522,10 +527,7 @@ struct TreeNodeRow: View {
     }
 
     private var displayTitle: String {
-        guard node.note.isProtected else { return node.title }
-        let t = node.title.trimmingCharacters(in: .whitespaces)
-        let hasNonASCII = t.unicodeScalars.contains { !$0.isASCII && !CharacterSet.whitespaces.contains($0) }
-        return (t.isEmpty || hasNonASCII) ? "Protected note" : t
+        node.displayTitle(protectedSessionActive: appState.protectedSessionActive)
     }
 
     private var noteLabel: some View {

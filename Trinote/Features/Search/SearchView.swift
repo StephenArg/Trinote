@@ -111,11 +111,14 @@ struct SearchView: View {
             Section {
                 ForEach(vm.results) { note in
                     Button {
-                        navigateToNote = note
+                        var nav = note
+                        nav.title = note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+                        navigateToNote = nav
                     } label: {
                         SearchResultRow(note: note)
                     }
                     .buttonStyle(.plain)
+                    .environment(appState)
                 }
             } header: {
                 Text("\(vm.results.count) result\(vm.results.count == 1 ? "" : "s")")
@@ -174,6 +177,12 @@ struct SearchView: View {
 struct SearchResultRow: View {
     let note: NoteItem
 
+    @Environment(AppState.self) private var appState
+
+    private var displayTitle: String {
+        note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: note.resolvedIconName)
@@ -182,7 +191,7 @@ struct SearchResultRow: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(note.title)
+                Text(displayTitle)
                     .font(.body)
                     .lineLimit(2)
 
@@ -218,7 +227,7 @@ struct SearchResultRow: View {
                 .foregroundStyle(.quaternary)
         }
         .padding(.vertical, 4)
-        .accessibilityLabel("\(note.title), \(note.type.displayName)")
+        .accessibilityLabel("\(displayTitle), \(note.type.displayName)")
     }
 }
 

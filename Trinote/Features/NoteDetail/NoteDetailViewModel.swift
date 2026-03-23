@@ -48,6 +48,8 @@ final class NoteDetailViewModel {
 
     // Protected notes
     var needsProtectedSession = false
+    var protectedUnlockError: String?
+    var isUnlockingProtected = false
 
     // Child notes
     var childNotes: [ChildNoteSummary] = []
@@ -71,15 +73,96 @@ final class NoteDetailViewModel {
     var isOnline: Bool { appState.isOnline }
     var serverBaseURL: URL? { (appState.client as? TriliumClient)?.baseURL }
 
+    private static func persistNoteResponse(_ response: NoteResponse, profileId: String, persistence: PersistenceManager) {
+        try? persistence.cacheNote(from: response, serverProfileId: profileId)
+        for attr in response.attributes {
+            try? persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
+        }
+    }
+
+    /// Refetches this note, ancestors, and direct children so titles match the current protected session (decrypted vs encrypted).
+    func resyncNoteTitlesWithProtectedSession() async {
+        guard let client, let profileId = serverProfileId else { return }
+        var visited = Set<String>()
+        var currentId: String? = noteId
+
+        while let nid = currentId, nid != "root", !visited.contains(nid) {
+            visited.insert(nid)
+            do {
+                let response = try await client.getNote(nid)
+                Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+                if nid == noteId {
+                    self.note = NoteItem(from: response)
+                    self.serverUtcDateModified = response.utcDateModified
+                }
+                currentId = response.parentNoteIds.first
+            } catch {
+                Log.api.warning("Protected title resync: getNote failed for \(nid): \(error)")
+                break
+            }
+        }
+        try? persistence.commitBatch()
+
+        if let n = self.note {
+            for childId in n.childNoteIds where !visited.contains(childId) {
+                do {
+                    let response = try await client.getNote(childId)
+                    Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+                } catch {
+                    Log.api.debug("Protected title resync: child getNote failed for \(childId)")
+                }
+            }
+            try? persistence.commitBatch()
+            try? persistence.recordRecentNote(
+                noteId: n.noteId, title: n.title,
+                noteType: n.type.rawValue, serverProfileId: profileId
+            )
+        }
+
+        rebuildBreadcrumbsFromCache()
+        await loadChildNotes()
+    }
+
+    private func rebuildBreadcrumbsFromCache() {
+        guard let profileId = serverProfileId else {
+            breadcrumbs = []
+            return
+        }
+        var crumbs: [BreadcrumbItem] = []
+        var currentId = noteId
+        var visited = Set<String>()
+        while currentId != "root", !visited.contains(currentId) {
+            visited.insert(currentId)
+            guard let cached = try? persistence.fetchCachedNote(id: currentId, serverProfileId: profileId) else { break }
+            let displayTitle: String
+            if !appState.protectedSessionActive, cached.isProtected {
+                displayTitle = NoteItem.protectedTitlePlaceholder
+            } else {
+                displayTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? currentId : cached.title
+            }
+            guard let parentNoteId = cached.parentNoteIds.first, !parentNoteId.isEmpty else { break }
+            let branchId = cached.parentBranchIds.first
+            crumbs.insert(BreadcrumbItem(noteId: currentId, title: displayTitle, branchId: branchId), at: 0)
+            currentId = parentNoteId
+        }
+        if currentId == "root" {
+            crumbs.insert(BreadcrumbItem(noteId: "root", title: "Root", branchId: nil), at: 0)
+        }
+        breadcrumbs = crumbs
+    }
+
     /// Path under title — same format as Recents (`Parent -> … -> note`, no `Root`). Hidden when it would only repeat the title.
     var noteTreePathCaption: String? {
         guard let profileId = serverProfileId, let note else { return nil }
         let full = persistence.cachedNotePathDisplay(
             noteId: note.noteId,
             leafTitle: note.title,
-            serverProfileId: profileId
+            leafIsProtected: note.isProtected,
+            serverProfileId: profileId,
+            protectedSessionActive: appState.protectedSessionActive
         )
-        let condensed = (full == note.title) ? "" : full
+        let leafUI = note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+        let condensed = (full == leafUI) ? "" : full
         return condensed.isEmpty ? nil : condensed
     }
 
@@ -113,17 +196,14 @@ final class NoteDetailViewModel {
             self.serverVerified = true
 
             if let profileId = self.serverProfileId {
-                try? self.persistence.cacheNote(from: response, serverProfileId: profileId)
+                Self.persistNoteResponse(response, profileId: profileId, persistence: self.persistence)
                 try? self.persistence.commitBatch()
                 try? self.persistence.recordRecentNote(
                     noteId: nid, title: response.title,
                     noteType: response.type, serverProfileId: profileId
                 )
-                for attr in response.attributes {
-                    try? self.persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
-                }
-                try? self.persistence.commitBatch()
             }
+            rebuildBreadcrumbsFromCache()
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError {
@@ -152,9 +232,10 @@ final class NoteDetailViewModel {
             }
         }
 
-        if let note = self.note, note.isProtected {
-            self.needsProtectedSession = true
-            return
+        guard let note = self.note else { return }
+
+        if !note.isProtected {
+            self.needsProtectedSession = false
         }
 
         self.checkForDraft()
@@ -163,8 +244,15 @@ final class NoteDetailViewModel {
         let profileId = self.serverProfileId ?? ""
         let cachedDate = (try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId))?.utcDateModified
 
-        if let serverDate = self.serverUtcDateModified, let cachedDate, serverDate <= cachedDate {
+        let forceFetchProtected = note.isProtected && !appState.protectedSessionActive
+        if let serverDate = self.serverUtcDateModified, let cachedDate, serverDate <= cachedDate, !forceFetchProtected {
             self.serverVerified = true
+            if note.isProtected {
+                self.needsProtectedSession = false
+                if appState.protectedSessionActive {
+                    await resyncNoteTitlesWithProtectedSession()
+                }
+            }
             return
         }
 
@@ -189,6 +277,12 @@ final class NoteDetailViewModel {
             self.contentString = displayHTML
             self.serverVerified = true
 
+            if note.isProtected {
+                self.appState.protectedSessionActive = true
+                self.needsProtectedSession = false
+                self.protectedUnlockError = nil
+            }
+
             if let profileId = self.serverProfileId {
                 try? self.persistence.cacheNoteContent(
                     nid, content: data, serverProfileId: profileId,
@@ -198,12 +292,27 @@ final class NoteDetailViewModel {
 
             self.checkForDraft()
 
+            if note.isProtected {
+                await resyncNoteTitlesWithProtectedSession()
+            }
+
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError {
                 return
             }
             Log.api.error("Failed to load note content")
+
+            if note.isProtected {
+                if Self.protectedSessionLikelyEnded(error) {
+                    self.appState.protectedSessionActive = false
+                    self.needsProtectedSession = true
+                    await resyncNoteTitlesWithProtectedSession()
+                } else if !self.appState.protectedSessionActive {
+                    // No server-side session yet — show unlock (wrong password will be handled after unlock attempt).
+                    self.needsProtectedSession = true
+                }
+            }
 
             // "Cannot find content for noteId" means the blob was erased —
             // the note is effectively deleted on the server.
@@ -337,6 +446,7 @@ final class NoteDetailViewModel {
         // 3) Fetch content into local vars (still no @Observable writes)
         var fetchedData: Data?
         var fetchedHTML: String?
+        var skipApplyingStaleMetaNote = false
         do {
             let data = try await client.getNoteContent(nid)
             fetchedData = data
@@ -347,20 +457,27 @@ final class NoteDetailViewModel {
                 return
             }
             Log.api.error("Note detail refresh: getNoteContent failed — will apply meta only; content may stay stale or empty")
+            if let meta = metaResponse, meta.isProtected, Self.protectedSessionLikelyEnded(error) {
+                self.appState.protectedSessionActive = false
+                self.needsProtectedSession = true
+                skipApplyingStaleMetaNote = true
+                await resyncNoteTitlesWithProtectedSession()
+            }
         }
 
         // 4) All network done — apply everything to @Observable state
         if let response = metaResponse {
-            self.note = NoteItem(from: response)
-            self.serverUtcDateModified = serverDate
-            self.serverVerified = true
-            if let pid = self.serverProfileId {
-                try? self.persistence.cacheNote(from: response, serverProfileId: pid)
-                try? self.persistence.commitBatch()
-                for attr in response.attributes {
-                    try? self.persistence.cacheAttributeBatch(from: attr, serverProfileId: pid)
+            if !skipApplyingStaleMetaNote {
+                self.note = NoteItem(from: response)
+                self.serverUtcDateModified = serverDate
+                self.serverVerified = true
+                if let pid = self.serverProfileId {
+                    Self.persistNoteResponse(response, profileId: pid, persistence: persistence)
+                    try? persistence.commitBatch()
                 }
-                try? self.persistence.commitBatch()
+            } else {
+                self.serverUtcDateModified = serverDate
+                self.serverVerified = true
             }
         }
 
@@ -564,6 +681,26 @@ final class NoteDetailViewModel {
 
     // MARK: - Saving
 
+    func unlockProtectedNote(documentPassword: String) async {
+        guard let client, let note, note.isProtected else { return }
+        let trimmed = documentPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            protectedUnlockError = "Enter the document password used for protected notes in Trilium."
+            return
+        }
+        isUnlockingProtected = true
+        protectedUnlockError = nil
+        defer { isUnlockingProtected = false }
+        do {
+            try await client.enterProtectedSession(password: trimmed)
+            appState.protectedSessionActive = true
+            needsProtectedSession = false
+            await loadContent()
+        } catch {
+            protectedUnlockError = APIError.from(error).localizedDescription
+        }
+    }
+
     func saveContent() async {
         flushPendingEditorContent()
         guard let client, let note else {
@@ -589,8 +726,21 @@ final class NoteDetailViewModel {
                     return
                 }
             } catch {
+                if note.isProtected, Self.protectedSessionLikelyEnded(error) {
+                    self.appState.protectedSessionActive = false
+                    self.needsProtectedSession = true
+                    await resyncNoteTitlesWithProtectedSession()
+                    self.saveError = "Protected session expired. Unlock the note again to save."
+                    self.showSaveError = true
+                    self.saveDraftLocally()
+                    return
+                }
                 Log.api.warning("Could not verify server content before save")
             }
+        }
+
+        if note.isProtected, appState.protectedSessionActive {
+            try? await client.touchProtectedSession()
         }
 
         do {
@@ -612,7 +762,14 @@ final class NoteDetailViewModel {
             }
             Log.api.info("Saved content for note")
         } catch {
-            self.saveError = APIError.from(error).localizedDescription
+            if note.isProtected, Self.protectedSessionLikelyEnded(error) {
+                self.appState.protectedSessionActive = false
+                self.needsProtectedSession = true
+                await resyncNoteTitlesWithProtectedSession()
+                self.saveError = "Protected session expired. Unlock the note again, then save."
+            } else {
+                self.saveError = APIError.from(error).localizedDescription
+            }
             self.showSaveError = true
             self.saveDraftLocally()
             Log.api.error("Failed to save content")
@@ -643,8 +800,8 @@ final class NoteDetailViewModel {
             self.showSaveError = true
             return nil
         }
-        if note.isProtected {
-            self.saveError = "Protected notes can’t be duplicated in the app."
+        if note.isProtected, !appState.protectedSessionActive {
+            self.saveError = "Unlock this protected note before duplicating."
             self.showSaveError = true
             return nil
         }
@@ -794,6 +951,7 @@ final class NoteDetailViewModel {
                 results.append(ChildNoteSummary(
                     noteId: cached.noteId,
                     title: cached.title,
+                    isProtected: cached.isProtected,
                     type: NoteType(rawValue: cached.noteType) ?? .text,
                     iconClass: iconClass,
                     childCount: cached.childNoteIds.count
@@ -842,11 +1000,28 @@ final class NoteDetailViewModel {
         }
     }
 
+    private static func protectedSessionLikelyEnded(_ error: Error) -> Bool {
+        let apiError = APIError.from(error)
+        switch apiError {
+        case .unauthorized:
+            return true
+        case .serverError(let code, let msg):
+            if code == 401 || code == 403 { return true }
+            if let msg, msg.localizedCaseInsensitiveContains("protect") { return true }
+            return false
+        default:
+            return false
+        }
+    }
+
     private func loadContentFromCache() {
         guard let profileId = self.serverProfileId else { return }
         let nid = self.noteId
         if let cached = try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId),
            let data = cached.content {
+            if cached.isProtected, !appState.protectedSessionActive {
+                return
+            }
             content = data
             let html = String(data: data, encoding: .utf8)
             rawContentString = html
@@ -859,6 +1034,7 @@ final class NoteDetailViewModel {
 struct ChildNoteSummary: Identifiable, Sendable {
     let noteId: String
     let title: String
+    let isProtected: Bool
     let type: NoteType
     let iconClass: String?
     let childCount: Int
