@@ -2,6 +2,18 @@ import SwiftUI
 import PhotosUI
 import UIKit
 
+/// Which ⋯ menu command to mirror on the trailing toolbar; stored in `UserDefaults` via `@AppStorage`.
+
+/// Tracked ⋯ menu actions mirrored on the trailing toolbar (delete and edit are never tracked).
+private enum NoteDetailToolbarQuickAction: String, CaseIterable {
+    case newChild
+    case duplicate
+    case rename
+    case noteDetails
+    case favorite
+    case findOnPage
+}
+
 struct NoteDetailView: View {
     let noteId: String
     let title: String
@@ -20,6 +32,14 @@ struct NoteDetailView: View {
     @State private var imageToInsert: String?
     @State private var protectedDocumentPassword = ""
     @State private var favoriteNoteIds: Set<String> = []
+    @State private var findControl = FindOnPageControl()
+    /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
+    @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.rename.rawValue
+
+    /// Floating Edit chip: shown when opening an editable note; hides on scroll **up**, shows on scroll **down**.
+    @State private var showFloatingEditButton = false
+    @State private var lastScrollContentOffsetY: CGFloat = 0
+    @State private var floatingEditScrollBaselineReady = false
 
     private var principalTitleText: String {
         if let n = viewModel?.note {
@@ -42,6 +62,66 @@ struct NoteDetailView: View {
             formatted = note.dateModified
         }
         return String(localized: "Last changed \(formatted)", comment: "Subtitle under note title; formatted is date/time")
+    }
+
+    /// Uses `UIScrollView.contentOffset.y` (via `NoteDetailScrollOffsetReader`): increases when scrolling **down**, decreases when scrolling **up**.
+    private func updateFloatingEditVisibility(contentOffsetY: CGFloat, vm: NoteDetailViewModel, note: NoteItem) {
+        guard note.type.isEditable, !vm.needsProtectedSession, !vm.isEditing else {
+            if showFloatingEditButton {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = false
+                }
+            }
+            lastScrollContentOffsetY = contentOffsetY
+            floatingEditScrollBaselineReady = false
+            return
+        }
+
+        if !floatingEditScrollBaselineReady {
+            floatingEditScrollBaselineReady = true
+            lastScrollContentOffsetY = contentOffsetY
+            return
+        }
+
+        let directionalThreshold: CGFloat = 10
+        let delta = contentOffsetY - lastScrollContentOffsetY
+        lastScrollContentOffsetY = contentOffsetY
+
+        let nextVisible: Bool
+        if delta < -directionalThreshold {
+            // Offset decreased → user scrolled **up** → hide.
+            nextVisible = false
+        } else if delta > directionalThreshold {
+            // User scrolled **down** → show again.
+            nextVisible = true
+        } else {
+            return
+        }
+
+        if nextVisible != showFloatingEditButton {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                showFloatingEditButton = nextVisible
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func floatingEditFAB(vm: NoteDetailViewModel) -> some View {
+        Button {
+            vm.startEditing()
+        } label: {
+            Image("EditNoteFloating")
+                .resizable()
+                .renderingMode(.template)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 24, height: 24)
+                .foregroundStyle(.primary)
+                .padding(12)
+                .background(.ultraThinMaterial, in: Circle())
+                .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(String(localized: "Edit note", comment: "Floating scroll edit button"))
     }
 
     var body: some View {
@@ -119,22 +199,90 @@ struct NoteDetailView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
                 } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            draftBanner(vm)
-                            breadcrumbsBar(vm)
-                            titleSection(vm, note: note)
-                            Divider()
-                            noteBody(vm, note: note)
-                            childNotesSection(vm)
+                    ZStack(alignment: .bottomTrailing) {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 0) {
+                                draftBanner(vm)
+                                breadcrumbsBar(vm)
+                                titleSection(vm, note: note)
+                                Divider()
+                                noteBody(vm, note: note, findControl: findControl)
+                                childNotesSection(vm)
 
-                            if vm.showDetails {
-                                attachmentsSection(vm)
-                                metadataSection(note)
+                                if vm.showDetails {
+                                    attachmentsSection(vm)
+                                    metadataSection(note)
+                                }
+                            }
+                            .background(
+                                NoteDetailScrollOffsetReader { y in
+                                    updateFloatingEditVisibility(
+                                        contentOffsetY: y,
+                                        vm: vm,
+                                        note: note
+                                    )
+                                }
+                                .frame(width: 0, height: 0)
+                            )
+                        }
+
+                        if showFloatingEditButton {
+                            floatingEditFAB(vm: vm)
+                                .padding(.trailing, 16)
+                                .padding(.bottom, findControl.isPresented ? 56 : 12)
+                                .transition(.scale(scale: 0.88).combined(with: .opacity))
+                                .zIndex(2)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.22), value: findControl.isPresented)
+                    .refreshable { await vm.refresh() }
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        if findControl.isPresented {
+                            FindOnPageBar(control: findControl)
+                        }
+                    }
+                    .onAppear {
+                        floatingEditScrollBaselineReady = false
+                        lastScrollContentOffsetY = 0
+                        let eligible = note.type.isEditable && !vm.needsProtectedSession && !vm.isEditing
+                        if eligible {
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                                showFloatingEditButton = true
+                            }
+                        } else {
+                            showFloatingEditButton = false
+                        }
+                    }
+                    .onChange(of: vm.isEditing) { _, editing in
+                        if editing {
+                            findControl.close()
+                            floatingEditScrollBaselineReady = false
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                                showFloatingEditButton = false
+                            }
+                        } else if note.type.isEditable && !vm.needsProtectedSession {
+                            floatingEditScrollBaselineReady = false
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                                showFloatingEditButton = true
                             }
                         }
                     }
-                    .refreshable { await vm.refresh() }
+                    .onChange(of: vm.needsProtectedSession) { _, needs in
+                        if needs {
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                                showFloatingEditButton = false
+                            }
+                            floatingEditScrollBaselineReady = false
+                        } else if note.type.isEditable && !vm.isEditing {
+                            floatingEditScrollBaselineReady = false
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                                showFloatingEditButton = true
+                            }
+                        }
+                    }
+                    .onDisappear {
+                        findControl.unregisterAll()
+                    }
                 }
             }
             .toolbar { noteToolbar(vm, note: note) }
@@ -369,7 +517,7 @@ struct NoteDetailView: View {
     }
 
     @ViewBuilder
-    private func noteBody(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+    private func noteBody(_ vm: NoteDetailViewModel, note: NoteItem, findControl: FindOnPageControl) -> some View {
         if vm.isLoadingContent {
             ProgressView("Loading content…")
                 .frame(maxWidth: .infinity)
@@ -377,12 +525,12 @@ struct NoteDetailView: View {
         } else if vm.isEditing && note.type != .text {
             codeEditingView(vm)
         } else {
-            readingView(vm, note: note)
+            readingView(vm, note: note, findControl: findControl)
         }
     }
 
     @ViewBuilder
-    private func readingView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+    private func readingView(_ vm: NoteDetailViewModel, note: NoteItem, findControl: FindOnPageControl) -> some View {
         switch note.type {
         case .text:
             if let html = vm.contentString {
@@ -394,7 +542,8 @@ struct NoteDetailView: View {
                     },
                     onCheckboxToggled: { index, checked in
                         vm.toggleCheckbox(index: index, checked: checked)
-                    }
+                    },
+                    findControl: findControl
                 )
             }
         case .mermaid:
@@ -403,7 +552,7 @@ struct NoteDetailView: View {
             }
         case .code:
             if let code = vm.contentString {
-                CodeNoteView(content: code, mime: note.mime)
+                CodeNoteView(content: code, mime: note.mime, findControl: findControl)
             }
         case .image:
             if let data = vm.content {
@@ -650,55 +799,84 @@ struct NoteDetailView: View {
     @ToolbarContentBuilder
     private func noteToolbar(_ vm: NoteDetailViewModel, note: NoteItem) -> some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if note.type.isEditable {
+            // First in group sits at the outer trailing edge (last-used quick action); ⋯ is to its left.
+            if let quick = firstAvailableToolbarQuickAction(vm: vm, note: note) {
                 Button {
-                    if vm.isEditing {
-                        vm.cancelEditing()
-                    } else {
-                        vm.startEditing()
-                    }
+                    performToolbarQuickAction(quick, vm: vm, note: note)
                 } label: {
-                    Image(systemName: vm.isEditing ? "eye" : "pencil")
+                    toolbarQuickActionLabel(quick, vm: vm, note: note)
                 }
-                .accessibilityLabel(vm.isEditing ? "Switch to read mode" : "Edit note")
-                .disabled(vm.needsProtectedSession)
+                .disabled(isToolbarQuickActionDisabled(quick, vm: vm))
+                .accessibilityLabel(toolbarQuickActionAccessibilityLabel(quick, vm: vm, note: note))
             }
 
             Menu {
+                if note.type.isEditable {
+                    Button {
+                        if vm.isEditing {
+                            vm.cancelEditing()
+                        } else {
+                            vm.startEditing()
+                        }
+                    } label: {
+                        if vm.isEditing {
+                            Label(
+                                String(localized: "Read Mode", comment: "Leave note editor"),
+                                systemImage: "eye"
+                            )
+                        } else {
+                            Label {
+                                Text(String(localized: "Edit Note", comment: "Open note editor"))
+                            } icon: {
+                                Image("EditNoteFloating")
+                                    .renderingMode(.template)
+                            }
+                        }
+                    }
+                    .disabled(vm.needsProtectedSession)
+                }
+
                 Button {
+                    recordToolbarQuickAction(.newChild)
                     vm.showCreateChild = true
                 } label: {
                     Label("New Child Note", systemImage: "plus")
                 }
 
-                Button {
-                    vm.editedTitle = note.title
-                    vm.editingTitle = true
-                } label: {
-                    Label("Rename", systemImage: "pencil")
-                }
-
-                Button {
-                    withAnimation { vm.showDetails.toggle() }
-                } label: {
-                    Label(vm.showDetails ? "Hide Details" : "Note Details", systemImage: vm.showDetails ? "info.circle.fill" : "info.circle")
-                }
-
                 if !note.isProtected || appState.protectedSessionActive {
                     Button {
+                        recordToolbarQuickAction(.duplicate)
                         Task {
                             if let dup = await vm.duplicateNote() {
                                 navigateToNoteId = dup.noteId
                             }
                         }
                     } label: {
-                        Label("Duplicate Note", systemImage: "doc.on.doc")
+                        Label("Duplicate", systemImage: "doc.on.doc")
                     }
                     .disabled(vm.isSaving)
                 }
 
+                Button {
+                    recordToolbarQuickAction(.rename)
+                    vm.editedTitle = note.title
+                    vm.editingTitle = true
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+
+                Divider()
+
+                Button {
+                    recordToolbarQuickAction(.noteDetails)
+                    withAnimation { vm.showDetails.toggle() }
+                } label: {
+                    Label(vm.showDetails ? "Hide Details" : "Note Details", systemImage: vm.showDetails ? "info.circle.fill" : "info.circle")
+                }
+
                 if appState.activeProfile != nil {
                     Button {
+                        recordToolbarQuickAction(.favorite)
                         toggleFavorite(note: note, isFavorite: favoriteNoteIds.contains(note.noteId))
                     } label: {
                         if favoriteNoteIds.contains(note.noteId) {
@@ -706,6 +884,24 @@ struct NoteDetailView: View {
                         } else {
                             Label("Add to Favorites", systemImage: "star")
                         }
+                    }
+                }
+
+                if !vm.isEditing && note.type.supportsReadOnlyOnPageFind {
+                    Button {
+                        recordToolbarQuickAction(.findOnPage)
+                        if findControl.isPresented {
+                            findControl.close()
+                        } else {
+                            findControl.isPresented = true
+                        }
+                    } label: {
+                        Label(
+                            findControl.isPresented
+                                ? String(localized: "Hide Find Bar", comment: "Close in-page search")
+                                : String(localized: "Find on Page", comment: "Open in-page search for read-only note"),
+                            systemImage: "magnifyingglass"
+                        )
                     }
                 }
 
@@ -720,6 +916,106 @@ struct NoteDetailView: View {
                 Image(systemName: "ellipsis.circle")
             }
             .accessibilityLabel("Note actions")
+        }
+    }
+
+    private func recordToolbarQuickAction(_ action: NoteDetailToolbarQuickAction) {
+        lastToolbarQuickActionRaw = action.rawValue
+    }
+
+    private func toolbarQuickActionCandidates(preferred: NoteDetailToolbarQuickAction) -> [NoteDetailToolbarQuickAction] {
+        [preferred] + NoteDetailToolbarQuickAction.allCases.filter { $0 != preferred }
+    }
+
+    private func firstAvailableToolbarQuickAction(vm: NoteDetailViewModel, note: NoteItem) -> NoteDetailToolbarQuickAction? {
+        // Legacy "edit" raw value no longer matches a case → falls back to .rename.
+        let preferred = NoteDetailToolbarQuickAction(rawValue: lastToolbarQuickActionRaw) ?? .rename
+        for action in toolbarQuickActionCandidates(preferred: preferred) where isToolbarQuickActionAvailable(action, vm: vm, note: note) {
+            return action
+        }
+        return nil
+    }
+
+    private func isToolbarQuickActionAvailable(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel, note: NoteItem) -> Bool {
+        switch action {
+        case .rename, .newChild, .noteDetails: return true
+        case .duplicate: return !note.isProtected || appState.protectedSessionActive
+        case .findOnPage: return !vm.isEditing && note.type.supportsReadOnlyOnPageFind
+        case .favorite: return appState.activeProfile != nil
+        }
+    }
+
+    private func isToolbarQuickActionDisabled(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel) -> Bool {
+        switch action {
+        case .duplicate: return vm.isSaving
+        default: return false
+        }
+    }
+
+    private func performToolbarQuickAction(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel, note: NoteItem) {
+        switch action {
+        case .newChild:
+            vm.showCreateChild = true
+        case .rename:
+            vm.editedTitle = note.title
+            vm.editingTitle = true
+        case .noteDetails:
+            withAnimation { vm.showDetails.toggle() }
+        case .duplicate:
+            Task {
+                if let dup = await vm.duplicateNote() {
+                    navigateToNoteId = dup.noteId
+                }
+            }
+        case .findOnPage:
+            if findControl.isPresented {
+                findControl.close()
+            } else {
+                findControl.isPresented = true
+            }
+        case .favorite:
+            toggleFavorite(note: note, isFavorite: favoriteNoteIds.contains(note.noteId))
+        }
+    }
+
+    @ViewBuilder
+    private func toolbarQuickActionLabel(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        switch action {
+        case .newChild:
+            Image(systemName: "plus")
+        case .rename:
+            Image(systemName: "square.and.pencil")
+        case .noteDetails:
+            Image(systemName: vm.showDetails ? "info.circle.fill" : "info.circle")
+        case .duplicate:
+            Image(systemName: "doc.on.doc")
+        case .findOnPage:
+            Image(systemName: findControl.isPresented ? "magnifyingglass.circle.fill" : "magnifyingglass")
+        case .favorite:
+            Image(systemName: favoriteNoteIds.contains(note.noteId) ? "star.slash" : "star")
+        }
+    }
+
+    private func toolbarQuickActionAccessibilityLabel(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel, note: NoteItem) -> String {
+        switch action {
+        case .newChild:
+            return String(localized: "New child note", comment: "Toolbar repeat last action")
+        case .rename:
+            return String(localized: "Rename note", comment: "Toolbar repeat last action")
+        case .noteDetails:
+            return vm.showDetails
+                ? String(localized: "Hide note details", comment: "Toolbar repeat last action")
+                : String(localized: "Show note details", comment: "Toolbar repeat last action")
+        case .duplicate:
+            return String(localized: "Duplicate note", comment: "Toolbar repeat last action")
+        case .findOnPage:
+            return findControl.isPresented
+                ? String(localized: "Hide find bar", comment: "Toolbar repeat last action")
+                : String(localized: "Find on page", comment: "Toolbar repeat last action")
+        case .favorite:
+            return favoriteNoteIds.contains(note.noteId)
+                ? String(localized: "Remove from favorites", comment: "Toolbar repeat last action")
+                : String(localized: "Add to favorites", comment: "Toolbar repeat last action")
         }
     }
 

@@ -6,6 +6,8 @@ struct HTMLNoteView: View {
     let baseURL: URL?
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+    /// When set, the web view registers for in-page find (read-only).
+    var findControl: FindOnPageControl?
 
     @State private var contentHeight: CGFloat = 200
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
@@ -39,6 +41,7 @@ struct HTMLNoteView: View {
             themeColors: themeColors,
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
+            findControl: findControl,
             onHeightChanged: { contentHeight = $0 }
         )
         .frame(height: contentHeight)
@@ -58,6 +61,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     let themeColors: HTMLThemeColors
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+    var findControl: FindOnPageControl?
     var onHeightChanged: ((CGFloat) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -88,6 +92,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         handler.webView = webView
         handler.themeColors = themeColors
+        handler.findControl = findControl
         let wrapped = Self.wrapHTML(html, theme: themeColors)
         webView.loadHTMLString(wrapped, baseURL: baseURL)
         handler.loadedHTML = html
@@ -97,9 +102,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.findControl = findControl
         coordinator.onNoteLinkTapped = onNoteLinkTapped
         coordinator.onCheckboxToggled = onCheckboxToggled
         coordinator.onHeightChanged = onHeightChanged
+        findControl?.registerHTMLWebView(webView)
 
         let needsReload = html != coordinator.loadedHTML || themeColors != coordinator.themeColors
         guard needsReload else { return }
@@ -226,11 +233,103 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         .text-huge { font-size: 1.8em; }
         hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
         .math-tex { overflow-x: auto; }
+        mark.trinote-find-hit { background-color: rgba(255, 204, 0, 0.45); color: inherit; padding: 0; }
+        mark.trinote-find-hit-active { background-color: rgba(255, 149, 0, 0.72); color: inherit; padding: 0; }
         </style>
         </head>
         <body>
         \(body)
         <script>
+        window.__trinoteFind = (function() {
+            var HIGHLIGHT = 'trinote-find-hit';
+            var ACTIVE = 'trinote-find-hit-active';
+            var marks = [];
+            var activeIdx = -1;
+            function clear() {
+                document.querySelectorAll('mark.' + HIGHLIGHT).forEach(function(m) {
+                    var p = m.parentNode;
+                    if (!p) return;
+                    while (m.firstChild) p.insertBefore(m.firstChild, m);
+                    p.removeChild(m);
+                    p.normalize();
+                });
+                marks = [];
+                activeIdx = -1;
+            }
+            function collectTextNodes(root) {
+                var list = [];
+                var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+                    acceptNode: function(node) {
+                        if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+                        var el = node.parentElement;
+                        if (!el) return NodeFilter.FILTER_REJECT;
+                        if (el.closest('script, style')) return NodeFilter.FILTER_REJECT;
+                        if (el.closest('mark.' + HIGHLIGHT)) return NodeFilter.FILTER_REJECT;
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                });
+                var n;
+                while (n = w.nextNode()) list.push(n);
+                return list;
+            }
+            function search(query) {
+                clear();
+                if (!query || query.length === 0) return;
+                var q = query.toLowerCase();
+                var nodes = collectTextNodes(document.body);
+                for (var i = 0; i < nodes.length; i++) {
+                    var textNode = nodes[i];
+                    if (!textNode.parentNode) continue;
+                    var text = textNode.nodeValue;
+                    var lower = text.toLowerCase();
+                    if (lower.indexOf(q) === -1) continue;
+                    var frag = document.createDocumentFragment();
+                    var pos = 0;
+                    while (pos < text.length) {
+                        var idx = lower.indexOf(q, pos);
+                        if (idx === -1) {
+                            frag.appendChild(document.createTextNode(text.substring(pos)));
+                            break;
+                        }
+                        if (idx > pos) frag.appendChild(document.createTextNode(text.substring(pos, idx)));
+                        var mk = document.createElement('mark');
+                        mk.className = HIGHLIGHT;
+                        mk.appendChild(document.createTextNode(text.substring(idx, idx + query.length)));
+                        frag.appendChild(mk);
+                        marks.push(mk);
+                        pos = idx + query.length;
+                    }
+                    textNode.parentNode.replaceChild(frag, textNode);
+                }
+                if (marks.length > 0) {
+                    activeIdx = 0;
+                    setActive(0);
+                }
+            }
+            function setActive(i) {
+                marks.forEach(function(m) { m.classList.remove(ACTIVE); });
+                if (i < 0 || i >= marks.length) return;
+                activeIdx = i;
+                marks[i].classList.add(ACTIVE);
+                try { marks[i].scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' }); } catch (e) {}
+            }
+            function next() {
+                if (marks.length === 0) return;
+                setActive((activeIdx + 1) % marks.length);
+            }
+            function prev() {
+                if (marks.length === 0) return;
+                setActive((activeIdx - 1 + marks.length) % marks.length);
+            }
+            function matchCount() { return marks.length; }
+            function active1Based() { return marks.length === 0 ? 0 : activeIdx + 1; }
+            function activeRectInViewport() {
+                if (activeIdx < 0 || activeIdx >= marks.length) return null;
+                var r = marks[activeIdx].getBoundingClientRect();
+                return { top: r.top, left: r.left, width: r.width, height: r.height };
+            }
+            return { search: search, clear: clear, next: next, prev: prev, matchCount: matchCount, active1Based: active1Based, activeRectInViewport: activeRectInViewport };
+        })();
         function reportHeight() {
             const h = document.body.scrollHeight;
             window.webkit.messageHandlers.heightUpdate.postMessage(h);
@@ -281,6 +380,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         weak var webView: WKWebView?
         var loadedHTML: String?
         var themeColors: HTMLThemeColors?
+        weak var findControl: FindOnPageControl?
         var onNoteLinkTapped: ((String) -> Void)?
         var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
         var onHeightChanged: ((CGFloat) -> Void)?
@@ -310,6 +410,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             default:
                 break
             }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            findControl?.registerHTMLWebView(webView)
+            findControl?.reapplyHTMLSearchIfNeeded()
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {

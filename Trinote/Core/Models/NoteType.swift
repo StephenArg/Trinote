@@ -86,4 +86,12 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
             return false
         }
     }
+
+    /// Note types that support the in-page find bar while viewing (not editing).
+    var supportsReadOnlyOnPageFind: Bool {
+        switch self {
+        case .text, .code: return true
+        default: return false
+        }
+    }
 }

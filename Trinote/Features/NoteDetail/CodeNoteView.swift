@@ -1,8 +1,10 @@
 import SwiftUI
+import UIKit
 
 struct CodeNoteView: View {
     let content: String
     let mime: String
+    var findControl: FindOnPageControl?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -24,14 +26,9 @@ struct CodeNoteView: View {
             .padding(.horizontal)
             .padding(.vertical, 8)
 
-            ScrollView(.horizontal, showsIndicators: true) {
-                Text(content)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .background(Color(.secondarySystemGroupedBackground))
+            CodeReadonlyTextView(text: content, findControl: findControl)
+                .frame(minHeight: 120)
+                .background(Color(.secondarySystemGroupedBackground))
         }
     }
 
@@ -46,6 +43,61 @@ struct CodeNoteView: View {
             return "Plain Text"
         }
         return lang.capitalized
+    }
+}
+
+// MARK: - Read-only monospaced text with optional in-page find
+
+private struct CodeReadonlyTextView: UIViewRepresentable {
+    let text: String
+    var findControl: FindOnPageControl?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.font = .monospacedSystemFont(ofSize: 17, weight: .regular)
+        tv.backgroundColor = UIColor.secondarySystemGroupedBackground
+        tv.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        tv.textContainer.lineFragmentPadding = 0
+        tv.isScrollEnabled = true
+        tv.showsHorizontalScrollIndicator = true
+        tv.showsVerticalScrollIndicator = true
+        tv.textColor = .label
+        tv.text = text
+        context.coordinator.lastText = text
+        context.coordinator.textView = tv
+        findControl?.registerCodeTextView(tv, plainText: text)
+        return tv
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        context.coordinator.textView = uiView
+        findControl?.registerCodeTextView(uiView, plainText: text)
+
+        if text != context.coordinator.lastText {
+            context.coordinator.lastText = text
+            let font = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
+            uiView.attributedText = NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: font,
+                    .foregroundColor: UIColor.label
+                ]
+            )
+            if let fc = findControl, !fc.query.isEmpty {
+                fc.applyQueryFromFieldChange()
+            }
+        }
+    }
+
+    final class Coordinator {
+        weak var textView: UITextView?
+        var lastText: String = ""
     }
 }
 
