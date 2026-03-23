@@ -1,8 +1,5 @@
 import SwiftUI
 import SwiftData
-#if canImport(UIKit)
-import UIKit
-#endif
 
 enum AppearanceMode: String, CaseIterable, Identifiable {
     case device = "Device"
@@ -28,39 +25,6 @@ extension ShapeStyle where Self == Color {
     static var appText: Color { Color.appText }
 }
 
-// MARK: - Launch / bootstrap mark (uses `LaunchAppIcon` imageset = app marketing icon)
-
-private struct AppLaunchMark: View {
-    var size: CGFloat = 72
-
-    var body: some View {
-        Group {
-            #if canImport(UIKit)
-            if UIImage(named: "LaunchAppIcon") != nil {
-                Image("LaunchAppIcon")
-                    .resizable()
-                    .interpolation(.high)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: size, height: size)
-                    .clipShape(RoundedRectangle(cornerRadius: size * (16 / 72), style: .continuous))
-            } else {
-                fallbackMark
-            }
-            #else
-            fallbackMark
-            #endif
-        }
-        .accessibilityHidden(true)
-    }
-
-    private var fallbackMark: some View {
-        Image(systemName: "note.text")
-            .font(.system(size: size * 0.78))
-            .foregroundStyle(.tint)
-            .frame(width: size, height: size)
-    }
-}
-
 // MARK: - Launch loading (pulsing icon + accessible status)
 
 private struct AppLaunchLoadingPanel: View {
@@ -73,7 +37,7 @@ private struct AppLaunchLoadingPanel: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            AppLaunchMark(size: 72)
+            LaunchAppMark(size: 72, useTransparentGlyphForBootstrap: true)
                 .scaleEffect(1 + pulse * 0.055)
                 .opacity(0.9 + pulse * 0.1)
                 .onAppear {
@@ -143,6 +107,8 @@ struct TrinoteApp: App {
                     )
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemBackground))
             .preferredColorScheme(resolvedColorScheme)
             .tint(resolvedAccentColor)
             .foregroundStyle(Color.appText)
@@ -172,6 +138,8 @@ struct RootView: View {
                 LoginView()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
         .animation(.easeInOut(duration: 0.3), value: appState.isAuthenticated)
         .animation(.easeInOut(duration: 0.3), value: appState.isLoading)
     }

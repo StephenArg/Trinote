@@ -58,6 +58,11 @@ struct TreeView: View {
         return colorScheme == .dark ? Color(hex: treeDarkBgColor) : Color(hex: treeLightBgColor)
     }
 
+    /// Fills space behind the tree list (scroll content is hidden); must not be `.clear` or the nav host shows white.
+    private var treeChromeBackground: Color {
+        treeBgColor ?? Color(.systemGroupedBackground)
+    }
+
     var body: some View {
         Group {
             if let viewModel {
@@ -67,8 +72,11 @@ struct TreeView: View {
                     }
             } else {
                 ProgressView("Loading…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(treeChromeBackground)
             }
         }
+        .background(treeChromeBackground)
         .navigationTitle(parentTitle)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -264,12 +272,15 @@ struct TreeView: View {
     }
 
     private var loadingView: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
+            LaunchAppMark(size: 56)
             ProgressView()
             Text("Loading note tree…")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(treeChromeBackground)
     }
 
     private func connectionErrorView(vm: TreeViewModel, error: String) -> some View {
@@ -283,6 +294,8 @@ struct TreeView: View {
             }
             .buttonStyle(.bordered)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(treeChromeBackground)
     }
 
     @ViewBuilder
@@ -297,7 +310,7 @@ struct TreeView: View {
             }
             treeList(vm)
         }
-        .background(treeBgColor ?? Color.clear)
+        .background(treeChromeBackground)
         .overlay {
             if vm.isRefreshing && !vm.isFromCache {
                 ProgressView()
@@ -351,7 +364,7 @@ struct TreeView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .refreshable { await refreshWithSync() }
-        .background(treeBgColor ?? Color.clear)
+        .background(treeChromeBackground)
     }
 
     private func treeNodeRow(flat: FlatTreeNode, vm: TreeViewModel, favoriteNoteIds: Set<String>, onFavoriteChanged: @escaping () -> Void) -> some View {
