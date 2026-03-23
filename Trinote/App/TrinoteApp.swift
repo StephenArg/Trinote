@@ -1,5 +1,8 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
+import UIKit
+#endif
 
 enum AppearanceMode: String, CaseIterable, Identifiable {
     case device = "Device"
@@ -23,6 +26,70 @@ extension Color {
 
 extension ShapeStyle where Self == Color {
     static var appText: Color { Color.appText }
+}
+
+// MARK: - Launch / bootstrap mark (uses `LaunchAppIcon` imageset = app marketing icon)
+
+private struct AppLaunchMark: View {
+    var size: CGFloat = 72
+
+    var body: some View {
+        Group {
+            #if canImport(UIKit)
+            if UIImage(named: "LaunchAppIcon") != nil {
+                Image("LaunchAppIcon")
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size, height: size)
+                    .clipShape(RoundedRectangle(cornerRadius: size * (16 / 72), style: .continuous))
+            } else {
+                fallbackMark
+            }
+            #else
+            fallbackMark
+            #endif
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var fallbackMark: some View {
+        Image(systemName: "note.text")
+            .font(.system(size: size * 0.78))
+            .foregroundStyle(.tint)
+            .frame(width: size, height: size)
+    }
+}
+
+// MARK: - Launch loading (pulsing icon + accessible status)
+
+private struct AppLaunchLoadingPanel: View {
+    /// Shown under the icon.
+    let message: String
+    /// Spoken by VoiceOver (icon is decorative).
+    let accessibilityLabelText: String
+
+    @State private var pulse: CGFloat = 0
+
+    var body: some View {
+        VStack(spacing: 16) {
+            AppLaunchMark(size: 72)
+                .scaleEffect(1 + pulse * 0.055)
+                .opacity(0.9 + pulse * 0.1)
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 1.25).repeatForever(autoreverses: true)) {
+                        pulse = 1
+                    }
+                }
+
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabelText)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
 }
 
 @main
@@ -68,15 +135,10 @@ struct TrinoteApp: App {
                     }
                     .padding()
                 } else {
-                    VStack(spacing: 16) {
-                        Image(systemName: "note.text")
-                            .font(.system(size: 56))
-                            .foregroundStyle(.tint)
-                        ProgressView()
-                        Text("Starting…")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
+                    AppLaunchLoadingPanel(
+                        message: "Starting…",
+                        accessibilityLabelText: "Starting. Loading, please wait."
+                    )
                 }
             }
             .preferredColorScheme(resolvedColorScheme)
@@ -115,15 +177,9 @@ struct RootView: View {
 
 struct LaunchView: View {
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "note.text")
-                .font(.system(size: 56))
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
-            ProgressView()
-            Text("Connecting…")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
+        AppLaunchLoadingPanel(
+            message: "Connecting…",
+            accessibilityLabelText: "Connecting. Loading, please wait."
+        )
     }
 }

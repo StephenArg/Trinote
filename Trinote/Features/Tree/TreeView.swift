@@ -147,8 +147,22 @@ struct TreeView: View {
                 .environment(appState)
         }
         .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
+        .onChange(of: appState.syncManager.phase) { _, phase in
+            if phase == .done {
+                // When pull applied rows to SwiftData, rebuild from DB (Trilium desktop applies Froca then reads it).
+                if self.appState.syncManager.lastCompletedSyncUpdatedLocalDatabase {
+                    self.viewModel?.reloadFromCache()
+                } else {
+                    self.viewModel?.pruneDeletedNodes()
+                    Task { await self.viewModel?.refresh() }
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .noteDeleted)) { _ in
             triggerSyncAndReload()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ghostNoteDetected)) { _ in
+            Task { await self.viewModel?.refresh() }
         }
         .sheet(item: $createSheetContext) { ctx in
             CreateChildNoteFromTreeSheet(
@@ -232,21 +246,15 @@ struct TreeView: View {
     }
 
     private func triggerSyncAndReload() {
-        guard let client = appState.client, let profileId = appState.activeProfile?.id else {
-            Task { await viewModel?.refresh() }
-            return
+        Task {
+            await self.appState.runIncrementalSync()
+            // refresh() is triggered by onChange(of: phase == .done)
         }
-        appState.syncManager.incrementalSync(client: client, profileId: profileId)
-        Task { await viewModel?.refresh() }
     }
 
     private func refreshWithSync() async {
-        guard let client = appState.client, let profileId = appState.activeProfile?.id else {
-            await viewModel?.refresh()
-            return
-        }
-        appState.syncManager.incrementalSync(client: client, profileId: profileId)
-        await viewModel?.refresh()
+        await self.appState.runIncrementalSync()
+        await self.viewModel?.refresh()
     }
 
     @ViewBuilder
@@ -421,13 +429,11 @@ extension TreeViewModel {
         }
         guard !updates.isEmpty else { return }
 
+        let newOrder = newChildren.map(\.branch.branchId)
         Task {
-            for (branchId, newPosition) in updates {
+            for (branchId, _) in updates {
                 do {
-                    _ = try await client.updateBranch(
-                        branchId,
-                        request: UpdateBranchRequest(prefix: nil, notePosition: newPosition, isExpanded: nil)
-                    )
+                    try await client.placeBranchInSiblingOrder(branchId, orderedSiblingBranchIds: newOrder)
                 } catch {
                     Log.api.error("Failed to update branch position: \(error)")
                     await MainActor.run { self.error = APIError.from(error).localizedDescription }

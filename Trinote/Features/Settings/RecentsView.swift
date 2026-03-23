@@ -3,6 +3,10 @@ import SwiftUI
 struct RecentsView: View {
     @Environment(AppState.self) private var appState
     @State private var recentNotes: [RecentNote] = []
+    /// Cached breadcrumb path per note (from SwiftData); empty string if unavailable.
+    @State private var pathByNoteId: [String: String] = [:]
+    /// SF Symbol for the top-level-under-root note (same visual grouping as tree).
+    @State private var iconByNoteId: [String: String] = [:]
     @State private var navigateToNote: (String, String)?
 
     var body: some View {
@@ -20,7 +24,7 @@ struct RecentsView: View {
                             navigateToNote = (recent.noteId, recent.title)
                         } label: {
                             HStack(spacing: 12) {
-                                Image(systemName: (NoteType(rawValue: recent.noteType) ?? .text).iconName)
+                                Image(systemName: recentsRowIcon(for: recent))
                                     .foregroundStyle(.secondary)
                                     .frame(width: 24)
                                     .accessibilityHidden(true)
@@ -30,17 +34,32 @@ struct RecentsView: View {
                                         .font(.body)
                                         .lineLimit(2)
                                         .foregroundStyle(.primary)
-                                    Text(recent.accessedAt.relativeDisplay)
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .multilineTextAlignment(.leading)
+                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                        Text(recent.accessedAt.relativeDisplay)
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
+                                            .fixedSize(horizontal: true, vertical: false)
+                                        if let path = pathByNoteId[recent.noteId], !path.isEmpty {
+                                            Text(path)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                                .minimumScaleFactor(0.85)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
                                 }
-
-                                Spacer()
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
                                 Image(systemName: "chevron.right")
                                     .font(.caption)
                                     .foregroundStyle(.quaternary)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
@@ -61,11 +80,60 @@ struct RecentsView: View {
 
     private func loadRecents() {
         guard let profileId = appState.activeProfile?.id else { return }
+        let pm = PersistenceManager.shared
         do {
-            recentNotes = try PersistenceManager.shared.fetchRecentNotes(serverProfileId: profileId)
+            let raw = try pm.fetchRecentNotes(serverProfileId: profileId)
+            var paths: [String: String] = [:]
+            var icons: [String: String] = [:]
+            var visible: [RecentNote] = []
+            visible.reserveCapacity(raw.count)
+            paths.reserveCapacity(raw.count)
+            icons.reserveCapacity(raw.count)
+
+            for recent in raw {
+                if GhostNoteTracker.shared.contains(recent.noteId, serverProfileId: profileId) {
+                    continue
+                }
+
+                let pathFull = pm.cachedNotePathDisplay(
+                    noteId: recent.noteId,
+                    leafTitle: recent.title,
+                    serverProfileId: profileId
+                )
+                // Avoid duplicating the title line when cache has no ancestors.
+                let pathUI = (pathFull == recent.title) ? "" : pathFull
+
+                let hasCachedLeaf = (try? pm.fetchCachedNote(id: recent.noteId, serverProfileId: profileId)) != nil
+                // Deleted / purged notes: no cache row and no breadcrumb trail — drop from list.
+                if !hasCachedLeaf && pathUI.isEmpty {
+                    continue
+                }
+
+                visible.append(recent)
+                paths[recent.noteId] = pathUI
+                icons[recent.noteId] = pm.recentsRowIconSystemName(
+                    noteId: recent.noteId,
+                    fallbackNoteType: recent.noteType,
+                    serverProfileId: profileId
+                )
+            }
+
+            recentNotes = visible
+            pathByNoteId = paths
+            iconByNoteId = icons
         } catch {
             Log.persistence.error("Failed to load recents: \(error)")
+            recentNotes = []
+            pathByNoteId = [:]
+            iconByNoteId = [:]
         }
+    }
+
+    /// Persisted icon from last open, then live recompute from cache, then note type.
+    private func recentsRowIcon(for recent: RecentNote) -> String {
+        if let s = recent.listIconSystemName, !s.isEmpty { return s }
+        if let s = iconByNoteId[recent.noteId], !s.isEmpty { return s }
+        return (NoteType(rawValue: recent.noteType) ?? .text).iconName
     }
 }
 

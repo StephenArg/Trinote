@@ -101,10 +101,20 @@ final class TreeViewModel {
             }
         } catch {
             let apiError = APIError.from(error)
-            if case .cancelled = apiError { return }
+            if case .cancelled = apiError {
+                return
+            }
 
             self.error = apiError.localizedDescription
             Log.api.error("Failed to load tree: \(error)")
+
+            // Server fetch failed — show the latest cached data (sync may have
+            // applied deletions that the stale in-memory tree doesn't reflect).
+            let cached = loadCachedChildren(parentNoteId: parentNoteId)
+            if !cached.isEmpty {
+                rootChildren = cached
+                isFromCache = true
+            }
 
             if let profileId = serverProfileId {
                 try? persistence.recordSyncError(domain: "tree", error: apiError.localizedDescription ?? "Unknown", serverProfileId: profileId)
@@ -211,10 +221,11 @@ final class TreeViewModel {
             }
         }
         guard !updates.isEmpty else { return }
+        let newOrder = newChildren.map(\.branch.branchId)
         Task {
-            for (branchId, newPosition) in updates {
+            for (branchId, _) in updates {
                 do {
-                    _ = try await client.updateBranch(branchId, request: UpdateBranchRequest(prefix: nil, notePosition: newPosition, isExpanded: nil))
+                    try await client.placeBranchInSiblingOrder(branchId, orderedSiblingBranchIds: newOrder)
                 } catch {
                     Log.api.error("Failed to update branch position: \(error)")
                     await MainActor.run { self.error = APIError.from(error).localizedDescription }
@@ -250,7 +261,21 @@ final class TreeViewModel {
         expandedBranches.insert(branchId)
         rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = true }
 
-        guard let client else { return }
+        // Prefer SwiftData (updated by incremental sync) like Trilium’s local Becca/Froca read path.
+        let cached = loadCachedChildren(parentNoteId: node.note.noteId)
+        if !cached.isEmpty {
+            rootChildren = setNodeState(branchId: branchId, in: rootChildren) {
+                $0.children = cached
+                $0.isLoading = false
+            }
+            return
+        }
+
+        guard let client else {
+            expandedBranches.remove(branchId)
+            rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = false }
+            return
+        }
 
         do {
             let children = try await loadChildren(of: node.note, client: client)
@@ -260,16 +285,8 @@ final class TreeViewModel {
             }
         } catch {
             Log.api.error("Failed to expand node: \(error)")
-            let cached = loadCachedChildren(parentNoteId: node.note.noteId)
-            if cached.isEmpty {
-                expandedBranches.remove(branchId)
-                rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = false }
-            } else {
-                rootChildren = setNodeState(branchId: branchId, in: rootChildren) {
-                    $0.children = cached
-                    $0.isLoading = false
-                }
-            }
+            expandedBranches.remove(branchId)
+            rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = false }
         }
     }
 
@@ -284,6 +301,7 @@ final class TreeViewModel {
         do {
             try await client.deleteNote(noteId)
             if let profileId = serverProfileId {
+                GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
                 try? persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
             }
             await refresh()
@@ -336,9 +354,38 @@ final class TreeViewModel {
     }
 
     func reloadFromCache() {
+        expandedBranches.removeAll()
         noteCache.removeAll()
         branchCache.removeAll()
         loadTreeFromCache()
+    }
+
+    /// Walk the in-memory tree and remove nodes whose branch no longer exists
+    /// in the SwiftData cache (i.e. the branch was deleted during sync).
+    /// Preserves expand/collapse state of surviving nodes.
+    func pruneDeletedNodes() {
+        guard let profileId = serverProfileId else { return }
+        let validBranchIds: Set<String>
+        do {
+            let pid = profileId
+            let all = try persistence.fetchAllCachedBranchIds(serverProfileId: pid)
+            validBranchIds = Set(all)
+        } catch {
+            Log.cache.error("pruneDeletedNodes: failed to fetch branch IDs: \(error)")
+            return
+        }
+        rootChildren = Self.pruneTree(rootChildren, validBranchIds: validBranchIds)
+    }
+
+    private static func pruneTree(_ nodes: [TreeNode], validBranchIds: Set<String>) -> [TreeNode] {
+        nodes.compactMap { node -> TreeNode? in
+            guard validBranchIds.contains(node.branch.branchId) else { return nil }
+            var pruned = node
+            if let children = node.children {
+                pruned.children = pruneTree(children, validBranchIds: validBranchIds)
+            }
+            return pruned
+        }
     }
 
     // MARK: - Breadcrumbs
@@ -382,7 +429,7 @@ final class TreeViewModel {
         if !missingBranchIds.isEmpty {
             let responses = try await withThrowingTaskGroup(of: BranchResponse.self) { group in
                 for branchId in missingBranchIds {
-                    group.addTask { try await client.getBranch(branchId) }
+                    group.addTask { try await client.getBranch(branchId, parentNoteId: note.noteId) }
                 }
                 var results: [BranchResponse] = []
                 for try await response in group { results.append(response) }
@@ -398,26 +445,43 @@ final class TreeViewModel {
         let missingNoteIds = Set(childNoteIds).subtracting(noteCache.keys)
 
         if !missingNoteIds.isEmpty {
-            let responses = try await withThrowingTaskGroup(of: NoteResponse.self) { group in
+            let responses = try await withThrowingTaskGroup(of: NoteResponse?.self) { group in
                 for noteId in missingNoteIds {
-                    group.addTask { try await client.getNote(noteId) }
+                    group.addTask {
+                        do {
+                            return try await client.getNote(noteId)
+                        } catch {
+                            return nil
+                        }
+                    }
                 }
                 var results: [NoteResponse] = []
-                for try await response in group { results.append(response) }
+                for try await response in group {
+                    if let r = response { results.append(r) }
+                }
                 return results
             }
             for response in responses {
+                if response.isDeleted { continue }
                 noteCache[response.noteId] = NoteItem(from: response)
             }
         }
 
-        // Assemble tree nodes, preserving branch order
+        // Assemble tree nodes, preserving branch order.
+        // Filter out ghost notes (server still lists them but their blobs are erased).
+        let ghosts: Set<String> = serverProfileId.map { GhostNoteTracker.shared.all(serverProfileId: $0) } ?? []
+
         var nodes: [TreeNode] = []
         for branchId in note.childBranchIds {
-            guard let branch = branchCache[branchId],
-                  let childNote = noteCache[branch.noteId] else { continue }
+            guard let branch = branchCache[branchId] else { continue }
+            guard let childNote = noteCache[branch.noteId] else { continue }
 
-            if Self.hiddenNoteIds.contains(childNote.noteId) { continue }
+            if Self.hiddenNoteIds.contains(childNote.noteId) {
+                continue
+            }
+            if ghosts.contains(childNote.noteId) {
+                continue
+            }
 
             var node = TreeNode(branch: branch, note: childNote)
             if expandedBranches.contains(branchId), childNote.hasChildren {
@@ -427,6 +491,7 @@ final class TreeViewModel {
         }
 
         nodes.sort { $0.branch.notePosition < $1.branch.notePosition }
+
         return nodes
     }
 
@@ -490,7 +555,8 @@ final class TreeViewModel {
     }
 
     private func persistNodesRecursive(_ nodes: [TreeNode], profileId: String) {
-        for node in nodes {
+        let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
+        for node in nodes where !ghosts.contains(node.note.noteId) {
             let noteResponse = NoteResponse(
                 noteId: node.note.noteId,
                 isProtected: node.note.isProtected,
@@ -498,6 +564,7 @@ final class TreeViewModel {
                 type: node.note.type.rawValue,
                 mime: node.note.mime,
                 blobId: nil,
+                isDeleted: false,
                 dateCreated: node.note.dateCreated,
                 dateModified: node.note.dateModified,
                 utcDateCreated: "",
@@ -515,7 +582,7 @@ final class TreeViewModel {
                         value: attr.value,
                         position: attr.position,
                         isInheritable: attr.isInheritable,
-                        utcDateModified: ""
+                        utcDateModified: nil
                     )
                 }
             )
@@ -531,7 +598,7 @@ final class TreeViewModel {
                     value: attr.value,
                     position: attr.position,
                     isInheritable: attr.isInheritable,
-                    utcDateModified: ""
+                    utcDateModified: nil
                 )
                 try? persistence.cacheAttributeBatch(from: attrResp, serverProfileId: profileId)
             }
@@ -543,7 +610,7 @@ final class TreeViewModel {
                 prefix: node.branch.prefix,
                 notePosition: node.branch.notePosition,
                 isExpanded: node.branch.isExpanded,
-                utcDateModified: ""
+                utcDateModified: nil
             )
             try? persistence.cacheBranchBatch(from: branchResponse, serverProfileId: profileId)
 
@@ -565,11 +632,19 @@ final class TreeViewModel {
     }
 
     private func loadCachedChildren(parentNoteId: String) -> [TreeNode] {
-        guard let profileId = serverProfileId else { return [] }
+        guard let profileId = serverProfileId else {
+            return []
+        }
+        let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
         do {
             let pairs = try persistence.fetchCachedChildren(parentNoteId: parentNoteId, serverProfileId: profileId)
-            return pairs.compactMap { branch, note -> TreeNode? in
-                if Self.hiddenNoteIds.contains(note.noteId) { return nil }
+            let nodes: [TreeNode] = pairs.compactMap { branch, note -> TreeNode? in
+                if Self.hiddenNoteIds.contains(note.noteId) {
+                    return nil
+                }
+                if ghosts.contains(note.noteId) {
+                    return nil
+                }
                 let branchItem = BranchItem(
                     branchId: branch.branchId,
                     noteId: branch.noteId,
@@ -613,6 +688,7 @@ final class TreeViewModel {
 
                 return TreeNode(branch: branchItem, note: noteItem)
             }
+            return nodes
         } catch {
             Log.cache.error("Failed to load cached children for \(parentNoteId): \(error)")
             return []

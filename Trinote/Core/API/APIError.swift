@@ -11,6 +11,7 @@ enum APIError: LocalizedError, Sendable {
     case certificateError
     case decodingFailed(String)
     case encodingFailed(String)
+    /// No valid Trilium session (replaces legacy ETAPI “no token”).
     case noToken
     case connectionRefused
     case cancelled
@@ -23,7 +24,7 @@ enum APIError: LocalizedError, Sendable {
         case .invalidResponse:
             return "Received an invalid response from the server."
         case .unauthorized:
-            return "Authentication failed. Check your token or password."
+            return "Authentication failed. Check your password or sign in again in the browser if you use SSO/TOTP."
         case .notFound(let resource):
             return "Not found: \(resource)"
         case .serverError(let code, let message):
@@ -40,7 +41,7 @@ enum APIError: LocalizedError, Sendable {
         case .encodingFailed(let detail):
             return "Failed to encode request: \(detail)"
         case .noToken:
-            return "No authentication token. Please log in."
+            return "Not signed in. Please log in with your Trilium password."
         case .connectionRefused:
             return "Connection refused. Check the server address and ensure Trilium is running."
         case .cancelled:

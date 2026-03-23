@@ -112,7 +112,8 @@ struct NoteDetailView: View {
             .sheet(isPresented: $vm.showCreateChild) {
                 CreateChildNoteSheet(viewModel: vm)
             }
-            .confirmationDialog("Delete Note?", isPresented: $vm.showDeleteConfirm) {
+            .alert("Delete Note?", isPresented: $vm.showDeleteConfirm) {
+                Button("Cancel", role: .cancel) {}
                 Button("Delete", role: .destructive) {
                     Task {
                         if await vm.deleteNote() { dismiss() }
@@ -143,7 +144,7 @@ struct NoteDetailView: View {
             Text("Protected Note")
                 .font(.title2.bold())
 
-            Text("This note is encrypted and cannot be viewed in the mobile app yet. Trilium's external API (ETAPI) does not currently support reading or writing protected notes.")
+            Text("This note is encrypted and cannot be viewed in the mobile app yet. Protected-note content is not exposed to this client.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -217,29 +218,68 @@ struct NoteDetailView: View {
     private func titleSection(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
         @Bindable var vm = vm
         VStack(alignment: .leading, spacing: 4) {
+            /// Keeps the path aligned with the title text (same inset as the note icon column).
+            let titleIconColumnWidth: CGFloat = 24
+            let titleIconSpacing: CGFloat = 8
+
             if vm.editingTitle {
-                HStack {
-                    TextField("Title", text: $vm.editedTitle)
-                        .font(.title2.bold())
-                        .textFieldStyle(.roundedBorder)
-                    Button("Save") {
-                        Task { await vm.renameNote() }
+                HStack(alignment: .top, spacing: titleIconSpacing) {
+                    Color.clear
+                        .frame(width: titleIconColumnWidth)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            TextField("Title", text: $vm.editedTitle)
+                                .font(.title2.bold())
+                                .textFieldStyle(.roundedBorder)
+                            Button("Save") {
+                                Task { await vm.renameNote() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(vm.isSaving)
+                            Button("Cancel") { vm.editingTitle = false }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                        if let path = vm.noteTreePathCaption {
+                            Text(path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityLabel("Path: \(path)")
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(vm.isSaving)
-                    Button("Cancel") { vm.editingTitle = false }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
                 }
             } else {
-                HStack {
-                    Image(systemName: note.resolvedIconName)
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    Text(note.title)
-                        .font(.title2.bold())
-                    Spacer()
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline, spacing: titleIconSpacing) {
+                            Image(systemName: note.resolvedIconName)
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
+                                .frame(width: titleIconColumnWidth, alignment: .center)
+                                .accessibilityHidden(true)
+                            Text(note.title)
+                                .font(.title2.bold())
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if let path = vm.noteTreePathCaption {
+                            Text(path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.leading, titleIconColumnWidth + titleIconSpacing)
+                                .accessibilityLabel("Path: \(path)")
+                        }
+                    }
+                    Spacer(minLength: 0)
                 }
                 .onTapGesture {
                     vm.editedTitle = note.title

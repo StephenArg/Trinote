@@ -27,11 +27,10 @@ final class TriliumClientTests: XCTestCase {
         override func stopLoading() {}
     }
 
-    private func makeClient(token: String? = "test-token") -> TriliumClient {
+    private func makeClient(persistedCookies: Data? = nil) -> TriliumClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
-        let session = URLSession(configuration: config)
-        return TriliumClient(baseURL: URL(string: "https://trilium.test")!, token: token, session: session)
+        return TriliumClient(baseURL: URL(string: "https://trilium.test")!, persistedCookieData: persistedCookies, urlSessionConfiguration: config)
     }
 
     private func respondJSON(_ json: String, statusCode: Int = 200) -> (URLRequest) throws -> (HTTPURLResponse, Data) {
@@ -40,133 +39,177 @@ final class TriliumClientTests: XCTestCase {
         }
     }
 
-    // MARK: - Auth
+    // MARK: - Session + CSRF
 
-    func testLoginSendsCorrectPayload() async throws {
+    func testGetAppInfoUsesNoBearer() async throws {
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/etapi/auth/login")
-            XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
-
-            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                    Data(#"{"authToken":"tok_abc123"}"#.utf8))
-        }
-
-        let client = makeClient(token: nil)
-        let token = try await client.login(password: "secret", tokenName: "test")
-        XCTAssertEqual(token, "tok_abc123")
-    }
-
-    func testBearerTokenSentOnAuthenticatedRequests() async throws {
-        MockURLProtocol.requestHandler = { request in
-            let auth = request.value(forHTTPHeaderField: "Authorization")
-            XCTAssertEqual(auth, "Bearer test-token")
-            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                    Data(#"{"appVersion":"0.63.7","dbVersion":227}"#.utf8))
+            let path = request.url?.path ?? ""
+            if path.isEmpty || path == "/" {
+                let html = "<html>window.glob = { csrfToken: 'csrf_ok' };</html>"
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        Data(#"{"appVersion":"0.95.0","dbVersion":228}"#.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
         }
 
         let client = makeClient()
+        try await client.restoreSession()
         _ = try await client.getAppInfo()
     }
 
-    func testNoTokenThrowsNoTokenError() async {
-        let client = makeClient(token: nil)
+    func testCsrfExtractsDoubleQuotedTokenInGlob() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            if path.isEmpty || path == "/" {
+                let html = #"<html>window.glob = { csrfToken: "csrf_double" };</html>"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        Data(#"{"appVersion":"0.95.0","dbVersion":228}"#.utf8))
+            }
+            XCTFail("Unexpected path: \(String(describing: request.url))")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        try await client.restoreSession()
+        _ = try await client.getAppInfo()
+    }
+
+    func testNoSessionThrowsNoToken() async {
+        MockURLProtocol.requestHandler = respondJSON(#"{"message":"no session"}"#, statusCode: 401)
+        let client = makeClient()
         do {
-            _ = try await client.getAppInfo()
-            XCTFail("Expected noToken error")
+            _ = try await client.getNote("n1")
+            XCTFail("Expected error")
         } catch let error as APIError {
             XCTAssertTrue(error.isAuthError)
         } catch {
-            XCTFail("Wrong error type: \(error)")
+            XCTFail("Wrong error \(error)")
         }
     }
 
-    // MARK: - Error Handling
+    // MARK: - Note decode
 
-    func testUnauthorizedThrowsAPIError() async {
-        MockURLProtocol.requestHandler = respondJSON("", statusCode: 401)
-        let client = makeClient()
-        do {
-            _ = try await client.getAppInfo()
-            XCTFail("Expected unauthorized")
-        } catch let error as APIError {
-            XCTAssertTrue(error.isAuthError)
-        } catch {
-            XCTFail("Wrong error type")
-        }
-    }
-
-    func testServerErrorParsesBody() async {
-        let errorJSON = #"{"status":400,"code":"VALIDATION_ERROR","message":"Title cannot be empty"}"#
-        MockURLProtocol.requestHandler = respondJSON(errorJSON, statusCode: 400)
-
-        let client = makeClient()
-        do {
-            _ = try await client.getNote("test")
-            XCTFail("Expected server error")
-        } catch let error as APIError {
-            if case .serverError(let code, let message) = error {
-                XCTAssertEqual(code, 400)
-                XCTAssertEqual(message, "Title cannot be empty")
-            } else {
-                XCTFail("Expected serverError, got \(error)")
+    func testGetNoteMergesTreeLoad() async throws {
+        var call = 0
+        MockURLProtocol.requestHandler = { request in
+            call += 1
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/api/notes/abc") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        Data(#"{"noteId":"abc","title":"Hi","isProtected":false,"type":"text","mime":"text/html","blobId":"b1","utcDateModified":"2024-01-15T13:00:00.000Z"}"#.utf8))
             }
-        } catch {
-            XCTFail("Wrong error type")
-        }
-    }
-
-    func testNotFoundContainsMessage() async {
-        let errorJSON = #"{"status":404,"code":"NOT_FOUND","message":"Note 'xyz' not found"}"#
-        MockURLProtocol.requestHandler = respondJSON(errorJSON, statusCode: 404)
-
-        let client = makeClient()
-        do {
-            _ = try await client.getNote("xyz")
-            XCTFail("Expected not found")
-        } catch let error as APIError {
-            if case .notFound(let msg) = error {
-                XCTAssertTrue(msg.contains("not found"))
-            } else {
-                XCTFail("Expected notFound, got \(error)")
+            if path.hasSuffix("/api/tree/load") {
+                XCTAssertEqual(request.value(forHTTPHeaderField: "x-csrf-token"), "csrf_test")
+                let tree = #"{"notes":[{"noteId":"abc","title":"Hi","isProtected":false,"type":"text","mime":"text/html","blobId":"b1"}],"branches":[{"branchId":"br1","noteId":"abc","parentNoteId":"root","prefix":null,"notePosition":0,"isExpanded":true}],"attributes":[]}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(tree.utf8))
             }
-        } catch {
-            XCTFail("Wrong error type")
+            if path == "/" || path.isEmpty {
+                let html = "<html>window.glob = { csrfToken: 'csrf_test' };</html>"
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
         }
-    }
-
-    // MARK: - Note CRUD
-
-    func testGetNoteDecodesCorrectly() async throws {
-        let json = """
-        {"noteId":"abc","isProtected":false,"title":"My Note","type":"text","mime":"text/html","blobId":"b1","dateCreated":"2024-01-15 12:00:00","dateModified":"2024-01-15 13:00:00","utcDateCreated":"2024-01-15T12:00:00.000Z","utcDateModified":"2024-01-15T13:00:00.000Z","parentNoteIds":["root"],"childNoteIds":["c1","c2"],"parentBranchIds":["b_root_abc"],"childBranchIds":["b1","b2"],"attributes":[{"attributeId":"a1","noteId":"abc","type":"label","name":"icon","value":"bx-home","position":0,"isInheritable":false,"utcDateModified":"2024-01-15T12:00:00.000Z"}]}
-        """
-        MockURLProtocol.requestHandler = respondJSON(json)
 
         let client = makeClient()
+        try await client.restoreSession()
         let note = try await client.getNote("abc")
         XCTAssertEqual(note.noteId, "abc")
-        XCTAssertEqual(note.title, "My Note")
-        XCTAssertEqual(note.childNoteIds.count, 2)
-        XCTAssertEqual(note.attributes.count, 1)
-        XCTAssertEqual(note.attributes[0].name, "icon")
+        XCTAssertEqual(note.title, "Hi")
+        XCTAssertEqual(note.parentNoteIds, ["root"])
+        XCTAssertTrue(note.childBranchIds.isEmpty)
+        XCTAssertGreaterThanOrEqual(call, 2)
     }
 
     // MARK: - Search
 
-    func testSearchSendsQueryParam() async throws {
+    func testSearchUsesNativePath() async throws {
         MockURLProtocol.requestHandler = { request in
-            XCTAssertTrue(request.url?.absoluteString.contains("search=hello") ?? false)
-            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                    Data(#"{"results":[],"debugInfo":null}"#.utf8))
+            let path = request.url?.path ?? ""
+            if path.isEmpty || path == "/" {
+                let html = "<html>window.glob = { csrfToken: 'x' };</html>"
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
+            }
+            if path.contains("/api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        Data(#"{"appVersion":"0.95.0","dbVersion":228}"#.utf8))
+            }
+            if path.contains("/api/search/") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("[]".utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
         }
 
         let client = makeClient()
-        let response = try await client.searchNotes(query: "hello", limit: 10)
-        XCTAssertEqual(response.results.count, 0)
+        try await client.restoreSession()
+        let res = try await client.searchNotes(query: "hello", fastSearch: false, includeArchived: false, ancestorNoteId: nil, orderBy: nil, orderDirection: nil, limit: 10)
+        XCTAssertEqual(res.results.count, 0)
     }
 
-    // MARK: - APIError Classification
+    // MARK: - Sync check JSON shape
+
+    func testSyncCheckResponseDecodesNestedEntityHashes() throws {
+        let json = #"""
+        {"entityHashes":{"notes":{"a":"hash1","b":"hash2"},"branches":{"c":"h3"}},"maxEntityChangeId":9042}
+        """#.data(using: .utf8)!
+        let r = try JSONDecoder().decode(SyncCheckResponse.self, from: json)
+        XCTAssertEqual(r.maxEntityChangeId, 9042)
+        XCTAssertEqual(r.entityHashes?["notes"]?["a"], "hash1")
+    }
+
+    func testSyncCheckResponseDecodesStringMaxEntityChangeId() throws {
+        let json = #"{"entityHashes":{},"maxEntityChangeId":"9042"}"#.data(using: .utf8)!
+        let r = try JSONDecoder().decode(SyncCheckResponse.self, from: json)
+        XCTAssertEqual(r.maxEntityChangeId, 9042)
+    }
+
+    func testSyncPullResponseParsesStringNumericFields() throws {
+        let json = #"""
+        {"entityChanges":[],"lastEntityChangeId":"12000","outstandingPullCount":"5"}
+        """#.data(using: .utf8)!
+        let p = try SyncPullResponse.parseFromChanged(jsonData: json)
+        XCTAssertEqual(p.maxEntityChangeId, 12_000)
+        XCTAssertEqual(p.outstandingPullCount, 5)
+    }
+
+    func testSyncPullResponseParsesErasedEntity() throws {
+        let json = #"""
+        {"entityChanges":[{"entityChange":{"entityName":"notes","entityId":"abc","isErased":1},"entity":null}],"lastEntityChangeId":1,"outstandingPullCount":0}
+        """#.data(using: .utf8)!
+        let p = try SyncPullResponse.parseFromChanged(jsonData: json)
+        XCTAssertEqual(p.entityChanges.count, 1)
+        XCTAssertEqual(p.entityChanges[0].entityName, "notes")
+        XCTAssertEqual(p.entityChanges[0].entityId, "abc")
+        XCTAssertTrue(p.entityChanges[0].isErased)
+        XCTAssertEqual(p.notes.count, 0)
+    }
+
+    func testSyncPullResponseParsesNoteEntities() throws {
+        let json = #"""
+        {
+            "entityChanges":[
+                {"entityChange":{"entityName":"notes","entityId":"n1","isErased":false},"entity":{"noteId":"n1","title":"Test","type":"text","mime":"text/html","isProtected":false}}
+            ],
+            "lastEntityChangeId":5,
+            "outstandingPullCount":0
+        }
+        """#.data(using: .utf8)!
+        let p = try SyncPullResponse.parseFromChanged(jsonData: json)
+        XCTAssertEqual(p.notes.count, 1)
+        XCTAssertEqual(p.notes[0]["noteId"] as? String, "n1")
+        XCTAssertEqual(p.notes[0]["title"] as? String, "Test")
+    }
+
+    // MARK: - APIError
 
     func testAPIErrorIsRetryable() {
         XCTAssertTrue(APIError.timeout.isRetryable)
@@ -182,11 +225,5 @@ final class TriliumClientTests: XCTestCase {
         if case .cancelled = apiError {} else {
             XCTFail("Expected cancelled, got \(apiError)")
         }
-    }
-
-    func testAPIErrorSendable() {
-        let error: APIError = .serverError(statusCode: 500, message: "test")
-        let sendable: any Sendable = error
-        XCTAssertNotNil(sendable)
     }
 }

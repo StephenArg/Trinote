@@ -4,7 +4,6 @@ struct LoginView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = AuthViewModel()
     @State private var isPasswordVisible = false
-    @State private var isTokenVisible = false
 
     var body: some View {
         NavigationStack {
@@ -36,7 +35,7 @@ struct LoginView: View {
                 .accessibilityHidden(true)
             Text("Trinote")
                 .font(.title.bold())
-            Text("Connect to your self-hosted server")
+            Text("Same login as the Trilium web app (session, not ETAPI)")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -82,66 +81,34 @@ struct LoginView: View {
             Text("Authentication")
                 .font(.headline)
 
-            Picker("Login method", selection: $viewModel.loginMode) {
-                ForEach(AuthViewModel.LoginMode.allCases, id: \.self) { mode in
-                    Text(mode.rawValue).tag(mode)
+            HStack {
+                Group {
+                    if isPasswordVisible {
+                        TextField("Password", text: $viewModel.password)
+                            .textContentType(.password)
+                            .autocorrectionDisabled()
+                    } else {
+                        SecureField("Password", text: $viewModel.password)
+                            .textContentType(.password)
+                    }
+                }
+                .accessibilityLabel("Server password")
+
+                Button {
+                    isPasswordVisible.toggle()
+                } label: {
+                    Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(isPasswordVisible ? "Hide password" : "Reveal password")
                 }
             }
-            .pickerStyle(.segmented)
-            .accessibilityLabel("Authentication method")
 
-            switch viewModel.loginMode {
-            case .password:
-                HStack {
-                    Group {
-                        if isPasswordVisible {
-                            TextField("Password", text: $viewModel.password)
-                                .textContentType(.password)
-                                .autocorrectionDisabled()
-                        } else {
-                            SecureField("Password", text: $viewModel.password)
-                                .textContentType(.password)
-                        }
-                    }
-                    .accessibilityLabel("Server password")
+            Toggle("Stay signed in (Remember me)", isOn: $viewModel.rememberMe)
+                .font(.subheadline)
 
-                    Button {
-                        isPasswordVisible.toggle()
-                    } label: {
-                        Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel(isPasswordVisible ? "Hide password" : "Reveal password")
-                    }
-                }
-            case .token:
-                HStack {
-                    Group {
-                        if isTokenVisible {
-                            TextField("ETAPI Token", text: $viewModel.token)
-                                .textContentType(.password)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                        } else {
-                            SecureField("ETAPI Token", text: $viewModel.token)
-                                .textContentType(.password)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                        }
-                    }
-                    .accessibilityLabel("ETAPI token")
-
-                    Button {
-                        isTokenVisible.toggle()
-                    } label: {
-                        Image(systemName: isTokenVisible ? "eye.slash" : "eye")
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel(isTokenVisible ? "Hide token" : "Reveal token")
-                    }
-                }
-                Text("Generate a token in Trilium → Options → ETAPI")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text("TOTP / SSO must be completed in the browser for now.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .textFieldStyle(.roundedBorder)
     }
@@ -157,14 +124,12 @@ struct LoginView: View {
                 } else {
                     Text("Connect")
                         .fontWeight(.semibold)
-                        .foregroundStyle(viewModel.canSubmit && !viewModel.isLoading ? .black : .white)
                 }
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
+            .padding(.vertical, 10)
         }
         .buttonStyle(.borderedProminent)
-        .tint(viewModel.canSubmit && !viewModel.isLoading ? .primary : .accentColor)
         .controlSize(.large)
         .disabled(!viewModel.canSubmit || viewModel.isLoading)
         .accessibilityLabel("Connect to server")

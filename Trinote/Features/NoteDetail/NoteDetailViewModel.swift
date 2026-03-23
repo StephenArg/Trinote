@@ -71,6 +71,18 @@ final class NoteDetailViewModel {
     var isOnline: Bool { appState.isOnline }
     var serverBaseURL: URL? { (appState.client as? TriliumClient)?.baseURL }
 
+    /// Path under title — same format as Recents (`Parent -> … -> note`, no `Root`). Hidden when it would only repeat the title.
+    var noteTreePathCaption: String? {
+        guard let profileId = serverProfileId, let note else { return nil }
+        let full = persistence.cachedNotePathDisplay(
+            noteId: note.noteId,
+            leafTitle: note.title,
+            serverProfileId: profileId
+        )
+        let condensed = (full == note.title) ? "" : full
+        return condensed.isEmpty ? nil : condensed
+    }
+
     // MARK: - Loading
 
     /// Loads note from cache instantly, then refreshes from server in the background.
@@ -114,7 +126,10 @@ final class NoteDetailViewModel {
             }
         } catch {
             let apiError = APIError.from(error)
-            if case .cancelled = apiError { return }
+            if case .cancelled = apiError {
+                return
+            }
+            Log.api.error("Failed to load note: \(error)")
             if !hadCachedNote {
                 self.error = apiError.localizedDescription
             }
@@ -185,8 +200,22 @@ final class NoteDetailViewModel {
 
         } catch {
             let apiError = APIError.from(error)
-            if case .cancelled = apiError { return }
+            if case .cancelled = apiError {
+                return
+            }
             Log.api.error("Failed to load note content")
+
+            // "Cannot find content for noteId" means the blob was erased —
+            // the note is effectively deleted on the server.
+            if case .serverError(let code, let msg) = apiError, code == 500,
+               let msg, msg.contains("Cannot find content") {
+                self.error = "This note was deleted on the server."
+                if let profileId = self.serverProfileId {
+                    GhostNoteTracker.shared.add(nid, serverProfileId: profileId)
+                    try? self.persistence.deleteCachedNotes(noteIds: [nid], serverProfileId: profileId)
+                }
+                NotificationCenter.default.post(name: .ghostNoteDetected, object: nil, userInfo: ["noteId": nid])
+            }
         }
     }
 
@@ -283,7 +312,10 @@ final class NoteDetailViewModel {
             serverDate = response.utcDateModified
         } catch {
             let apiError = APIError.from(error)
-            if case .cancelled = apiError { return }
+            if case .cancelled = apiError {
+                return
+            }
+            Log.api.error("Note detail refresh: getNote failed — leaving UI unchanged")
         }
 
         // 2) Compare timestamps
@@ -311,7 +343,10 @@ final class NoteDetailViewModel {
             fetchedHTML = String(data: data, encoding: .utf8)
         } catch {
             let apiError = APIError.from(error)
-            if case .cancelled = apiError { return }
+            if case .cancelled = apiError {
+                return
+            }
+            Log.api.error("Note detail refresh: getNoteContent failed — will apply meta only; content may stay stale or empty")
         }
 
         // 4) All network done — apply everything to @Observable state
@@ -329,7 +364,9 @@ final class NoteDetailViewModel {
             }
         }
 
-        guard let data = fetchedData else { return }
+        guard let data = fetchedData else {
+            return
+        }
         self.content = data
         self.serverContentHash = fetchedHTML?.hashValue
         self.rawContentString = fetchedHTML
@@ -561,6 +598,9 @@ final class NoteDetailViewModel {
             try await client.updateNoteContent(nid, content: data, contentType: note.mime)
             self.content = data
             self.contentString = self.editableContent
+            // Keep in sync with contentString so read-only checkbox toggles patch the saved body,
+            // not stale HTML from the last network load (see toggleCheckbox / saveCheckboxChange).
+            self.rawContentString = self.editableContent
             self.serverContentHash = self.editableContent.hashValue
             self.isEditing = false
             self.hasDraft = false
@@ -646,12 +686,14 @@ final class NoteDetailViewModel {
         do {
             try await client.deleteNote(nid)
             if let profileId = serverProfileId {
+                GhostNoteTracker.shared.add(nid, serverProfileId: profileId)
                 try? persistence.deleteCachedNotes(noteIds: [nid], serverProfileId: profileId)
                 try? persistence.removeFavorite(noteId: nid, serverProfileId: profileId)
             }
             NotificationCenter.default.post(name: .noteDeleted, object: nil)
             return true
         } catch {
+            Log.api.error("Failed to delete note: \(error)")
             self.saveError = APIError.from(error).localizedDescription
             self.showSaveError = true
             return false
@@ -733,7 +775,9 @@ final class NoteDetailViewModel {
     // MARK: - Cache Fallback
 
     private func loadFromCache() {
-        guard let profileId = self.serverProfileId else { return }
+        guard let profileId = self.serverProfileId else {
+            return
+        }
         let nid = self.noteId
         if let cached = try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId) {
             let cachedAttrs = (try? self.persistence.fetchCachedAttributes(noteId: nid, serverProfileId: profileId)) ?? []

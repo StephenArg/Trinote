@@ -30,6 +30,7 @@ final class PersistenceManager {
                 DraftContent.self,
                 SyncStatus.self,
                 CachedImageData.self,
+                EntityPullCursor.self,
             ])
 
             let config = ModelConfiguration(
@@ -285,11 +286,20 @@ final class PersistenceManager {
         let id = "\(serverProfileId):\(noteId)"
         var descriptor = FetchDescriptor<RecentNote>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
+        // Fresh cache + parentNoteIds from getNote — best time to resolve top-level notebook icon.
+        let rowIcon = recentsRowIconSystemName(noteId: noteId, fallbackNoteType: noteType, serverProfileId: serverProfileId)
         if let existing = try context.fetch(descriptor).first {
             existing.accessedAt = .now
             existing.title = title
+            existing.listIconSystemName = rowIcon
         } else {
-            let recent = RecentNote(noteId: noteId, title: title, noteType: noteType, serverProfileId: serverProfileId)
+            let recent = RecentNote(
+                noteId: noteId,
+                title: title,
+                noteType: noteType,
+                serverProfileId: serverProfileId,
+                listIconSystemName: rowIcon
+            )
             context.insert(recent)
         }
         try context.save()
@@ -304,6 +314,97 @@ final class PersistenceManager {
         )
         descriptor.fetchLimit = limit
         return try context.fetch(descriptor)
+    }
+
+    /// Breadcrumb-style path from cached parent chain under root: `Parent -> … -> note` (no `Root` prefix).
+    /// Uses `leafTitle` when the leaf row is missing from the cache.
+    func cachedNotePathDisplay(noteId: String, leafTitle: String, serverProfileId: String) -> String {
+        var segments: [String] = []
+        var currentId = noteId
+        var visited = Set<String>()
+
+        while currentId != "root", !visited.contains(currentId) {
+            visited.insert(currentId)
+
+            let cached = try? fetchCachedNote(id: currentId, serverProfileId: serverProfileId)
+            let displayTitle: String
+            if let cached {
+                displayTitle = cached.title.isEmpty ? currentId : cached.title
+            } else if currentId == noteId {
+                let t = leafTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                displayTitle = t.isEmpty ? noteId : t
+            } else {
+                break
+            }
+
+            segments.insert(displayTitle, at: 0)
+
+            guard let cached,
+                  let parentId = parentNoteIdForTreeWalk(noteId: currentId, serverProfileId: serverProfileId, cached: cached),
+                  !parentId.isEmpty
+            else { break }
+
+            currentId = parentId
+        }
+
+        return segments.joined(separator: " -> ")
+    }
+
+    /// SF Symbol for a recents row: matches the note directly under `root` on the path to `noteId`
+    /// (Trilium “top-level” notebook). Uses that note’s `iconClass` + type; falls back to `fallbackNoteType` if cache is missing.
+    func recentsRowIconSystemName(noteId: String, fallbackNoteType: String, serverProfileId: String) -> String {
+        guard let topId = topLevelNoteIdUnderRoot(noteId: noteId, serverProfileId: serverProfileId),
+              let cached = try? fetchCachedNote(id: topId, serverProfileId: serverProfileId)
+        else {
+            return (NoteType(rawValue: fallbackNoteType) ?? .text).iconName
+        }
+        let type = NoteType(rawValue: cached.noteType) ?? .text
+        let attrs = (try? fetchCachedAttributes(noteId: topId, serverProfileId: serverProfileId)) ?? []
+        // Match `NoteItem` / tree: iconClass is a label attribute.
+        let iconClass = attrs.first { $0.name == "iconClass" && $0.type == "label" }?.value
+            ?? attrs.first { $0.name == "iconClass" }?.value
+        return NoteIconMapper.sfSymbol(for: iconClass) ?? type.iconName
+    }
+
+    /// Walks parents from `noteId` until the parent is `root`; returns that note’s id (the top-level child of root on this branch).
+    /// Uses `CachedBranch` when `parentNoteIds` is empty (common after incremental sync).
+    private func topLevelNoteIdUnderRoot(noteId: String, serverProfileId: String) -> String? {
+        var current = noteId
+        var visited = Set<String>()
+        while !visited.contains(current) {
+            visited.insert(current)
+            guard let cached = try? fetchCachedNote(id: current, serverProfileId: serverProfileId) else {
+                return nil
+            }
+            guard let parent = parentNoteIdForTreeWalk(noteId: current, serverProfileId: serverProfileId, cached: cached)
+            else {
+                return current
+            }
+            if parent == "root" {
+                return current
+            }
+            current = parent
+        }
+        return nil
+    }
+
+    /// Prefer `CachedNote.parentNoteIds`; fall back to the first `CachedBranch` row (same idea as tree/load).
+    private func parentNoteIdForTreeWalk(noteId: String, serverProfileId: String, cached: CachedNote) -> String? {
+        if let p = cached.parentNoteIds.first, !p.isEmpty {
+            return p
+        }
+        return parentNoteIdFromFirstBranch(noteId: noteId, serverProfileId: serverProfileId)
+    }
+
+    private func parentNoteIdFromFirstBranch(noteId: String, serverProfileId: String) -> String? {
+        let nid = noteId
+        let pid = serverProfileId
+        var descriptor = FetchDescriptor<CachedBranch>(
+            predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid },
+            sortBy: [SortDescriptor(\.branchId)]
+        )
+        descriptor.fetchLimit = 1
+        return try? context.fetch(descriptor).first?.parentNoteId
     }
 
     private func pruneRecents(serverProfileId: String, keep: Int) throws {
@@ -464,6 +565,57 @@ final class PersistenceManager {
         )
     }
 
+    // MARK: - Entity pull cursor (`/api/sync/changed`)
+
+    func getEntityPullCursor(serverProfileId: String) throws -> Int64 {
+        let pid = serverProfileId
+        var descriptor = FetchDescriptor<EntityPullCursor>(
+            predicate: #Predicate { $0.serverProfileId == pid }
+        )
+        descriptor.fetchLimit = 1
+        if let row = try context.fetch(descriptor).first {
+            return row.lastEntityChangeId
+        }
+        let row = EntityPullCursor(serverProfileId: serverProfileId, lastEntityChangeId: 0)
+        context.insert(row)
+        try context.save()
+        return 0
+    }
+
+    func setEntityPullCursor(serverProfileId: String, lastEntityChangeId: Int64) throws {
+        let pid = serverProfileId
+        var descriptor = FetchDescriptor<EntityPullCursor>(
+            predicate: #Predicate { $0.serverProfileId == pid }
+        )
+        descriptor.fetchLimit = 1
+        if let row = try context.fetch(descriptor).first {
+            row.lastEntityChangeId = lastEntityChangeId
+        } else {
+            context.insert(EntityPullCursor(serverProfileId: serverProfileId, lastEntityChangeId: lastEntityChangeId))
+        }
+        try context.save()
+    }
+
+    func deleteCachedBranch(branchId: String, serverProfileId: String) throws {
+        let bid = branchId
+        let pid = serverProfileId
+        let rows = try context.fetch(FetchDescriptor<CachedBranch>(
+            predicate: #Predicate { $0.branchId == bid && $0.serverProfileId == pid }
+        ))
+        rows.forEach { context.delete($0) }
+        try context.save()
+    }
+
+    func deleteCachedAttribute(attributeId: String, serverProfileId: String) throws {
+        let aid = attributeId
+        let pid = serverProfileId
+        let rows = try context.fetch(FetchDescriptor<CachedAttribute>(
+            predicate: #Predicate { $0.attributeId == aid && $0.serverProfileId == pid }
+        ))
+        rows.forEach { context.delete($0) }
+        try context.save()
+    }
+
     // MARK: - Sync Helpers
 
     func fetchAllCachedNoteIds(serverProfileId: String) throws -> [String] {
@@ -474,6 +626,21 @@ final class PersistenceManager {
             )
         )
         return notes.map(\.noteId)
+    }
+
+    func fetchAllCachedBranchIds(serverProfileId: String) throws -> [String] {
+        let profileId = serverProfileId
+        let branches = try context.fetch(
+            FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        return branches.map(\.branchId)
+    }
+
+    /// Deletes cached notes (and their branches/attributes) for the profile.
+    func deleteCachedNotes(noteIds: [String], serverProfileId: String) throws {
+        try deleteCachedNotes(noteIds: Set(noteIds), serverProfileId: serverProfileId)
     }
 
     func deleteCachedNotes(noteIds: Set<String>, serverProfileId: String) throws {
@@ -583,6 +750,11 @@ final class PersistenceManager {
             predicate: #Predicate { $0.serverProfileId == profileId }
         ))
         images.forEach { context.delete($0) }
+
+        let cursors = try context.fetch(FetchDescriptor<EntityPullCursor>(
+            predicate: #Predicate { $0.serverProfileId == profileId }
+        ))
+        cursors.forEach { context.delete($0) }
 
         try context.save()
     }

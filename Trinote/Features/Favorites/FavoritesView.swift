@@ -216,6 +216,7 @@ struct FavoritesView: View {
         guard fav.noteId != "root" else { return }
         do {
             try await client.deleteNote(fav.noteId)
+            GhostNoteTracker.shared.add(fav.noteId, serverProfileId: profileId)
             try? PersistenceManager.shared.deleteCachedNotes(noteIds: [fav.noteId], serverProfileId: profileId)
             try? PersistenceManager.shared.removeFavorite(noteId: fav.noteId, serverProfileId: profileId)
             loadFavorites()

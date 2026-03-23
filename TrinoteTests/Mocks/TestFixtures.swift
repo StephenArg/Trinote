@@ -20,6 +20,7 @@ enum TestFixtures {
             type: type,
             mime: mime,
             blobId: "blob-\(id)",
+            isDeleted: false,
             dateCreated: "2024-01-15 12:00:00",
             dateModified: "2024-01-15 13:00:00",
             utcDateCreated: "2024-01-15T12:00:00.000Z",

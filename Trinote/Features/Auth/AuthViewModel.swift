@@ -8,19 +8,14 @@ final class AuthViewModel {
     var serverName = ""
     var serverURL = ""
     var password = ""
-    var token = ""
-    var loginMode: LoginMode = .password
+    /// Matches Trilium “Remember me” session cookie behavior.
+    var rememberMe = true
     var isLoading = false
     var errorMessage: String?
     var showError = false
     var profiles: [ServerProfile] = []
 
     private let persistence = PersistenceManager.shared
-
-    enum LoginMode: String, CaseIterable {
-        case password = "Password"
-        case token = "ETAPI Token"
-    }
 
     enum URLScheme: String, CaseIterable {
         case https = "https://"
@@ -41,12 +36,7 @@ final class AuthViewModel {
 
     var canSubmit: Bool {
         let hasServer = !serverURL.trimmingCharacters(in: .whitespaces).isEmpty
-        switch loginMode {
-        case .password:
-            return hasServer && !password.isEmpty
-        case .token:
-            return hasServer && !token.isEmpty
-        }
+        return hasServer && !password.isEmpty
     }
 
     func loadProfiles() {
@@ -82,14 +72,8 @@ final class AuthViewModel {
 
         do {
             try persistence.saveProfile(profile)
-            switch loginMode {
-            case .password:
-                try await appState.loginWithPassword(password, profile: profile)
-            case .token:
-                try await appState.loginWithToken(token, profile: profile)
-            }
+            try await appState.loginWithPassword(password, rememberMe: rememberMe, profile: profile)
             password = ""
-            token = ""
             loadProfiles()
         } catch {
             errorMessage = APIError.from(error).localizedDescription

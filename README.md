@@ -4,7 +4,7 @@ A native iOS client for self-hosted [TriliumNext](https://github.com/TriliumNext
 
 ## Features
 
-- **Connect** to any self-hosted Trilium instance via ETAPI
+- **Connect** with the same **web session** as Trilium (password + cookies + CSRF), not ETAPI
 - **Browse** the full note tree with lazy loading and proper clone/branch semantics
 - **Read** text notes (HTML), code notes, image notes, and file notes
 - **Search** full-text across all notes via the server search API
@@ -19,7 +19,7 @@ A native iOS client for self-hosted [TriliumNext](https://github.com/TriliumNext
 - iOS 17.0+
 - Xcode 16.0+
 - Swift 5.9+
-- A self-hosted TriliumNext server (v0.63+) with ETAPI enabled
+- A self-hosted TriliumNext server (**v0.95.x** recommended; native `/api` routes are pinned in `local_notes/trilium_native_api_v0.95.md`)
 
 ## Setup
 
@@ -52,19 +52,10 @@ Select an iOS 17+ simulator or device and press **Cmd+R**.
 
 ## Connecting to a Server
 
-### Option A: ETAPI Token (recommended)
-
-1. Open your Trilium instance in a browser
-2. Go to **Options → ETAPI**
-3. Create a new token
-4. In the app, enter your server URL and paste the token
-
-### Option B: Password Login
-
-1. Enter your server URL
-2. Select "Password" mode
-3. Enter your Trilium password
-4. The app will exchange it for an ETAPI token automatically
+1. Enter your server URL (same origin you use in the browser)
+2. Enter your Trilium **password** (same as the web UI)
+3. Optional: **Remember me** — matches Trilium’s longer-lived session cookie
+4. **TOTP / SSO**: complete login in the browser first if your server requires it; password-only flow may not be enough yet
 
 ### Self-signed certificates
 
@@ -78,7 +69,7 @@ Management). The app allows arbitrary HTTP loads via ATS to support local networ
 Trinote/
 ├── App/                     # App entry, state, tab navigation
 ├── Core/
-│   ├── API/                 # TriliumClient, ETAPI models, error types
+│   ├── API/                 # TriliumClient (session + `/api`), models, WebSocket
 │   ├── Models/              # Domain models, SwiftData cache models
 │   ├── Persistence/         # SwiftData container, cache manager
 │   ├── Security/            # Keychain token storage
@@ -95,7 +86,7 @@ Trinote/
 
 ### Key Design Decisions
 
-- **ETAPI only** — uses the documented external API, not the internal sync API
+- **Native `/api` + sync** — session cookies, `sync/check` + `sync/changed`, entity-change cursor; WebSocket debounces incremental sync
 - **Notes ≠ Branches** — notes and branches are separate entities; a note can appear in multiple tree locations (clones)
 - **Lazy tree loading** — fetches children on demand to avoid loading the entire tree upfront
 - **Cache-first offline** — falls back to cached data when the server is unreachable

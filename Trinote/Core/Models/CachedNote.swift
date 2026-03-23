@@ -127,14 +127,17 @@ final class RecentNote {
     var noteType: String
     var accessedAt: Date
     var serverProfileId: String
+    /// SF Symbol for the top-level-under-root notebook (computed when the note is opened).
+    var listIconSystemName: String?
 
-    init(noteId: String, title: String, noteType: String, serverProfileId: String) {
+    init(noteId: String, title: String, noteType: String, serverProfileId: String, listIconSystemName: String? = nil) {
         self.id = "\(serverProfileId):\(noteId)"
         self.noteId = noteId
         self.title = title
         self.noteType = noteType
         self.accessedAt = .now
         self.serverProfileId = serverProfileId
+        self.listIconSystemName = listIconSystemName
     }
 }
 
@@ -201,6 +204,18 @@ final class SyncStatus {
         self.lastSyncedAt = .now
         self.lastError = nil
         self.serverProfileId = serverProfileId
+    }
+}
+
+/// Cursor for `GET /api/sync/changed` (`lastEntityChangeId`), per server profile.
+@Model
+final class EntityPullCursor {
+    @Attribute(.unique) var serverProfileId: String
+    var lastEntityChangeId: Int64
+
+    init(serverProfileId: String, lastEntityChangeId: Int64 = 0) {
+        self.serverProfileId = serverProfileId
+        self.lastEntityChangeId = lastEntityChangeId
     }
 }
 

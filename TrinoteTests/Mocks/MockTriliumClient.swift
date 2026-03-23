@@ -3,8 +3,7 @@ import Foundation
 
 actor MockTriliumClient: TriliumClientProtocol {
     let baseURL: URL
-    private var token: String?
-    var currentToken: String? { token }
+    var isSessionValid = false
 
     // Stubs
     var appInfoResult: Result<AppInfoResponse, Error> = .success(AppInfoResponse(appVersion: "0.63.7", dbVersion: 227, syncVersion: 32, buildDate: "2024-01-15", buildRevision: "abc", dataDirectory: nil, clipperProtocolVersion: nil, utcDateTime: nil))
@@ -19,6 +18,11 @@ actor MockTriliumClient: TriliumClientProtocol {
     var attachmentsResult: Result<[AttachmentResponse], Error> = .success([])
     var attachmentContentResult: Result<Data, Error>?
     var createAttachmentResult: Result<AttachmentResponse, Error>?
+    var syncCheckResult: Result<SyncCheckResponse, Error> = .success(SyncCheckResponse())
+    var syncPullResult: Result<SyncPullResponse, Error> = .success(SyncPullResponse(
+        entityChanges: [], maxEntityChangeId: 0, outstandingPullCount: 0,
+        notes: [], branches: [], attributes: [], blobs: []
+    ))
 
     // Call tracking
     var loginCalled = false
@@ -29,23 +33,40 @@ actor MockTriliumClient: TriliumClientProtocol {
     var updateNoteContentCalls: [(String, Data)] = []
     var deleteNoteCalls: [String] = []
     var searchCalls: [String] = []
-    var getBranchCalls: [String] = []
+    var getBranchCalls: [(String, String)] = []
 
     init(baseURL: URL = URL(string: "https://test.trilium.local")!) {
         self.baseURL = baseURL
     }
 
-    func setToken(_ token: String?) { self.token = token }
+    func exportSessionCookieData() -> Data? { nil }
 
-    func login(password: String, tokenName: String?) async throws -> String {
+    func login(password: String, rememberMe: Bool) async throws {
         loginCalled = true
-        return "mock-token-\(UUID().uuidString.prefix(8))"
+        _ = password
+        _ = rememberMe
+        isSessionValid = true
     }
 
-    func logout() async throws { logoutCalled = true }
+    func restoreSession() async throws {
+        _ = try appInfoResult.get()
+        isSessionValid = true
+    }
+
+    func logout() async throws { logoutCalled = true; isSessionValid = false }
 
     func getAppInfo() async throws -> AppInfoResponse {
         try appInfoResult.get()
+    }
+
+    func syncCheck() async throws -> SyncCheckResponse {
+        try syncCheckResult.get()
+    }
+
+    func syncPull(instanceId: String, lastEntityChangeId: Int64) async throws -> SyncPullResponse {
+        _ = instanceId
+        _ = lastEntityChangeId
+        return try syncPullResult.get()
     }
 
     func getNote(_ noteId: String) async throws -> NoteResponse {
@@ -87,10 +108,15 @@ actor MockTriliumClient: TriliumClientProtocol {
         return try searchResult.get()
     }
 
-    func getBranch(_ branchId: String) async throws -> BranchResponse {
-        getBranchCalls.append(branchId)
+    func getBranch(_ branchId: String, parentNoteId: String) async throws -> BranchResponse {
+        getBranchCalls.append((branchId, parentNoteId))
         if let result = branchResults[branchId] { return try result.get() }
         return TestFixtures.branchResponse(branchId: branchId)
+    }
+
+    func placeBranchInSiblingOrder(_ branchId: String, orderedSiblingBranchIds: [String]) async throws {
+        _ = branchId
+        _ = orderedSiblingBranchIds
     }
 
     func createBranch(_ request: CreateBranchRequest) async throws -> BranchResponse {
@@ -111,7 +137,10 @@ actor MockTriliumClient: TriliumClientProtocol {
         TestFixtures.attributeResponse(noteId: request.noteId, name: request.name, value: request.value)
     }
 
-    func deleteAttribute(_ attributeId: String) async throws {}
+    func deleteAttribute(noteId: String, attributeId: String) async throws {
+        _ = noteId
+        _ = attributeId
+    }
 
     func getNoteAttachments(_ noteId: String) async throws -> [AttachmentResponse] {
         try attachmentsResult.get()
