@@ -27,8 +27,19 @@ struct RichTextEditorView: UIViewRepresentable {
         webView.navigationDelegate = coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
+        webView.clipsToBounds = false
+        webView.scrollView.clipsToBounds = false
+        // Scroll only inside the page (#editor-container). If the WKWebView scroll view scrolls,
+        // the flex toolbar can be partially clipped / scrolled off-screen.
+        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.bounces = false
+        webView.scrollView.alwaysBounceVertical = false
+        webView.scrollView.alwaysBounceHorizontal = false
         webView.scrollView.keyboardDismissMode = .interactive
-        webView.scrollView.alwaysBounceVertical = true
+        // Avoid iOS adjusting the scroll view in a way that shears the top few CSS pixels of the page.
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.contentInset = .zero
+        webView.scrollView.scrollIndicatorInsets = .zero
 
         if #available(iOS 16.4, *) {
             webView.isInspectable = true
@@ -48,6 +59,14 @@ struct RichTextEditorView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.onContentChanged = onContentChanged
         coordinator.onPickImage = onPickImage
+
+        let sv = webView.scrollView
+        if sv.contentOffset != .zero {
+            sv.setContentOffset(.zero, animated: false)
+        }
+        sv.contentInsetAdjustmentBehavior = .never
+        sv.contentInset = .zero
+        sv.scrollIndicatorInsets = .zero
 
         if let dataUri = imageToInsert {
             coordinator.insertImage(dataUri)

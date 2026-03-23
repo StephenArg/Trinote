@@ -41,17 +41,29 @@
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
 body { display: flex; flex-direction: column; }
 
-/* Toolbar */
-.toolbar-wrap { flex-shrink: 0; border-bottom: 1px solid var(--toolbar-border); background: var(--toolbar-bg); }
+/* Toolbar — full natural height; horizontal scroll only inside the strip */
+.toolbar-wrap {
+  flex-shrink: 0; border-bottom: 1px solid var(--toolbar-border); background: var(--toolbar-bg);
+  overflow-x: hidden; overflow-y: visible;
+  /* Subpixel / WK clipping: avoid the first row of controls being sheared at the top */
+  padding-top: 2px;
+}
 .toolbar {
-  display: flex; align-items: center; gap: 1px;
-  padding: 4px 6px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 1px;
+  padding: 4px 6px;
+  min-height: 42px;
+  overflow-x: auto; overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: none;
+  touch-action: pan-x;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .toolbar::-webkit-scrollbar { display: none; }
 .toolbar button {
   flex-shrink: 0; border: none; background: var(--btn-bg);
   color: var(--fg); font-size: 15px; font-weight: 600;
-  width: 36px; height: 34px; border-radius: 6px;
+  width: 36px; min-height: 34px; border-radius: 6px;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
@@ -59,6 +71,14 @@ body { display: flex; flex-direction: column; }
 .toolbar button.active { color: var(--btn-active); background: var(--btn-active-bg); }
 .toolbar button svg { width: 18px; height: 18px; fill: currentColor; }
 .toolbar button img.icon { width: 18px; height: 18px; object-fit: contain; filter: var(--icon-filter); }
+.toolbar button .toolbar-code-glyph {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: -0.12em;
+  line-height: 1;
+  user-select: none;
+}
 .toolbar .sep { width: 1px; height: 22px; background: var(--toolbar-border); margin: 0 3px; flex-shrink: 0; }
 .toolbar select {
   flex-shrink: 0; border: 1px solid var(--border); background: var(--toolbar-bg);
@@ -66,11 +86,14 @@ body { display: flex; flex-direction: column; }
   -webkit-appearance: none; appearance: none; cursor: pointer;
 }
 
-/* Color popup */
+/* Color popup — fixed to viewport (appended to body) so toolbar overflow never clips or scrolls it */
 .color-popup {
-  display: none; position: absolute; top: 44px; left: 0; z-index: 100;
+  display: none; position: fixed; left: 0; top: 0; z-index: 10000;
   background: var(--popup-bg); border: 1px solid var(--border); border-radius: 10px;
   padding: 8px; box-shadow: 0 4px 20px var(--popup-shadow);
+  /* 7×30px swatches + gaps; avoids 0×0 first-paint layout on WKWebView */
+  min-width: 248px;
+  max-height: min(70vh, 420px); overflow-y: auto; -webkit-overflow-scrolling: touch;
 }
 .color-popup.visible { display: block; }
 .color-grid { display: grid; grid-template-columns: repeat(7, 30px); gap: 4px; }
@@ -126,6 +149,13 @@ body { display: flex; flex-direction: column; }
 .tiptap img { max-width: 100%; height: auto; border-radius: 6px; }
 .tiptap hr { border: none; border-top: 2px solid var(--border); margin: 1em 0; }
 .tiptap a { color: var(--btn-active); text-decoration: underline; }
+/* TipTap Highlight → <mark>; ensure multicolor backgrounds paint (esp. WebKit / line wraps) */
+.tiptap mark {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  border-radius: 2px;
+  padding: 0.05em 0;
+}
 .tiptap table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
 .tiptap th, .tiptap td { border: 1px solid var(--table-border); padding: 6px 10px; min-width: 60px; vertical-align: top; }
 .tiptap th { background: rgba(128,128,128,0.08); font-weight: 600; }
@@ -194,9 +224,35 @@ const editor = new Editor({
   onTransaction() { scheduleToolbarUpdate(); },
 });
 
+// WKWebView / iOS: tapping the toolbar blurs the editor and collapses the DOM selection.
+// Keep the last ProseMirror ranged selection so color / highlight pickers can still apply.
+let editorSavedRange = null;
+editor.on('selectionUpdate', ({ editor }) => {
+  const { from, to, empty } = editor.state.selection;
+  if (!empty) editorSavedRange = { from, to };
+});
+
+// iOS: while the swatch panel is open, blur refocuses the editor so the keyboard can stay up.
+// IMPORTANT: Do not refocus on a timer/hold — that runs when tapping the color *button* (before the
+// panel is visible) and steals the tap so the synthetic click never opens the picker.
+function refocusEditorIfNeeded() {
+  if (!document.querySelector('.color-popup.visible')) return;
+  requestAnimationFrame(() => {
+    try {
+      if (editor.view && editor.view.dom) {
+        editor.view.dom.focus({ preventScroll: true });
+      }
+    } catch (e) {}
+  });
+}
+editor.view.dom.addEventListener('blur', refocusEditorIfNeeded);
+
 // --- Toolbar Setup ---
 const toolbar = document.getElementById('toolbar');
 function ic(name) { return '<img class="icon" src="' + name + '" width="18" height="18" alt="" />'; }
+function codeInlineGlyph() {
+  return '<span class="toolbar-code-glyph" aria-hidden="true">&lt;/&gt;</span>';
+}
 function btn(title, icon, action, isActive) {
   const b = document.createElement('button');
   b.title = title; b.innerHTML = icon;
@@ -230,7 +286,7 @@ btn('Bold', ic('foundation--bold.svg'), () => editor.chain().focus().toggleBold(
 btn('Italic', ic('foundation--italic.svg'), () => editor.chain().focus().toggleItalic().run(), () => editor.isActive('italic'));
 btn('Underline', ic('foundation--underline.svg'), () => editor.chain().focus().toggleUnderline().run(), () => editor.isActive('underline'));
 btn('Strike', ic('foundation--strikethrough.svg'), () => editor.chain().focus().toggleStrike().run(), () => editor.isActive('strike'));
-btn('Code', ic('brackets-curly-fill-svgrepo-com.svg'), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
+btn('Code', codeInlineGlyph(), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
 btn('Superscript', ic('foundation--superscript.svg'), () => editor.chain().focus().toggleSuperscript().run(), () => editor.isActive('superscript'));
 btn('Subscript', ic('foundation--subscript.svg'), () => editor.chain().focus().toggleSubscript().run(), () => editor.isActive('subscript'));
 sep();
@@ -257,41 +313,231 @@ btn('Outdent', ic('foundation--indent-less.svg'), () => { if(editor.isActive('bu
 btn('Indent', ic('foundation--indent-more.svg'), () => { if(editor.isActive('bulletList')||editor.isActive('orderedList')||editor.isActive('taskList')) editor.chain().focus().sinkListItem('listItem').run(); }, () => false);
 sep();
 
-// Color pickers
-function makeColorPicker(title, icon, applyFn, clearFn) {
+// Color pickers — restore range before applying marks (see editorSavedRange above).
+// After applying a mark, scroll the selection into the area visible above the keyboard (visualViewport).
+function scrollEditorRangeIntoView() {
+  const ec = document.getElementById('editor-container');
+  const view = editor.view;
+  if (!ec || !view) return;
+  const { from, to } = editor.state.selection;
+  let topDoc, bottomDoc;
+  try {
+    const c1 = view.coordsAtPos(from);
+    const c2 = view.coordsAtPos(to);
+    topDoc = Math.min(c1.top, c2.top, c1.bottom, c2.bottom);
+    bottomDoc = Math.max(c1.top, c2.top, c1.bottom, c2.bottom);
+  } catch (e) {
+    return;
+  }
+  const pad = 12;
+  const ecRect = ec.getBoundingClientRect();
+  let visibleTop = ecRect.top + pad;
+  let visibleBottom = ecRect.bottom - pad;
+  const vv = window.visualViewport;
+  if (vv) {
+    const vTop = vv.offsetTop + pad;
+    const vBottom = vv.offsetTop + vv.height - pad;
+    visibleTop = Math.max(visibleTop, vTop);
+    visibleBottom = Math.min(visibleBottom, vBottom);
+  }
+  if (visibleBottom <= visibleTop) return;
+
+  if (topDoc < visibleTop) {
+    ec.scrollTop += topDoc - visibleTop;
+  } else if (bottomDoc > visibleBottom) {
+    ec.scrollTop += bottomDoc - visibleBottom;
+  }
+}
+
+function afterColorMarkEdit() {
+  const dom = editor.view && editor.view.dom;
+  if (dom) {
+    try {
+      dom.focus({ preventScroll: true });
+    } catch (e) {
+      dom.focus();
+    }
+  }
+  const bump = () => scrollEditorRangeIntoView();
+  bump();
+  requestAnimationFrame(() => {
+    bump();
+    requestAnimationFrame(bump);
+  });
+  setTimeout(bump, 80);
+  setTimeout(bump, 250);
+  setTimeout(bump, 450);
+}
+
+function withColorMarkEdit(editFn) {
+  editFn();
+  afterColorMarkEdit();
+}
+
+function colorPickerApplyRange(wrapper) {
+  const sel = editor.state.selection;
+  if (!sel.empty) return { from: sel.from, to: sel.to };
+  if (wrapper._rangeAtOpen && wrapper._rangeAtOpen.from !== wrapper._rangeAtOpen.to)
+    return wrapper._rangeAtOpen;
+  if (editorSavedRange && editorSavedRange.from !== editorSavedRange.to)
+    return editorSavedRange;
+  return null;
+}
+
+const COLOR_POPUP_OUTSIDE_GRACE_MS = 450;
+const COLOR_POPUP_SCROLL_GRACE_MS = 500;
+
+function hideColorPopup(popup) {
+  popup.classList.remove('visible');
+  popup.style.left = '';
+  popup.style.top = '';
+  popup.style.visibility = '';
+  popup._ignoreOutsideUntil = 0;
+  popup._ignoreScrollUntil = 0;
+}
+
+function markColorPopupJustOpened(popup) {
+  const t = performance.now();
+  popup._ignoreOutsideUntil = t + COLOR_POPUP_OUTSIDE_GRACE_MS;
+  popup._ignoreScrollUntil = t + COLOR_POPUP_SCROLL_GRACE_MS;
+}
+
+function layoutColorPopup(anchor, popup) {
+  if (!popup.classList.contains('visible')) return;
+  popup.style.visibility = 'hidden';
+  popup.style.left = '0px';
+  popup.style.top = '0px';
+  const pr = popup.getBoundingClientRect();
+  const ar = anchor.getBoundingClientRect();
+  const margin = 8;
+  let top = ar.bottom + 4;
+  let left = ar.left;
+  const pw = Math.max(pr.width, 1);
+  const ph = Math.max(pr.height, 1);
+  left = Math.max(margin, Math.min(left, window.innerWidth - pw - margin));
+  if (top + ph > window.innerHeight - margin) {
+    top = Math.max(margin, ar.top - ph - 4);
+  }
+  popup.style.left = `${Math.round(left)}px`;
+  popup.style.top = `${Math.round(top)}px`;
+  popup.style.visibility = '';
+}
+
+function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
   const wrapper = document.createElement('div');
-  wrapper.style.position = 'relative'; wrapper.style.display = 'inline-flex';
+  wrapper.style.display = 'inline-flex';
   const b = document.createElement('button');
+  b.type = 'button';
   b.title = title; b.innerHTML = icon;
-  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;width:36px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;';
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;width:36px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
   const popup = document.createElement('div');
   popup.className = 'color-popup';
+  popup._anchorButton = b;
   const grid = document.createElement('div');
   grid.className = 'color-grid';
   const clearBtn = document.createElement('div');
   clearBtn.className = 'color-swatch clear-color';
   clearBtn.title = 'Remove color';
-  clearBtn.addEventListener('click', () => { clearFn(); popup.classList.remove('visible'); });
+  clearBtn.style.touchAction = 'manipulation';
+  function runClear(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const r = colorPickerApplyRange(wrapper);
+    hideColorPopup(popup);
+    if (!r) return;
+    clearRangeFn(r.from, r.to);
+  }
+  clearBtn.addEventListener('pointerdown', runClear, true);
+  clearBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
   grid.appendChild(clearBtn);
   COLORS.forEach(c => {
     const sw = document.createElement('div');
-    sw.className = 'color-swatch'; sw.style.background = c;
-    sw.addEventListener('click', () => { applyFn(c); popup.classList.remove('visible'); });
+    sw.className = 'color-swatch';
+    sw.style.background = c;
+    sw.style.touchAction = 'manipulation';
+    function runApply(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const r = colorPickerApplyRange(wrapper);
+      hideColorPopup(popup);
+      if (!r) return;
+      applyRangeFn(r.from, r.to, c);
+    }
+    sw.addEventListener('pointerdown', runApply, true);
+    sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
     grid.appendChild(sw);
   });
   popup.appendChild(grid);
-  b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); popup.classList.toggle('visible'); });
-  wrapper.appendChild(b); wrapper.appendChild(popup);
+  document.body.appendChild(popup);
+  b.addEventListener('pointerdown', () => {
+    const { from, to } = editor.state.selection;
+    wrapper._rangeAtOpen = { from, to };
+  }, true);
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const willOpen = !popup.classList.contains('visible');
+    document.querySelectorAll('.color-popup.visible').forEach(p => { if (p !== popup) hideColorPopup(p); });
+    if (willOpen) {
+      markColorPopupJustOpened(popup);
+      popup.classList.add('visible');
+      // Two rAFs: first layout pass can report 0×0 for the grid on iOS WKWebView
+      requestAnimationFrame(() => {
+        layoutColorPopup(b, popup);
+        requestAnimationFrame(() => layoutColorPopup(b, popup));
+      });
+    } else {
+      hideColorPopup(popup);
+    }
+  });
+  wrapper.appendChild(b);
   toolbar.appendChild(wrapper);
-  document.addEventListener('click', (e) => { if (!wrapper.contains(e.target)) popup.classList.remove('visible'); });
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideColorPopup(popup);
+  });
 }
 
+(function attachColorPopupDismiss() {
+  const ec = document.getElementById('editor-container');
+  if (!ec) return;
+  ec.addEventListener('scroll', () => {
+    document.querySelectorAll('.color-popup.visible').forEach(popup => {
+      if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
+      hideColorPopup(popup);
+    });
+  }, { passive: true });
+  window.addEventListener('resize', () => {
+    document.querySelectorAll('.color-popup.visible').forEach(popup => {
+      const anchor = popup._anchorButton;
+      if (anchor) layoutColorPopup(anchor, popup);
+    });
+  });
+})();
+
 makeColorPicker('Text color', ic('foundation--text-color.svg'),
-  (c) => editor.chain().focus().setColor(c).run(),
-  () => editor.chain().focus().unsetColor().run());
+  (from, to, c) => {
+    withColorMarkEdit(() => {
+      editor.chain().setTextSelection({ from, to }).setColor(c).run();
+    });
+  },
+  (from, to) => {
+    withColorMarkEdit(() => {
+      editor.chain().setTextSelection({ from, to }).unsetColor().run();
+    });
+  });
 makeColorPicker('Background', ic('foundation--background-color.svg'),
-  (c) => editor.chain().focus().toggleHighlight({ color: c }).run(),
-  () => editor.chain().focus().unsetHighlight().run());
+  (from, to, c) => {
+    withColorMarkEdit(() => {
+      editor.chain().setTextSelection({ from, to }).setHighlight({ color: c }).run();
+    });
+  },
+  (from, to) => {
+    withColorMarkEdit(() => {
+      editor.chain().setTextSelection({ from, to }).unsetHighlight().run();
+    });
+  });
 sep();
 
 // Insert
@@ -348,6 +594,48 @@ function updateToolbarState() {
 // TipTap setContent() expects:  <ul data-type="taskList">
 //                                 <li data-type="taskItem" data-checked="false">text</li></ul>
 
+// CKEditor / Trilium often use <span style="background-color:…">; TipTap Highlight expects <mark data-color>.
+function migrateCkColorMarkupForTiptap(doc) {
+  const body = doc.body;
+  const spans = Array.from(body.querySelectorAll('span[style]')).reverse();
+  spans.forEach(span => {
+    if (!span.parentNode) return;
+    const style = span.getAttribute('style') || '';
+    const bgMatch = style.match(/background-color\s*:\s*([^;]+)/i);
+    if (!bgMatch) return;
+    const d = span.ownerDocument;
+    const mark = d.createElement('mark');
+    const bgVal = bgMatch[1].trim();
+    mark.style.backgroundColor = bgVal;
+    mark.setAttribute('data-color', bgVal);
+    const colorMatch = style.match(/(?:^|;)\s*color\s*:\s*([^;]+)/i);
+    if (colorMatch) {
+      const inner = d.createElement('span');
+      inner.setAttribute('style', 'color: ' + colorMatch[1].trim());
+      while (span.firstChild) inner.appendChild(span.firstChild);
+      mark.appendChild(inner);
+    } else {
+      while (span.firstChild) mark.appendChild(span.firstChild);
+    }
+    span.parentNode.replaceChild(mark, span);
+  });
+}
+
+// TipTap saves <mark>; convert back to spans for CKEditor-compatible HTML / Trilium desktop.
+function tiptapMarkToCkSpans(doc) {
+  doc.querySelectorAll('mark').forEach(mark => {
+    if (!mark.parentNode) return;
+    const span = doc.createElement('span');
+    const dc = mark.getAttribute('data-color');
+    const st = mark.getAttribute('style') || '';
+    const bgMatch = st.match(/background-color\s*:\s*([^;]+)/i);
+    const bg = (dc || (bgMatch ? bgMatch[1].trim() : '')).trim();
+    if (bg) span.style.backgroundColor = bg;
+    while (mark.firstChild) span.appendChild(mark.firstChild);
+    mark.parentNode.replaceChild(span, mark);
+  });
+}
+
 function ckToTiptap(html) {
   if (!html) return html;
   const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -372,12 +660,15 @@ function ckToTiptap(html) {
     });
   });
 
+  migrateCkColorMarkupForTiptap(doc);
   return doc.body.innerHTML;
 }
 
 function tiptapToCk(html) {
   if (!html) return html;
   const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  tiptapMarkToCkSpans(doc);
 
   doc.querySelectorAll('ul[data-type="taskList"]').forEach(ul => {
     ul.removeAttribute('data-type');

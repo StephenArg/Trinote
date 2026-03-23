@@ -103,6 +103,7 @@ struct NoteDetailView: View {
                     protectedNoteOverlay(vm, note: note)
                 } else if vm.isEditing && note.type == .text {
                     richTextEditingView(vm)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
@@ -484,6 +485,8 @@ struct NoteDetailView: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(Color(uiColor: .systemBackground))
 
             RichTextEditorView(
                 initialHTML: vm.editableContent,
@@ -491,8 +494,11 @@ struct NoteDetailView: View {
                 onPickImage: { showEditorImageSourceDialog = true },
                 imageToInsert: $imageToInsert
             )
-            .frame(minHeight: 400)
+            // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
+            // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).
+            .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .confirmationDialog("Add Image", isPresented: $showEditorImageSourceDialog) {
             Button("Photo Library") { showEditorImagePicker = true }
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
