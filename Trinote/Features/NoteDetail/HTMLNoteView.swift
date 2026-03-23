@@ -157,9 +157,20 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         ul, ol { padding-left: 24px; }
         ul.todo-list { list-style: none; padding-left: 0; }
         ul.todo-list li { margin: 4px 0; }
-        .todo-list__label { display: flex; align-items: flex-start; gap: 6px; cursor: default; }
-        .todo-list__label input[type="checkbox"] { margin-top: 4px; flex-shrink: 0; pointer-events: auto; cursor: pointer;
-            width: 18px; height: 18px; }
+        .todo-list__label { display: flex; align-items: flex-start; gap: 8px; cursor: default; }
+        .todo-list__label input[type="checkbox"] {
+          margin: 0;
+          margin-top: 6px;
+          flex-shrink: 0;
+          pointer-events: auto;
+          cursor: pointer;
+          width: 18px;
+          height: 18px;
+          accent-color: \(theme.lightLink);
+        }
+        @media (prefers-color-scheme: dark) {
+          .todo-list__label input[type="checkbox"] { accent-color: \(theme.darkLink); }
+        }
         .todo-list__label__description { flex: 1; transition: opacity 0.15s, text-decoration 0.15s; }
         .todo-list__label--checked .todo-list__label__description { text-decoration: line-through; opacity: 0.5; }
         hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }

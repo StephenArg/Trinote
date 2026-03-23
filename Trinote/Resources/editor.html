@@ -99,8 +99,26 @@ body { display: flex; flex-direction: column; }
 .tiptap h6 { font-size: 1em; margin: 0.4em 0 0.2em; }
 .tiptap ul, .tiptap ol { padding-left: 24px; }
 .tiptap ul[data-type="taskList"] { list-style: none; padding-left: 4px; }
-.tiptap ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 8px; }
-.tiptap ul[data-type="taskList"] li label { flex-shrink: 0; margin-top: 3px; }
+/* Use > li (not [data-type=taskItem]) so every task row keeps checkbox + text on one line */
+.tiptap ul[data-type="taskList"] > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.tiptap ul[data-type="taskList"] > li > label {
+  flex-shrink: 0;
+  /* Slightly lower than before (was 3px) so checkbox lines up with first line of text */
+  margin-top: 5px;
+}
+.tiptap ul[data-type="taskList"] > li > label input[type="checkbox"] {
+  margin: 0;
+  vertical-align: top;
+  accent-color: var(--btn-active);
+  cursor: pointer;
+}
+/* TipTap puts copy in div > p; dropping first-p top margin avoids text sitting low vs checkbox */
+.tiptap ul[data-type="taskList"] > li > div > p:first-child { margin-top: 0; }
+.tiptap ul[data-type="taskList"] > li > p:first-child { margin-top: 0; }
 .tiptap blockquote { border-left: 4px solid var(--border); margin: 0.5em 0; padding: 4px 16px; opacity: 0.85; }
 .tiptap pre { background: rgba(128,128,128,0.1); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }
 .tiptap code { background: rgba(128,128,128,0.1); padding: 2px 6px; border-radius: 4px; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }

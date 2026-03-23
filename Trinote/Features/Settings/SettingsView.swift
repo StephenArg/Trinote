@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
     @State private var showLogoutConfirm = false
     @State private var showClearCacheConfirm = false
+    @State private var showResetColorsConfirm = false
     @State private var appInfo: AppInfoResponse?
     @State private var isLoadingInfo = false
     @State private var cacheEntityCount = 0
@@ -75,6 +76,19 @@ struct SettingsView: View {
                         .labelsHidden()
                 }
             }
+
+            Button("Reset Colors to Default…") {
+                showResetColorsConfirm = true
+            }
+            .foregroundStyle(.tint)
+        }
+        .alert("Reset Colors to Default?", isPresented: $showResetColorsConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset") {
+                resetAllColorSettingsToDefaults()
+            }
+        } message: {
+            Text("This restores the default accent theme, turns off custom app and tree colors, and resets every custom color to its default value.")
         }
     }
 
@@ -393,6 +407,19 @@ struct SettingsView: View {
         } catch {
             Log.persistence.error("Failed to clear cache: \(error)")
         }
+    }
+
+    /// Matches initial `@AppStorage` defaults in this view and `TreeView`.
+    private func resetAllColorSettingsToDefaults() {
+        colorTheme = ColorTheme.default.rawValue
+        useCustomTextColor = false
+        customLightTextColor = "#1c1c1e"
+        customDarkTextColor = "#aaaaaa"
+        useCustomTreeColors = false
+        treeLightTextColor = "#1c1c1e"
+        treeDarkTextColor = "#e5e5e7"
+        treeLightBgColor = "#ffffff"
+        treeDarkBgColor = "#1c1c1e"
     }
 }
 
