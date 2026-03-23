@@ -19,6 +19,7 @@ struct NoteDetailView: View {
     @State private var editorImageItem: PhotosPickerItem?
     @State private var imageToInsert: String?
     @State private var protectedDocumentPassword = ""
+    @State private var favoriteNoteIds: Set<String> = []
 
     private var principalTitleText: String {
         if let n = viewModel?.note {
@@ -29,6 +30,18 @@ struct NoteDetailView: View {
 
     private func uiTitle(for note: NoteItem) -> String {
         note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+    }
+
+    /// Shown under the note title (replaces duplicate full path).
+    private func lastChangedCaption(for note: NoteItem) -> String? {
+        guard !note.dateModified.isEmpty else { return nil }
+        let formatted: String
+        if let d = note.dateModified.triliumDate() {
+            formatted = d.shortDisplay
+        } else {
+            formatted = note.dateModified
+        }
+        return String(localized: "Last changed \(formatted)", comment: "Subtitle under note title; formatted is date/time")
     }
 
     var body: some View {
@@ -125,6 +138,8 @@ struct NoteDetailView: View {
                 }
             }
             .toolbar { noteToolbar(vm, note: note) }
+            .onAppear { loadFavoriteNoteIds() }
+            .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteNoteIds() }
             .alert("Error", isPresented: $vm.showSaveError) {
                 Button("OK") { vm.showSaveError = false }
             } message: {
@@ -237,10 +252,12 @@ struct NoteDetailView: View {
 
     @ViewBuilder
     private func breadcrumbsBar(_ vm: NoteDetailViewModel) -> some View {
-        if !vm.breadcrumbs.isEmpty {
+        // Drop synthetic "Root" — it’s on every note. Hide entirely for top-level notes (only self left).
+        let crumbs = vm.breadcrumbs.filter { $0.noteId != "root" }
+        if crumbs.count > 1 {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(vm.breadcrumbs) { crumb in
+                    ForEach(crumbs) { crumb in
                         if crumb.noteId != vm.noteId {
                             Text(crumb.title)
                                 .font(.caption)
@@ -290,15 +307,12 @@ struct NoteDetailView: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                         }
-                        if let path = vm.noteTreePathCaption {
-                            Text(path)
+                        if let modified = lastChangedCaption(for: note) {
+                            Text(modified)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                                .multilineTextAlignment(.leading)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .accessibilityLabel("Path: \(path)")
+                                .accessibilityLabel("Last changed \(modified)")
                         }
                     }
                 }
@@ -315,16 +329,13 @@ struct NoteDetailView: View {
                                 .font(.title2.bold())
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        if let path = vm.noteTreePathCaption {
-                            Text(path)
+                        if let modified = lastChangedCaption(for: note) {
+                            Text(modified)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                                .multilineTextAlignment(.leading)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.leading, titleIconColumnWidth + titleIconSpacing)
-                                .accessibilityLabel("Path: \(path)")
+                                .accessibilityLabel("Last changed \(modified)")
                         }
                     }
                     Spacer(minLength: 0)
@@ -686,11 +697,15 @@ struct NoteDetailView: View {
                     .disabled(vm.isSaving)
                 }
 
-                Divider()
-
-                if let url = openInWebURL(note) {
-                    ShareLink(item: url) {
-                        Label("Share Link", systemImage: "square.and.arrow.up")
+                if appState.activeProfile != nil {
+                    Button {
+                        toggleFavorite(note: note, isFavorite: favoriteNoteIds.contains(note.noteId))
+                    } label: {
+                        if favoriteNoteIds.contains(note.noteId) {
+                            Label("Remove from Favorites", systemImage: "star.slash")
+                        } else {
+                            Label("Add to Favorites", systemImage: "star")
+                        }
                     }
                 }
 
@@ -708,9 +723,36 @@ struct NoteDetailView: View {
         }
     }
 
-    private func openInWebURL(_ note: NoteItem) -> URL? {
-        guard let base = appState.activeProfile?.normalizedBaseURL else { return nil }
-        return URL(string: "\(base)/#/\(note.noteId)")
+    private func loadFavoriteNoteIds() {
+        guard let profileId = appState.activeProfile?.id else {
+            favoriteNoteIds = []
+            return
+        }
+        do {
+            let favs = try PersistenceManager.shared.fetchFavorites(serverProfileId: profileId)
+            favoriteNoteIds = Set(favs.map(\.noteId))
+        } catch {
+            Log.persistence.error("Failed to load favorite IDs: \(error.localizedDescription)")
+        }
+    }
+
+    private func toggleFavorite(note: NoteItem, isFavorite: Bool) {
+        guard let profileId = appState.activeProfile?.id else { return }
+        do {
+            if isFavorite {
+                try PersistenceManager.shared.removeFavorite(noteId: note.noteId, serverProfileId: profileId)
+            } else {
+                try PersistenceManager.shared.addFavorite(
+                    noteId: note.noteId,
+                    title: note.title,
+                    noteType: note.type.rawValue,
+                    serverProfileId: profileId
+                )
+            }
+            loadFavoriteNoteIds()
+        } catch {
+            Log.persistence.error("Failed to toggle favorite: \(error.localizedDescription)")
+        }
     }
 }
 

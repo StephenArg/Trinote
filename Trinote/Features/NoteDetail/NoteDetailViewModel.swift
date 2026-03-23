@@ -151,21 +151,6 @@ final class NoteDetailViewModel {
         breadcrumbs = crumbs
     }
 
-    /// Path under title — same format as Recents (`Parent -> … -> note`, no `Root`). Hidden when it would only repeat the title.
-    var noteTreePathCaption: String? {
-        guard let profileId = serverProfileId, let note else { return nil }
-        let full = persistence.cachedNotePathDisplay(
-            noteId: note.noteId,
-            leafTitle: note.title,
-            leafIsProtected: note.isProtected,
-            serverProfileId: profileId,
-            protectedSessionActive: appState.protectedSessionActive
-        )
-        let leafUI = note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
-        let condensed = (full == leafUI) ? "" : full
-        return condensed.isEmpty ? nil : condensed
-    }
-
     // MARK: - Loading
 
     /// Loads note from cache instantly, then refreshes from server in the background.
