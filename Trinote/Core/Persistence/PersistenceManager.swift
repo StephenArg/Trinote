@@ -316,6 +316,14 @@ final class PersistenceManager {
         return try context.fetch(descriptor)
     }
 
+    /// Single recent row for a note, if it exists (same composite id as favorites).
+    func fetchRecentNote(noteId: String, serverProfileId: String) throws -> RecentNote? {
+        let compositeId = "\(serverProfileId):\(noteId)"
+        var descriptor = FetchDescriptor<RecentNote>(predicate: #Predicate { $0.id == compositeId })
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
     /// Breadcrumb-style path from cached parent chain under root: `Parent -> … -> note` (no `Root` prefix).
     /// Uses `leafTitle` when the leaf row is missing from the cache.
     func cachedNotePathDisplay(noteId: String, leafTitle: String, serverProfileId: String) -> String {
@@ -465,6 +473,29 @@ final class PersistenceManager {
         let profileId = serverProfileId
         for noteId in noteIds {
             try removeFavorite(noteId: noteId, serverProfileId: profileId)
+        }
+    }
+
+    /// `rootNoteId` plus any descendant note IDs reachable via cached `childNoteIds` (BFS).
+    func cachedDescendantNoteIds(rootNoteId: String, serverProfileId: String) -> Set<String> {
+        var result: Set<String> = [rootNoteId]
+        var queue: [String] = [rootNoteId]
+        while !queue.isEmpty {
+            let id = queue.removeFirst()
+            guard let note = try? fetchCachedNote(id: id, serverProfileId: serverProfileId) else { continue }
+            for child in note.childNoteIds where !result.contains(child) {
+                result.insert(child)
+                queue.append(child)
+            }
+        }
+        return result
+    }
+
+    /// Removes favorite rows for the root and cached descendants (e.g. after deleting a subtree on the server).
+    func removeFavoritesForCachedSubtree(rootNoteId: String, serverProfileId: String) {
+        let ids = cachedDescendantNoteIds(rootNoteId: rootNoteId, serverProfileId: serverProfileId)
+        for id in ids {
+            try? removeFavorite(noteId: id, serverProfileId: serverProfileId)
         }
     }
 

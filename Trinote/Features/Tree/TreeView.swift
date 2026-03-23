@@ -19,10 +19,17 @@ private struct CreateNoteSheetContext: Identifiable {
 struct TreeView: View {
     let parentNoteId: String
     let parentTitle: String
+    /// When set, tapping a note row selects it as a parent (e.g. bulk duplicate) instead of opening it.
+    var onPickParent: ((String, String) -> Void)?
 
-    init(parentNoteId: String = "root", parentTitle: String = "Notes") {
+    init(
+        parentNoteId: String = "root",
+        parentTitle: String = "Notes",
+        onPickParent: ((String, String) -> Void)? = nil
+    ) {
         self.parentNoteId = parentNoteId
         self.parentTitle = parentTitle
+        self.onPickParent = onPickParent
     }
 
     @Environment(AppState.self) private var appState
@@ -33,7 +40,6 @@ struct TreeView: View {
     @State private var createSheetContext: CreateNoteSheetContext?
     @State private var navigateToNoteForEdit: NoteEditTarget?
     @State private var noteToDelete: (note: NoteItem, vm: TreeViewModel)?
-    @State private var showFavoritesSheet = false
     @State private var favoriteNoteIds: Set<String> = []
 
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
@@ -71,38 +77,28 @@ struct TreeView: View {
                 .disabled(viewModel?.isRefreshing ?? false || appState.syncManager.isSyncing)
                 .accessibilityLabel("Refresh tree")
             }
-            if parentNoteId == "root" {
+            if parentNoteId == "root", let vm = viewModel {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        showFavoritesSheet = true
+                        let rootNote = NoteItem(
+                            noteId: "root",
+                            title: "Notes",
+                            type: .text,
+                            mime: "text/html",
+                            isProtected: false,
+                            dateCreated: "",
+                            dateModified: "",
+                            parentNoteIds: [],
+                            childNoteIds: [],
+                            parentBranchIds: [],
+                            childBranchIds: [],
+                            attributes: []
+                        )
+                        createSheetContext = CreateNoteSheetContext(parentNote: rootNote, viewModel: vm)
                     } label: {
-                        Image(systemName: "star")
+                        Image(systemName: "plus")
                     }
-                    .accessibilityLabel("Favorites")
-                }
-                if let vm = viewModel {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            let rootNote = NoteItem(
-                                noteId: "root",
-                                title: "Notes",
-                                type: .text,
-                                mime: "text/html",
-                                isProtected: false,
-                                dateCreated: "",
-                                dateModified: "",
-                                parentNoteIds: [],
-                                childNoteIds: [],
-                                parentBranchIds: [],
-                                childBranchIds: [],
-                                attributes: []
-                            )
-                            createSheetContext = CreateNoteSheetContext(parentNote: rootNote, viewModel: vm)
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityLabel("New top-level note")
-                    }
+                    .accessibilityLabel("New top-level note")
                 }
             }
         }
@@ -121,7 +117,7 @@ struct TreeView: View {
             NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
         }
         .navigationDestination(item: $drillDownTarget) { target in
-            TreeView(parentNoteId: target.noteId, parentTitle: target.title)
+            TreeView(parentNoteId: target.noteId, parentTitle: target.title, onPickParent: onPickParent)
         }
         .alert("Delete Note", isPresented: Binding(
             get: { noteToDelete != nil },
@@ -141,10 +137,6 @@ struct TreeView: View {
             if let (note, _) = noteToDelete {
                 Text("\"\(note.title)\" and all its subnotes will be permanently deleted. This cannot be undone.")
             }
-        }
-        .sheet(isPresented: $showFavoritesSheet, onDismiss: loadFavoriteIds) {
-            FavoritesView(onNoteDeleted: { triggerSyncAndReload() })
-                .environment(appState)
         }
         .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
         .onChange(of: appState.syncManager.phase) { _, phase in
@@ -349,7 +341,9 @@ struct TreeView: View {
             ForEach(vm.visibleNodes) { flat in
                 treeNodeRow(flat: flat, vm: vm, favoriteNoteIds: favoriteNoteIds, onFavoriteChanged: loadFavoriteIds)
             }
-            .onMove(perform: vm.handleMove)
+            .if(onPickParent == nil) { view in
+                view.onMove(perform: vm.handleMove)
+            }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -365,42 +359,50 @@ struct TreeView: View {
             depth: flat.depth,
             viewModel: vm,
             customTextColor: treeTextColor,
-            onSelect: { note in navigateToNote = note },
+            onSelect: { note in
+                if let pick = onPickParent {
+                    pick(note.noteId, note.title)
+                } else {
+                    navigateToNote = note
+                }
+            },
             onDrillDown: { noteId, title in
                 drillDownTarget = SubTreeTarget(noteId: noteId, title: title)
             }
         )
         .contextMenu {
-            Button {
-                createSheetContext = CreateNoteSheetContext(parentNote: flat.node.note, viewModel: vm)
-            } label: {
-                Label("New Note", systemImage: "plus")
-            }
-            if flat.node.note.noteId != "root" {
-                if !flat.node.note.isProtected {
-                    Button {
-                        Task {
-                            let parentId = flat.node.branch.parentNoteId
-                            if let newNote = await vm.duplicateNote(
-                                sourceNoteId: flat.node.note.noteId,
-                                parentNoteId: parentId
-                            ) {
-                                navigateToNote = newNote
-                            }
-                        }
-                    } label: {
-                        Label("Duplicate Note", systemImage: "doc.on.doc")
-                    }
-                }
+            if onPickParent == nil {
                 Button {
-                    toggleFavorite(flat.node.note, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
+                    createSheetContext = CreateNoteSheetContext(parentNote: flat.node.note, viewModel: vm)
                 } label: {
-                    Label(isFav ? "Remove from Favorites" : "Add to Favorites", systemImage: isFav ? "star.slash" : "star")
+                    Label("New Note", systemImage: "plus")
                 }
-                Button(role: .destructive) {
-                    noteToDelete = (flat.node.note, vm)
-                } label: {
-                    Label("Delete Note", systemImage: "trash")
+                if flat.node.note.noteId != "root" {
+                    if !flat.node.note.isProtected {
+                        Button {
+                            Task {
+                                let parentId = flat.node.branch.parentNoteId
+                                if let newNote = await vm.duplicateNote(
+                                    sourceNoteId: flat.node.note.noteId,
+                                    parentNoteId: parentId
+                                ) {
+                                    navigateToNote = newNote
+                                }
+                            }
+                        } label: {
+                            Label("Duplicate Note", systemImage: "doc.on.doc")
+                        }
+                    }
+                    Button {
+                        toggleFavorite(flat.node.note, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
+                    } label: {
+                        Label(isFav ? "Remove from Favorites" : "Add to Favorites", systemImage: isFav ? "star.slash" : "star")
+                    }
+                    Button(role: .destructive) {
+                        noteToDelete = (flat.node.note, vm)
+                    } label: {
+                        Label("Delete Note", systemImage: "trash")
+                    }
                 }
             }
         }

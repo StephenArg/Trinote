@@ -720,8 +720,8 @@ final class NoteDetailViewModel {
             try await client.deleteNote(nid)
             if let profileId = serverProfileId {
                 GhostNoteTracker.shared.add(nid, serverProfileId: profileId)
+                persistence.removeFavoritesForCachedSubtree(rootNoteId: nid, serverProfileId: profileId)
                 try? persistence.deleteCachedNotes(noteIds: [nid], serverProfileId: profileId)
-                try? persistence.removeFavorite(noteId: nid, serverProfileId: profileId)
             }
             NotificationCenter.default.post(name: .noteDeleted, object: nil)
             return true

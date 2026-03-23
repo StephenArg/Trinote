@@ -6,6 +6,7 @@ struct MainTabView: View {
 
     enum Tab: String, CaseIterable {
         case notes = "Notes"
+        case favorites = "Favorites"
         case search = "Search"
         case recents = "Recents"
         case settings = "Settings"
@@ -13,6 +14,7 @@ struct MainTabView: View {
         var icon: String {
             switch self {
             case .notes: return "folder.fill"
+            case .favorites: return "star.fill"
             case .search: return "magnifyingglass"
             case .recents: return "clock.fill"
             case .settings: return "gearshape.fill"
@@ -38,6 +40,12 @@ struct MainTabView: View {
         case .notes:
             NavigationStack {
                 TreeView()
+            }
+        case .favorites:
+            NavigationStack {
+                FavoritesView(onNoteDeleted: {
+                    Task { await appState.runIncrementalSync() }
+                })
             }
         case .search:
             NavigationStack {

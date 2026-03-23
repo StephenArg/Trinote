@@ -302,6 +302,7 @@ final class TreeViewModel {
             try await client.deleteNote(noteId)
             if let profileId = serverProfileId {
                 GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
+                persistence.removeFavoritesForCachedSubtree(rootNoteId: noteId, serverProfileId: profileId)
                 try? persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
             }
             await refresh()
