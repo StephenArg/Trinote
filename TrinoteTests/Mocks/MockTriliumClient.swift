@@ -103,6 +103,31 @@ actor MockTriliumClient: TriliumClientProtocol {
         return CreateNoteResponse(note: note, branch: branch)
     }
 
+    func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse {
+        let src = try await getNote(sourceNoteId)
+        if src.isProtected {
+            throw APIError.unknown("Protected notes can’t be duplicated in the app.")
+        }
+        let data = try await getNoteContent(sourceNoteId)
+        let title = src.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Note (copy)"
+            : "\(src.title) (copy)"
+        let content = String(data: data, encoding: .utf8) ?? ""
+        let req = CreateNoteRequest(
+            parentNoteId: parentNoteId,
+            title: title,
+            type: src.type,
+            mime: src.mime,
+            content: content,
+            notePosition: nil,
+            prefix: nil,
+            isProtected: false,
+            noteId: nil,
+            branchId: nil
+        )
+        return try await createNote(req)
+    }
+
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse {
         searchCalls.append(query)
         return try searchResult.get()

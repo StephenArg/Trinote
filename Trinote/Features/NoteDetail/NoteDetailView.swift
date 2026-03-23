@@ -618,6 +618,19 @@ struct NoteDetailView: View {
                     Label(vm.showDetails ? "Hide Details" : "Note Details", systemImage: vm.showDetails ? "info.circle.fill" : "info.circle")
                 }
 
+                if !note.isProtected {
+                    Button {
+                        Task {
+                            if let dup = await vm.duplicateNote() {
+                                navigateToNoteId = dup.noteId
+                            }
+                        }
+                    } label: {
+                        Label("Duplicate Note", systemImage: "doc.on.doc")
+                    }
+                    .disabled(vm.isSaving)
+                }
+
                 Divider()
 
                 if let url = openInWebURL(note) {

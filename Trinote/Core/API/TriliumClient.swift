@@ -23,6 +23,8 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws
     func deleteNote(_ noteId: String) async throws
     func createNote(_ request: CreateNoteRequest) async throws -> CreateNoteResponse
+    /// New note under `parentNoteId` with copied title, type, mime, and body (child notes are not copied).
+    func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse
 
     func getBranch(_ branchId: String, parentNoteId: String) async throws -> BranchResponse
@@ -531,6 +533,62 @@ actor TriliumClient: TriliumClientProtocol {
             utcDateModified: br.utcDateModified
         )
         return CreateNoteResponse(note: note, branch: branch)
+    }
+
+    func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse {
+        let src = try await getNote(sourceNoteId)
+        if src.isProtected {
+            throw APIError.unknown("Protected notes can’t be duplicated in the app.")
+        }
+        let data = try await getNoteContent(sourceNoteId)
+        let dupTitle = Self.duplicateNoteTitle(from: src.title)
+        let (initialContent, needsBinaryUpload) = Self.initialCreateContentForDuplicate(
+            data: data,
+            type: src.type,
+            mime: src.mime
+        )
+        let request = CreateNoteRequest(
+            parentNoteId: parentNoteId,
+            title: dupTitle,
+            type: src.type,
+            mime: src.mime,
+            content: initialContent,
+            notePosition: nil,
+            prefix: nil,
+            isProtected: false,
+            noteId: nil,
+            branchId: nil
+        )
+        var response = try await createNote(request)
+        if needsBinaryUpload {
+            try await updateNoteContent(response.note.noteId, content: data, contentType: src.mime)
+            let refreshed = try await getNote(response.note.noteId)
+            response = CreateNoteResponse(note: refreshed, branch: response.branch)
+        }
+        return response
+    }
+
+    private static func duplicateNoteTitle(from title: String) -> String {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return "Note (copy)" }
+        return "\(t) (copy)"
+    }
+
+    /// UTF-8 text for `createNote`, or empty with `needsBinaryUpload` when body should be sent via `updateNoteContent`.
+    private static func initialCreateContentForDuplicate(data: Data, type: String, mime: String) -> (String, Bool) {
+        let textLike = mime.hasPrefix("text/")
+            || mime.contains("json")
+            || type == "code"
+            || type == "text"
+            || type == "relation"
+            || type == "mermaid"
+        if textLike, let s = String(data: data, encoding: .utf8) {
+            return (s, false)
+        }
+        if data.isEmpty {
+            return ("", false)
+        }
+        return ("", true)
     }
 
     func searchNotes(

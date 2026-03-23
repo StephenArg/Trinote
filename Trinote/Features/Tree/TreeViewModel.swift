@@ -313,6 +313,25 @@ final class TreeViewModel {
         }
     }
 
+    /// Copies note content into a new sibling under the same parent (same placement as in the tree). Returns the new note for navigation.
+    func duplicateNote(sourceNoteId: String, parentNoteId: String) async -> NoteItem? {
+        guard let client, sourceNoteId != "root" else { return nil }
+        do {
+            let response = try await client.duplicateNoteAsChild(sourceNoteId: sourceNoteId, parentNoteId: parentNoteId)
+            if let profileId = serverProfileId {
+                try? persistence.cacheNote(from: response.note, serverProfileId: profileId)
+                try? persistence.cacheBranch(from: response.branch, serverProfileId: profileId)
+                try? persistence.commitBatch()
+            }
+            await refresh()
+            return NoteItem(from: response.note)
+        } catch {
+            self.error = APIError.from(error).localizedDescription
+            Log.api.error("Failed to duplicate note: \(error)")
+            return nil
+        }
+    }
+
     func createChildNote(parentNoteId: String, title: String, type: NoteType = .text) async -> String? {
         guard let client, !title.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
 

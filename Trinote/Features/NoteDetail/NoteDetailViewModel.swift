@@ -635,6 +635,39 @@ final class NoteDetailViewModel {
         }
     }
 
+    /// Duplicate this note as a sibling under the same parent (first parent if cloned). Opens via navigation from the view.
+    func duplicateNote() async -> (noteId: String, title: String)? {
+        let nid = self.noteId
+        guard let client, let note else {
+            self.saveError = "Cannot duplicate while offline."
+            self.showSaveError = true
+            return nil
+        }
+        if note.isProtected {
+            self.saveError = "Protected notes can’t be duplicated in the app."
+            self.showSaveError = true
+            return nil
+        }
+        let parentId = note.parentNoteIds.first ?? "root"
+        self.isSaving = true
+        defer { self.isSaving = false }
+
+        do {
+            let response = try await client.duplicateNoteAsChild(sourceNoteId: nid, parentNoteId: parentId)
+            if let profileId = serverProfileId {
+                try? persistence.cacheNote(from: response.note, serverProfileId: profileId)
+                try? persistence.cacheBranch(from: response.branch, serverProfileId: profileId)
+                try? persistence.commitBatch()
+            }
+            return (response.note.noteId, response.note.title)
+        } catch {
+            self.saveError = APIError.from(error).localizedDescription
+            self.showSaveError = true
+            Log.api.error("Failed to duplicate note: \(error)")
+            return nil
+        }
+    }
+
     func createChildNote() async -> String? {
         let nid = self.noteId
         guard let client, !self.newNoteTitle.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }

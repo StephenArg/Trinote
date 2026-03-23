@@ -377,6 +377,21 @@ struct TreeView: View {
                 Label("New Note", systemImage: "plus")
             }
             if flat.node.note.noteId != "root" {
+                if !flat.node.note.isProtected {
+                    Button {
+                        Task {
+                            let parentId = flat.node.branch.parentNoteId
+                            if let newNote = await vm.duplicateNote(
+                                sourceNoteId: flat.node.note.noteId,
+                                parentNoteId: parentId
+                            ) {
+                                navigateToNote = newNote
+                            }
+                        }
+                    } label: {
+                        Label("Duplicate Note", systemImage: "doc.on.doc")
+                    }
+                }
                 Button {
                     toggleFavorite(flat.node.note, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
                 } label: {
