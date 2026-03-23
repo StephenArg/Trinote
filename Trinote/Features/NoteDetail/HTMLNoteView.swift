@@ -153,6 +153,37 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         th, td { border: 1px solid var(--border); padding: 8px; text-align: left; }
         th { background: var(--code-bg); font-weight: 600; }
         blockquote { border-left: 4px solid var(--border); margin: 8px 0; padding: 4px 16px; opacity: 0.85; }
+        /* TriliumNext: <aside class="admonition note">; legacy Trinote: div[data-callout-type] */
+        aside.admonition, .tiptap-callout, div[data-callout-type] {
+          margin: 10px 0; border-radius: 10px; padding: 10px 12px 10px 14px; border: 1px solid;
+          background: rgba(128,128,128,0.06);
+          display: block;
+        }
+        aside.admonition > *:first-child, .tiptap-callout > *:first-child, div[data-callout-type] > *:first-child { margin-top: 0; }
+        aside.admonition > *:last-child, .tiptap-callout > *:last-child, div[data-callout-type] > *:last-child { margin-bottom: 0; }
+        aside.admonition.note, .tiptap-callout--note, div[data-callout-type="note"] { border-color: #4a9eff; }
+        aside.admonition.note::before, .tiptap-callout--note::before, div[data-callout-type="note"]::before {
+          content: "Note"; display: block; font-weight: 700; font-size: 0.82em; margin-bottom: 6px; color: #4a9eff;
+        }
+        aside.admonition.tip, .tiptap-callout--tip, div[data-callout-type="tip"] { border-color: #3fb950; }
+        aside.admonition.tip::before, .tiptap-callout--tip::before, div[data-callout-type="tip"]::before {
+          content: "Tip"; display: block; font-weight: 700; font-size: 0.82em; margin-bottom: 6px; color: #3fb950;
+        }
+        aside.admonition.important, .tiptap-callout--important, div[data-callout-type="important"] { border-color: #a371f7; }
+        aside.admonition.important::before, .tiptap-callout--important::before, div[data-callout-type="important"]::before {
+          content: "Important"; display: block; font-weight: 700; font-size: 0.82em; margin-bottom: 6px; color: #a371f7;
+        }
+        aside.admonition.caution, .tiptap-callout--caution, div[data-callout-type="caution"] { border-color: #f85149; }
+        aside.admonition.caution::before, .tiptap-callout--caution::before, div[data-callout-type="caution"]::before {
+          content: "Caution"; display: block; font-weight: 700; font-size: 0.82em; margin-bottom: 6px; color: #f85149;
+        }
+        aside.admonition.warning, .tiptap-callout--warning, div[data-callout-type="warning"] { border-color: #d29922; }
+        aside.admonition.warning::before, .tiptap-callout--warning::before, div[data-callout-type="warning"]::before {
+          content: "Warning"; display: block; font-weight: 700; font-size: 0.82em; margin-bottom: 6px; color: #d29922;
+        }
+        @media (prefers-color-scheme: dark) {
+          aside.admonition, .tiptap-callout, div[data-callout-type] { background: rgba(255,255,255,0.05); }
+        }
         h1, h2, h3, h4, h5, h6 { margin-top: 1em; margin-bottom: 0.5em; }
         ul, ol { padding-left: 24px; }
         ul.todo-list { list-style: none; padding-left: 0; }

@@ -25,8 +25,7 @@ struct RichTextEditorView: UIViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = coordinator
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
+        Self.applyEditorSurfaceColors(to: webView)
         webView.clipsToBounds = false
         webView.scrollView.clipsToBounds = false
         // Scroll only inside the page (#editor-container). If the WKWebView scroll view scrolls,
@@ -59,6 +58,7 @@ struct RichTextEditorView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.onContentChanged = onContentChanged
         coordinator.onPickImage = onPickImage
+        Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
         if sv.contentOffset != .zero {
@@ -71,6 +71,18 @@ struct RichTextEditorView: UIViewRepresentable {
         if let dataUri = imageToInsert {
             coordinator.insertImage(dataUri)
             DispatchQueue.main.async { self.imageToInsert = nil }
+        }
+    }
+
+    /// Pixel-match `editor.html` :root `--bg` / `--editor-bg` (not `systemBackground`, which can differ
+    /// slightly and show a hairline next to the keyboard’s rounded top edge).
+    private static func applyEditorSurfaceColors(to webView: WKWebView) {
+        let bg = UIColor.trinoteEditorCanvas
+        webView.isOpaque = true
+        webView.backgroundColor = bg
+        webView.scrollView.backgroundColor = bg
+        if #available(iOS 15.0, *) {
+            webView.underPageBackgroundColor = bg
         }
     }
 
@@ -184,6 +196,20 @@ struct RichTextEditorView: UIViewRepresentable {
                 return .cancel
             }
             return .allow
+        }
+    }
+}
+
+extension UIColor {
+    /// Must stay in sync with `editor.html` `:root` / `@media (prefers-color-scheme: dark)`.
+    static var trinoteEditorCanvas: UIColor {
+        UIColor { traitCollection in
+            switch traitCollection.userInterfaceStyle {
+            case .dark:
+                return UIColor(red: 28 / 255, green: 28 / 255, blue: 30 / 255, alpha: 1) // #1c1c1e
+            default:
+                return UIColor(red: 1, green: 1, blue: 1, alpha: 1) // #ffffff
+            }
         }
     }
 }

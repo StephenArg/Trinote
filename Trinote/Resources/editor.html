@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
 <style>
 :root {
   --bg: #ffffff;
@@ -38,7 +40,16 @@
   }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+html { color-scheme: light dark; }
+html, body {
+  height: 100%;
+  min-height: 100%;
+  min-height: -webkit-fill-available;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
 body { display: flex; flex-direction: column; }
 
 /* Toolbar — full natural height; horizontal scroll only inside the strip */
@@ -70,6 +81,32 @@ body { display: flex; flex-direction: column; }
 .toolbar button:active { opacity: 0.6; }
 .toolbar button.active { color: var(--btn-active); background: var(--btn-active-bg); }
 .toolbar button svg { width: 18px; height: 18px; fill: currentColor; }
+/* Small dropdown hint next to icon (lists, colors, callout) */
+.toolbar button svg.toolbar-btn-chevron {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  fill: currentColor;
+}
+.toolbar button.toolbar-btn-with-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: auto;
+  min-width: 40px;
+  padding: 0 5px;
+}
+.toolbar button.toolbar-btn-with-chevron img.icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+}
+/* Callout toolbar: larger info glyph */
+.toolbar button.toolbar-callout-btn svg:first-of-type {
+  width: 23px;
+  height: 23px;
+}
 .toolbar button img.icon { width: 18px; height: 18px; object-fit: contain; filter: var(--icon-filter); }
 .toolbar button .toolbar-code-glyph {
   font-size: 12px;
@@ -96,6 +133,53 @@ body { display: flex; flex-direction: column; }
   max-height: min(70vh, 420px); overflow-y: auto; -webkit-overflow-scrolling: touch;
 }
 .color-popup.visible { display: block; }
+/* Callout / admonition picker (same positioning model as .color-popup) */
+.callout-popup {
+  display: none; position: fixed; left: 0; top: 0; z-index: 10000;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 8px; box-shadow: 0 4px 20px var(--popup-shadow);
+  min-width: 220px; max-width: min(92vw, 320px);
+}
+.callout-popup.visible { display: block; }
+/* Link editor popup (anchored like color / callout) */
+.link-popup {
+  display: none; position: fixed; left: 0; top: 0; z-index: 10000;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px; box-shadow: 0 4px 20px var(--popup-shadow);
+  min-width: min(92vw, 300px); max-width: min(92vw, 360px);
+}
+.link-popup.visible { display: block; }
+.link-popup label.link-popup-label {
+  display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; opacity: 0.75; color: var(--fg);
+}
+.link-popup input.link-popup-input {
+  width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 16px; line-height: 1.3;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+  -webkit-appearance: none; appearance: none;
+}
+.link-popup .link-popup-actions {
+  display: flex; gap: 8px; margin-top: 12px;
+}
+.link-popup .link-popup-actions button {
+  flex: 1; border: none; border-radius: 8px; padding: 10px 12px; font-size: 15px; font-weight: 600;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.link-popup .link-popup-apply {
+  background: var(--btn-active); color: #fff;
+}
+.link-popup .link-popup-remove {
+  background: var(--border); color: var(--fg);
+}
+.callout-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; margin: 3px 0; border-radius: 10px;
+  border: 1px solid var(--border); cursor: pointer;
+  font-size: 15px; font-weight: 600; color: var(--fg);
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.callout-row:active { opacity: 0.75; }
+.callout-row .callout-row-icon { flex-shrink: 0; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; }
+.callout-row .callout-row-icon svg { width: 20px; height: 20px; }
 .color-grid { display: grid; grid-template-columns: repeat(7, 30px); gap: 4px; }
 .color-swatch {
   width: 30px; height: 30px; border-radius: 6px; border: 2px solid transparent;
@@ -108,10 +192,15 @@ body { display: flex; flex-direction: column; }
   background: red; transform: rotate(-45deg);
 }
 
-/* Editor area */
-#editor-container { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; cursor: text; }
+/* Editor area — extra bottom padding so the last lines aren’t tight against the keyboard */
+#editor-container {
+  flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; cursor: text;
+  background: var(--editor-bg);
+  padding-bottom: max(25px, calc(env(safe-area-inset-bottom, 0px) + 20px));
+}
 .tiptap {
-  padding: 16px; outline: none; min-height: 100%; font-size: 16px; line-height: 1.6; color: var(--fg);
+  padding: 16px 16px 20px; outline: none; min-height: 100%; font-size: 16px; line-height: 1.6; color: var(--fg);
+  background: var(--editor-bg);
 }
 .tiptap p { margin: 0.4em 0; }
 .tiptap h1 { font-size: 1.8em; margin: 0.6em 0 0.3em; }
@@ -143,6 +232,34 @@ body { display: flex; flex-direction: column; }
 .tiptap ul[data-type="taskList"] > li > div > p:first-child { margin-top: 0; }
 .tiptap ul[data-type="taskList"] > li > p:first-child { margin-top: 0; }
 .tiptap blockquote { border-left: 4px solid var(--border); margin: 0.5em 0; padding: 4px 16px; opacity: 0.85; }
+/* TriliumNext CKEditor admonitions: <aside class="admonition note">… — plus legacy div[data-callout-type] */
+.tiptap aside.admonition { margin: 0.65em 0; border-radius: 10px; padding: 10px 12px 10px 14px; border: 1px solid; background: rgba(128,128,128,0.06); display: block; }
+.tiptap aside.admonition > *:first-child { margin-top: 0; }
+.tiptap aside.admonition > *:last-child { margin-bottom: 0; }
+.tiptap aside.admonition.note, .tiptap div[data-callout-type="note"] { border-color: #4a9eff; }
+.tiptap aside.admonition.note::before, .tiptap div[data-callout-type="note"]::before {
+  content: "Note"; display: block; font-weight: 700; font-size: 0.82em; letter-spacing: 0.02em;
+  margin-bottom: 6px; color: #4a9eff;
+}
+.tiptap aside.admonition.tip, .tiptap div[data-callout-type="tip"] { border-color: #3fb950; }
+.tiptap aside.admonition.tip::before, .tiptap div[data-callout-type="tip"]::before {
+  content: "Tip"; display: block; font-weight: 700; font-size: 0.82em; margin-bottom: 6px; color: #3fb950;
+}
+.tiptap aside.admonition.important, .tiptap div[data-callout-type="important"] { border-color: #a371f7; }
+.tiptap aside.admonition.important::before, .tiptap div[data-callout-type="important"]::before {
+  content: "Important"; display: block; font-weight: 700; font-size: 0.82em; margin-bottom: 6px; color: #a371f7;
+}
+.tiptap aside.admonition.caution, .tiptap div[data-callout-type="caution"] { border-color: #f85149; }
+.tiptap aside.admonition.caution::before, .tiptap div[data-callout-type="caution"]::before {
+  content: "Caution"; display: block; font-weight: 700; font-size: 0.82em; margin-bottom: 6px; color: #f85149;
+}
+.tiptap aside.admonition.warning, .tiptap div[data-callout-type="warning"] { border-color: #d29922; }
+.tiptap aside.admonition.warning::before, .tiptap div[data-callout-type="warning"]::before {
+  content: "Warning"; display: block; font-weight: 700; font-size: 0.82em; margin-bottom: 6px; color: #d29922;
+}
+@media (prefers-color-scheme: dark) {
+  .tiptap aside.admonition, .tiptap div[data-callout-type] { background: rgba(255,255,255,0.05); }
+}
 .tiptap pre { background: rgba(128,128,128,0.1); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }
 .tiptap code { background: rgba(128,128,128,0.1); padding: 2px 6px; border-radius: 4px; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }
 .tiptap pre code { background: none; padding: 0; }
@@ -179,8 +296,10 @@ body { display: flex; flex-direction: column; }
 </div>
 
 <script src="tiptap-bundle.min.js"></script>
+<script src="callout-extension.js"></script>
 <script>
 const { Editor, StarterKit, Underline, TextAlign, Color, TextStyle, Highlight, Table, TableRow, TableCell, TableHeader, Link, TaskList, TaskItem, Placeholder, Subscript, Superscript, Image } = TipTap;
+const CalloutExt = (typeof TipTapCallout !== 'undefined' && TipTapCallout && TipTapCallout.Callout) ? TipTapCallout.Callout : null;
 
 const COLORS = [
   '#000000','#434343','#666666','#999999','#b7b7b7','#cccccc','#ffffff',
@@ -192,27 +311,30 @@ const COLORS = [
 let _contentTimer = null;
 let _toolbarScheduled = false;
 
+const editorExtensions = [
+  StarterKit.configure({ heading: { levels: [1,2,3,4,5,6] } }),
+  Underline,
+  TextStyle,
+  Color,
+  Highlight.configure({ multicolor: true }),
+  TextAlign.configure({ types: ['heading','paragraph'] }),
+  Table.configure({ resizable: false }),
+  TableRow,
+  TableCell,
+  TableHeader,
+  Link.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
+  TaskList,
+  TaskItem.configure({ nested: true }),
+  Placeholder.configure({ placeholder: 'Start writing…' }),
+  Subscript,
+  Superscript,
+  Image.configure({ inline: true, allowBase64: true, HTMLAttributes: { class: '' } }),
+];
+if (CalloutExt) editorExtensions.push(CalloutExt);
+
 const editor = new Editor({
   element: document.getElementById('editor'),
-  extensions: [
-    StarterKit.configure({ heading: { levels: [1,2,3,4,5,6] } }),
-    Underline,
-    TextStyle,
-    Color,
-    Highlight.configure({ multicolor: true }),
-    TextAlign.configure({ types: ['heading','paragraph'] }),
-    Table.configure({ resizable: false }),
-    TableRow,
-    TableCell,
-    TableHeader,
-    Link.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
-    TaskList,
-    TaskItem.configure({ nested: true }),
-    Placeholder.configure({ placeholder: 'Start writing…' }),
-    Subscript,
-    Superscript,
-    Image.configure({ inline: true, allowBase64: true, HTMLAttributes: { class: '' } }),
-  ],
+  extensions: editorExtensions,
   content: '',
   onUpdate({ editor }) {
     clearTimeout(_contentTimer);
@@ -236,7 +358,7 @@ editor.on('selectionUpdate', ({ editor }) => {
 // IMPORTANT: Do not refocus on a timer/hold — that runs when tapping the color *button* (before the
 // panel is visible) and steals the tap so the synthetic click never opens the picker.
 function refocusEditorIfNeeded() {
-  if (!document.querySelector('.color-popup.visible')) return;
+  if (!document.querySelector('.color-popup.visible') && !document.querySelector('.callout-popup.visible')) return;
   requestAnimationFrame(() => {
     try {
       if (editor.view && editor.view.dom) {
@@ -250,12 +372,26 @@ editor.view.dom.addEventListener('blur', refocusEditorIfNeeded);
 // --- Toolbar Setup ---
 const toolbar = document.getElementById('toolbar');
 function ic(name) { return '<img class="icon" src="' + name + '" width="18" height="18" alt="" />'; }
+const TOOLBAR_CHEVRON_SVG = '<svg class="toolbar-btn-chevron" width="10" height="10" viewBox="0 0 12 12" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2 4l4 4 4-4"/></svg>';
+/* Task list: inline SVG (viewBox 48×48); toolbar .toolbar button svg → ~18×18 like other icons */
+const TASK_LIST_TOOLBAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" aria-hidden="true"><g fill="none"><path d="M20 24h24z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M20 24h24"/><path d="M20 38h24z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M20 38h24"/><path d="M20 10h24z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M20 10h24"/><path stroke="currentColor" stroke-linejoin="round" stroke-width="4" d="M4 34h8v8H4zm0-14h8v8H4zM4 6h8v8H4z"/></g></svg>';
 function codeInlineGlyph() {
   return '<span class="toolbar-code-glyph" aria-hidden="true">&lt;/&gt;</span>';
 }
 function btn(title, icon, action, isActive) {
   const b = document.createElement('button');
   b.title = title; b.innerHTML = icon;
+  b.addEventListener('click', (e) => { e.preventDefault(); action(); });
+  b._isActive = isActive || (() => false);
+  toolbar.appendChild(b);
+  return b;
+}
+function btnWithChevron(title, iconHtml, action, isActive) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = title;
+  b.classList.add('toolbar-btn-with-chevron');
+  b.innerHTML = iconHtml + TOOLBAR_CHEVRON_SVG;
   b.addEventListener('click', (e) => { e.preventDefault(); action(); });
   b._isActive = isActive || (() => false);
   toolbar.appendChild(b);
@@ -296,9 +432,9 @@ const headingSel = heading();
 sep();
 
 // Lists
-btn('Bullet list', ic('foundation--list-bullet.svg'), () => editor.chain().focus().toggleBulletList().run(), () => editor.isActive('bulletList'));
-btn('Ordered list', ic('foundation--list-number.svg'), () => editor.chain().focus().toggleOrderedList().run(), () => editor.isActive('orderedList'));
-btn('Task list', ic('foundation--list-thumbnails.svg'), () => editor.chain().focus().toggleTaskList().run(), () => editor.isActive('taskList'));
+btnWithChevron('Bullet list', ic('foundation--list-bullet.svg'), () => editor.chain().focus().toggleBulletList().run(), () => editor.isActive('bulletList'));
+btnWithChevron('Ordered list', ic('foundation--list-number.svg'), () => editor.chain().focus().toggleOrderedList().run(), () => editor.isActive('orderedList'));
+btn('Task list', TASK_LIST_TOOLBAR_SVG, () => editor.chain().focus().toggleTaskList().run(), () => editor.isActive('taskList'));
 sep();
 
 // Alignment
@@ -349,6 +485,45 @@ function scrollEditorRangeIntoView() {
   }
 }
 
+// iOS: keyboard / visualViewport settle after focus — scroll so the caret stays above the keys.
+function scheduleScrollCaretIntoViewAfterKeyboard() {
+  const bump = function () { scrollEditorRangeIntoView(); };
+  bump();
+  requestAnimationFrame(function () {
+    bump();
+    requestAnimationFrame(bump);
+  });
+  setTimeout(bump, 80);
+  setTimeout(bump, 200);
+  setTimeout(bump, 400);
+  setTimeout(bump, 600);
+  setTimeout(bump, 850);
+  setTimeout(bump, 1100);
+}
+
+(function attachCaretScrollOnVisualViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  let debounceTimer = null;
+  function onViewportChange() {
+    try {
+      if (!editor.view || !editor.view.hasFocus()) return;
+    } catch (e) {
+      return;
+    }
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(function () {
+      scrollEditorRangeIntoView();
+    }, 50);
+  }
+  vv.addEventListener('resize', onViewportChange, { passive: true });
+  vv.addEventListener('scroll', onViewportChange, { passive: true });
+})();
+
+editor.on('focus', function () {
+  scheduleScrollCaretIntoViewAfterKeyboard();
+});
+
 function afterColorMarkEdit() {
   const dom = editor.view && editor.view.dom;
   if (dom) {
@@ -386,6 +561,8 @@ function colorPickerApplyRange(wrapper) {
 
 const COLOR_POPUP_OUTSIDE_GRACE_MS = 450;
 const COLOR_POPUP_SCROLL_GRACE_MS = 500;
+const CALLOUT_POPUP_OUTSIDE_GRACE_MS = 450;
+const LINK_POPUP_OUTSIDE_GRACE_MS = 450;
 
 function hideColorPopup(popup) {
   popup.classList.remove('visible');
@@ -400,6 +577,37 @@ function markColorPopupJustOpened(popup) {
   const t = performance.now();
   popup._ignoreOutsideUntil = t + COLOR_POPUP_OUTSIDE_GRACE_MS;
   popup._ignoreScrollUntil = t + COLOR_POPUP_SCROLL_GRACE_MS;
+}
+
+function markCalloutPopupJustOpened(popup) {
+  const t = performance.now();
+  popup._ignoreOutsideUntil = t + CALLOUT_POPUP_OUTSIDE_GRACE_MS;
+  // Same as color pickers: editor-container scroll (keyboard / WKWebView) fires on tap and must not dismiss.
+  popup._ignoreScrollUntil = t + COLOR_POPUP_SCROLL_GRACE_MS;
+}
+
+function hideCalloutPopup(popup) {
+  popup.classList.remove('visible');
+  popup.style.left = '';
+  popup.style.top = '';
+  popup.style.visibility = '';
+  popup._ignoreOutsideUntil = 0;
+  popup._ignoreScrollUntil = 0;
+}
+
+function markLinkPopupJustOpened(popup) {
+  const t = performance.now();
+  popup._ignoreOutsideUntil = t + LINK_POPUP_OUTSIDE_GRACE_MS;
+  popup._ignoreScrollUntil = t + COLOR_POPUP_SCROLL_GRACE_MS;
+}
+
+function hideLinkPopup(popup) {
+  popup.classList.remove('visible');
+  popup.style.left = '';
+  popup.style.top = '';
+  popup.style.visibility = '';
+  popup._ignoreOutsideUntil = 0;
+  popup._ignoreScrollUntil = 0;
 }
 
 function layoutColorPopup(anchor, popup) {
@@ -428,8 +636,10 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
   wrapper.style.display = 'inline-flex';
   const b = document.createElement('button');
   b.type = 'button';
-  b.title = title; b.innerHTML = icon;
-  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;width:36px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
+  b.title = title;
+  b.classList.add('toolbar-btn-with-chevron');
+  b.innerHTML = icon + TOOLBAR_CHEVRON_SVG;
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;min-width:40px;height:34px;padding:0 5px;border-radius:6px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
   const popup = document.createElement('div');
   popup.className = 'color-popup';
   popup._anchorButton = b;
@@ -478,6 +688,7 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
     e.stopPropagation();
     const willOpen = !popup.classList.contains('visible');
     document.querySelectorAll('.color-popup.visible').forEach(p => { if (p !== popup) hideColorPopup(p); });
+    document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
     if (willOpen) {
       markColorPopupJustOpened(popup);
       popup.classList.add('visible');
@@ -507,14 +718,301 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
       hideColorPopup(popup);
     });
+    document.querySelectorAll('.callout-popup.visible').forEach(popup => {
+      if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
+      hideCalloutPopup(popup);
+    });
+    document.querySelectorAll('.link-popup.visible').forEach(popup => {
+      if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
+      hideLinkPopup(popup);
+    });
   }, { passive: true });
   window.addEventListener('resize', () => {
     document.querySelectorAll('.color-popup.visible').forEach(popup => {
       const anchor = popup._anchorButton;
       if (anchor) layoutColorPopup(anchor, popup);
     });
+    document.querySelectorAll('.callout-popup.visible').forEach(popup => {
+      const anchor = popup._anchorButton;
+      if (anchor && typeof layoutCalloutPopup === 'function') layoutCalloutPopup(anchor, popup);
+    });
+    document.querySelectorAll('.link-popup.visible').forEach(popup => {
+      const anchor = popup._anchorButton;
+      if (anchor) layoutColorPopup(anchor, popup);
+    });
   });
 })();
+
+function layoutCalloutPopup(anchor, popup) {
+  if (!popup.classList.contains('visible')) return;
+  popup.style.visibility = 'hidden';
+  popup.style.left = '0px';
+  popup.style.top = '0px';
+  const pr = popup.getBoundingClientRect();
+  const ar = anchor.getBoundingClientRect();
+  const margin = 8;
+  let top = ar.bottom + 4;
+  let left = ar.left;
+  const pw = Math.max(pr.width, 1);
+  const ph = Math.max(pr.height, 1);
+  left = Math.max(margin, Math.min(left, window.innerWidth - pw - margin));
+  if (top + ph > window.innerHeight - margin) {
+    top = Math.max(margin, ar.top - ph - 4);
+  }
+  popup.style.left = `${Math.round(left)}px`;
+  popup.style.top = `${Math.round(top)}px`;
+  popup.style.visibility = '';
+}
+
+const CALLOUT_KINDS = [
+  { type: 'note', label: 'Note', color: '#4a9eff', svg: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 10v5M12 8h.01" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>' },
+  { type: 'tip', label: 'Tip', color: '#3fb950', svg: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 18h6M10 22h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 2a5 5 0 0 0-3 9v2h6v-2a5 5 0 0 0-3-9z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>' },
+  { type: 'important', label: 'Important', color: '#a371f7', svg: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="4" width="14" height="16" rx="2" stroke="currentColor" stroke-width="2"/><path d="M12 8v5M12 16h.01" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>' },
+  { type: 'caution', label: 'Caution', color: '#f85149', svg: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 8v5M12 16h.01" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>' },
+  { type: 'warning', label: 'Warning', color: '#d29922', svg: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3 2 20h20L12 3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 9v5M12 17h.01" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>' },
+];
+
+function applyCalloutType(kind) {
+  if (!CalloutExt) return;
+  if (editor.isActive('callout')) {
+    editor.chain().focus().setCalloutType(kind).run();
+  } else {
+    const ok = editor.chain().focus().wrapInCallout(kind).run();
+    if (!ok) editor.chain().focus().insertCallout(kind).run();
+  }
+  const dom = editor.view && editor.view.dom;
+  if (dom) {
+    try { dom.focus({ preventScroll: true }); } catch (e) { dom.focus(); }
+  }
+  scrollEditorRangeIntoView();
+  requestAnimationFrame(() => scrollEditorRangeIntoView());
+  setTimeout(scrollEditorRangeIntoView, 120);
+}
+
+function makeCalloutToolbar() {
+  if (!CalloutExt) return;
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'inline-flex';
+  wrapper.style.alignItems = 'center';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = 'Callout';
+  b.classList.add('toolbar-callout-btn', 'toolbar-btn-with-chevron');
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;height:34px;border-radius:6px;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
+  b.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true"><path fill="currentColor" d="M50 12.5c-20.712 0-37.5 16.793-37.5 37.502S29.288 87.5 50 87.5s37.5-16.788 37.5-37.498S70.712 12.5 50 12.5m3.826 58.36c0 .72-.584 1.304-1.304 1.304h-5.044c-.72 0-1.304-.583-1.304-1.304V46.642c0-.72.584-1.304 1.304-1.304h5.044c.72 0 1.304.583 1.304 1.304zm-3.857-30.927c-2.47 0-4.518-2.048-4.518-4.579a4.51 4.51 0 0 1 4.518-4.518c2.531 0 4.579 1.987 4.579 4.518a4.576 4.576 0 0 1-4.579 4.579"/></svg>' + TOOLBAR_CHEVRON_SVG;
+  const popup = document.createElement('div');
+  popup.className = 'callout-popup';
+  popup._anchorButton = b;
+  CALLOUT_KINDS.forEach(k => {
+    const row = document.createElement('div');
+    row.className = 'callout-row';
+    row.style.borderColor = k.color;
+    const ic = document.createElement('div');
+    ic.className = 'callout-row-icon';
+    ic.style.color = k.color;
+    ic.innerHTML = k.svg;
+    const lab = document.createElement('span');
+    lab.textContent = k.label;
+    row.appendChild(ic);
+    row.appendChild(lab);
+    function pick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      hideCalloutPopup(popup);
+      applyCalloutType(k.type);
+    }
+    row.addEventListener('pointerdown', pick, true);
+    row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    popup.appendChild(row);
+  });
+  document.body.appendChild(popup);
+  // Arm dismiss-grace before click: iOS often scrolls editor-container on the same tap (before click fires).
+  b.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    if (!popup.classList.contains('visible')) markCalloutPopupJustOpened(popup);
+  }, true);
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    document.querySelectorAll('.callout-popup.visible').forEach(p => {
+      if (p !== popup) hideCalloutPopup(p);
+    });
+    document.querySelectorAll('.color-popup.visible').forEach(p => hideColorPopup(p));
+    document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
+    if (opening) {
+      markCalloutPopupJustOpened(popup);
+      popup.classList.add('visible');
+      requestAnimationFrame(() => {
+        layoutCalloutPopup(b, popup);
+        requestAnimationFrame(() => layoutCalloutPopup(b, popup));
+      });
+    } else {
+      hideCalloutPopup(popup);
+    }
+  });
+  wrapper.appendChild(b);
+  toolbar.appendChild(wrapper);
+  b._isActive = () => editor.isActive('callout');
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideCalloutPopup(popup);
+  });
+}
+
+function normalizeLinkUrl(raw) {
+  const t = (raw || '').trim();
+  if (!t) return '';
+  if (/^mailto:/i.test(t) || /^tel:/i.test(t)) return t;
+  if (/^\/[\s\S]*/.test(t)) return t;
+  if (/^[\w.-]+\.[a-z]{2,}([\/?#][^\s]*)?$/i.test(t) && !/^https?:\/\//i.test(t)) return 'https://' + t;
+  return t;
+}
+
+function makeLinkToolbar() {
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'inline-flex';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = 'Link';
+  b.innerHTML = ic('foundation--link.svg');
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;width:36px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
+
+  const popup = document.createElement('div');
+  popup.className = 'link-popup';
+  popup._anchorButton = b;
+
+  const lab = document.createElement('label');
+  lab.className = 'link-popup-label';
+  lab.textContent = 'URL';
+  lab.setAttribute('for', 'link-popup-url-field');
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'link-popup-url-field';
+  input.className = 'link-popup-input';
+  input.placeholder = 'https://…';
+  input.autocomplete = 'off';
+  input.autocapitalize = 'off';
+  input.spellcheck = false;
+
+  const actions = document.createElement('div');
+  actions.className = 'link-popup-actions';
+
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button';
+  applyBtn.className = 'link-popup-apply';
+  applyBtn.textContent = 'Apply';
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'link-popup-remove';
+  removeBtn.textContent = 'Remove';
+
+  actions.appendChild(applyBtn);
+  actions.appendChild(removeBtn);
+  popup.appendChild(lab);
+  popup.appendChild(input);
+  popup.appendChild(actions);
+  document.body.appendChild(popup);
+
+  function applyLink(e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const url = normalizeLinkUrl(input.value);
+    if (!url) return;
+    const r = colorPickerApplyRange(wrapper);
+    hideLinkPopup(popup);
+    if (!r) return;
+    withColorMarkEdit(() => {
+      editor.chain().setTextSelection({ from: r.from, to: r.to }).setLink({ href: url }).run();
+    });
+  }
+
+  function removeLink(e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const r = colorPickerApplyRange(wrapper);
+    hideLinkPopup(popup);
+    if (!r) return;
+    withColorMarkEdit(() => {
+      editor.chain().setTextSelection({ from: r.from, to: r.to }).unsetLink().run();
+    });
+  }
+
+  applyBtn.addEventListener('pointerdown', applyLink, true);
+  applyBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+  removeBtn.addEventListener('pointerdown', removeLink, true);
+  removeBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      applyLink(e);
+    }
+  });
+
+  b.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    const { from, to } = editor.state.selection;
+    wrapper._rangeAtOpen = { from, to };
+    if (!popup.classList.contains('visible')) markLinkPopupJustOpened(popup);
+  }, true);
+
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    document.querySelectorAll('.color-popup.visible').forEach(p => hideColorPopup(p));
+    document.querySelectorAll('.callout-popup.visible').forEach(p => hideCalloutPopup(p));
+    document.querySelectorAll('.link-popup.visible').forEach(p => {
+      if (p !== popup) hideLinkPopup(p);
+    });
+    if (opening) {
+      markLinkPopupJustOpened(popup);
+      popup.classList.add('visible');
+      let href = '';
+      if (editor.isActive('link')) {
+        href = editor.getAttributes('link').href || '';
+        try {
+          editor.chain().focus().extendMarkRange('link').run();
+          const s = editor.state.selection;
+          wrapper._rangeAtOpen = { from: s.from, to: s.to };
+        } catch (err) {}
+      }
+      input.value = href;
+      requestAnimationFrame(() => {
+        layoutColorPopup(b, popup);
+        requestAnimationFrame(() => {
+          layoutColorPopup(b, popup);
+          try {
+            input.focus();
+            input.setSelectionRange(0, input.value.length);
+          } catch (err2) {
+            input.focus();
+          }
+        });
+      });
+    } else {
+      hideLinkPopup(popup);
+    }
+  });
+
+  wrapper.appendChild(b);
+  toolbar.appendChild(wrapper);
+  b._isActive = () => editor.isActive('link');
+
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideLinkPopup(popup);
+  });
+}
 
 makeColorPicker('Text color', ic('foundation--text-color.svg'),
   (from, to, c) => {
@@ -541,14 +1039,11 @@ makeColorPicker('Background', ic('foundation--background-color.svg'),
 sep();
 
 // Insert
-btn('Link', ic('foundation--link.svg'), () => {
-  if (editor.isActive('link')) { editor.chain().focus().unsetLink().run(); return; }
-  const url = prompt('Enter URL:');
-  if (url) editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
-}, () => editor.isActive('link'));
+makeLinkToolbar();
 btn('Table', ic('grid-1524-svgrepo-com.svg'), () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(), () => false);
 btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () => false);
 btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
+makeCalloutToolbar();
 btn('Code block', ic('brackets-curly-fill-svgrepo-com.svg'), () => editor.chain().focus().toggleCodeBlock().run(), () => editor.isActive('codeBlock'));
 btn('Image', ic('foundation--photo.svg'), () => {
   try { window.webkit.messageHandlers.pickImage.postMessage('pick'); } catch(e) {}
@@ -593,6 +1088,65 @@ function updateToolbarState() {
 //
 // TipTap setContent() expects:  <ul data-type="taskList">
 //                                 <li data-type="taskItem" data-checked="false">text</li></ul>
+
+// TriliumNext saves <aside class="admonition note"> (ckeditor5-admonition). TipTap callout parses that natively.
+// Also: legacy div[data-callout-type], blockquote, GitHub markdown-alert → same <aside> shape for the editor.
+function migrateTriliumAdmonitionsForTiptap(doc) {
+  const types = ['note', 'tip', 'important', 'caution', 'warning'];
+  function detectType(className) {
+    if (!className) return null;
+    const c = className.toLowerCase();
+    for (const t of types) {
+      if (c.includes('admonition-' + t) || c.includes('admonition_' + t)) return t;
+      if (c.includes('callout-' + t) || c.includes('callout_' + t)) return t;
+      if (c.includes('markdown-alert-' + t)) return t;
+    }
+    return null;
+  }
+  function makeAside(t) {
+    const aside = doc.createElement('aside');
+    aside.className = 'admonition ' + t;
+    return aside;
+  }
+  doc.querySelectorAll('div[data-callout-type]').forEach(div => {
+    const raw = (div.getAttribute('data-callout-type') || 'note').trim();
+    const t = types.includes(raw) ? raw : 'note';
+    const aside = makeAside(t);
+    while (div.firstChild) aside.appendChild(div.firstChild);
+    div.parentNode.replaceChild(aside, div);
+  });
+  doc.querySelectorAll('blockquote[class]').forEach(bq => {
+    const t = detectType(bq.getAttribute('class'));
+    if (!t) return;
+    const aside = makeAside(t);
+    while (bq.firstChild) aside.appendChild(bq.firstChild);
+    bq.parentNode.replaceChild(aside, bq);
+  });
+  doc.querySelectorAll('div[class*="markdown-alert"]').forEach(div => {
+    const t = detectType(div.getAttribute('class') || '') || 'note';
+    const aside = makeAside(t);
+    while (div.firstChild) aside.appendChild(div.firstChild);
+    div.parentNode.replaceChild(aside, div);
+  });
+}
+
+// Saved HTML must match Trilium desktop: <aside class="admonition TYPE"> (not div[data-callout-type]).
+function normalizeCalloutsForTrilium(doc) {
+  const types = ['note', 'tip', 'important', 'caution', 'warning'];
+  doc.querySelectorAll('div[data-callout-type]').forEach(div => {
+    const raw = (div.getAttribute('data-callout-type') || 'note').trim();
+    const t = types.includes(raw) ? raw : 'note';
+    const aside = doc.createElement('aside');
+    aside.className = 'admonition ' + t;
+    while (div.firstChild) aside.appendChild(div.firstChild);
+    div.parentNode.replaceChild(aside, div);
+  });
+  doc.querySelectorAll('aside.admonition').forEach(aside => {
+    const typeClass = types.find(tt => aside.classList.contains(tt));
+    const t = typeClass || 'note';
+    aside.className = 'admonition ' + t;
+  });
+}
 
 // CKEditor / Trilium often use <span style="background-color:…">; TipTap Highlight expects <mark data-color>.
 function migrateCkColorMarkupForTiptap(doc) {
@@ -660,6 +1214,7 @@ function ckToTiptap(html) {
     });
   });
 
+  migrateTriliumAdmonitionsForTiptap(doc);
   migrateCkColorMarkupForTiptap(doc);
   return doc.body.innerHTML;
 }
@@ -668,6 +1223,7 @@ function tiptapToCk(html) {
   if (!html) return html;
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
+  normalizeCalloutsForTrilium(doc);
   tiptapMarkToCkSpans(doc);
 
   doc.querySelectorAll('ul[data-type="taskList"]').forEach(ul => {
@@ -725,7 +1281,10 @@ window.editorBridge = {
     clearTimeout(_contentTimer);
     return tiptapToCk(editor.getHTML());
   },
-  focus() { editor.commands.focus('end'); },
+  focus() {
+    editor.commands.focus('end');
+    scheduleScrollCaretIntoViewAfterKeyboard();
+  },
   insertHTML(html) { editor.commands.insertContent(html); },
   insertImage(src) { editor.chain().focus().setImage({ src }).run(); },
 };
@@ -736,7 +1295,8 @@ document.getElementById('editor').style.display = 'block';
 document.getElementById('toolbar-wrap').style.display = 'block';
 updateToolbarState();
 
-// First tap while unfocused: move caret to end and show keyboard. After that, let taps place the caret normally.
+// First tap while unfocused: for very short notes, jump caret to end + keyboard (iOS WKWebView).
+// If there are 2+ logical lines (blocks / hard breaks) or multiple top-level blocks, let the tap place the caret.
 function editorDocumentHasFocus() {
   if (editor.isFocused === true) return true;
   try {
@@ -745,12 +1305,26 @@ function editorDocumentHasFocus() {
     return false;
   }
 }
+function shouldJumpCaretToEndOnFirstUnfocusedTap() {
+  try {
+    const doc = editor.state.doc;
+    if (doc.childCount >= 2) return false;
+    const plain = editor.getText({ blockSeparator: '\n' });
+    const nonEmptyLines = plain.split('\n').filter(function (l) { return l.trim().length > 0; }).length;
+    if (nonEmptyLines >= 2) return false;
+    return true;
+  } catch (err) {
+    return true;
+  }
+}
 document.getElementById('editor-container').addEventListener('click', function(e) {
   if (e.target.closest('a[href]')) return;
   if (editorDocumentHasFocus()) return;
+  if (!shouldJumpCaretToEndOnFirstUnfocusedTap()) return;
   e.preventDefault();
   e.stopPropagation();
   editor.commands.focus('end');
+  scheduleScrollCaretIntoViewAfterKeyboard();
 }, true);
 
 try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch(e) {}

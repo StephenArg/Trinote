@@ -1,0 +1,12 @@
+{
+  "name": "trinote-editor-vendor-build",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@tiptap/core": "^2.11.5",
+    "esbuild": "^0.25.0"
+  },
+  "scripts": {
+    "build:callout": "esbuild callout-entry.mjs --bundle --format=iife --global-name=TipTapCallout --outfile=callout-extension.js --platform=browser"
+  }
+}

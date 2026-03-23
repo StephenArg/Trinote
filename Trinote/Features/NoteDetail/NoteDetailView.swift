@@ -104,6 +104,7 @@ struct NoteDetailView: View {
                 } else if vm.isEditing && note.type == .text {
                     richTextEditingView(vm)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
@@ -486,7 +487,7 @@ struct NoteDetailView: View {
             .padding(.horizontal)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
-            .background(Color(uiColor: .systemBackground))
+            .background(Color(uiColor: .trinoteEditorCanvas))
 
             RichTextEditorView(
                 initialHTML: vm.editableContent,
@@ -499,6 +500,7 @@ struct NoteDetailView: View {
             .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
         .confirmationDialog("Add Image", isPresented: $showEditorImageSourceDialog) {
             Button("Photo Library") { showEditorImagePicker = true }
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
