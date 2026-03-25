@@ -9,6 +9,9 @@ extension Notification.Name {
     /// Posted when a ghost note is detected (content blob missing on server).
     /// `userInfo["noteId"]` contains the note ID.
     static let ghostNoteDetected = Notification.Name("GhostNoteDetected")
+    /// Posted after a note’s public sharing is toggled from note details so the tree can refetch and show share badges.
+    /// `userInfo["noteId"]` contains the note ID.
+    static let trinoteTreeShouldRefresh = Notification.Name("TrinoteTreeShouldRefresh")
 }
 
 /// Thread-safe tracker for "ghost notes" — notes the server still lists in its

@@ -40,9 +40,15 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func createBranch(_ request: CreateBranchRequest) async throws -> BranchResponse
     func updateBranch(_ branchId: String, request: UpdateBranchRequest) async throws -> BranchResponse
     func deleteBranch(_ branchId: String) async throws
+    /// Matches the web client: `taskId=no-progress-reporting` and `last=true` so the delete task completes without WS progress.
+    func deleteBranchWithNoProgressTask(_ branchId: String) async throws
+    /// `PUT /api/notes/:noteId/clone-to-note/:parentNoteId` — same as Trilium’s “share” (clone under `_share`).
+    func cloneNoteToParentNote(_ noteId: String, parentNoteId: String) async throws
+    /// Resolves the branch linking `childNoteId` as a child of `parentNoteId` (from `POST /api/tree/load`).
+    func branchId(fromParentNoteId parentNoteId: String, toChildNoteId childNoteId: String) async throws -> String?
 
     func getAttribute(_ attributeId: String) async throws -> AttributeResponse
-    func createAttribute(_ request: CreateAttributeRequest) async throws -> AttributeResponse
+    func createAttribute(_ request: CreateAttributeRequest) async throws
     func deleteAttribute(noteId: String, attributeId: String) async throws
 
     func getNoteAttachments(_ noteId: String) async throws -> [AttachmentResponse]
@@ -732,6 +738,36 @@ actor TriliumClient: TriliumClientProtocol {
         try await delete("/api/branches/\(branchId)", queryParams: nil, csrf: true)
     }
 
+    func deleteBranchWithNoProgressTask(_ branchId: String) async throws {
+        try await delete(
+            "/api/branches/\(branchId)",
+            queryParams: ["taskId": "no-progress-reporting", "last": "true"],
+            csrf: true
+        )
+    }
+
+    func cloneNoteToParentNote(_ noteId: String, parentNoteId: String) async throws {
+        struct Body: Encodable { var prefix: String? = nil }
+        try await putJSONVoid(
+            "/api/notes/\(noteId)/clone-to-note/\(parentNoteId)",
+            body: Body(),
+            csrf: true
+        )
+    }
+
+    func branchId(fromParentNoteId parentNoteId: String, toChildNoteId childNoteId: String) async throws -> String? {
+        let tree: TreeLoadResponse = try await postJSON(
+            "/api/tree/load",
+            body: TreeLoadRequest(noteIds: [childNoteId]),
+            csrf: true
+        )
+        return tree.branches.first { row in
+            row.noteId == childNoteId
+                && row.parentNoteId == parentNoteId
+                && row.isDeleted != true
+        }?.branchId
+    }
+
     // MARK: - Attributes
 
     func getAttribute(_ attributeId: String) async throws -> AttributeResponse {
@@ -739,8 +775,55 @@ actor TriliumClient: TriliumClientProtocol {
         throw APIError.notFound("Single-attribute GET is not available on /api; use note attributes list.")
     }
 
-    func createAttribute(_ request: CreateAttributeRequest) async throws -> AttributeResponse {
-        try await postJSON("/api/notes/\(request.noteId)/attributes", body: request, csrf: true)
+    func createAttribute(_ request: CreateAttributeRequest) async throws {
+        // Trilium expects `noteId` only in the URL; including it in the JSON body can confuse the server
+        // or produce a response shape we do not decode. Success is confirmed via a follow-up `getNote`.
+        struct Body: Encodable {
+            let type: String
+            let name: String
+            let value: String
+            let isInheritable: Bool?
+            let position: Int?
+        }
+        let body = Body(
+            type: request.type,
+            name: request.name,
+            value: request.value,
+            isInheritable: request.isInheritable,
+            position: request.position
+        )
+        var req = try buildRequest(
+            path: "/api/notes/\(request.noteId)/attributes",
+            method: "POST",
+            queryParams: nil,
+            csrf: true,
+            jsonBody: true
+        )
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try encoder.encode(body)
+        let (data, response) = try await session.data(for: req)
+        try validateResponse(response, data: data)
+        let trimmed = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty, trimmed != "{}" else { return }
+        if Self.tryDecodeAttributeResponse(data) == nil {
+            Log.api.debug("createAttribute: non-empty response not decoded as AttributeResponse (refresh will load attributes); bytes=\(data.count)")
+        }
+    }
+
+    /// Best-effort decode for logging / future use; Trilium variants may use snake_case or a wrapper key.
+    private static func tryDecodeAttributeResponse(_ data: Data) -> AttributeResponse? {
+        if let r = try? JSONDecoder().decode(AttributeResponse.self, from: data) { return r }
+        let snake = JSONDecoder()
+        snake.keyDecodingStrategy = .convertFromSnakeCase
+        if let r = try? snake.decode(AttributeResponse.self, from: data) { return r }
+        struct Wrapped: Decodable {
+            let attribute: AttributeResponse?
+            let row: AttributeResponse?
+        }
+        if let w = try? snake.decode(Wrapped.self, from: data) {
+            return w.attribute ?? w.row
+        }
+        return nil
     }
 
     func deleteAttribute(noteId: String, attributeId: String) async throws {

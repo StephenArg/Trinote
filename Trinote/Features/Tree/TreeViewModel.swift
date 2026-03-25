@@ -19,7 +19,7 @@ final class TreeViewModel {
     var isFromCache = false
 
     /// Trilium system notes that should not appear in the tree.
-    private static let hiddenNoteIds: Set<String> = ["_hidden", "_share", "_lbRoot", "_lbAvailableLaunchers", "_lbVisibleLaunchers"]
+    private static let hiddenNoteIds: Set<String> = TriliumSharing.hiddenSystemChildNoteIds
 
     private var noteCache: [String: NoteItem] = [:]
     private var branchCache: [String: BranchItem] = [:]
@@ -42,15 +42,63 @@ final class TreeViewModel {
         get { _rootChildren }
         set {
             _rootChildren = newValue
-            rebuildVisibleNodes()
+            rebuildVisibleNodes(animated: true)
         }
     }
 
-    private func rebuildVisibleNodes() {
+    private func rebuildVisibleNodes(animated: Bool = true) {
         var result: [FlatTreeNode] = []
         flatten(_rootChildren, depth: 0, into: &result)
-        withAnimation(.easeInOut(duration: 0.15)) {
+        if animated {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                visibleNodes = result
+            }
+        } else {
             visibleNodes = result
+        }
+    }
+
+    /// Updates one note’s metadata everywhere it appears (e.g. `parentNoteIds` after share) without reloading the whole tree.
+    /// Also writes through to SwiftData when a profile is active so `reloadFromCache()` after sync does not resurrect stale parents/labels.
+    func applyNoteMetadataPatch(noteId: String, newNote: NoteItem, animateList: Bool = false) {
+        noteCache[noteId] = newNote
+        _rootChildren = Self.replaceNoteInTreeNodes(_rootChildren, noteId: noteId, newNote: newNote)
+        rebuildVisibleNodes(animated: animateList)
+        if let profileId = serverProfileId {
+            let response = NoteResponse(forSwiftDataCache: newNote)
+            try? persistence.cacheNote(from: response, serverProfileId: profileId)
+            try? persistence.commitBatch()
+            for attr in response.attributes {
+                try? persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
+            }
+            try? persistence.commitBatch()
+        }
+    }
+
+    /// Toggles public sharing for a note and patches the in-memory tree (no full reload).
+    func performPublicShareToggle(noteId: String, client: any TriliumClientProtocol) async throws -> NoteItem {
+        let fresh = try await client.getNote(noteId)
+        let item = NoteItem(from: fresh)
+        let shared = try await TriliumSharing.resolveIsPubliclyShared(note: item, client: client)
+        try await TriliumSharing.mutatePublicSharing(
+            noteId: item.noteId,
+            noteForAttributes: item,
+            enable: !shared,
+            client: client
+        )
+        let after = try await client.getNote(noteId)
+        let patched = NoteItem(from: after)
+        applyNoteMetadataPatch(noteId: patched.noteId, newNote: patched, animateList: false)
+        return patched
+    }
+
+    private static func replaceNoteInTreeNodes(_ nodes: [TreeNode], noteId: String, newNote: NoteItem) -> [TreeNode] {
+        nodes.map { node in
+            let nextChildren: [TreeNode]? = node.children.map { replaceNoteInTreeNodes($0, noteId: noteId, newNote: newNote) }
+            if node.note.noteId == noteId {
+                return TreeNode(branch: node.branch, note: newNote, children: nextChildren, isLoading: node.isLoading)
+            }
+            return TreeNode(branch: node.branch, note: node.note, children: nextChildren, isLoading: node.isLoading)
         }
     }
 
@@ -112,7 +160,7 @@ final class TreeViewModel {
             // applied deletions that the stale in-memory tree doesn't reflect).
             let cached = loadCachedChildren(parentNoteId: parentNoteId)
             if !cached.isEmpty {
-                rootChildren = cached
+                rootChildren = attachExpandedCachedChildren(nodes: cached)
                 isFromCache = true
             }
 
@@ -374,10 +422,34 @@ final class TreeViewModel {
     }
 
     func reloadFromCache() {
-        expandedBranches.removeAll()
+        let savedExpansion = expandedBranches
         noteCache.removeAll()
         branchCache.removeAll()
-        loadTreeFromCache()
+        expandedBranches = savedExpansion
+        let nodes = loadCachedChildren(parentNoteId: parentNoteId)
+        guard !nodes.isEmpty else {
+            expandedBranches = []
+            _rootChildren = []
+            rebuildVisibleNodes(animated: false)
+            isFromCache = false
+            return
+        }
+        let withExpanded = attachExpandedCachedChildren(nodes: nodes)
+        _rootChildren = withExpanded
+        isFromCache = true
+        rebuildVisibleNodes(animated: false)
+    }
+
+    /// Re-attaches cached subtrees for branch IDs still marked expanded (used after `reloadFromCache`).
+    private func attachExpandedCachedChildren(nodes: [TreeNode]) -> [TreeNode] {
+        nodes.map { node in
+            guard expandedBranches.contains(node.branch.branchId), node.note.hasChildren else {
+                return node
+            }
+            let rawKids = loadCachedChildren(parentNoteId: node.note.noteId)
+            let kids = attachExpandedCachedChildren(nodes: rawKids)
+            return TreeNode(branch: node.branch, note: node.note, children: kids.isEmpty ? nil : kids, isLoading: false)
+        }
     }
 
     /// Walk the in-memory tree and remove nodes whose branch no longer exists
@@ -654,7 +726,8 @@ final class TreeViewModel {
     private func loadTreeFromCache() {
         let nodes = loadCachedChildren(parentNoteId: parentNoteId)
         if !nodes.isEmpty {
-            rootChildren = nodes
+            let withExpanded = attachExpandedCachedChildren(nodes: nodes)
+            rootChildren = withExpanded
             isFromCache = true
             Log.cache.info("Loaded \(nodes.count) cached root children")
         }

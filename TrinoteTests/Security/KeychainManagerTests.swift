@@ -65,6 +65,7 @@ final class KeychainManagerTests: XCTestCase {
         XCTAssertEqual(loaded, id)
 
         try await KeychainManager.shared.deleteTriliumInstanceId(forServer: testServerId)
-        XCTAssertNil(try await KeychainManager.shared.loadTriliumInstanceId(forServer: testServerId))
+        let afterDelete = try await KeychainManager.shared.loadTriliumInstanceId(forServer: testServerId)
+        XCTAssertNil(afterDelete)
     }
 }

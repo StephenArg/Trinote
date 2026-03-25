@@ -94,6 +94,7 @@ final class NoteDetailViewModel {
                 if nid == noteId {
                     self.note = NoteItem(from: response)
                     self.serverUtcDateModified = response.utcDateModified
+                    await updateSharedPublicState(client: client)
                 }
                 currentId = response.parentNoteIds.first
             } catch {
@@ -179,6 +180,7 @@ final class NoteDetailViewModel {
             self.note = fresh
             self.serverUtcDateModified = response.utcDateModified
             self.serverVerified = true
+            await updateSharedPublicState(client: client)
 
             if let profileId = self.serverProfileId {
                 Self.persistNoteResponse(response, profileId: profileId, persistence: self.persistence)
@@ -421,6 +423,7 @@ final class NoteDetailViewModel {
                 self.note = NoteItem(from: response)
                 self.serverUtcDateModified = serverDate
                 self.serverVerified = true
+                await updateSharedPublicState(client: client)
             }
             if let note, !note.childNoteIds.isEmpty {
                 loadChildNotesFromCache(childNoteIds: note.childNoteIds)
@@ -460,6 +463,7 @@ final class NoteDetailViewModel {
                     Self.persistNoteResponse(response, profileId: pid, persistence: persistence)
                     try? persistence.commitBatch()
                 }
+                await updateSharedPublicState(client: client)
             } else {
                 self.serverUtcDateModified = serverDate
                 self.serverVerified = true
@@ -982,6 +986,86 @@ final class NoteDetailViewModel {
                 childBranchIds: cached.childBranchIds,
                 attributes: attrs
             )
+            if let n = note {
+                isSharedPublicly = TriliumSharing.isPublishedUnderShareRoot(note: n)
+            }
+        }
+    }
+
+    // MARK: - Sharing (Trilium /share)
+
+    var isUpdatingShare = false
+    /// Matches Trilium desktop: note is shared when it has a clone under `_share` (ancestor `_share`).
+    var isSharedPublicly = false
+
+    func shareURLForCurrentNote() -> URL? {
+        guard let note, let base = serverBaseURL else { return nil }
+        guard isSharedPublicly else { return nil }
+        return TriliumSharing.publicShareURL(baseURL: base, note: note)
+    }
+
+    /// Updates `isSharedPublicly` from current `note` (fast path) or by walking parents on the server.
+    private func updateSharedPublicState(client: any TriliumClientProtocol) async {
+        guard let note else {
+            isSharedPublicly = false
+            return
+        }
+        if TriliumSharing.isPublishedUnderShareRoot(note: note) {
+            isSharedPublicly = true
+            return
+        }
+        do {
+            isSharedPublicly = try await TriliumSharing.noteHasShareAncestor(noteId: note.noteId, client: client)
+        } catch {
+            Log.api.debug("Share state update failed for \(note.noteId): \(error)")
+            isSharedPublicly = false
+        }
+    }
+
+    /// Toggles Trilium sharing: clone to `_share` or remove that branch (same as the web “Shared” switch).
+    func setNoteSharing(enabled: Bool) async {
+        guard let client, let note else {
+            saveError = String(localized: "Cannot change sharing while offline.", comment: "Share toggle without client")
+            showSaveError = true
+            return
+        }
+        if note.isProtected || needsProtectedSession {
+            saveError = String(localized: "Protected notes cannot be shared.", comment: "Share disabled for protected note")
+            showSaveError = true
+            return
+        }
+        if [TriliumSharing.shareRootNoteId, "_hidden", "root"].contains(note.noteId) || note.noteId.hasPrefix("_options") {
+            saveError = String(localized: "This note cannot be shared.", comment: "Share disabled for system notes")
+            showSaveError = true
+            return
+        }
+
+        let previousSharing = isSharedPublicly
+        isSharedPublicly = enabled
+        isUpdatingShare = true
+        defer { isUpdatingShare = false }
+
+        do {
+            try await TriliumSharing.mutatePublicSharing(
+                noteId: noteId,
+                noteForAttributes: note,
+                enable: enabled,
+                client: client
+            )
+            await refresh()
+            NotificationCenter.default.post(
+                name: .trinoteTreeShouldRefresh,
+                object: nil,
+                userInfo: ["noteId": noteId]
+            )
+        } catch {
+            isSharedPublicly = previousSharing
+            if let pe = error as? TriliumSharing.PublicSharingMutationError {
+                saveError = pe.localizedDescription
+            } else {
+                saveError = APIError.from(error).localizedDescription
+            }
+            showSaveError = true
         }
     }
 

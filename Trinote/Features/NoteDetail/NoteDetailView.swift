@@ -38,8 +38,13 @@ struct NoteDetailView: View {
     @State private var favoriteNoteIds: Set<String> = []
     @State private var findControl = FindOnPageControl()
     @State private var findDeepLinkConsumed = false
+    @State private var isPresentingShareURLSheet = false
+    @State private var urlToShare: URL?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.rename.rawValue
+
+    /// Aligns “Copy share link” / “Share link…” with the Share/Sharing title (after `scale.3d` column).
+    private static let sharingSubmenuTitleLeadingInset: CGFloat = 36
 
     /// Floating Edit chip: shown when opening an editable note; hides on scroll **up**, shows on scroll **down**.
     @State private var showFloatingEditButton = false
@@ -431,6 +436,11 @@ struct NoteDetailView: View {
             } message: {
                 Text("You have an unsaved draft for this note. Would you like to restore it?")
             }
+            .sheet(isPresented: $isPresentingShareURLSheet, onDismiss: { urlToShare = nil }) {
+                if let u = urlToShare {
+                    ShareSheet(items: [u])
+                }
+            }
         }
     }
 
@@ -618,7 +628,18 @@ struct NoteDetailView: View {
                 //     .font(.caption)
                 //     .foregroundStyle(.secondary)
 
-                if note.parentNoteIds.count > 1 {
+                if note.isSharedWithMultipleTreePlacements {
+                    Label("Sharing", systemImage: "scale.3d")
+                        .font(.caption)
+                        .foregroundStyle(Color.green)
+                    Label("Cloned (\(note.parentNoteIds.count) parents)", systemImage: "arrow.triangle.branch")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if note.showsSharingBadge {
+                    Label("Sharing", systemImage: "scale.3d")
+                        .font(.caption)
+                        .foregroundStyle(Color.green)
+                } else if note.showsMultiCloneBadge {
                     Label("Cloned (\(note.parentNoteIds.count) parents)", systemImage: "arrow.triangle.branch")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -630,6 +651,7 @@ struct NoteDetailView: View {
                         .foregroundStyle(.yellow)
                 }
             }
+            .padding(.leading, titleIconColumnWidth + titleIconSpacing)
         }
         .padding()
     }
@@ -1014,6 +1036,79 @@ struct NoteDetailView: View {
                     Label(vm.showDetails ? "Hide Details" : "Note Details", systemImage: vm.showDetails ? "info.circle.fill" : "info.circle")
                 }
 
+                Divider()
+
+                if note.isProtected || vm.needsProtectedSession {
+                    Button {
+                    } label: {
+                        Label(
+                            String(localized: "Sharing unavailable (protected note)", comment: "Share menu disabled"),
+                            systemImage: "lock.fill"
+                        )
+                    }
+                    .disabled(true)
+                } else if vm.client == nil {
+                    Button {
+                    } label: {
+                        Label(
+                            String(localized: "Sharing requires connection", comment: "Share menu offline"),
+                            systemImage: "wifi.slash"
+                        )
+                    }
+                    .disabled(true)
+                } else {
+                    Button {
+                        Task { await vm.setNoteSharing(enabled: !vm.isSharedPublicly) }
+                    } label: {
+                        // `Menu` often ignores arbitrary views in `Label`’s title (e.g. `HStack` + `Image`); use a single
+                        // concatenated `Text` so the checkmark is part of the rendered title string.
+                        Label {
+                            if vm.isSharedPublicly {
+                                Text(String(localized: "Sharing ✓", comment: "Note overflow: public link when enabled"))
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text(String(localized: "Share", comment: "Note overflow: public link when disabled"))
+                            }
+                        } icon: {
+                            Image(systemName: "scale.3d")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(vm.isUpdatingShare)
+                    .accessibilityAddTraits(vm.isSharedPublicly ? .isSelected : [])
+                    .applyMenuKeepOpenOnAction()
+
+                    if vm.isSharedPublicly {
+                        Button {
+                            if let u = vm.shareURLForCurrentNote() {
+                                UIPasteboard.general.string = u.absoluteString
+                            }
+                        } label: {
+                            Label(
+                                String(localized: "Copy share link", comment: "Copy public Trilium URL"),
+                                systemImage: "doc.on.doc"
+                            )
+                            .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
+                        }
+                        .disabled(vm.shareURLForCurrentNote() == nil)
+
+                        Button {
+                            if let u = vm.shareURLForCurrentNote() {
+                                urlToShare = u
+                                isPresentingShareURLSheet = true
+                            }
+                        } label: {
+                            Label(
+                                String(localized: "Share link…", comment: "System share sheet for URL"),
+                                systemImage: "square.and.arrow.up"
+                            )
+                            .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
+                        }
+                        .disabled(vm.shareURLForCurrentNote() == nil)
+                    }
+                }
+
                 if appState.activeProfile != nil {
                     Button {
                         recordToolbarQuickAction(.favorite)
@@ -1281,6 +1376,18 @@ struct CameraPickerView: UIViewControllerRepresentable {
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             onDismiss()
+        }
+    }
+}
+
+private extension View {
+    /// Keeps the ⋯ menu open after this action (iOS 17+).
+    @ViewBuilder
+    func applyMenuKeepOpenOnAction() -> some View {
+        if #available(iOS 17.0, *) {
+            self.menuActionDismissBehavior(.disabled)
+        } else {
+            self
         }
     }
 }

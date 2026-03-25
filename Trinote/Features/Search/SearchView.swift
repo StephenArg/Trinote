@@ -362,9 +362,20 @@ struct SearchResultRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 titleView
 
-                if note.parentNoteIds.count > 1 || note.isProtected {
+                if note.showsSharingBadge || note.showsMultiCloneBadge || note.isProtected {
                     HStack(spacing: 8) {
-                        if note.parentNoteIds.count > 1 {
+                        if note.isSharedWithMultipleTreePlacements {
+                            Label("Sharing", systemImage: "scale.3d")
+                                .font(.caption2)
+                                .foregroundStyle(Color.green)
+                            Label("Cloned", systemImage: "arrow.triangle.branch")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        } else if note.showsSharingBadge {
+                            Label("Sharing", systemImage: "scale.3d")
+                                .font(.caption2)
+                                .foregroundStyle(Color.green)
+                        } else if note.showsMultiCloneBadge {
                             Label("Cloned", systemImage: "arrow.triangle.branch")
                                 .font(.caption2)
                                 .foregroundStyle(.orange)

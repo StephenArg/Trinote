@@ -34,6 +34,11 @@ actor MockTriliumClient: TriliumClientProtocol {
     var deleteNoteCalls: [String] = []
     var searchCalls: [String] = []
     var getBranchCalls: [(String, String)] = []
+    var createAttributeCalls: [CreateAttributeRequest] = []
+    var deleteAttributeCalls: [(noteId: String, attributeId: String)] = []
+    var cloneToParentCalls: [(noteId: String, parentNoteId: String)] = []
+    var deleteBranchWithTaskCalls: [String] = []
+    var branchIdLookupCalls: [(parent: String, child: String)] = []
 
     init(baseURL: URL = URL(string: "https://test.trilium.local")!) {
         self.baseURL = baseURL
@@ -165,17 +170,55 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func deleteBranch(_ branchId: String) async throws {}
 
+    func deleteBranchWithNoProgressTask(_ branchId: String) async throws {
+        deleteBranchWithTaskCalls.append(branchId)
+    }
+
+    func cloneNoteToParentNote(_ noteId: String, parentNoteId: String) async throws {
+        cloneToParentCalls.append((noteId, parentNoteId))
+    }
+
+    func branchId(fromParentNoteId parentNoteId: String, toChildNoteId childNoteId: String) async throws -> String? {
+        branchIdLookupCalls.append((parentNoteId, childNoteId))
+        if parentNoteId == "_share", childNoteId == "n1" { return "brS1" }
+        return nil
+    }
+
     func getAttribute(_ attributeId: String) async throws -> AttributeResponse {
         TestFixtures.attributeResponse(attributeId: attributeId)
     }
 
-    func createAttribute(_ request: CreateAttributeRequest) async throws -> AttributeResponse {
-        TestFixtures.attributeResponse(noteId: request.noteId, name: request.name, value: request.value)
+    func createAttribute(_ request: CreateAttributeRequest) async throws {
+        createAttributeCalls.append(request)
     }
 
     func deleteAttribute(noteId: String, attributeId: String) async throws {
-        _ = noteId
-        _ = attributeId
+        deleteAttributeCalls.append((noteId: noteId, attributeId: attributeId))
+    }
+
+    /// Fixture for `SharedNotesSubtreeLoader` tests (`_share` → `n1`).
+    func seedSharedNotesSubtreeDemo() {
+        let brS1 = TestFixtures.branchResponse(branchId: "brS1", noteId: "n1", parentNoteId: "_share")
+        noteResults["_share"] = .success(
+            TestFixtures.noteResponse(
+                id: "_share",
+                title: "Shared",
+                parentNoteIds: ["root"],
+                childNoteIds: ["n1"],
+                childBranchIds: ["brS1"]
+            )
+        )
+        branchResults["brS1"] = .success(brS1)
+        noteResults["n1"] = .success(
+            TestFixtures.noteResponse(
+                id: "n1",
+                title: "Alpha",
+                parentNoteIds: ["_share"],
+                attributes: [
+                    TestFixtures.attributeResponse(attributeId: "sh1", noteId: "n1", name: TriliumSharing.sharedLabelName, value: ""),
+                ]
+            )
+        )
     }
 
     func getNoteAttachments(_ noteId: String) async throws -> [AttachmentResponse] {

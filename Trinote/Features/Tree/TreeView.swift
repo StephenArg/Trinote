@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 private struct SubTreeTarget: Hashable {
     let noteId: String
@@ -14,6 +15,26 @@ private struct CreateNoteSheetContext: Identifiable {
     let id = UUID()
     let parentNote: NoteItem
     let viewModel: TreeViewModel
+}
+
+private struct TreeShareSheetPayload: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// One long deferral per process — any `TreeView` instance (root or drilled subtree) shares the same “first share after launch” cold-start window.
+private enum TreeShareSheetColdStartGate {
+    private static let lock = NSLock()
+    private static var didPrime = false
+
+    /// Returns true the first time in this app launch; subsequent calls return false.
+    static func consumeLongDeferIfNeeded() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if didPrime { return false }
+        didPrime = true
+        return true
+    }
 }
 
 struct TreeView: View {
@@ -41,6 +62,9 @@ struct TreeView: View {
     @State private var navigateToNoteForEdit: NoteEditTarget?
     @State private var noteToDelete: (note: NoteItem, vm: TreeViewModel)?
     @State private var favoriteNoteIds: Set<String> = []
+    @State private var showSharedNotesManagement = false
+    @State private var treeShareSheetPayload: TreeShareSheetPayload?
+    @State private var treeSharingError: String?
 
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
@@ -77,39 +101,40 @@ struct TreeView: View {
             }
         }
         .background(treeChromeBackground)
-        .navigationTitle(parentTitle)
+        /// Root: title + new-note control live in the first list row (same line). Subtrees use the normal navigation title.
+        .navigationTitle(parentNoteId == "root" ? "" : parentTitle)
+        .toolbarTitleDisplayMode(parentNoteId == "root" ? .inline : .automatic)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    triggerSyncAndReload()
-                } label: {
-                    Image(systemName: "arrow.trianglehead.2.clockwise")
-                }
-                .disabled(viewModel?.isRefreshing ?? false || appState.syncManager.isSyncing)
-                .accessibilityLabel("Refresh tree")
-            }
             if parentNoteId == "root", let vm = viewModel {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        triggerSyncAndReload()
+                    } label: {
+                        Image(systemName: "arrow.trianglehead.2.clockwise")
+                    }
+                    .disabled(vm.isRefreshing || appState.syncManager.isSyncing)
+                    .accessibilityLabel(String(localized: "Refresh tree", comment: "Toolbar sync tree"))
+
+                    Menu {
+                        Button {
+                            showSharedNotesManagement = true
+                        } label: {
+                            Label(String(localized: "Shared notes…", comment: "Open shared notes manager"), systemImage: "scale.3d")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel(String(localized: "More", comment: "Root tree overflow menu"))
+                }
+            } else {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        let rootNote = NoteItem(
-                            noteId: "root",
-                            title: "Notes",
-                            type: .text,
-                            mime: "text/html",
-                            isProtected: false,
-                            dateCreated: "",
-                            dateModified: "",
-                            parentNoteIds: [],
-                            childNoteIds: [],
-                            parentBranchIds: [],
-                            childBranchIds: [],
-                            attributes: []
-                        )
-                        createSheetContext = CreateNoteSheetContext(parentNote: rootNote, viewModel: vm)
+                        triggerSyncAndReload()
                     } label: {
-                        Image(systemName: "plus")
+                        Image(systemName: "arrow.trianglehead.2.clockwise")
                     }
-                    .accessibilityLabel("New top-level note")
+                    .disabled(viewModel?.isRefreshing ?? false || appState.syncManager.isSyncing)
+                    .accessibilityLabel("Refresh tree")
                 }
             }
         }
@@ -164,6 +189,25 @@ struct TreeView: View {
         .onReceive(NotificationCenter.default.publisher(for: .noteDeleted)) { _ in
             triggerSyncAndReload()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .trinoteTreeShouldRefresh)) { notification in
+            guard let nid = notification.userInfo?["noteId"] as? String else {
+                Task { await self.viewModel?.refresh() }
+                return
+            }
+            Task {
+                guard let client = appState.client, let vm = viewModel else {
+                    await self.viewModel?.refresh()
+                    return
+                }
+                do {
+                    let response = try await client.getNote(nid)
+                    let item = NoteItem(from: response)
+                    vm.applyNoteMetadataPatch(noteId: nid, newNote: item, animateList: false)
+                } catch {
+                    await vm.refresh()
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .ghostNoteDetected)) { _ in
             Task { await self.viewModel?.refresh() }
         }
@@ -176,6 +220,26 @@ struct TreeView: View {
                     navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
                 }
             )
+        }
+        .sheet(isPresented: $showSharedNotesManagement) {
+            SharedNotesManagementView()
+                .environment(appState)
+        }
+        .sheet(item: $treeShareSheetPayload) { payload in
+            ShareSheet(items: [payload.url])
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .alert(
+            "Error",
+            isPresented: Binding(
+                get: { treeSharingError != nil },
+                set: { if !$0 { treeSharingError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { treeSharingError = nil }
+        } message: {
+            Text(treeSharingError ?? "An unknown error occurred.")
         }
     }
 
@@ -217,7 +281,6 @@ struct TreeView: View {
             .foregroundStyle(.blue)
             .padding(.horizontal)
             .padding(.vertical, 6)
-            .background(.blue.opacity(0.08))
         }
     }
 
@@ -300,24 +363,8 @@ struct TreeView: View {
 
     @ViewBuilder
     private func treeListView(_ vm: TreeViewModel) -> some View {
-        VStack(spacing: 0) {
-            if vm.isFromCache && !appState.syncManager.isSyncing {
-                cachedBanner(vm)
-            }
-            syncProgressBanner
-            if let error = vm.error, !vm.rootChildren.isEmpty {
-                errorBanner(error)
-            }
-            treeList(vm)
-        }
-        .background(treeChromeBackground)
-        .overlay {
-            if vm.isRefreshing && !vm.isFromCache {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding()
-            }
-        }
+        treeList(vm)
+            .background(treeChromeBackground)
     }
 
     private func cachedBanner(_ vm: TreeViewModel) -> some View {
@@ -334,7 +381,6 @@ struct TreeView: View {
         .foregroundStyle(.orange)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 6)
-        .background(.orange.opacity(0.1))
     }
 
     private func errorBanner(_ error: String) -> some View {
@@ -349,11 +395,73 @@ struct TreeView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 4)
         .padding(.horizontal)
-        .background(.red.opacity(0.08))
+    }
+
+    private func rootNotebookHeaderRow(viewModel vm: TreeViewModel) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(String(localized: "Notes", comment: "Root notebook screen title"))
+                .font(.largeTitle)
+                .fontWeight(.bold)
+                .foregroundStyle(.primary)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 0)
+            Button {
+                createSheetContext = CreateNoteSheetContext(parentNote: syntheticRootNoteItem(), viewModel: vm)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(String(localized: "New top-level note", comment: "Toolbar add note"))
+        }
+    }
+
+    /// Placeholder for the Trilium `root` note when presenting “new child” flows from the root tree.
+    private func syntheticRootNoteItem() -> NoteItem {
+        NoteItem(
+            noteId: "root",
+            title: String(localized: "Notes", comment: "Root notebook screen title"),
+            type: .text,
+            mime: "text/html",
+            isProtected: false,
+            dateCreated: "",
+            dateModified: "",
+            parentNoteIds: [],
+            childNoteIds: [],
+            parentBranchIds: [],
+            childBranchIds: [],
+            attributes: []
+        )
     }
 
     private func treeList(_ vm: TreeViewModel) -> some View {
-        List {
+        let sync = appState.syncManager
+        return List {
+            if vm.isFromCache && !sync.isSyncing {
+                cachedBanner(vm)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.orange.opacity(0.1))
+            }
+            if sync.isSyncing {
+                syncProgressBanner
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.blue.opacity(0.08))
+            }
+            if let error = vm.error, !vm.rootChildren.isEmpty {
+                errorBanner(error)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.red.opacity(0.08))
+            }
+            if parentNoteId == "root" {
+                rootNotebookHeaderRow(viewModel: vm)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(treeBgColor ?? Color(.systemGroupedBackground))
+            }
             ForEach(vm.visibleNodes) { flat in
                 treeNodeRow(flat: flat, vm: vm, favoriteNoteIds: favoriteNoteIds, onFavoriteChanged: loadFavoriteIds)
             }
@@ -367,10 +475,54 @@ struct TreeView: View {
         .background(treeChromeBackground)
     }
 
+    /// Defers past UIKit context-menu dismissal. The first tree share after app launch also waits for the window/scene to settle — otherwise `UIActivityViewController` in a SwiftUI sheet often renders black once.
+    private func scheduleTreeShareSheet(url: URL) {
+        DispatchQueue.main.async {
+            Task { @MainActor in
+                if TreeShareSheetColdStartGate.consumeLongDeferIfNeeded() {
+                    try? await Task.sleep(for: .milliseconds(320))
+                } else {
+                    await Task.yield()
+                    await Task.yield()
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                treeShareSheetPayload = TreeShareSheetPayload(url: url)
+            }
+        }
+    }
+
+    private func treeRowContextMenuModel(
+        flat: FlatTreeNode,
+        vm: TreeViewModel,
+        isFav: Bool,
+        onFavoriteChanged: @escaping () -> Void
+    ) -> TreeListRowContextMenuModel {
+        TreeListRowContextMenuModel(
+            note: flat.node.note,
+            vm: vm,
+            isFavorite: isFav,
+            duplicateParentNoteId: flat.node.branch.parentNoteId,
+            isRootRow: flat.node.note.noteId == "root",
+            client: appState.client,
+            onNewNote: {
+                createSheetContext = CreateNoteSheetContext(parentNote: flat.node.note, viewModel: vm)
+            },
+            onDuplicateSuccess: { navigateToNote = $0 },
+            onFavoriteToggle: {
+                toggleFavorite(flat.node.note, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
+            },
+            onDelete: {
+                noteToDelete = (flat.node.note, vm)
+            },
+            onPresentShareSheet: { scheduleTreeShareSheet(url: $0) },
+            onSharingError: { treeSharingError = $0 }
+        )
+    }
+
     private func treeNodeRow(flat: FlatTreeNode, vm: TreeViewModel, favoriteNoteIds: Set<String>, onFavoriteChanged: @escaping () -> Void) -> some View {
         let leading = CGFloat(flat.depth) * 20 + 16
         let isFav = favoriteNoteIds.contains(flat.node.note.noteId)
-        return TreeNodeRow(
+        let row = TreeNodeRow(
             node: flat.node,
             depth: flat.depth,
             viewModel: vm,
@@ -386,40 +538,16 @@ struct TreeView: View {
                 drillDownTarget = SubTreeTarget(noteId: noteId, title: title)
             }
         )
-        .contextMenu {
+
+        return Group {
             if onPickParent == nil {
-                Button {
-                    createSheetContext = CreateNoteSheetContext(parentNote: flat.node.note, viewModel: vm)
-                } label: {
-                    Label("New Note", systemImage: "plus")
+                TreeListRowUIKitContextMenu(
+                    model: treeRowContextMenuModel(flat: flat, vm: vm, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
+                ) {
+                    row
                 }
-                if flat.node.note.noteId != "root" {
-                    if !flat.node.note.isProtected {
-                        Button {
-                            Task {
-                                let parentId = flat.node.branch.parentNoteId
-                                if let newNote = await vm.duplicateNote(
-                                    sourceNoteId: flat.node.note.noteId,
-                                    parentNoteId: parentId
-                                ) {
-                                    navigateToNote = newNote
-                                }
-                            }
-                        } label: {
-                            Label("Duplicate Note", systemImage: "doc.on.doc")
-                        }
-                    }
-                    Button {
-                        toggleFavorite(flat.node.note, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
-                    } label: {
-                        Label(isFav ? "Remove from Favorites" : "Add to Favorites", systemImage: isFav ? "star.slash" : "star")
-                    }
-                    Button(role: .destructive) {
-                        noteToDelete = (flat.node.note, vm)
-                    } label: {
-                        Label("Delete Note", systemImage: "trash")
-                    }
-                }
+            } else {
+                row
             }
         }
         .listRowInsets(EdgeInsets(top: 8, leading: leading, bottom: 8, trailing: 16))
@@ -574,11 +702,28 @@ struct TreeNodeRow: View {
 
                 Spacer()
 
-                if node.note.parentNoteIds.count > 1 {
+                if node.note.isSharedWithMultipleTreePlacements {
+                    HStack(spacing: 4) {
+                        Image(systemName: "scale.3d")
+                            .font(.caption2)
+                            .foregroundStyle(Color.green)
+                            .accessibilityLabel(String(localized: "Shared note", comment: "Tree row: note has public share link"))
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel(String(localized: "Cloned note", comment: "Tree row: note has multiple parents"))
+                    }
+                    .accessibilityElement(children: .combine)
+                } else if node.note.showsSharingBadge {
+                    Image(systemName: "scale.3d")
+                        .font(.caption2)
+                        .foregroundStyle(Color.green)
+                        .accessibilityLabel(String(localized: "Shared note", comment: "Tree row: note has public share link"))
+                } else if node.note.showsMultiCloneBadge {
                     Image(systemName: "arrow.triangle.branch")
                         .font(.caption2)
                         .foregroundStyle(.orange)
-                        .accessibilityLabel("Cloned note")
+                        .accessibilityLabel(String(localized: "Cloned note", comment: "Tree row: note has multiple parents"))
                 }
 
                 Image(systemName: "chevron.right")

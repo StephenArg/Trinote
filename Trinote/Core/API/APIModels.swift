@@ -87,6 +87,41 @@ struct NoteResponse: Decodable {
     }
 }
 
+extension NoteResponse {
+    /// Builds a API-shaped note payload from a `NoteItem` so live updates (e.g. sharing toggles) can be written to SwiftData.
+    init(forSwiftDataCache item: NoteItem) {
+        self.init(
+            noteId: item.noteId,
+            isProtected: item.isProtected,
+            title: item.title,
+            type: item.type.rawValue,
+            mime: item.mime,
+            blobId: nil,
+            isDeleted: false,
+            dateCreated: item.dateCreated,
+            dateModified: item.dateModified,
+            utcDateCreated: "",
+            utcDateModified: "",
+            parentNoteIds: item.parentNoteIds,
+            childNoteIds: item.childNoteIds,
+            parentBranchIds: item.parentBranchIds,
+            childBranchIds: item.childBranchIds,
+            attributes: item.attributes.map { a in
+                AttributeResponse(
+                    attributeId: a.attributeId,
+                    noteId: a.noteId,
+                    type: a.type.rawValue,
+                    name: a.name,
+                    value: a.value,
+                    position: a.position,
+                    isInheritable: a.isInheritable,
+                    utcDateModified: nil
+                )
+            }
+        )
+    }
+}
+
 // MARK: - Branch
 
 struct BranchResponse: Decodable {
@@ -125,6 +160,42 @@ struct AttributeResponse: Decodable {
     let position: Int
     let isInheritable: Bool
     let utcDateModified: String?
+
+    enum CodingKeys: String, CodingKey {
+        case attributeId, noteId, type, name, value, position, isInheritable, utcDateModified
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        attributeId = try c.decode(String.self, forKey: .attributeId)
+        noteId = try c.decode(String.self, forKey: .noteId)
+        type = try c.decode(String.self, forKey: .type)
+        name = try c.decode(String.self, forKey: .name)
+        value = (try c.decodeIfPresent(String.self, forKey: .value)) ?? ""
+        position = (try c.decodeIfPresent(Int.self, forKey: .position)) ?? 0
+        isInheritable = (try c.decodeIfPresent(Bool.self, forKey: .isInheritable)) ?? false
+        utcDateModified = try c.decodeIfPresent(String.self, forKey: .utcDateModified)
+    }
+
+    init(
+        attributeId: String,
+        noteId: String,
+        type: String,
+        name: String,
+        value: String,
+        position: Int,
+        isInheritable: Bool,
+        utcDateModified: String?
+    ) {
+        self.attributeId = attributeId
+        self.noteId = noteId
+        self.type = type
+        self.name = name
+        self.value = value
+        self.position = position
+        self.isInheritable = isInheritable
+        self.utcDateModified = utcDateModified
+    }
 }
 
 struct CreateAttributeRequest: Encodable {

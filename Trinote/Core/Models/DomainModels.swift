@@ -143,7 +143,7 @@ extension AttachmentItem {
 
 /// A tree node combines a note with its branch placement.
 /// A single note can appear in multiple tree nodes (clones).
-/// Hashable is identity-based (branchId only) to avoid deep recursion.
+/// `Equatable` / `Hashable` include `note` so rows update when note metadata changes (e.g. sharing); children are compared by id only.
 struct TreeNode: Identifiable, Sendable {
     let branch: BranchItem
     let note: NoteItem
@@ -182,6 +182,7 @@ extension TreeNode: Equatable {
     static func == (lhs: TreeNode, rhs: TreeNode) -> Bool {
         lhs.branch.branchId == rhs.branch.branchId
             && lhs.isLoading == rhs.isLoading
+            && lhs.note == rhs.note
             && lhs.children?.map(\.id) == rhs.children?.map(\.id)
     }
 }
@@ -189,6 +190,7 @@ extension TreeNode: Equatable {
 extension TreeNode: Hashable {
     func hash(into hasher: inout Hasher) {
         hasher.combine(branch.branchId)
+        hasher.combine(note)
     }
 }
 
