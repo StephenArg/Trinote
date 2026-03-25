@@ -19,6 +19,17 @@ final class FindOnPageControl {
     private var codePlainText: String = ""
 
     private var htmlSearchTask: Task<Void, Never>?
+    /// After search completes, activate this 1-based match (e.g. from search results deep link).
+    private var pendingJumpToMatch1Based: Int?
+
+    /// Opens the find bar with the given text and jumps to `matchIndex1Based` once matches are computed.
+    func prepareFindDeepLink(findQuery: String, matchIndex1Based: Int) {
+        let trimmed = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, matchIndex1Based >= 1 else { return }
+        query = trimmed
+        pendingJumpToMatch1Based = matchIndex1Based
+        isPresented = true
+    }
 
     func registerHTMLWebView(_ webView: WKWebView) {
         htmlWebView = webView
@@ -30,6 +41,9 @@ final class FindOnPageControl {
         codeTextView = textView
         codePlainText = plainText
         htmlWebView = nil
+        if !query.isEmpty {
+            applyCodeQuery()
+        }
     }
 
     func unregisterAll() {
@@ -51,6 +65,7 @@ final class FindOnPageControl {
         activeMatchIndex = 0
         query = ""
         isPresented = false
+        pendingJumpToMatch1Based = nil
     }
 
     /// Call after WebKit finishes loading document HTML so highlights can be restored.
@@ -110,7 +125,33 @@ final class FindOnPageControl {
                     self.matchCount = 0
                     self.activeMatchIndex = 0
                 }
-                self.scrollHTMLActiveIntoOuterScroll()
+
+                let jump = self.pendingJumpToMatch1Based
+                if let j = jump, self.matchCount > 0 {
+                    self.pendingJumpToMatch1Based = nil
+                    let goJs = """
+                    (function(){
+                      if (!window.__trinoteFind || !window.__trinoteFind.goToMatch) return { count: 0, active: 0 };
+                      window.__trinoteFind.goToMatch(\(j));
+                      return { count: window.__trinoteFind.matchCount(), active: window.__trinoteFind.active1Based() };
+                    })();
+                    """
+                    wv.evaluateJavaScript(goJs) { [weak self] r2, _ in
+                        guard let self else { return }
+                        Task { @MainActor in
+                            if let d2 = r2 as? [String: Any] {
+                                let c2 = (d2["count"] as? NSNumber)?.intValue ?? (d2["count"] as? Int) ?? self.matchCount
+                                let a2 = (d2["active"] as? NSNumber)?.intValue ?? (d2["active"] as? Int) ?? 0
+                                self.matchCount = c2
+                                self.activeMatchIndex = a2
+                            }
+                            self.scrollHTMLActiveIntoOuterScroll()
+                        }
+                    }
+                } else {
+                    self.pendingJumpToMatch1Based = nil
+                    self.scrollHTMLActiveIntoOuterScroll()
+                }
             }
         }
     }
@@ -136,7 +177,6 @@ final class FindOnPageControl {
 
         var ranges: [NSRange] = []
         if !q.isEmpty {
-            let nsFull = full as NSString
             let lowerFull = full.lowercased() as NSString
             let lowerQ = q.lowercased()
             var searchStart = 0
@@ -146,21 +186,38 @@ final class FindOnPageControl {
                 ranges.append(found)
                 searchStart = found.location + found.length
             }
+
+            let jump = pendingJumpToMatch1Based
+            pendingJumpToMatch1Based = nil
+            let activeZero: Int
+            if let j = jump, j >= 1, j <= ranges.count {
+                activeZero = j - 1
+            } else {
+                activeZero = 0
+            }
+
             for (i, r) in ranges.enumerated() {
-                let color = (i == 0) ? activeHighlight : highlight
+                let color = i == activeZero ? activeHighlight : highlight
                 attr.addAttribute(.backgroundColor, value: color, range: r)
             }
-        }
 
-        tv.attributedText = attr
-        matchCount = ranges.count
-        activeMatchIndex = ranges.isEmpty ? 0 : 1
+            matchCount = ranges.count
+            activeMatchIndex = ranges.isEmpty ? 0 : activeZero + 1
 
-        if let first = ranges.first {
-            tv.selectedRange = first
-            Self.scrollCodeMatchToCenter(tv, range: first)
+            tv.attributedText = attr
+            if activeZero < ranges.count {
+                let activeRange = ranges[activeZero]
+                tv.selectedRange = activeRange
+                Self.scrollCodeMatchToCenter(tv, range: activeRange)
+            } else {
+                tv.selectedRange = NSRange(location: 0, length: 0)
+            }
         } else {
+            pendingJumpToMatch1Based = nil
+            tv.attributedText = attr
             tv.selectedRange = NSRange(location: 0, length: 0)
+            matchCount = 0
+            activeMatchIndex = 0
         }
     }
 
@@ -346,6 +403,7 @@ final class FindOnPageControl {
 
     func clearHighlights() {
         htmlSearchTask?.cancel()
+        pendingJumpToMatch1Based = nil
         query = ""
         matchCount = 0
         activeMatchIndex = 0

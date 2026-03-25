@@ -328,7 +328,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 var r = marks[activeIdx].getBoundingClientRect();
                 return { top: r.top, left: r.left, width: r.width, height: r.height };
             }
-            return { search: search, clear: clear, next: next, prev: prev, matchCount: matchCount, active1Based: active1Based, activeRectInViewport: activeRectInViewport };
+            function goToMatch(oneBased) {
+                if (marks.length === 0) return;
+                var i = (oneBased | 0) - 1;
+                if (i < 0) i = 0;
+                if (i >= marks.length) i = marks.length - 1;
+                setActive(i);
+            }
+            return { search: search, clear: clear, next: next, prev: prev, matchCount: matchCount, active1Based: active1Based, activeRectInViewport: activeRectInViewport, goToMatch: goToMatch };
         })();
         function reportHeight() {
             const h = document.body.scrollHeight;

@@ -19,6 +19,9 @@ struct NoteDetailView: View {
     let noteId: String
     let title: String
     var startInEditMode: Bool = false
+    /// When set (e.g. from search), opens find-on-page after content loads and jumps to this 1-based match.
+    var pendingFindQuery: String? = nil
+    var pendingFindMatchIndex: Int? = nil
 
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
@@ -34,6 +37,7 @@ struct NoteDetailView: View {
     @State private var protectedDocumentPassword = ""
     @State private var favoriteNoteIds: Set<String> = []
     @State private var findControl = FindOnPageControl()
+    @State private var findDeepLinkConsumed = false
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.rename.rawValue
 
@@ -187,6 +191,18 @@ struct NoteDetailView: View {
     }
 
     var body: some View {
+        bodyCore
+            .task { await initialLoad() }
+            .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
+                NoteDetailView(noteId: linkedNoteId, title: "")
+            }
+            .toolbar(viewModel?.isEditing == true ? .hidden : .visible, for: .tabBar)
+            .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing)
+            .overlay { bodyChangeListeners }
+    }
+
+    @ViewBuilder
+    private var bodyCore: some View {
         Group {
             if let viewModel {
                 noteContent(viewModel)
@@ -209,33 +225,73 @@ struct NoteDetailView: View {
                 }
             }
         }
-        .task {
-            if viewModel == nil {
-                let vm = NoteDetailViewModel(noteId: noteId, appState: appState)
-                viewModel = vm
-                // Cache loads are instant; server refreshes run concurrently
-                await vm.load()
-                async let contentTask: () = vm.loadContent()
-                async let attachTask: () = vm.loadAttachments()
-                await vm.loadChildNotes()
-                _ = await (contentTask, attachTask)
-                if startInEditMode, vm.note != nil {
-                    vm.isEditing = true
+    }
+
+    private func initialLoad() async {
+        if viewModel == nil {
+            let vm = NoteDetailViewModel(noteId: noteId, appState: appState)
+            viewModel = vm
+            await vm.load()
+            async let contentTask: () = vm.loadContent()
+            async let attachTask: () = vm.loadAttachments()
+            await vm.loadChildNotes()
+            _ = await (contentTask, attachTask)
+            if startInEditMode, vm.note != nil {
+                vm.isEditing = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var bodyChangeListeners: some View {
+        let needsProtected: Bool? = viewModel?.needsProtectedSession
+        let protectedActive: Bool = appState.protectedSessionActive
+        let content: String? = viewModel?.contentString
+        let loading: Bool? = viewModel?.isLoadingContent
+        let editing: Bool? = viewModel?.isEditing
+
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: needsProtected) { _, needs in
+                if needs == false { protectedDocumentPassword = "" }
+                if needs == false, pendingFindQuery != nil {
+                    findDeepLinkConsumed = false
+                    consumeFindDeepLinkIfNeeded()
                 }
             }
-        }
-        .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
-            NoteDetailView(noteId: linkedNoteId, title: "")
-        }
-        .toolbar(viewModel?.isEditing == true ? .hidden : .visible, for: .tabBar)
-            .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing)
-            .onChange(of: viewModel?.needsProtectedSession) { _, needs in
-                if needs == false { protectedDocumentPassword = "" }
-            }
-            .onChange(of: appState.protectedSessionActive) { _, _ in
+            .onChange(of: protectedActive) { _, _ in
                 guard let vm = viewModel else { return }
                 Task { await vm.resyncNoteTitlesWithProtectedSession() }
             }
+            .onChange(of: content) { _, _ in
+                consumeFindDeepLinkIfNeeded()
+            }
+            .onChange(of: loading) { _, isLoading in
+                if isLoading == false {
+                    consumeFindDeepLinkIfNeeded()
+                }
+            }
+            .onChange(of: editing) { _, isEditing in
+                if isEditing == true {
+                    findDeepLinkConsumed = true
+                }
+            }
+    }
+
+    /// Opens the find bar and jumps to a match after the note body is available (search → note deep link).
+    private func consumeFindDeepLinkIfNeeded() {
+        guard !findDeepLinkConsumed else { return }
+        guard let q = pendingFindQuery, !q.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let idx = pendingFindMatchIndex, idx >= 1,
+              let vm = viewModel, let note = vm.note,
+              note.type.supportsReadOnlyOnPageFind,
+              !vm.isEditing,
+              !vm.needsProtectedSession,
+              !vm.isLoadingContent,
+              vm.contentString != nil
+        else { return }
+        findDeepLinkConsumed = true
+        findControl.prepareFindDeepLink(findQuery: q, matchIndex1Based: idx)
     }
 
     @ViewBuilder
@@ -1233,3 +1289,4 @@ struct CameraPickerView: UIViewControllerRepresentable {
 extension String: @retroactive Identifiable {
     public var id: String { self }
 }
+

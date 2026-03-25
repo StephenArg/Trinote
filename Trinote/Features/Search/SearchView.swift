@@ -1,9 +1,18 @@
 import SwiftUI
+import UIKit
+
+/// Navigation from search, optionally deep-linking into find-on-page at a specific match.
+private struct SearchNoteDestination: Hashable {
+    let noteId: String
+    let title: String
+    var findQuery: String?
+    var findMatchIndex1Based: Int?
+}
 
 struct SearchView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel: SearchViewModel?
-    @State private var navigateToNote: NoteItem?
+    @State private var navigateTo: SearchNoteDestination?
 
     var body: some View {
         Group {
@@ -21,8 +30,13 @@ struct SearchView: View {
                 vm.loadRecentSearches()
             }
         }
-        .navigationDestination(item: $navigateToNote) { note in
-            NoteDetailView(noteId: note.noteId, title: note.title)
+        .navigationDestination(item: $navigateTo) { dest in
+            NoteDetailView(
+                noteId: dest.noteId,
+                title: dest.title,
+                pendingFindQuery: dest.findQuery,
+                pendingFindMatchIndex: dest.findMatchIndex1Based
+            )
         }
     }
 
@@ -93,6 +107,15 @@ struct SearchView: View {
         .padding()
     }
 
+    private func openNote(_ note: NoteItem, findQuery: String?, matchIndex1Based: Int?) {
+        navigateTo = SearchNoteDestination(
+            noteId: note.noteId,
+            title: note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive),
+            findQuery: findQuery,
+            findMatchIndex1Based: matchIndex1Based
+        )
+    }
+
     private func resultsList(_ vm: SearchViewModel) -> some View {
         List {
             if vm.isOfflineResults {
@@ -110,21 +133,110 @@ struct SearchView: View {
 
             Section {
                 ForEach(vm.results) { note in
-                    Button {
-                        var nav = note
-                        nav.title = note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
-                        navigateToNote = nav
-                    } label: {
-                        SearchResultRow(note: note)
-                    }
-                    .buttonStyle(.plain)
-                    .environment(appState)
+                    searchResultSection(note: note, vm: vm)
                 }
             } header: {
                 Text("\(vm.results.count) result\(vm.results.count == 1 ? "" : "s")")
             }
         }
         .listStyle(.insetGrouped)
+    }
+
+    private static let maxVisibleMatches = 20
+
+    @ViewBuilder
+    private func searchResultSection(note: NoteItem, vm: SearchViewModel) -> some View {
+        let canExpand = note.type.supportsReadOnlyOnPageFind
+        let expanded = vm.expandedMatchNoteIds.contains(note.noteId)
+
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 8) {
+                if canExpand {
+                    Button {
+                        vm.toggleMatchExpansion(for: note)
+                    } label: {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    openNote(note, findQuery: nil, matchIndex1Based: nil)
+                } label: {
+                    SearchResultRow(note: note, searchQuery: vm.query, showTrailingChevron: true)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.vertical, 4)
+
+            if expanded && canExpand {
+                matchExpansionContent(note: note, vm: vm)
+            }
+        }
+        .environment(appState)
+    }
+
+    @ViewBuilder
+    private func matchExpansionContent(note: NoteItem, vm: SearchViewModel) -> some View {
+        let allMatches = vm.matchLines(for: note.noteId)
+        let visibleMatches = Array(allMatches.prefix(Self.maxVisibleMatches))
+        let hasMore = allMatches.count > Self.maxVisibleMatches
+
+        if vm.loadingMatchNoteIds.contains(note.noteId) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading matches…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 30)
+            .padding(.bottom, 8)
+        } else if let err = vm.matchLoadErrorByNoteId[note.noteId],
+                  allMatches.isEmpty {
+            Text(err)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 30)
+                .padding(.bottom, 8)
+        }
+
+        ForEach(visibleMatches) { match in
+            Button {
+                let q = vm.query.trimmingCharacters(in: .whitespacesAndNewlines)
+                openNote(note, findQuery: q, matchIndex1Based: match.matchIndex1Based)
+            } label: {
+                HStack(alignment: .top, spacing: 6) {
+                    Text("–")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    SearchMatchPreviewLine(text: match.previewLine, query: vm.query)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.vertical, 4)
+                .padding(.leading, 30)
+            }
+            .buttonStyle(.plain)
+        }
+
+        if hasMore {
+            HStack(spacing: 6) {
+                Text("–")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Text("more references in note")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .italic()
+            }
+            .padding(.vertical, 4)
+            .padding(.leading, 30)
+        }
     }
 
     @ViewBuilder
@@ -174,13 +286,70 @@ struct SearchView: View {
     }
 }
 
+// MARK: - Query highlight (titles + previews)
+
+enum SearchQueryHighlight {
+    static func attributedString(text: String, query: String) -> AttributedString {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mutable = NSMutableAttributedString(string: text)
+        guard !trimmed.isEmpty else {
+            return AttributedString(mutable)
+        }
+
+        let nsText = text as NSString
+        let len = nsText.length
+        let bg = UIColor.systemYellow.withAlphaComponent(0.38)
+        var loc = 0
+        while loc < len {
+            let r = nsText.range(of: trimmed, options: [.caseInsensitive], range: NSRange(location: loc, length: len - loc))
+            if r.location == NSNotFound { break }
+            mutable.addAttribute(.backgroundColor, value: bg, range: r)
+            loc = r.location + max(r.length, 1)
+        }
+        return AttributedString(mutable)
+    }
+}
+
+struct SearchMatchPreviewLine: View {
+    let text: String
+    let query: String
+
+    var body: some View {
+        Text(SearchQueryHighlight.attributedString(text: text, query: query))
+            .font(.caption)
+            .foregroundStyle(.primary)
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+    }
+}
+
 struct SearchResultRow: View {
     let note: NoteItem
+    /// Current search query; title matches are highlighted (case-insensitive).
+    var searchQuery: String = ""
+    var showTrailingChevron: Bool = true
 
     @Environment(AppState.self) private var appState
 
     private var displayTitle: String {
         note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+    }
+
+    private var titleHighlightQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    @ViewBuilder
+    private var titleView: some View {
+        if titleHighlightQuery.isEmpty {
+            Text(displayTitle)
+                .font(.body)
+                .lineLimit(2)
+        } else {
+            Text(SearchQueryHighlight.attributedString(text: displayTitle, query: titleHighlightQuery))
+                .font(.body)
+                .lineLimit(2)
+        }
     }
 
     var body: some View {
@@ -191,25 +360,21 @@ struct SearchResultRow: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(displayTitle)
-                    .font(.body)
-                    .lineLimit(2)
+                titleView
 
-                HStack(spacing: 8) {
-                    Text(note.type.displayName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if note.parentNoteIds.count > 1 || note.isProtected {
+                    HStack(spacing: 8) {
+                        if note.parentNoteIds.count > 1 {
+                            Label("Cloned", systemImage: "arrow.triangle.branch")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
 
-                    if note.parentNoteIds.count > 1 {
-                        Label("Cloned", systemImage: "arrow.triangle.branch")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    }
-
-                    if note.isProtected {
-                        Label("Protected", systemImage: "lock.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.yellow)
+                        if note.isProtected {
+                            Label("Protected", systemImage: "lock.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.yellow)
+                        }
                     }
                 }
 
@@ -222,11 +387,12 @@ struct SearchResultRow: View {
 
             Spacer()
 
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.quaternary)
+            if showTrailingChevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.quaternary)
+            }
         }
-        .padding(.vertical, 4)
         .accessibilityLabel("\(displayTitle), \(note.type.displayName)")
     }
 }
