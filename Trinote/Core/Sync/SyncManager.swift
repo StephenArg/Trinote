@@ -71,11 +71,39 @@ final class SyncManager {
         }
     }
 
+    /// After unlock, downloads bodies for protected notes (skipped during normal sync until a protected session exists).
+    func prefetchProtectedNoteBodies(client: any TriliumClientProtocol, profileId: String) async {
+        if isSyncing {
+            Log.sync.debug("Deferring protected body prefetch — sync in progress")
+            return
+        }
+        let map = (try? persistence.serverModifiedMapForProtectedNotesMissingContent(serverProfileId: profileId)) ?? [:]
+        guard !map.isEmpty else { return }
+        do {
+            _ = try await downloadContent(
+                serverNotes: map,
+                client: client,
+                profileId: profileId,
+                protectedBodiesOnly: true
+            )
+            Log.sync.info("Protected note body prefetch finished (\(map.count) candidates)")
+        } catch {
+            Log.sync.warning("Protected body prefetch failed: \(error)")
+        }
+    }
+
     /// Incremental sync via `GET /api/sync/changed` (Trilium desktop–style pull).
     /// Loops until the server returns an empty `entityChanges` batch (and keeps pulling when
     /// `outstandingPullCount > 0` even if a batch is empty, matching ETAPI behavior).
     /// Applies notes, branches, attributes, blobs to SwiftData, including `isErased` / `isDeleted`.
-    func incrementalSync(client: any TriliumClientProtocol, profileId: String, triliumInstanceId: String) {
+    /// Only downloads note **bodies** for ids referenced in this pull (changed notes / blobs)—not a vault-wide backfill (that is `fullSync`).
+    /// - Parameter downloadChangedBodies: When `false`, applies entity rows only; bodies refresh when notes are opened (faster tree / toolbar refresh).
+    func incrementalSync(
+        client: any TriliumClientProtocol,
+        profileId: String,
+        triliumInstanceId: String,
+        downloadChangedBodies: Bool = true
+    ) {
         guard self.hasCompletedFullSync else {
             self.fullSync(client: client, profileId: profileId)
             return
@@ -91,7 +119,8 @@ final class SyncManager {
                 client: client,
                 profileId: profileId,
                 instanceId: triliumInstanceId,
-                generation: gen
+                generation: gen,
+                downloadChangedBodies: downloadChangedBodies
             )
         }
     }
@@ -111,6 +140,11 @@ final class SyncManager {
     // MARK: - Full Sync (tree walk — unchanged approach for initial data)
 
     private func performFullSync(client: any TriliumClientProtocol, profileId: String, generation: UInt64) async {
+        defer {
+            if !isStale(generation) {
+                self.isSyncing = false
+            }
+        }
         self.syncProgress = 0
         self.syncedNoteCount = 0
         self.totalNoteCount = 0
@@ -122,17 +156,30 @@ final class SyncManager {
             let serverNotes = try await self.walkTree(client: client, profileId: profileId)
             if isStale(generation) { return }
 
+            try? self.persistence.reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
+
             let allServerNoteIds = Set(serverNotes.keys)
             var serverNoteIds = allServerNoteIds
             self.totalNoteCount = serverNoteIds.count
             Log.sync.info("Tree walk complete: \(serverNoteIds.count) notes found")
 
             self.phase = .downloadingContent
-            let ghostIds = try await self.downloadContent(
+            var ghostIds = try await self.downloadContent(
                 serverNotes: serverNotes,
                 client: client,
-                profileId: profileId
+                profileId: profileId,
+                protectedBodiesOnly: false
             )
+            let backfillRetry = (try? self.persistence.serverModifiedMapForUnprotectedNotesMissingContent(serverProfileId: profileId)) ?? [:]
+            if !backfillRetry.isEmpty {
+                let ghost2 = try await self.downloadContent(
+                    serverNotes: backfillRetry,
+                    client: client,
+                    profileId: profileId,
+                    protectedBodiesOnly: false
+                )
+                ghostIds.formUnion(ghost2)
+            }
             if isStale(generation) { return }
 
             if !ghostIds.isEmpty {
@@ -177,10 +224,6 @@ final class SyncManager {
                 serverProfileId: profileId
             )
         }
-
-        if !isStale(generation) {
-            self.isSyncing = false
-        }
     }
 
     // MARK: - Incremental Sync via GET /api/sync/changed
@@ -189,8 +232,14 @@ final class SyncManager {
         client: any TriliumClientProtocol,
         profileId: String,
         instanceId: String,
-        generation: UInt64
+        generation: UInt64,
+        downloadChangedBodies: Bool
     ) async {
+        defer {
+            if !isStale(generation) {
+                self.isSyncing = false
+            }
+        }
         self.syncProgress = 0
         self.syncedNoteCount = 0
         self.totalNoteCount = 0
@@ -200,7 +249,8 @@ final class SyncManager {
             var lastPullMaxId: Int64 = cursor
             var totalApplied = 0
             var deletionCount = 0
-            var notesToRefreshContent: Set<String> = []
+            /// Note id → server `utcDateModified` for content staleness (empty string = unknown, still refreshes when body missing).
+            var notesToRefreshContent: [String: String] = [:]
             var pullIterations = 0
             /// Empty batches with `outstandingPullCount > 0` but no cursor advance (server stuck).
             var consecutiveEmptyWithoutCursorAdvance = 0
@@ -258,7 +308,7 @@ final class SyncManager {
                     switch ec.entityName {
                     case "notes":
                         if let row = noteIndex[ec.entityId] {
-                            let wasDeletion = try applyNoteRow(row, profileId: profileId, notesToRefresh: &notesToRefreshContent)
+                            let wasDeletion = try applyNoteRow(row, profileId: profileId, notesToRefreshUtc: &notesToRefreshContent)
                             if wasDeletion { deletionCount += 1 }
                         }
                     case "branches":
@@ -273,7 +323,7 @@ final class SyncManager {
                         }
                     case "blobs":
                         if let row = blobIndex[ec.entityId] {
-                            try applyBlobRow(row, profileId: profileId, notesToRefresh: &notesToRefreshContent)
+                            try applyBlobRow(row, profileId: profileId, notesToRefreshUtc: &notesToRefreshContent)
                         }
                     default:
                         break
@@ -291,34 +341,47 @@ final class SyncManager {
                 Log.sync.warning("Incremental sync: stopped after \(Self.maxSyncPullIterations) pull iterations (safety cap)")
             }
 
-            self.totalNoteCount = max(notesToRefreshContent.count, totalApplied)
+            // Do not run `reconcileCachedNoteBranchesMetadata` here — it walks the entire branch/note tables on every
+            // incremental run and can block the main actor for a long time. Full sync already reconciles; incremental
+            // updates come from `applyBranchRow` / `applyNoteRow`.
 
-            // Download fresh content for notes that were updated.
-            if !notesToRefreshContent.isEmpty {
-                self.phase = .downloadingContent
-                let serverNotes = Dictionary(uniqueKeysWithValues: notesToRefreshContent.map { ($0, "") })
-                let ghostIds = try await self.downloadContent(
-                    serverNotes: serverNotes,
-                    client: client,
-                    profileId: profileId
-                )
-                if !ghostIds.isEmpty {
-                    for gid in ghostIds {
-                        GhostNoteTracker.shared.add(gid, serverProfileId: profileId)
-                        try? self.persistence.deleteCachedNotes(noteIds: [gid], serverProfileId: profileId)
+            // Content downloads only for notes touched in this pull (not a full backfill of every missing body).
+            let serverNotesForContent = notesToRefreshContent
+
+            let ranContentPass: Bool
+            if downloadChangedBodies {
+                self.totalNoteCount = max(serverNotesForContent.count, totalApplied, 1)
+                if !serverNotesForContent.isEmpty {
+                    self.phase = .downloadingContent
+                    let ghostIds = try await self.downloadContent(
+                        serverNotes: serverNotesForContent,
+                        client: client,
+                        profileId: profileId,
+                        protectedBodiesOnly: false
+                    )
+                    if !ghostIds.isEmpty {
+                        for gid in ghostIds {
+                            GhostNoteTracker.shared.add(gid, serverProfileId: profileId)
+                            try? self.persistence.deleteCachedNotes(noteIds: [gid], serverProfileId: profileId)
+                        }
                     }
                 }
+                ranContentPass = !serverNotesForContent.isEmpty
+            } else {
+                self.totalNoteCount = max(totalApplied, 1)
+                ranContentPass = false
             }
 
             if isStale(generation) { return }
-
-            self.lastCompletedSyncUpdatedLocalDatabase = (totalApplied > 0 || deletionCount > 0)
+            self.lastCompletedSyncUpdatedLocalDatabase = (totalApplied > 0 || deletionCount > 0 || ranContentPass)
 
             try? self.persistence.updateSyncStatus(domain: "incrementalSync", serverProfileId: profileId)
             self.lastIncrementalSyncDate = .now
             self.phase = .done
             self.syncProgress = 1.0
-            Log.sync.info("Incremental sync complete: \(self.syncedNoteCount) notes updated, \(deletionCount) deletions")
+            Log.sync.info(
+                "Incremental sync complete: \(self.syncedNoteCount) notes updated, \(deletionCount) deletions\(downloadChangedBodies ? "" : " (metadata only)")"
+            )
 
         } catch {
             if isStale(generation) { return }
@@ -333,13 +396,18 @@ final class SyncManager {
                 serverProfileId: profileId
             )
         }
-
-        if !isStale(generation) {
-            self.isSyncing = false
-        }
     }
 
     // MARK: - Entity Application (from sync/pull rows)
+
+    /// When the key is absent or JSON null, keep `existing`. When present (including `[]`), use the decoded array.
+    /// Sync entity rows often omit tree fields; treating omission as “clear” wiped `childNoteIds` and broke offline sub-note lists.
+    private static func treeStringArrayField(_ d: [String: Any], key: String, existing: [String]?) -> [String] {
+        guard let raw = d[key], !(raw is NSNull) else {
+            return existing ?? []
+        }
+        return FlexJSON.stringArray(raw) ?? []
+    }
 
     private static func indexEntities(_ rows: [[String: Any]], idKey: String) -> [String: [String: Any]] {
         var index: [String: [String: Any]] = [:]
@@ -366,7 +434,7 @@ final class SyncManager {
     }
 
     @discardableResult
-    private func applyNoteRow(_ d: [String: Any], profileId: String, notesToRefresh: inout Set<String>) throws -> Bool {
+    private func applyNoteRow(_ d: [String: Any], profileId: String, notesToRefreshUtc: inout [String: String]) throws -> Bool {
         guard let noteId = FlexJSON.string(d["noteId"]) else { return false }
 
         if FlexJSON.bool(d["isDeleted"]) {
@@ -382,6 +450,10 @@ final class SyncManager {
         let utc = d["utcDateModified"] as? String ?? ""
 
         let existing = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId)
+        let parentNoteIds = Self.treeStringArrayField(d, key: "parentNoteIds", existing: existing?.parentNoteIds)
+        let childNoteIds = Self.treeStringArrayField(d, key: "childNoteIds", existing: existing?.childNoteIds)
+        let parentBranchIds = Self.treeStringArrayField(d, key: "parentBranchIds", existing: existing?.parentBranchIds)
+        let childBranchIds = Self.treeStringArrayField(d, key: "childBranchIds", existing: existing?.childBranchIds)
         let response = NoteResponse(
             noteId: noteId,
             isProtected: isProtected,
@@ -394,14 +466,14 @@ final class SyncManager {
             dateModified: d["dateModified"] as? String ?? "",
             utcDateCreated: d["utcDateCreated"] as? String ?? "",
             utcDateModified: utc,
-            parentNoteIds: existing?.parentNoteIds ?? [],
-            childNoteIds: existing?.childNoteIds ?? [],
-            parentBranchIds: existing?.parentBranchIds ?? [],
-            childBranchIds: existing?.childBranchIds ?? [],
+            parentNoteIds: parentNoteIds,
+            childNoteIds: childNoteIds,
+            parentBranchIds: parentBranchIds,
+            childBranchIds: childBranchIds,
             attributes: []
         )
         try persistence.cacheNoteBatch(from: response, serverProfileId: profileId)
-        if !utc.isEmpty { notesToRefresh.insert(noteId) }
+        notesToRefreshUtc[noteId] = utc.isEmpty ? (notesToRefreshUtc[noteId] ?? "") : utc
         return false
     }
 
@@ -458,7 +530,7 @@ final class SyncManager {
         return false
     }
 
-    private func applyBlobRow(_ d: [String: Any], profileId: String, notesToRefresh: inout Set<String>) throws {
+    private func applyBlobRow(_ d: [String: Any], profileId: String, notesToRefreshUtc: inout [String: String]) throws {
         guard let blobId = FlexJSON.string(d["blobId"]) else { return }
 
         // If the blob content is included, find the note(s) that reference
@@ -470,8 +542,9 @@ final class SyncManager {
                 try? persistence.cacheNoteContent(noteId, content: data, serverProfileId: profileId, utcDateModified: nil)
             }
         }
-        // Blob changes without inline content: the associated notes
-        // will be in `notesToRefresh` via their note entity change.
+        if let noteId = FlexJSON.string(d["noteId"]) {
+            notesToRefreshUtc[noteId] = notesToRefreshUtc[noteId] ?? ""
+        }
         _ = blobId
     }
 
@@ -557,12 +630,21 @@ final class SyncManager {
     private func downloadContent(
         serverNotes: [String: String],
         client: any TriliumClientProtocol,
-        profileId: String
+        profileId: String,
+        protectedBodiesOnly: Bool
     ) async throws -> Set<String> {
-        let noteIdsNeedingContent = try self.persistence.fetchNotesNeedingContent(
-            serverProfileId: profileId,
-            serverModifiedAfter: serverNotes
-        )
+        let noteIdsNeedingContent: [String]
+        if protectedBodiesOnly {
+            noteIdsNeedingContent = try self.persistence.fetchProtectedNotesNeedingContent(
+                serverProfileId: profileId,
+                serverModifiedAfter: serverNotes
+            )
+        } else {
+            noteIdsNeedingContent = try self.persistence.fetchNotesNeedingContent(
+                serverProfileId: profileId,
+                serverModifiedAfter: serverNotes
+            )
+        }
 
         let alreadyUpToDate = self.totalNoteCount - noteIdsNeedingContent.count
         self.syncedNoteCount = max(alreadyUpToDate, 0)

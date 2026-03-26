@@ -88,7 +88,7 @@ struct NoteResponse: Decodable {
 }
 
 extension NoteResponse {
-    /// Builds a API-shaped note payload from a `NoteItem` so live updates (e.g. sharing toggles) can be written to SwiftData.
+    /// Builds an API-shaped note payload from a `NoteItem` so live updates (e.g. sharing toggles) can be written to SwiftData.
     init(forSwiftDataCache item: NoteItem) {
         self.init(
             noteId: item.noteId,
@@ -490,5 +490,12 @@ enum FlexJSON {
         if let v = try? c.decode(Int.self, forKey: key) { return Int64(v) }
         if let s = try? c.decode(String.self, forKey: key), let v = Int64(s) { return v }
         return 0
+    }
+
+    /// Sync / loose JSON dictionaries may use `[String]` or mixed `[Any]`.
+    static func stringArray(_ any: Any?) -> [String]? {
+        if let a = any as? [String] { return a }
+        if let a = any as? [Any] { return a.compactMap { $0 as? String } }
+        return nil
     }
 }

@@ -268,8 +268,11 @@ struct SettingsView: View {
             }
 
             Button {
-                if let client = appState.client, let profileId = appState.activeProfile?.id {
-                    appState.syncManager.fullSync(client: client, profileId: profileId)
+                Task {
+                    guard await appState.refreshTriliumSession() else { return }
+                    if let client = appState.client, let profileId = appState.activeProfile?.id {
+                        appState.syncManager.fullSync(client: client, profileId: profileId)
+                    }
                 }
             } label: {
                 Label("Full Sync (All Notes)", systemImage: "arrow.triangle.2.circlepath")
@@ -370,13 +373,13 @@ struct SettingsView: View {
     }
 
     private func testConnection() async {
-        guard let client = appState.client else { return }
+        guard appState.client != nil else { return }
         isLoadingInfo = true
         defer { isLoadingInfo = false }
+        let ok = await appState.refreshTriliumSession()
+        guard ok, let client = appState.client else { return }
         do {
             appInfo = try await client.getAppInfo()
-            appState.connectionError = nil
-            appState.lastRefreshed = .now
         } catch {
             appState.connectionError = APIError.from(error).localizedDescription
             Log.api.error("Failed to load app info: \(error)")

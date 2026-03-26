@@ -2,6 +2,7 @@ import XCTest
 @testable import Trinote
 
 final class SharedNotesSubtreeLoaderTests: XCTestCase {
+    /// `_share` → `n1` (direct share) → `n2` (child of `n1`); only `n1` is listed.
     func testLoadAllSharedNotes_flattensUnderShareRoot() async throws {
         let mock = MockTriliumClient()
         await mock.seedSharedNotesSubtreeDemo()

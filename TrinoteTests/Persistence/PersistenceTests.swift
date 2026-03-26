@@ -16,6 +16,8 @@ final class PersistenceTests: XCTestCase {
             RecentNote.self,
             RecentSearch.self,
             DraftContent.self,
+            PendingNoteCreation.self,
+            PendingNoteBodyUpload.self,
             SyncStatus.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
@@ -96,14 +98,17 @@ final class PersistenceTests: XCTestCase {
     }
 
     func testMultiProfileIsolation() throws {
+        // `CachedNote.noteId` is unique in the store (not scoped per profile), so each row needs a distinct id.
         try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1", title: "Server1 Note"), serverProfileId: "s1")
-        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1", title: "Server2 Note"), serverProfileId: "s2")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n2", title: "Server2 Note"), serverProfileId: "s2")
         try persistence.commitBatch()
 
         let fromS1 = try persistence.fetchCachedNote(id: "n1", serverProfileId: "s1")
-        let fromS2 = try persistence.fetchCachedNote(id: "n1", serverProfileId: "s2")
+        let fromS2 = try persistence.fetchCachedNote(id: "n2", serverProfileId: "s2")
         XCTAssertEqual(fromS1?.title, "Server1 Note")
         XCTAssertEqual(fromS2?.title, "Server2 Note")
+        XCTAssertNil(try persistence.fetchCachedNote(id: "n1", serverProfileId: "s2"))
+        XCTAssertNil(try persistence.fetchCachedNote(id: "n2", serverProfileId: "s1"))
     }
 
     // MARK: - Cached Branches
@@ -234,12 +239,12 @@ final class PersistenceTests: XCTestCase {
 
     func testClearCacheDoesNotAffectOtherProfiles() throws {
         try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1"), serverProfileId: "s1")
-        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1"), serverProfileId: "s2")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n2"), serverProfileId: "s2")
         try persistence.commitBatch()
 
         try persistence.clearCache(for: "s1")
 
         XCTAssertNil(try persistence.fetchCachedNote(id: "n1", serverProfileId: "s1"))
-        XCTAssertNotNil(try persistence.fetchCachedNote(id: "n1", serverProfileId: "s2"))
+        XCTAssertNotNil(try persistence.fetchCachedNote(id: "n2", serverProfileId: "s2"))
     }
 }

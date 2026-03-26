@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import PhotosUI
 import UIKit
@@ -15,16 +16,41 @@ private enum NoteDetailToolbarQuickAction: String, CaseIterable {
     case findOnPage
 }
 
+private struct NoteDetailShareURLSheetItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 struct NoteDetailView: View {
     let noteId: String
     let title: String
+    /// Populated when opening from the tree so sub-notes match expanded in-memory children offline.
+    var seedChildSummaries: [ChildNoteSummary]? = nil
     var startInEditMode: Bool = false
     /// When set (e.g. from search), opens find-on-page after content loads and jumps to this 1-based match.
     var pendingFindQuery: String? = nil
     var pendingFindMatchIndex: Int? = nil
 
+    init(
+        noteId: String,
+        title: String,
+        seedChildSummaries: [ChildNoteSummary]? = nil,
+        startInEditMode: Bool = false,
+        pendingFindQuery: String? = nil,
+        pendingFindMatchIndex: Int? = nil
+    ) {
+        self.noteId = noteId
+        self.title = title
+        self.seedChildSummaries = seedChildSummaries
+        self.startInEditMode = startInEditMode
+        self.pendingFindQuery = pendingFindQuery
+        self.pendingFindMatchIndex = pendingFindMatchIndex
+        _activeNoteId = State(initialValue: noteId)
+    }
+
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
+    @State private var activeNoteId: String
     @State private var viewModel: NoteDetailViewModel?
     @State private var navigateToNoteId: String?
 
@@ -38,8 +64,7 @@ struct NoteDetailView: View {
     @State private var favoriteNoteIds: Set<String> = []
     @State private var findControl = FindOnPageControl()
     @State private var findDeepLinkConsumed = false
-    @State private var isPresentingShareURLSheet = false
-    @State private var urlToShare: URL?
+    @State private var noteDetailShareURLSheetItem: NoteDetailShareURLSheetItem?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.rename.rawValue
 
@@ -197,7 +222,7 @@ struct NoteDetailView: View {
 
     var body: some View {
         bodyCore
-            .task { await initialLoad() }
+            .task(id: activeNoteId) { await initialLoad() }
             .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
                 NoteDetailView(noteId: linkedNoteId, title: "")
             }
@@ -230,11 +255,16 @@ struct NoteDetailView: View {
                 }
             }
         }
+        .sheet(item: $noteDetailShareURLSheetItem) { item in
+            ShareSheet(items: [item.url])
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private func initialLoad() async {
         if viewModel == nil {
-            let vm = NoteDetailViewModel(noteId: noteId, appState: appState)
+            let vm = NoteDetailViewModel(noteId: activeNoteId, appState: appState, seedChildSummaries: seedChildSummaries)
             viewModel = vm
             await vm.load()
             async let contentTask: () = vm.loadContent()
@@ -257,6 +287,14 @@ struct NoteDetailView: View {
 
         Color.clear
             .frame(width: 0, height: 0)
+            .onReceive(NotificationCenter.default.publisher(for: .trinoteOfflineNoteIdReplaced)) { notification in
+                guard let from = notification.userInfo?["from"] as? String,
+                      let to = notification.userInfo?["to"] as? String,
+                      from == activeNoteId
+                else { return }
+                viewModel = nil
+                activeNoteId = to
+            }
             .onChange(of: needsProtected) { _, needs in
                 if needs == false { protectedDocumentPassword = "" }
                 if needs == false, pendingFindQuery != nil {
@@ -280,6 +318,11 @@ struct NoteDetailView: View {
                 if isEditing == true {
                     findDeepLinkConsumed = true
                 }
+            }
+            .onChange(of: appState.syncManager.phase) { _, phase in
+                guard phase == .done else { return }
+                guard let vm = viewModel else { return }
+                Task { await vm.loadChildNotes() }
             }
     }
 
@@ -318,13 +361,17 @@ struct NoteDetailView: View {
                 if vm.needsProtectedSession {
                     protectedNoteOverlay(vm, note: note)
                 } else if vm.isEditing && note.type == .text {
-                    richTextEditingView(vm)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+                    VStack(spacing: 0) {
+                        editorStatusBanner(vm)
+                        richTextEditingView(vm)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
+                    .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
                 } else {
                     ZStack(alignment: .bottomTrailing) {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 0) {
+                                editorStatusBanner(vm)
                                 draftBanner(vm)
                                 breadcrumbsBar(vm)
                                 titleSection(vm, note: note)
@@ -436,11 +483,6 @@ struct NoteDetailView: View {
             } message: {
                 Text("You have an unsaved draft for this note. Would you like to restore it?")
             }
-            .sheet(isPresented: $isPresentingShareURLSheet, onDismiss: { urlToShare = nil }) {
-                if let u = urlToShare {
-                    ShareSheet(items: [u])
-                }
-            }
         }
     }
 
@@ -498,6 +540,24 @@ struct NoteDetailView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func editorStatusBanner(_ vm: NoteDetailViewModel) -> some View {
+        if let msg = vm.transientEditorMessage {
+            HStack(spacing: 8) {
+                Image(systemName: "icloud.and.arrow.up")
+                    .font(.caption)
+                Text(msg)
+                    .font(.caption.weight(.medium))
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+        }
     }
 
     @ViewBuilder
@@ -843,7 +903,9 @@ struct NoteDetailView: View {
     @ViewBuilder
     private func codeEditingView(_ vm: NoteDetailViewModel) -> some View {
         @Bindable var vm = vm
-        ZStack(alignment: .bottomTrailing) {
+        VStack(spacing: 0) {
+            editorStatusBanner(vm)
+            ZStack(alignment: .bottomTrailing) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Source")
@@ -874,6 +936,7 @@ struct NoteDetailView: View {
                     .padding(.bottom, 12)
                     .transition(.scale(scale: 0.88).combined(with: .opacity))
                     .zIndex(2)
+            }
             }
         }
         .onAppear {
@@ -1080,32 +1143,7 @@ struct NoteDetailView: View {
                     .applyMenuKeepOpenOnAction()
 
                     if vm.isSharedPublicly {
-                        Button {
-                            if let u = vm.shareURLForCurrentNote() {
-                                UIPasteboard.general.string = u.absoluteString
-                            }
-                        } label: {
-                            Label(
-                                String(localized: "Copy share link", comment: "Copy public Trilium URL"),
-                                systemImage: "doc.on.doc"
-                            )
-                            .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
-                        }
-                        .disabled(vm.shareURLForCurrentNote() == nil)
-
-                        Button {
-                            if let u = vm.shareURLForCurrentNote() {
-                                urlToShare = u
-                                isPresentingShareURLSheet = true
-                            }
-                        } label: {
-                            Label(
-                                String(localized: "Share link…", comment: "System share sheet for URL"),
-                                systemImage: "square.and.arrow.up"
-                            )
-                            .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
-                        }
-                        .disabled(vm.shareURLForCurrentNote() == nil)
+                        noteDetailShareLinkButtons(vm: vm)
                     }
                 }
 
@@ -1280,6 +1318,42 @@ struct NoteDetailView: View {
             favoriteNoteIds = Set(favs.map(\.noteId))
         } catch {
             Log.persistence.error("Failed to load favorite IDs: \(error.localizedDescription)")
+        }
+    }
+
+    @ViewBuilder
+    private func noteDetailShareLinkButtons(vm: NoteDetailViewModel) -> some View {
+        let shareURL = vm.shareURLForCurrentNote()
+        Button {
+            if let u = shareURL {
+                UIPasteboard.general.string = u.absoluteString
+            }
+        } label: {
+            Label(
+                String(localized: "Copy share link", comment: "Copy public Trilium URL"),
+                systemImage: "doc.on.doc"
+            )
+            .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
+        }
+        .disabled(shareURL == nil)
+
+        Button {
+            if let u = shareURL {
+                scheduleNoteDetailShareURLSheet(url: u)
+            }
+        } label: {
+            Label(
+                String(localized: "Share link…", comment: "System share sheet for URL"),
+                systemImage: "square.and.arrow.up"
+            )
+            .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
+        }
+        .disabled(shareURL == nil)
+    }
+
+    private func scheduleNoteDetailShareURLSheet(url: URL) {
+        TrinoteDeferredSystemShareSheet.schedulePresentation {
+            noteDetailShareURLSheetItem = NoteDetailShareURLSheetItem(url: url)
         }
     }
 

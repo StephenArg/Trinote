@@ -128,12 +128,22 @@ actor MockTriliumClient: TriliumClientProtocol {
         let title = src.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Note (copy)"
             : "\(src.title) (copy)"
-        let content = String(data: data, encoding: .utf8) ?? ""
+        return try await createChildNoteWithContent(
+            parentNoteId: parentNoteId,
+            title: title,
+            noteType: src.type,
+            mime: src.mime,
+            body: data
+        )
+    }
+
+    func createChildNoteWithContent(parentNoteId: String, title: String, noteType: String, mime: String, body: Data) async throws -> CreateNoteResponse {
+        let content = String(data: body, encoding: .utf8) ?? ""
         let req = CreateNoteRequest(
             parentNoteId: parentNoteId,
             title: title,
-            type: src.type,
-            mime: src.mime,
+            type: noteType,
+            mime: mime,
             content: content,
             notePosition: nil,
             prefix: nil,
@@ -196,9 +206,10 @@ actor MockTriliumClient: TriliumClientProtocol {
         deleteAttributeCalls.append((noteId: noteId, attributeId: attributeId))
     }
 
-    /// Fixture for `SharedNotesSubtreeLoader` tests (`_share` → `n1`).
+    /// Fixture for `SharedNotesSubtreeLoader` tests: `_share` → `n1` (explicit share) → `n2` (subnote; not a direct `_share` child).
     func seedSharedNotesSubtreeDemo() {
         let brS1 = TestFixtures.branchResponse(branchId: "brS1", noteId: "n1", parentNoteId: "_share")
+        let brN2 = TestFixtures.branchResponse(branchId: "brN2", noteId: "n2", parentNoteId: "n1")
         noteResults["_share"] = .success(
             TestFixtures.noteResponse(
                 id: "_share",
@@ -209,14 +220,24 @@ actor MockTriliumClient: TriliumClientProtocol {
             )
         )
         branchResults["brS1"] = .success(brS1)
+        branchResults["brN2"] = .success(brN2)
         noteResults["n1"] = .success(
             TestFixtures.noteResponse(
                 id: "n1",
                 title: "Alpha",
                 parentNoteIds: ["_share"],
+                childNoteIds: ["n2"],
+                childBranchIds: ["brN2"],
                 attributes: [
                     TestFixtures.attributeResponse(attributeId: "sh1", noteId: "n1", name: TriliumSharing.sharedLabelName, value: ""),
                 ]
+            )
+        )
+        noteResults["n2"] = .success(
+            TestFixtures.noteResponse(
+                id: "n2",
+                title: "Sub under shared",
+                parentNoteIds: ["n1"]
             )
         )
     }

@@ -32,6 +32,13 @@ struct MainTabView: View {
                     .tag(tab)
             }
         }
+        .onChange(of: appState.networkMonitor.isConnected) { _, online in
+            guard online, appState.isAuthenticated else { return }
+            Task {
+                let refreshed = await appState.refreshTriliumSession()
+                await appState.flushPendingLocalChangesIfPossible(assumeSessionIsReady: refreshed)
+            }
+        }
     }
 
     @ViewBuilder
@@ -44,7 +51,7 @@ struct MainTabView: View {
         case .favorites:
             NavigationStack {
                 FavoritesView(onNoteDeleted: {
-                    Task { await appState.runIncrementalSync() }
+                    Task { await appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false) }
                 })
             }
         case .search:

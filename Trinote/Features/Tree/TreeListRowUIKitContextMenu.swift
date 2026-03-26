@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// Drives a `UIContextMenuInteraction` so the Share / Sharing toggle can use `keepsMenuPresented` and
-/// `updateVisibleMenu` — SwiftUI’s `.contextMenu` snapshots content and cannot refresh while open.
+/// `updateVisibleMenu` — SwiftUI's `.contextMenu` snapshots content and cannot refresh while open.
 struct TreeListRowContextMenuModel {
     var note: NoteItem
     var vm: TreeViewModel
@@ -14,7 +14,6 @@ struct TreeListRowContextMenuModel {
     var onDuplicateSuccess: (NoteItem) -> Void
     var onFavoriteToggle: () -> Void
     var onDelete: () -> Void
-    /// Caller should defer flipping the sheet binding (e.g. two `DispatchQueue.main.async`) so presentation waits until the UIKit context menu has dismissed.
     var onPresentShareSheet: (URL) -> Void
     var onSharingError: (String) -> Void
 }
@@ -32,11 +31,13 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
         coordinator.model = model
         let host = UIHostingController(rootView: AnyView(content()))
         host.view.backgroundColor = .clear
+        host.view.clipsToBounds = true
         host.view.translatesAutoresizingMaskIntoConstraints = false
         coordinator.hostingController = host
 
         let box = UIView()
         box.backgroundColor = .clear
+        box.clipsToBounds = true
         box.addSubview(host.view)
         NSLayoutConstraint.activate([
             host.view.topAnchor.constraint(equalTo: box.topAnchor),
@@ -45,8 +46,11 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
             host.view.bottomAnchor.constraint(equalTo: box.bottomAnchor),
         ])
 
+        // Attach interaction to the container that lives in UIKit's hierarchy.
+        // Attaching to `host.view` makes UIKit resolve the detached `UIHostingController`
+        // as presenter, which triggers "presenting from detached view controller".
         let interaction = UIContextMenuInteraction(delegate: coordinator)
-        host.view.addInteraction(interaction)
+        box.addInteraction(interaction)
         coordinator.menuInteraction = interaction
 
         return box
@@ -62,7 +66,7 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
         let w = proposal.width ?? UIView.layoutFittingExpandedSize.width
         let target = CGSize(width: w, height: UIView.layoutFittingCompressedSize.height)
         let fitted = host.sizeThatFits(in: target)
-        return CGSize(width: w, height: max(fitted.height, 44))
+        return CGSize(width: w, height: ceil(max(fitted.height, 44)))
     }
 
     final class Coordinator: NSObject, UIContextMenuInteractionDelegate {
@@ -77,39 +81,6 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
                 guard let self else { return nil }
                 return UIMenu(title: "", children: self.buildMenuChildren())
             }
-        }
-
-        /// Anchor the menu near the **leading** edge of the row so it opens toward the left (LTR) instead of from the trailing side.
-        func contextMenuInteraction(
-            _ interaction: UIContextMenuInteraction,
-            previewForHighlightingMenuWith _: UIContextMenuConfiguration
-        ) -> UITargetedPreview? {
-            leadingEdgeMenuPreview(interaction: interaction)
-        }
-
-        func contextMenuInteraction(
-            _ interaction: UIContextMenuInteraction,
-            previewForDismissingMenuWith _: UIContextMenuConfiguration
-        ) -> UITargetedPreview? {
-            leadingEdgeMenuPreview(interaction: interaction)
-        }
-
-        private func leadingEdgeMenuPreview(interaction: UIContextMenuInteraction) -> UITargetedPreview? {
-            guard let view = interaction.view else { return nil }
-            let bounds = view.bounds
-            let inset = min(28.0, max(8.0, bounds.width * 0.12))
-            let x: CGFloat
-            switch view.effectiveUserInterfaceLayoutDirection {
-            case .rightToLeft:
-                x = bounds.maxX - inset
-            default:
-                x = bounds.minX + inset
-            }
-            let center = CGPoint(x: x, y: bounds.midY)
-            let parameters = UIPreviewParameters()
-            parameters.backgroundColor = .clear
-            let target = UIPreviewTarget(container: view, center: center)
-            return UITargetedPreview(view: view, parameters: parameters, target: target)
         }
 
         private func buildMenuChildren() -> [UIMenuElement] {

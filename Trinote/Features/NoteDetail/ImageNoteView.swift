@@ -58,8 +58,5 @@ struct ShareSheet: UIViewControllerRepresentable {
         return activity
     }
 
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
-        uiViewController.view.setNeedsLayout()
-        uiViewController.view.layoutIfNeeded()
-    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

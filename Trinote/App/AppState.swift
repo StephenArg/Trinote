@@ -21,6 +21,10 @@ final class AppState {
 
     private var realtime: TriliumWebSocketConnection?
 
+    /// Ensures only one offline queue flush runs at a time. Concurrent callers await the same run (then return without duplicating work).
+    private var offlineFlushInFlight = false
+    private var offlineFlushWaiters: [CheckedContinuation<Void, Never>] = []
+
     var isOnline: Bool { networkMonitor.isConnected }
 
     /// Ends the Trilium protected-note session on the server and persists cookies. Call after restoring the main session and when the app goes to the background so the document password is required again.
@@ -36,17 +40,249 @@ final class AppState {
 
     /// Runs entity-pull incremental sync (or full sync if none completed yet) when session + instance id exist.
     /// Waits until the sync task finishes or `maxWaitSeconds` elapses so callers (e.g. tree reload) see fresh data.
-    func runIncrementalSync(maxWaitSeconds: TimeInterval = 180) async {
+    /// - Parameter downloadChangedBodies: Pass `false` for pull-to-refresh / tree toolbar: metadata updates only; bodies load on note open.
+    func runIncrementalSync(maxWaitSeconds: TimeInterval = 180, downloadChangedBodies: Bool = true) async {
+        guard networkMonitor.isConnected else { return }
         guard let client, let profile = activeProfile else { return }
         guard let iid = try? await keychain.loadTriliumInstanceId(forServer: profile.id) else { return }
-        self.syncManager.incrementalSync(client: client, profileId: profile.id, triliumInstanceId: iid)
+        self.syncManager.incrementalSync(
+            client: client,
+            profileId: profile.id,
+            triliumInstanceId: iid,
+            downloadChangedBodies: downloadChangedBodies
+        )
         await waitWhileSyncing(atMost: maxWaitSeconds)
     }
 
+    /// Re-validates cookies (`/api/app-info`) and refreshes CSRF. Use after the network returns so the next API calls don’t use a stale session from when the device was offline.
+    @discardableResult
+    func refreshTriliumSession(timeoutSeconds: TimeInterval = 18) async -> Bool {
+        guard networkMonitor.isConnected,
+              let client,
+              activeProfile != nil,
+              isAuthenticated
+        else { return false }
+        do {
+            if let tc = client as? TriliumClient {
+                try await restoreSessionWithTimeout(client: tc, seconds: timeoutSeconds)
+            } else {
+                try await client.restoreSession()
+            }
+            connectionError = nil
+            lastRefreshed = .now
+            if let tc = client as? TriliumClient, let profile = activeProfile {
+                let data = await tc.exportSessionCookieData()
+                try? await keychain.saveSessionCookies(data, forServer: profile.id)
+            }
+            return true
+        } catch {
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError { return false }
+            connectionError = apiError.localizedDescription
+            Log.auth.warning("Trilium session refresh failed: \(error)")
+            return false
+        }
+    }
+
+    /// Refreshes the server session, pushes offline queues, incremental sync, then WebSocket. Prefer this for the tree toolbar / manual quick sync right after reconnect.
+    func refreshSessionThenIncrementalSync(maxWaitSeconds: TimeInterval = 180, downloadChangedBodies: Bool = true) async {
+        guard networkMonitor.isConnected,
+              client != nil,
+              activeProfile != nil,
+              isAuthenticated
+        else { return }
+        connectionError = nil
+        let ok = await refreshTriliumSession()
+        guard ok else { return }
+        await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
+        await runIncrementalSync(maxWaitSeconds: maxWaitSeconds, downloadChangedBodies: downloadChangedBodies)
+        startRealtimeIfPossible()
+    }
+
     private func waitWhileSyncing(atMost seconds: TimeInterval) async {
+        guard seconds > 0 else { return }
         let deadline = Date().addingTimeInterval(seconds)
         while syncManager.isSyncing, Date() < deadline {
             try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if syncManager.isSyncing {
+            Log.sync.warning("Sync still running after \(Int(seconds))s wait — cancelling so the user can retry")
+            syncManager.cancel()
+        }
+    }
+
+    /// Creates notes queued while offline (`PendingNoteCreation`), then pushes pending body uploads. Order matters for nested offline children.
+    /// - Parameter assumeSessionIsReady: Set `true` when this is called immediately after `restoreSession` / login so we don’t repeat a network round-trip for the creation phase.
+    func flushPendingLocalChangesIfPossible(assumeSessionIsReady: Bool = false) async {
+        if offlineFlushInFlight {
+            await withCheckedContinuation { offlineFlushWaiters.append($0) }
+            return
+        }
+        offlineFlushInFlight = true
+        defer {
+            offlineFlushInFlight = false
+            let waiters = offlineFlushWaiters
+            offlineFlushWaiters.removeAll()
+            for w in waiters { w.resume() }
+        }
+        await flushPendingNoteCreationsIfPossible(assumeSessionIsReady: assumeSessionIsReady)
+        await flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
+    }
+
+    func flushPendingNoteCreationsIfPossible(assumeSessionIsReady: Bool = false) async {
+        guard networkMonitor.isConnected,
+              let client,
+              let profile = activeProfile
+        else { return }
+        let profileId = profile.id
+        do {
+            let pending = try persistence.fetchPendingNoteCreations(serverProfileId: profileId)
+            guard !pending.isEmpty else { return }
+        } catch {
+            Log.sync.warning("Failed to read pending note creations: \(error)")
+            return
+        }
+        if !assumeSessionIsReady, let tc = client as? TriliumClient {
+            do {
+                try await restoreSessionWithTimeout(client: tc, seconds: 10)
+            } catch {
+                Log.sync.warning("Pending note creation flush skipped — session refresh failed: \(error)")
+                return
+            }
+        }
+        if protectedSessionActive {
+            try? await client.touchProtectedSession()
+        }
+        var idMap: [String: String] = [:]
+        var didApplyAny = false
+        // Re-fetch after each success so parent→child order and parent id rewrites from SwiftData are always current.
+        // A single snapshot `for row in rows` plus concurrent flushes caused duplicate `createNote` calls and crashes.
+        while true {
+            let rows: [PendingNoteCreation]
+            do {
+                rows = try persistence.fetchPendingNoteCreations(serverProfileId: profileId)
+            } catch {
+                Log.sync.warning("Failed to read pending note creations: \(error)")
+                return
+            }
+            guard let row = rows.first else { break }
+            let resolvedParent = idMap[row.parentNoteId] ?? row.parentNoteId
+            let request = CreateNoteRequest(
+                parentNoteId: resolvedParent,
+                title: row.title,
+                type: row.noteType,
+                mime: row.mime,
+                content: row.initialContent,
+                notePosition: nil,
+                prefix: nil,
+                isProtected: nil,
+                noteId: nil,
+                branchId: nil
+            )
+            do {
+                let response = try await client.createNote(request)
+                let newId = response.note.noteId
+                idMap[row.localNoteId] = newId
+                try persistence.applyOfflineNoteCreationServerResult(
+                    queueRowId: row.id,
+                    localNoteId: row.localNoteId,
+                    localBranchId: row.localBranchId,
+                    response: response,
+                    serverProfileId: profileId
+                )
+                NotificationCenter.default.post(
+                    name: .trinoteOfflineNoteIdReplaced,
+                    object: nil,
+                    userInfo: ["from": row.localNoteId, "to": newId]
+                )
+                didApplyAny = true
+                Log.sync.info("Flushed offline-created note \(row.localNoteId) → \(newId)")
+            } catch {
+                Log.sync.warning("Pending note creation failed for \(row.localNoteId): \(error)")
+                break
+            }
+        }
+        if didApplyAny {
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        }
+    }
+
+    /// Pushes bodies queued while offline (`PendingNoteBodyUpload`) after `restoreSession` has obtained CSRF.
+    /// - Parameter assumeSessionIsReady: Set `true` when this is called immediately after `restoreSession` / login so we don’t repeat a network round-trip.
+    func flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: Bool = false) async {
+        guard networkMonitor.isConnected,
+              let client,
+              let profile = activeProfile
+        else { return }
+        let profileId = profile.id
+        let pending: [PendingNoteBodyUpload]
+        do {
+            pending = try persistence.fetchPendingNoteBodyUploads(serverProfileId: profileId)
+        } catch {
+            Log.sync.warning("Failed to read pending body uploads: \(error)")
+            return
+        }
+        guard !pending.isEmpty else { return }
+        if !assumeSessionIsReady, let tc = client as? TriliumClient {
+            do {
+                try await restoreSessionWithTimeout(client: tc, seconds: 10)
+            } catch {
+                Log.sync.warning("Pending body upload flush skipped — session refresh failed: \(error)")
+                return
+            }
+        }
+        if protectedSessionActive {
+            try? await client.touchProtectedSession()
+        }
+        for row in pending {
+            do {
+                let fresh = try? await client.getNote(row.noteId)
+                let base = row.baseUtcDateModified.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let fresh {
+                    let serverMod = fresh.utcDateModified.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let canDetectConflict = !base.isEmpty && !serverMod.isEmpty
+                    if canDetectConflict, serverMod != base {
+                        if fresh.isProtected {
+                            try await client.updateNoteContent(row.noteId, content: row.body, contentType: row.mime)
+                            Log.sync.warning(
+                                "Offline body conflict for protected note \(row.noteId): applied overwrite (duplicate not supported)."
+                            )
+                        } else {
+                            let parentId = fresh.parentNoteIds.first ?? "root"
+                            let trimmedTitle = fresh.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let conflictSuffix = String(localized: " (ios-sync-conflict)", comment: "Appended to note title for offline/server merge conflict sibling")
+                            let newTitle: String
+                            if trimmedTitle.isEmpty {
+                                newTitle = String(localized: "Note (ios-sync-conflict)", comment: "Title when original note has no title and iOS saved a conflict copy")
+                            } else {
+                                newTitle = "\(trimmedTitle)\(conflictSuffix)"
+                            }
+                            let response = try await client.createChildNoteWithContent(
+                                parentNoteId: parentId,
+                                title: newTitle,
+                                noteType: fresh.type,
+                                mime: fresh.mime,
+                                body: row.body
+                            )
+                            try? persistence.cacheNote(from: response.note, serverProfileId: profileId)
+                            try? persistence.cacheBranch(from: response.branch, serverProfileId: profileId)
+                            try? persistence.commitBatch()
+                            Log.sync.info(
+                                "Offline body conflict for \(row.noteId): saved iOS copy as new note \(response.note.noteId) under \(parentId)"
+                            )
+                        }
+                        try? persistence.deletePendingNoteBodyUpload(noteId: row.noteId, serverProfileId: profileId)
+                        NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+                        continue
+                    }
+                }
+                try await client.updateNoteContent(row.noteId, content: row.body, contentType: row.mime)
+                try? persistence.deletePendingNoteBodyUpload(noteId: row.noteId, serverProfileId: profileId)
+                Log.sync.info("Flushed offline-edited body for note \(row.noteId)")
+            } catch {
+                Log.sync.warning("Pending body upload failed for \(row.noteId): \(error)")
+                break
+            }
         }
     }
 
@@ -103,17 +339,52 @@ final class AppState {
         realtime?.start()
     }
 
+    /// Bounded wait so offline / captive networks don’t leave bootstrap on “Connecting…” until URLSession’s default timeout.
+    private func restoreSessionWithTimeout(client: TriliumClient, seconds: TimeInterval = 12) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await client.restoreSession()
+            }
+            group.addTask {
+                let ns = UInt64(seconds * 1_000_000_000)
+                try await Task.sleep(nanoseconds: ns)
+                throw APIError.timeout
+            }
+            try await group.next()!
+            group.cancelAll()
+        }
+    }
+
+    /// Use SwiftData branch rows to repopulate `CachedNote` parent/child id lists (fixes detail sub-notes when incremental rows omitted tree fields).
+    private func enterOfflineCacheMode(profile: ServerProfile) async {
+        self.isAuthenticated = true
+        self.connectionError = String(localized: "Offline — showing cached notes. Connect to refresh.", comment: "Banner when launch continues without server")
+        self.lastRefreshed = nil
+        try? persistence.setActiveProfile(profile)
+        Log.auth.info("Proceeding offline with persisted session cookies for \(profile.name)")
+        _ = try? await triliumInstanceId(for: profile)
+        try? persistence.reconcileCachedNoteBranchesMetadata(serverProfileId: profile.id)
+        await runIncrementalSync(maxWaitSeconds: 0)
+        startRealtimeIfPossible()
+    }
+
     /// Restore session cookies; validate with `/api/app-info`.
     private func activateProfileSilently(_ profile: ServerProfile) async {
         guard let url = profile.url else { return }
         let cookieData = try? await keychain.loadSessionCookies(forServer: profile.id)
         let newClient = TriliumClient(baseURL: url, persistedCookieData: cookieData)
+        let hadPersistedSessionCookies = cookieData.map { !$0.isEmpty } ?? false
 
         self.client = newClient
         self.activeProfile = profile
 
+        if !networkMonitor.isConnected, hadPersistedSessionCookies {
+            await enterOfflineCacheMode(profile: profile)
+            return
+        }
+
         do {
-            try await newClient.restoreSession()
+            try await restoreSessionWithTimeout(client: newClient, seconds: 12)
             await endServerProtectedSessionAndPersistCookies()
             self.isAuthenticated = true
             self.connectionError = nil
@@ -123,12 +394,22 @@ final class AppState {
             try? await keychain.saveSessionCookies(exported, forServer: profile.id)
             Log.auth.info("Connected to \(profile.name)")
             _ = try await triliumInstanceId(for: profile)
-            await runIncrementalSync(maxWaitSeconds: 180)
+            await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
+            // Do not block launch on full/incremental sync (large vaults can take a long time).
+            await runIncrementalSync(maxWaitSeconds: 0)
             startRealtimeIfPossible()
         } catch {
-            self.isAuthenticated = false
-            self.connectionError = APIError.from(error).localizedDescription
-            Log.auth.warning("Session restore failed: \(error)")
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError { return }
+            // Without network (or restore timeout), fall back to SwiftData when cookies exist.
+            let canUseCacheOffline = hadPersistedSessionCookies && !apiError.isAuthError && apiError.isNetworkError
+            if canUseCacheOffline {
+                await enterOfflineCacheMode(profile: profile)
+            } else {
+                self.isAuthenticated = false
+                self.connectionError = apiError.localizedDescription
+                Log.auth.warning("Session restore failed: \(error)")
+            }
         }
     }
 
@@ -151,7 +432,8 @@ final class AppState {
             try? await keychain.saveSessionCookies(exported, forServer: profile.id)
             syncManager.restoreSyncState(profileId: profile.id)
             _ = try await triliumInstanceId(for: profile)
-            await runIncrementalSync(maxWaitSeconds: 180)
+            await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
+            await runIncrementalSync(maxWaitSeconds: 30)
             startRealtimeIfPossible()
         } catch {
             self.client = newClient
@@ -182,7 +464,8 @@ final class AppState {
         Log.auth.info("Logged in to \(profile.name) (session)")
         syncManager.restoreSyncState(profileId: profile.id)
         _ = try await triliumInstanceId(for: profile)
-        await runIncrementalSync(maxWaitSeconds: 180)
+        await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
+        await runIncrementalSync(maxWaitSeconds: 30)
         startRealtimeIfPossible()
     }
 
@@ -228,15 +511,21 @@ final class AppState {
     /// Called when app returns to foreground
     func onForegroundResume() async {
         guard isAuthenticated, let client, let profile = activeProfile else { return }
+        guard networkMonitor.isConnected else { return }
         do {
-            try await client.restoreSession()
+            if let tc = client as? TriliumClient {
+                try await restoreSessionWithTimeout(client: tc, seconds: 12)
+            } else {
+                try await client.restoreSession()
+            }
             connectionError = nil
             lastRefreshed = .now
             if let tc = client as? TriliumClient {
                 let data = await tc.exportSessionCookieData()
                 try? await keychain.saveSessionCookies(data, forServer: profile.id)
             }
-            await runIncrementalSync(maxWaitSeconds: 90)
+            await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
+            await runIncrementalSync(maxWaitSeconds: 15)
             startRealtimeIfPossible()
         } catch {
             connectionError = APIError.from(error).localizedDescription

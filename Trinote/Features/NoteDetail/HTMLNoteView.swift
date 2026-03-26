@@ -409,13 +409,52 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     onNoteLinkTapped?(noteId)
                 }
             case "checkboxToggle":
-                if let dict = message.body as? [String: Any],
-                   let index = dict["index"] as? Int,
-                   let checked = dict["checked"] as? Bool {
-                    onCheckboxToggled?(index, checked)
-                }
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                      let index = Self.intFromScriptValue(dict["index"]),
+                      let checked = Self.boolFromScriptValue(dict["checked"])
+                else { return }
+                onCheckboxToggled?(index, checked)
             default:
                 break
+            }
+        }
+
+        /// WKWebView often delivers `postMessage` numbers as `NSNumber` / `Double`, so `as? Int` fails silently.
+        private static func dictionaryFromScriptMessageBody(_ body: Any) -> [String: Any]? {
+            if let d = body as? [String: Any] { return d }
+            guard let ns = body as? [AnyHashable: Any] else { return nil }
+            var out: [String: Any] = [:]
+            for (k, v) in ns {
+                let key: String?
+                if let s = k as? String {
+                    key = s
+                } else if let s = k as? NSString {
+                    key = s as String
+                } else {
+                    key = nil
+                }
+                guard let key else { continue }
+                out[key] = v
+            }
+            return out
+        }
+
+        private static func intFromScriptValue(_ value: Any?) -> Int? {
+            switch value {
+            case let i as Int: return i
+            case let n as NSNumber: return n.intValue
+            case let d as Double: return Int(d)
+            case let s as String: return Int(s)
+            default: return nil
+            }
+        }
+
+        private static func boolFromScriptValue(_ value: Any?) -> Bool? {
+            switch value {
+            case let b as Bool: return b
+            case let n as NSNumber: return n.boolValue
+            case let i as Int: return i != 0
+            default: return nil
             }
         }
 

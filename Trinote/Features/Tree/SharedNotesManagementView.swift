@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Loads all notes under Trilium’s `_share` system subtree (same idea as “Show shared notes” in the desktop app).
+/// Loads notes **directly** under Trilium’s `_share` root (explicit public placements).
+/// Descendants of those clones (subnotes of a shared note) are omitted — they inherit the parent’s share but are not separate “shared” toggles.
 enum SharedNotesSubtreeLoader {
     static func loadAllSharedNotes(client: any TriliumClientProtocol) async throws -> [NoteItem] {
         let rootResponse = try await client.getNote("_share")
@@ -26,7 +27,8 @@ enum SharedNotesSubtreeLoader {
         }
 
         try await visit(root)
-        return collected.sorted { a, b in
+        let explicitOnly = collected.filter { TriliumSharing.isPublishedUnderShareRoot(note: $0) }
+        return explicitOnly.sorted { a, b in
             let ta = a.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? a.noteId : a.title
             let tb = b.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? b.noteId : b.title
             return ta.localizedCaseInsensitiveCompare(tb) == .orderedAscending

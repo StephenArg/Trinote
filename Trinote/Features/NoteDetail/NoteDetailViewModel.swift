@@ -27,6 +27,9 @@ final class NoteDetailViewModel {
     var saveError: String?
     var showSaveError = false
     var hasDraft = false
+    /// Short-lived hint after offline save (e.g. queued for upload).
+    var transientEditorMessage: String?
+    @ObservationIgnored private var transientEditorMessageTask: Task<Void, Never>?
 
     // Title edit
     var editingTitle = false
@@ -57,15 +60,18 @@ final class NoteDetailViewModel {
 
     let noteId: String
     private let appState: AppState
+    /// From the tree when opening a note whose children are in memory but not (yet) in SwiftData — critical offline.
+    @ObservationIgnored private let seedChildSummaries: [ChildNoteSummary]?
     private let persistence = PersistenceManager.shared
     private var draftAutoSaveTask: Task<Void, Never>?
     private var serverContentHash: Int?
     /// The server's utcDateModified for the current note, set during metadata fetch.
     private var serverUtcDateModified: String?
 
-    init(noteId: String, appState: AppState) {
+    init(noteId: String, appState: AppState, seedChildSummaries: [ChildNoteSummary]? = nil) {
         self.noteId = noteId
         self.appState = appState
+        self.seedChildSummaries = seedChildSummaries
     }
 
     var client: (any TriliumClientProtocol)? { appState.client }
@@ -160,12 +166,23 @@ final class NoteDetailViewModel {
 
         // Show cached data immediately
         loadFromCache()
+        // Hydrate body from SwiftData before any network await. Otherwise `load()` can sit on
+        // getNote + share-state checks while the UI already has a title but `contentString`
+        // stays nil until `loadContent()` runs (after this method returns).
+        loadContentFromCache()
 
         if let note, let profileId = self.serverProfileId {
             try? self.persistence.recordRecentNote(
                 noteId: nid, title: note.title,
                 noteType: note.type.rawValue, serverProfileId: profileId
             )
+        }
+
+        rebuildBreadcrumbsFromCache()
+
+        // Do not await getNote while offline — same long URLSession stall as bootstrap “Connecting…”.
+        if !appState.isOnline {
+            return
         }
 
         // Background server refresh
@@ -223,9 +240,17 @@ final class NoteDetailViewModel {
 
         if !note.isProtected {
             self.needsProtectedSession = false
+        } else if !appState.protectedSessionActive, contentString == nil, content == nil {
+            // `loadContentFromCache` skips protected bodies until unlock — keep overlay visible offline too.
+            self.needsProtectedSession = true
         }
 
         self.checkForDraft()
+
+        // When offline, rely on SwiftData only; avoid getNoteContent timeouts and a stuck loading state.
+        if !appState.isOnline {
+            return
+        }
 
         guard let client else { return }
         let profileId = self.serverProfileId ?? ""
@@ -425,9 +450,7 @@ final class NoteDetailViewModel {
                 self.serverVerified = true
                 await updateSharedPublicState(client: client)
             }
-            if let note, !note.childNoteIds.isEmpty {
-                loadChildNotesFromCache(childNoteIds: note.childNoteIds)
-            }
+            await loadChildNotes()
             return
         }
 
@@ -471,6 +494,7 @@ final class NoteDetailViewModel {
         }
 
         guard let data = fetchedData else {
+            await loadChildNotes()
             return
         }
         self.content = data
@@ -492,9 +516,7 @@ final class NoteDetailViewModel {
         }
         self.checkForDraft()
 
-        if let note, !note.childNoteIds.isEmpty {
-            loadChildNotesFromCache(childNoteIds: note.childNoteIds)
-        }
+        await loadChildNotes()
     }
 
     func loadAttachments() async {
@@ -520,7 +542,7 @@ final class NoteDetailViewModel {
     // MARK: - Checkbox Toggle
 
     func toggleCheckbox(index: Int, checked: Bool) {
-        guard let raw = rawContentString else { return }
+        guard let raw = rawContentString ?? contentString else { return }
 
         let checkboxPattern = try! NSRegularExpression(
             pattern: #"<input\s+[^>]*type\s*=\s*["']checkbox["'][^>]*/?\s*>"#,
@@ -571,21 +593,40 @@ final class NoteDetailViewModel {
             }
         }
 
-        Task {
+        Task { @MainActor in
             await saveCheckboxChange(newRaw)
         }
     }
 
     private func saveCheckboxChange(_ html: String) async {
-        guard let client, note != nil else { return }
+        guard let note else { return }
         let nid = self.noteId
+        let data = Data(html.utf8)
+        let mime = note.mime
+        guard let profileId = serverProfileId else { return }
+
+        if !appState.isOnline {
+            do {
+                try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
+                try persistence.upsertPendingNoteBodyUpload(
+                    noteId: nid,
+                    body: data,
+                    mime: mime,
+                    serverProfileId: profileId,
+                    baseUtcDateModified: serverUtcDateModified
+                )
+                self.content = data
+            } catch {
+                Log.api.error("Failed to save checkbox state offline: \(error)")
+            }
+            return
+        }
+
+        guard let client else { return }
         do {
-            let data = Data(html.utf8)
             try await client.updateNoteContent(nid, content: data, contentType: "text/html")
             self.content = data
-            if let profileId = self.serverProfileId {
-                try? self.persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId)
-            }
+            try? self.persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId)
         } catch {
             Log.api.error("Failed to save checkbox state: \(error)")
         }
@@ -670,6 +711,53 @@ final class NoteDetailViewModel {
 
     // MARK: - Saving
 
+    private func showTransientEditorMessage(_ message: String) {
+        transientEditorMessage = message
+        transientEditorMessageTask?.cancel()
+        transientEditorMessageTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            transientEditorMessage = nil
+        }
+    }
+
+    /// Persists edited HTML locally and queues upload when the API session (CSRF) is available again.
+    private func saveNoteBodyOffline(note: NoteItem) async {
+        let nid = noteId
+        let data = Data(editableContent.utf8)
+        guard let profileId = serverProfileId else { return }
+        isSaving = true
+        saveError = nil
+        showSaveError = false
+        defer { isSaving = false }
+        do {
+            try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
+            try persistence.upsertPendingNoteBodyUpload(
+                noteId: nid,
+                body: data,
+                mime: note.mime,
+                serverProfileId: profileId,
+                baseUtcDateModified: serverUtcDateModified
+            )
+            content = data
+            contentString = editableContent
+            rawContentString = editableContent
+            serverContentHash = editableContent.hashValue
+            try? persistence.deleteDraft(noteId: nid, serverProfileId: profileId)
+            isEditing = false
+            hasDraft = false
+            draftAutoSaveTask?.cancel()
+            showTransientEditorMessage(
+                String(localized: "Saved on this device. Your edit will upload when you're back online.", comment: "After offline note save")
+            )
+            Log.api.info("Saved note body locally (queued for upload): \(nid)")
+        } catch {
+            saveError = error.localizedDescription
+            showSaveError = true
+            saveDraftLocally()
+        }
+    }
+
     func unlockProtectedNote(documentPassword: String) async {
         guard let client, let note, note.isProtected else { return }
         let trimmed = documentPassword.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -685,6 +773,9 @@ final class NoteDetailViewModel {
             appState.protectedSessionActive = true
             needsProtectedSession = false
             await loadContent()
+            if let profileId = serverProfileId {
+                await appState.syncManager.prefetchProtectedNoteBodies(client: client, profileId: profileId)
+            }
         } catch {
             protectedUnlockError = APIError.from(error).localizedDescription
         }
@@ -692,12 +783,25 @@ final class NoteDetailViewModel {
 
     func saveContent() async {
         flushPendingEditorContent()
-        guard let client, let note else {
-            self.saveError = "Cannot save while offline. Your draft has been preserved."
+        guard let note else {
+            self.saveError = String(localized: "Could not load this note.", comment: "Save without cached note")
             self.showSaveError = true
             self.saveDraftLocally()
             return
         }
+
+        if !appState.isOnline {
+            await saveNoteBodyOffline(note: note)
+            return
+        }
+
+        guard let client else {
+            self.saveError = String(localized: "Sign in and connect to your server to save.", comment: "Save without API client")
+            self.showSaveError = true
+            self.saveDraftLocally()
+            return
+        }
+
         let nid = self.noteId
         self.isSaving = true
         self.saveError = nil
@@ -748,6 +852,7 @@ final class NoteDetailViewModel {
             if let profileId = self.serverProfileId {
                 try? self.persistence.deleteDraft(noteId: nid, serverProfileId: profileId)
                 try? self.persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId)
+                try? self.persistence.deletePendingNoteBodyUpload(noteId: nid, serverProfileId: profileId)
             }
             Log.api.info("Saved content for note")
         } catch {
@@ -816,38 +921,67 @@ final class NoteDetailViewModel {
 
     func createChildNote() async -> String? {
         let nid = self.noteId
-        guard let client, !self.newNoteTitle.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        let trimmed = self.newNoteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let profileId = serverProfileId else { return nil }
         self.isSaving = true
         defer { self.isSaving = false }
 
-        do {
-            let mime: String
-            switch self.newNoteType {
-            case .code: mime = "text/plain"
-            case .file: mime = "application/octet-stream"
-            default: mime = "text/html"
-            }
+        let mime: String
+        switch self.newNoteType {
+        case .code: mime = "text/plain"
+        case .file: mime = "application/octet-stream"
+        default: mime = "text/html"
+        }
 
-            let request = CreateNoteRequest(
+        if isOnline, let client {
+            do {
+                let request = CreateNoteRequest(
+                    parentNoteId: nid,
+                    title: trimmed,
+                    type: self.newNoteType.rawValue,
+                    mime: mime,
+                    content: "",
+                    notePosition: nil,
+                    prefix: nil,
+                    isProtected: nil,
+                    noteId: nil,
+                    branchId: nil
+                )
+                let response = try await client.createNote(request)
+                self.showCreateChild = false
+                self.newNoteTitle = ""
+                await self.load()
+                return response.note.noteId
+            } catch {
+                self.saveError = APIError.from(error).localizedDescription
+                self.showSaveError = true
+                return nil
+            }
+        }
+
+        guard appState.isAuthenticated else {
+            self.saveError = String(localized: "Sign in to create notes.", comment: "Error when creating child offline without session")
+            self.showSaveError = true
+            return nil
+        }
+
+        do {
+            let (newId, _) = try persistence.createOfflineChildNote(
                 parentNoteId: nid,
-                title: self.newNoteTitle,
-                type: self.newNoteType.rawValue,
+                title: trimmed,
+                noteType: self.newNoteType.rawValue,
                 mime: mime,
-                content: "",
-                notePosition: nil,
-                prefix: nil,
-                isProtected: nil,
-                noteId: nil,
-                branchId: nil
+                initialContent: "",
+                serverProfileId: profileId
             )
-            let response = try await client.createNote(request)
             self.showCreateChild = false
             self.newNoteTitle = ""
-            await self.load()
-            return response.note.noteId
+            await self.loadChildNotes()
+            return newId
         } catch {
             self.saveError = APIError.from(error).localizedDescription
             self.showSaveError = true
+            Log.api.error("Failed to create offline child note: \(error)")
             return nil
         }
     }
@@ -924,15 +1058,81 @@ final class NoteDetailViewModel {
 
     // MARK: - Child Notes
 
+    /// Merges every local source: `CachedBranch` rows (canonical order), `childBranchIds` on the parent note, `childNoteIds`, then notes that list this id in `parentNoteIds`.
+    private func resolvedChildNoteIdsForDetail() -> [String] {
+        guard let profileId = serverProfileId else { return [] }
+        var seen = Set<String>()
+        var ordered: [String] = []
+        func append(_ ids: [String]) {
+            for id in ids {
+                guard !id.isEmpty, seen.insert(id).inserted else { continue }
+                ordered.append(id)
+            }
+        }
+        append(
+            (try? persistence.fetchChildNoteIdsOrderedFromBranches(
+                parentNoteId: noteId,
+                serverProfileId: profileId
+            )) ?? []
+        )
+        if let n = note, !n.childBranchIds.isEmpty {
+            append((try? persistence.fetchNoteIdsForChildBranchIds(branchIds: n.childBranchIds, serverProfileId: profileId)) ?? [])
+        }
+        append(note?.childNoteIds ?? [])
+        if ordered.isEmpty {
+            append(
+                (try? persistence.fetchChildNoteIdsReferencingParent(
+                    parentNoteId: noteId,
+                    serverProfileId: profileId
+                )) ?? []
+            )
+        }
+        return ordered
+    }
+
     /// Loads child notes purely from cache. The sync keeps the cache fresh.
     func loadChildNotes() async {
-        guard let note, !note.childNoteIds.isEmpty else { return }
-        loadChildNotesFromCache(childNoteIds: note.childNoteIds)
+        let childIds = resolvedChildNoteIdsForDetail()
+        if childIds.isEmpty {
+            if let seed = seedChildSummaries, !seed.isEmpty {
+                childNotes = seed
+            } else {
+                childNotes = []
+            }
+            return
+        }
+        loadChildNotesFromCache(childNoteIds: childIds)
+        applySeedChildMetadataMerge()
+    }
+
+    private func applySeedChildMetadataMerge() {
+        guard let seed = seedChildSummaries, !seed.isEmpty else { return }
+        let byId = Dictionary(uniqueKeysWithValues: seed.map { ($0.noteId, $0) })
+        let placeholder = String(localized: "Sub-note", comment: "Child row title when this note is not in the local database yet (offline or not synced)")
+        childNotes = childNotes.map { row in
+            guard let s = byId[row.noteId] else { return row }
+            let trimmed = row.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let useSeedTitle = trimmed.isEmpty || row.title == placeholder
+            let title = useSeedTitle ? s.title : row.title
+            return ChildNoteSummary(
+                noteId: row.noteId,
+                title: title,
+                isProtected: row.isProtected,
+                type: row.type,
+                iconClass: s.iconClass ?? row.iconClass,
+                childCount: max(row.childCount, s.childCount)
+            )
+        }
     }
 
     private func loadChildNotesFromCache(childNoteIds: [String]) {
         guard let profileId = self.serverProfileId else { return }
+        guard !childNoteIds.isEmpty else {
+            self.childNotes = []
+            return
+        }
         var results: [ChildNoteSummary] = []
+        let missingMetaTitle = String(localized: "Sub-note", comment: "Child row title when this note is not in the local database yet (offline or not synced)")
         for childId in childNoteIds {
             if let cached = try? self.persistence.fetchCachedNote(id: childId, serverProfileId: profileId) {
                 let cachedAttrs = (try? self.persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
@@ -945,11 +1145,19 @@ final class NoteDetailViewModel {
                     iconClass: iconClass,
                     childCount: cached.childNoteIds.count
                 ))
+            } else {
+                // Parent lists child IDs from metadata, but we never stored a row for this child (common when only part of the tree was synced).
+                results.append(ChildNoteSummary(
+                    noteId: childId,
+                    title: missingMetaTitle,
+                    isProtected: false,
+                    type: .text,
+                    iconClass: nil,
+                    childCount: 0
+                ))
             }
         }
-        if !results.isEmpty {
-            self.childNotes = results
-        }
+        self.childNotes = results
     }
 
     // MARK: - Cache Fallback

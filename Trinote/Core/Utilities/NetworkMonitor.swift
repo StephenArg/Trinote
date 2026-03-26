@@ -7,7 +7,8 @@ import Observation
 final class NetworkMonitor {
     static let shared = NetworkMonitor()
 
-    var isConnected = true
+    /// Starts pessimistic until `NWPathMonitor` reports a path (avoids treating the device as “online” during cold launch while offline).
+    var isConnected = false
     var connectionType: ConnectionType = .unknown
 
     enum ConnectionType: String {
@@ -23,11 +24,16 @@ final class NetworkMonitor {
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
-                self?.isConnected = path.status == .satisfied
-                self?.connectionType = Self.mapConnectionType(path)
+                self?.apply(path: path)
             }
         }
         monitor.start(queue: queue)
+        apply(path: monitor.currentPath)
+    }
+
+    private func apply(path: NWPath) {
+        isConnected = path.status == .satisfied
+        connectionType = Self.mapConnectionType(path)
     }
 
     private static func mapConnectionType(_ path: NWPath) -> ConnectionType {

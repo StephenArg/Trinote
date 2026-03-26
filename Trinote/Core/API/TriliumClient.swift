@@ -32,6 +32,8 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func createNote(_ request: CreateNoteRequest) async throws -> CreateNoteResponse
     /// New note under `parentNoteId` with copied title, type, mime, and body (child notes are not copied).
     func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse
+    /// New child with arbitrary body (text in `createNote`, binary via `updateNoteContent` when needed).
+    func createChildNoteWithContent(parentNoteId: String, title: String, noteType: String, mime: String, body: Data) async throws -> CreateNoteResponse
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse
 
     func getBranch(_ branchId: String, parentNoteId: String) async throws -> BranchResponse
@@ -591,16 +593,26 @@ actor TriliumClient: TriliumClientProtocol {
         }
         let data = try await getNoteContent(sourceNoteId)
         let dupTitle = Self.duplicateNoteTitle(from: src.title)
+        return try await createChildNoteWithContent(
+            parentNoteId: parentNoteId,
+            title: dupTitle,
+            noteType: src.type,
+            mime: src.mime,
+            body: data
+        )
+    }
+
+    func createChildNoteWithContent(parentNoteId: String, title: String, noteType: String, mime: String, body: Data) async throws -> CreateNoteResponse {
         let (initialContent, needsBinaryUpload) = Self.initialCreateContentForDuplicate(
-            data: data,
-            type: src.type,
-            mime: src.mime
+            data: body,
+            type: noteType,
+            mime: mime
         )
         let request = CreateNoteRequest(
             parentNoteId: parentNoteId,
-            title: dupTitle,
-            type: src.type,
-            mime: src.mime,
+            title: title,
+            type: noteType,
+            mime: mime,
             content: initialContent,
             notePosition: nil,
             prefix: nil,
@@ -610,7 +622,7 @@ actor TriliumClient: TriliumClientProtocol {
         )
         var response = try await createNote(request)
         if needsBinaryUpload {
-            try await updateNoteContent(response.note.noteId, content: data, contentType: src.mime)
+            try await updateNoteContent(response.note.noteId, content: body, contentType: mime)
             let refreshed = try await getNote(response.note.noteId)
             response = CreateNoteResponse(note: refreshed, branch: response.branch)
         }

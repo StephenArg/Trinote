@@ -22,21 +22,6 @@ private struct TreeShareSheetPayload: Identifiable {
     let url: URL
 }
 
-/// One long deferral per process — any `TreeView` instance (root or drilled subtree) shares the same “first share after launch” cold-start window.
-private enum TreeShareSheetColdStartGate {
-    private static let lock = NSLock()
-    private static var didPrime = false
-
-    /// Returns true the first time in this app launch; subsequent calls return false.
-    static func consumeLongDeferIfNeeded() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if didPrime { return false }
-        didPrime = true
-        return true
-    }
-}
-
 struct TreeView: View {
     let parentNoteId: String
     let parentTitle: String
@@ -87,6 +72,15 @@ struct TreeView: View {
         treeBgColor ?? Color(.systemGroupedBackground)
     }
 
+    /// Keep refresh disabled during active refresh/sync, except allow retry after failures (sync or session).
+    private var canTriggerRefresh: Bool {
+        let sync = appState.syncManager
+        if sync.syncError != nil { return true }
+        if appState.connectionError != nil { return true }
+        if sync.isSyncing { return false }
+        return !(viewModel?.isRefreshing ?? false)
+    }
+
     var body: some View {
         Group {
             if let viewModel {
@@ -105,15 +99,19 @@ struct TreeView: View {
         .navigationTitle(parentNoteId == "root" ? "" : parentTitle)
         .toolbarTitleDisplayMode(parentNoteId == "root" ? .inline : .automatic)
         .toolbar {
-            if parentNoteId == "root", let vm = viewModel {
+            if parentNoteId == "root", viewModel != nil {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         triggerSyncAndReload()
                     } label: {
-                        Image(systemName: "arrow.trianglehead.2.clockwise")
+                        SyncToolbarIcon(isSyncing: appState.syncManager.isSyncing)
                     }
-                    .disabled(vm.isRefreshing || appState.syncManager.isSyncing)
-                    .accessibilityLabel(String(localized: "Refresh tree", comment: "Toolbar sync tree"))
+                    .disabled(!canTriggerRefresh)
+                    .accessibilityLabel(
+                        appState.syncManager.isSyncing
+                            ? String(localized: "Syncing…", comment: "Accessibility: tree sync in progress")
+                            : String(localized: "Refresh tree", comment: "Toolbar sync tree")
+                    )
 
                     Menu {
                         Button {
@@ -131,10 +129,14 @@ struct TreeView: View {
                     Button {
                         triggerSyncAndReload()
                     } label: {
-                        Image(systemName: "arrow.trianglehead.2.clockwise")
+                        SyncToolbarIcon(isSyncing: appState.syncManager.isSyncing)
                     }
-                    .disabled(viewModel?.isRefreshing ?? false || appState.syncManager.isSyncing)
-                    .accessibilityLabel("Refresh tree")
+                    .disabled(!canTriggerRefresh)
+                    .accessibilityLabel(
+                        appState.syncManager.isSyncing
+                            ? String(localized: "Syncing…", comment: "Accessibility: tree sync in progress")
+                            : String(localized: "Refresh tree", comment: "Toolbar sync subtree")
+                    )
                 }
             }
         }
@@ -147,7 +149,11 @@ struct TreeView: View {
             loadFavoriteIds()
         }
         .navigationDestination(item: $navigateToNote) { note in
-            NoteDetailView(noteId: note.noteId, title: note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))
+            NoteDetailView(
+                noteId: note.noteId,
+                title: note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive),
+                seedChildSummaries: viewModel?.childNoteSummariesForDetailNavigation(parentNoteId: note.noteId)
+            )
         }
         .navigationDestination(item: $navigateToNoteForEdit) { target in
             NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
@@ -179,7 +185,11 @@ struct TreeView: View {
             if phase == .done {
                 // When pull applied rows to SwiftData, rebuild from DB (Trilium desktop applies Froca then reads it).
                 if self.appState.syncManager.lastCompletedSyncUpdatedLocalDatabase {
-                    self.viewModel?.reloadFromCache()
+                    if self.appState.isOnline {
+                        Task { await self.viewModel?.refresh() }
+                    } else {
+                        self.viewModel?.reloadFromCache()
+                    }
                 } else {
                     self.viewModel?.pruneDeletedNodes()
                     Task { await self.viewModel?.refresh() }
@@ -190,7 +200,9 @@ struct TreeView: View {
             triggerSyncAndReload()
         }
         .onReceive(NotificationCenter.default.publisher(for: .trinoteTreeShouldRefresh)) { notification in
-            guard let nid = notification.userInfo?["noteId"] as? String else {
+            let nid = notification.userInfo?["noteId"] as? String
+            Log.api.debug("[TreeView] trinoteTreeShouldRefresh received – noteId=\(nid ?? "nil")")
+            guard let nid else {
                 Task { await self.viewModel?.refresh() }
                 return
             }
@@ -202,6 +214,7 @@ struct TreeView: View {
                 do {
                     let response = try await client.getNote(nid)
                     let item = NoteItem(from: response)
+                    Log.api.debug("[TreeView] trinoteTreeShouldRefresh – calling applyNoteMetadataPatch for \(nid)")
                     vm.applyNoteMetadataPatch(noteId: nid, newNote: item, animateList: false)
                 } catch {
                     await vm.refresh()
@@ -243,47 +256,6 @@ struct TreeView: View {
         }
     }
 
-    @ViewBuilder
-    private var syncProgressBanner: some View {
-        let sync = appState.syncManager
-        if sync.isSyncing {
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.mini)
-                Group {
-                    switch sync.phase {
-                    case .walkingTree:
-                        Text("Discovering notes…")
-                    case .fetchingChanges:
-                        Text("Checking for changes…")
-                    case .downloadingContent:
-                        if sync.totalNoteCount > 0 {
-                            Text("Syncing \(sync.syncedNoteCount)/\(sync.totalNoteCount) notes…")
-                        } else {
-                            Text("Downloading content…")
-                        }
-                    case .cleaningUp:
-                        Text("Cleaning up…")
-                    default:
-                        Text("Syncing…")
-                    }
-                }
-                .font(.caption)
-
-                Spacer()
-
-                if sync.totalNoteCount > 0 && sync.phase == .downloadingContent {
-                    Text("\(Int(sync.syncProgress * 100))%")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .foregroundStyle(.blue)
-            .padding(.horizontal)
-            .padding(.vertical, 6)
-        }
-    }
-
     private func toggleFavorite(_ note: NoteItem, isFav: Bool, onFavoriteChanged: @escaping () -> Void) {
         guard let profileId = appState.activeProfile?.id else { return }
         do {
@@ -313,13 +285,13 @@ struct TreeView: View {
 
     private func triggerSyncAndReload() {
         Task {
-            await self.appState.runIncrementalSync()
+            await self.appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
             // refresh() is triggered by onChange(of: phase == .done)
         }
     }
 
     private func refreshWithSync() async {
-        await self.appState.runIncrementalSync()
+        await self.appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
         await self.viewModel?.refresh()
     }
 
@@ -367,22 +339,6 @@ struct TreeView: View {
             .background(treeChromeBackground)
     }
 
-    private func cachedBanner(_ vm: TreeViewModel) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "icloud.slash")
-                .font(.caption)
-            Text("Showing cached data")
-                .font(.caption)
-            if vm.isRefreshing {
-                ProgressView()
-                    .controlSize(.mini)
-            }
-        }
-        .foregroundStyle(.orange)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 6)
-    }
-
     private func errorBanner(_ error: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle")
@@ -399,11 +355,18 @@ struct TreeView: View {
 
     private func rootNotebookHeaderRow(viewModel vm: TreeViewModel) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(String(localized: "Notes", comment: "Root notebook screen title"))
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .foregroundStyle(.primary)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(String(localized: "Notes", comment: "Root notebook screen title"))
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.primary)
+                    .accessibilityAddTraits(.isHeader)
+                if !appState.isOnline, vm.isFromCache {
+                    Image(systemName: "icloud.slash")
+                        .font(.headline)
+                        .accessibilityLabel(String(localized: "Showing cached data", comment: "Offline cached data indicator"))
+                }
+            }
             Spacer(minLength: 0)
             Button {
                 createSheetContext = CreateNoteSheetContext(parentNote: syntheticRootNoteItem(), viewModel: vm)
@@ -438,18 +401,6 @@ struct TreeView: View {
     private func treeList(_ vm: TreeViewModel) -> some View {
         let sync = appState.syncManager
         return List {
-            if vm.isFromCache && !sync.isSyncing {
-                cachedBanner(vm)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.orange.opacity(0.1))
-            }
-            if sync.isSyncing {
-                syncProgressBanner
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.blue.opacity(0.08))
-            }
             if let error = vm.error, !vm.rootChildren.isEmpty {
                 errorBanner(error)
                     .listRowInsets(EdgeInsets())
@@ -475,20 +426,34 @@ struct TreeView: View {
         .background(treeChromeBackground)
     }
 
-    /// Defers past UIKit context-menu dismissal. The first tree share after app launch also waits for the window/scene to settle — otherwise `UIActivityViewController` in a SwiftUI sheet often renders black once.
+    /// Defers past UIKit context-menu dismissal and cold-launch window timing (`TrinoteDeferredSystemShareSheet`).
     private func scheduleTreeShareSheet(url: URL) {
-        DispatchQueue.main.async {
-            Task { @MainActor in
-                if TreeShareSheetColdStartGate.consumeLongDeferIfNeeded() {
-                    try? await Task.sleep(for: .milliseconds(320))
-                } else {
-                    await Task.yield()
-                    await Task.yield()
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
+        TrinoteDeferredSystemShareSheet.schedulePresentation {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
                 treeShareSheetPayload = TreeShareSheetPayload(url: url)
             }
         }
+    }
+
+    private func buildTreeNodeRow(node: TreeNode, depth: Int, vm: TreeViewModel) -> TreeNodeRow {
+        TreeNodeRow(
+            node: node,
+            depth: depth,
+            viewModel: vm,
+            customTextColor: treeTextColor,
+            onSelect: { note in
+                if let pick = onPickParent {
+                    pick(note.noteId, note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))
+                } else {
+                    navigateToNote = note
+                }
+            },
+            onDrillDown: { noteId, title in
+                drillDownTarget = SubTreeTarget(noteId: noteId, title: title)
+            }
+        )
     }
 
     private func treeRowContextMenuModel(
@@ -522,22 +487,7 @@ struct TreeView: View {
     private func treeNodeRow(flat: FlatTreeNode, vm: TreeViewModel, favoriteNoteIds: Set<String>, onFavoriteChanged: @escaping () -> Void) -> some View {
         let leading = CGFloat(flat.depth) * 20 + 16
         let isFav = favoriteNoteIds.contains(flat.node.note.noteId)
-        let row = TreeNodeRow(
-            node: flat.node,
-            depth: flat.depth,
-            viewModel: vm,
-            customTextColor: treeTextColor,
-            onSelect: { note in
-                if let pick = onPickParent {
-                    pick(note.noteId, note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))
-                } else {
-                    navigateToNote = note
-                }
-            },
-            onDrillDown: { noteId, title in
-                drillDownTarget = SubTreeTarget(noteId: noteId, title: title)
-            }
-        )
+        let row = buildTreeNodeRow(node: flat.node, depth: flat.depth, vm: vm)
 
         return Group {
             if onPickParent == nil {
@@ -610,6 +560,9 @@ extension TreeViewModel {
 
 struct TreeNodeRow: View {
     static let maxInlineDepth = 2
+    /// Reserves space so share/clone badges do not change row intrinsic size when they appear (avoids `List` self-sizing jumps).
+    private static let badgeTrayWidth: CGFloat = 40
+    private static let badgeTrayHeight: CGFloat = 18
 
     @Environment(AppState.self) private var appState
 
@@ -702,29 +655,36 @@ struct TreeNodeRow: View {
 
                 Spacer()
 
-                if node.note.isSharedWithMultipleTreePlacements {
-                    HStack(spacing: 4) {
-                        Image(systemName: "scale.3d")
-                            .font(.caption2)
-                            .foregroundStyle(Color.green)
-                            .accessibilityLabel(String(localized: "Shared note", comment: "Tree row: note has public share link"))
-                        Image(systemName: "arrow.triangle.branch")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                            .accessibilityLabel(String(localized: "Cloned note", comment: "Tree row: note has multiple parents"))
+                Group {
+                    if node.note.isSharedWithMultipleTreePlacements {
+                        HStack(spacing: 4) {
+                            Image(systemName: "scale.3d")
+                                .font(.caption2)
+                                .foregroundStyle(Color.green)
+                                .accessibilityLabel(String(localized: "Shared note", comment: "Tree row: note has public share link"))
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                                .accessibilityLabel(String(localized: "Cloned note", comment: "Tree row: note has multiple parents"))
+                        }
+                        .accessibilityElement(children: .combine)
+                    } else {
+                        HStack(spacing: 4) {
+                            if node.note.showsSharingBadge {
+                                Image(systemName: "scale.3d")
+                                    .font(.caption2)
+                                    .foregroundStyle(Color.green)
+                                    .accessibilityLabel(String(localized: "Shared note", comment: "Tree row: note has public share link"))
+                            } else if node.note.showsMultiCloneBadge {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                                    .accessibilityLabel(String(localized: "Cloned note", comment: "Tree row: note has multiple parents"))
+                            }
+                        }
                     }
-                    .accessibilityElement(children: .combine)
-                } else if node.note.showsSharingBadge {
-                    Image(systemName: "scale.3d")
-                        .font(.caption2)
-                        .foregroundStyle(Color.green)
-                        .accessibilityLabel(String(localized: "Shared note", comment: "Tree row: note has public share link"))
-                } else if node.note.showsMultiCloneBadge {
-                    Image(systemName: "arrow.triangle.branch")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .accessibilityLabel(String(localized: "Cloned note", comment: "Tree row: note has multiple parents"))
                 }
+                .frame(width: Self.badgeTrayWidth, height: Self.badgeTrayHeight, alignment: .center)
 
                 Image(systemName: "chevron.right")
                     .font(.caption2)
@@ -795,6 +755,22 @@ private struct CreateChildNoteFromTreeSheet: View {
         dismiss()
         if let noteId {
             onNoteCreated?(noteId, newNoteTitle)
+        }
+    }
+}
+
+/// Spinning sync arrow in the nav bar while `SyncManager` is syncing (replaces the former blue list banner).
+private struct SyncToolbarIcon: View {
+    let isSyncing: Bool
+
+    var body: some View {
+        if isSyncing {
+            TimelineView(.animation(minimumInterval: 1 / 45.0, paused: false)) { context in
+                Image(systemName: "arrow.trianglehead.2.clockwise")
+                    .rotationEffect(.degrees(context.date.timeIntervalSinceReferenceDate * 320))
+            }
+        } else {
+            Image(systemName: "arrow.trianglehead.2.clockwise")
         }
     }
 }

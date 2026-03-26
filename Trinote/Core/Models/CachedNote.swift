@@ -190,6 +190,75 @@ final class DraftContent {
     }
 }
 
+/// Child note created offline; flushed via `createNote` when online (ordered with `queuedAt`).
+@Model
+final class PendingNoteCreation {
+    @Attribute(.unique) var id: String
+    var serverProfileId: String
+    var localNoteId: String
+    var localBranchId: String
+    var parentNoteId: String
+    var title: String
+    var noteType: String
+    var mime: String
+    var initialContent: String
+    var queuedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        serverProfileId: String,
+        localNoteId: String,
+        localBranchId: String,
+        parentNoteId: String,
+        title: String,
+        noteType: String,
+        mime: String,
+        initialContent: String,
+        queuedAt: Date = .now
+    ) {
+        self.id = id
+        self.serverProfileId = serverProfileId
+        self.localNoteId = localNoteId
+        self.localBranchId = localBranchId
+        self.parentNoteId = parentNoteId
+        self.title = title
+        self.noteType = noteType
+        self.mime = mime
+        self.initialContent = initialContent
+        self.queuedAt = queuedAt
+    }
+}
+
+/// Note body waiting for `PUT` after offline edit (CSRF/session unavailable until `restoreSession` succeeds).
+@Model
+final class PendingNoteBodyUpload {
+    @Attribute(.unique) var id: String
+    var noteId: String
+    var serverProfileId: String
+    @Attribute(.externalStorage) var body: Data
+    var mime: String
+    var queuedAt: Date
+    /// Server `utcDateModified` when this offline edit was queued; used to detect remote changes before flush.
+    var baseUtcDateModified: String
+
+    init(
+        noteId: String,
+        serverProfileId: String,
+        body: Data,
+        mime: String,
+        queuedAt: Date = .now,
+        baseUtcDateModified: String = ""
+    ) {
+        self.id = "\(serverProfileId):\(noteId)"
+        self.noteId = noteId
+        self.serverProfileId = serverProfileId
+        self.body = body
+        self.mime = mime
+        self.queuedAt = queuedAt
+        self.baseUtcDateModified = baseUtcDateModified
+    }
+}
+
 @Model
 final class SyncStatus {
     @Attribute(.unique) var id: String

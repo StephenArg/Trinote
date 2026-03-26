@@ -1,6 +1,38 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Deferred system share sheet (SwiftUI `.sheet` + `UIActivityViewController`)
+
+/// Avoids a black share UI when the activity controller is shown in a SwiftUI sheet too soon after another control (e.g. UIKit context menu) or before the window scene is ready on cold launch.
+enum TrinoteDeferredSystemShareSheet {
+    private static let lock = NSLock()
+    private static var didUseLongProcessLaunchDelay = false
+
+    static func consumeLongDelayIfNeeded() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if didUseLongProcessLaunchDelay { return false }
+        didUseLongProcessLaunchDelay = true
+        return true
+    }
+
+    /// Schedules `present` on the main actor after leaving the current run loop and applying a short (or first-launch longer) delay.
+    static func schedulePresentation(_ present: @escaping @MainActor () -> Void) {
+        DispatchQueue.main.async {
+            Task { @MainActor in
+                if consumeLongDelayIfNeeded() {
+                    try? await Task.sleep(for: .milliseconds(320))
+                } else {
+                    await Task.yield()
+                    await Task.yield()
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                present()
+            }
+        }
+    }
+}
+
 // MARK: - Notification Names
 
 extension Notification.Name {
@@ -12,6 +44,8 @@ extension Notification.Name {
     /// Posted after a note’s public sharing is toggled from note details so the tree can refetch and show share badges.
     /// `userInfo["noteId"]` contains the note ID.
     static let trinoteTreeShouldRefresh = Notification.Name("TrinoteTreeShouldRefresh")
+    /// Posted when an offline-created note receives a server id after sync. `userInfo["from"]` / `["to"]` are note ids.
+    static let trinoteOfflineNoteIdReplaced = Notification.Name("TrinoteOfflineNoteIdReplaced")
 }
 
 /// Thread-safe tracker for "ghost notes" — notes the server still lists in its

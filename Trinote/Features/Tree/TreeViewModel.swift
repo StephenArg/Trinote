@@ -113,6 +113,25 @@ final class TreeViewModel {
 
     // MARK: - Loading
 
+    /// Prevents a hung `getNote` / child fetch after reconnect from leaving `isRefreshing` stuck indefinitely.
+    private func loadTreeFromServerWithTimeout(client: any TriliumClientProtocol, seconds: TimeInterval) async throws -> (NoteResponse, [TreeNode]) {
+        try await withThrowingTaskGroup(of: (NoteResponse, [TreeNode]).self) { group in
+            group.addTask { @MainActor [self] in
+                let pn = try await client.getNote(parentNoteId)
+                let pi = NoteItem(from: pn)
+                noteCache[parentNoteId] = pi
+                let ch = try await loadChildren(of: pi, client: client)
+                return (pn, ch)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw APIError.timeout
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
+        }
+    }
+
     func loadTree() async {
         let isFirstLoad = rootChildren.isEmpty
         if isFirstLoad {
@@ -128,17 +147,21 @@ final class TreeViewModel {
             isRefreshing = false
         }
 
+        if !appState.isOnline {
+            // First load already called `loadTreeFromCache` above; on pull-to-refresh, re-read SwiftData.
+            if !isFirstLoad {
+                reloadFromCache()
+            }
+            return
+        }
+
         guard let client else {
             if rootChildren.isEmpty { error = "Not connected" }
             return
         }
 
         do {
-            let parentNote = try await client.getNote(parentNoteId)
-            let parentItem = NoteItem(from: parentNote)
-            noteCache[parentNoteId] = parentItem
-
-            let children = try await loadChildren(of: parentItem, client: client)
+            let (parentNote, children) = try await loadTreeFromServerWithTimeout(client: client, seconds: 120)
             rootChildren = children
             isFromCache = false
 
@@ -382,7 +405,8 @@ final class TreeViewModel {
     }
 
     func createChildNote(parentNoteId: String, title: String, type: NoteType = .text) async -> String? {
-        guard let client, !title.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let profileId = serverProfileId, appState.isAuthenticated else { return nil }
 
         let mime: String
         switch type {
@@ -391,32 +415,47 @@ final class TreeViewModel {
         default: mime = "text/html"
         }
 
-        do {
-            let request = CreateNoteRequest(
-                parentNoteId: parentNoteId,
-                title: title,
-                type: type.rawValue,
-                mime: mime,
-                content: "",
-                notePosition: nil,
-                prefix: nil,
-                isProtected: nil,
-                noteId: nil,
-                branchId: nil
-            )
-            let response = try await client.createNote(request)
-
-            if let profileId = serverProfileId {
+        if appState.isOnline, let client {
+            do {
+                let request = CreateNoteRequest(
+                    parentNoteId: parentNoteId,
+                    title: trimmed,
+                    type: type.rawValue,
+                    mime: mime,
+                    content: "",
+                    notePosition: nil,
+                    prefix: nil,
+                    isProtected: nil,
+                    noteId: nil,
+                    branchId: nil
+                )
+                let response = try await client.createNote(request)
                 try? persistence.cacheNote(from: response.note, serverProfileId: profileId)
                 try? persistence.cacheBranch(from: response.branch, serverProfileId: profileId)
                 try? persistence.commitBatch()
+                await refresh()
+                return response.note.noteId
+            } catch {
+                self.error = APIError.from(error).localizedDescription
+                Log.api.error("Failed to create note: \(error)")
+                return nil
             }
+        }
 
+        do {
+            let (noteId, _) = try persistence.createOfflineChildNote(
+                parentNoteId: parentNoteId,
+                title: trimmed,
+                noteType: type.rawValue,
+                mime: mime,
+                initialContent: "",
+                serverProfileId: profileId
+            )
             await refresh()
-            return response.note.noteId
+            return noteId
         } catch {
             self.error = APIError.from(error).localizedDescription
-            Log.api.error("Failed to create note: \(error)")
+            Log.api.error("Failed to create offline note: \(error)")
             return nil
         }
     }
@@ -638,6 +677,76 @@ final class TreeViewModel {
 
     func noteItem(for noteId: String) -> NoteItem? {
         noteCache[noteId]
+    }
+
+    /// Sub-notes already loaded in the in-memory tree (expanded parent). Used to seed note detail when SwiftData has no branch/child rows yet (common offline).
+    func childNoteSummariesForDetailSeed(parentNoteId: String) -> [ChildNoteSummary]? {
+        guard let node = Self.findTreeNode(noteId: parentNoteId, in: rootChildren),
+              let children = node.children, !children.isEmpty
+        else { return nil }
+        return children.map { n in
+            let iconClass = n.note.attributes.first { $0.name == "iconClass" }?.value
+            return ChildNoteSummary(
+                noteId: n.note.noteId,
+                title: n.note.title,
+                isProtected: n.note.isProtected,
+                type: n.note.type,
+                iconClass: iconClass,
+                childCount: n.note.childNoteIds.count
+            )
+        }
+    }
+
+    /// Seeds note-detail sub-notes from the expanded tree, else from SwiftData (branch rows + parent pointers) so sub-notes appear offline without expanding the parent first.
+    func childNoteSummariesForDetailNavigation(parentNoteId: String) -> [ChildNoteSummary]? {
+        if let fromExpanded = childNoteSummariesForDetailSeed(parentNoteId: parentNoteId) {
+            return fromExpanded
+        }
+        guard let profileId = serverProfileId else { return nil }
+        let placeholder = String(localized: "Sub-note", comment: "Child row title when this note is not in the local database yet (offline or not synced)")
+        var ids: [String] = (try? persistence.fetchChildNoteIdsOrderedFromBranches(
+            parentNoteId: parentNoteId,
+            serverProfileId: profileId
+        )) ?? []
+        if ids.isEmpty {
+            ids = (try? persistence.fetchChildNoteIdsReferencingParent(
+                parentNoteId: parentNoteId,
+                serverProfileId: profileId
+            )) ?? []
+        }
+        guard !ids.isEmpty else { return nil }
+        return ids.map { childId in
+            if let n = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) {
+                let cachedAttrs = (try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
+                let iconClass = cachedAttrs.first { $0.name == "iconClass" }?.value
+                return ChildNoteSummary(
+                    noteId: n.noteId,
+                    title: n.title,
+                    isProtected: n.isProtected,
+                    type: NoteType(rawValue: n.noteType) ?? .text,
+                    iconClass: iconClass,
+                    childCount: n.childNoteIds.count
+                )
+            }
+            return ChildNoteSummary(
+                noteId: childId,
+                title: placeholder,
+                isProtected: false,
+                type: .text,
+                iconClass: nil,
+                childCount: 0
+            )
+        }
+    }
+
+    private static func findTreeNode(noteId: String, in nodes: [TreeNode]) -> TreeNode? {
+        for node in nodes {
+            if node.note.noteId == noteId { return node }
+            if let kids = node.children, let found = findTreeNode(noteId: noteId, in: kids) {
+                return found
+            }
+        }
+        return nil
     }
 
     // MARK: - Batch Persistence
