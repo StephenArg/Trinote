@@ -11,6 +11,19 @@ enum ColorTheme: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Localized theme name for pickers (stored value remains English `rawValue`).
+    var localizedTitle: String {
+        switch self {
+        case .default: String(localized: "Default", comment: "Color theme name")
+        case .ocean: String(localized: "Ocean", comment: "Color theme name")
+        case .forest: String(localized: "Forest", comment: "Color theme name")
+        case .sunset: String(localized: "Sunset", comment: "Color theme name")
+        case .lavender: String(localized: "Lavender", comment: "Color theme name")
+        case .slate: String(localized: "Slate", comment: "Color theme name")
+        case .rose: String(localized: "Rose", comment: "Color theme name")
+        }
+    }
+
     var accentColor: Color {
         switch self {
         case .default: return Color.blue

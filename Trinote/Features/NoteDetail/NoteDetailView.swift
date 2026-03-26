@@ -370,14 +370,14 @@ struct NoteDetailView: View {
     private func noteContent(_ vm: NoteDetailViewModel) -> some View {
         @Bindable var vm = vm
         if vm.isLoading && vm.note == nil {
-            ProgressView("Loading note…")
+            ProgressView(String(localized: "Loading note…", comment: "Note detail loading"))
         } else if let error = vm.error, vm.note == nil {
             ContentUnavailableView {
-                Label("Error", systemImage: "exclamationmark.triangle")
+                Label(String(localized: "Error", comment: "Generic error title"), systemImage: "exclamationmark.triangle")
             } description: {
                 Text(error)
             } actions: {
-                Button("Retry") { Task { await vm.load() } }
+                Button(String(localized: "Retry", comment: "Retry load")) { Task { await vm.load() } }
                     .buttonStyle(.bordered)
             }
         } else if let note = vm.note {
@@ -482,10 +482,10 @@ struct NoteDetailView: View {
             .toolbar { noteToolbar(vm, note: note) }
             .onAppear { loadFavoriteNoteIds() }
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteNoteIds() }
-            .alert("Error", isPresented: $vm.showSaveError) {
-                Button("OK") { vm.showSaveError = false }
+            .alert(String(localized: "Error", comment: "Save error alert"), isPresented: $vm.showSaveError) {
+                Button(String(localized: "OK", comment: "Alert dismiss")) { vm.showSaveError = false }
             } message: {
-                Text(vm.saveError ?? "An unknown error occurred.")
+                Text(vm.saveError ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
             }
             .sheet(isPresented: $vm.showCreateChild) {
                 CreateChildNoteSheet(viewModel: vm)
@@ -522,7 +522,7 @@ struct NoteDetailView: View {
                     set: { if !$0 { moveNoteDetailConfirm = nil } }
                 )
             ) {
-                Button("Cancel", role: .cancel) {
+                Button(String(localized: "Cancel", comment: "Dismiss move confirm"), role: .cancel) {
                     moveNoteDetailConfirm = nil
                 }
                 Button(String(localized: "Move", comment: "Confirm move note")) {
@@ -545,22 +545,27 @@ struct NoteDetailView: View {
                     )
                 }
             }
-            .alert("Delete Note?", isPresented: $vm.showDeleteConfirm) {
-                Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) {
+            .alert(String(localized: "Delete Note?", comment: "Delete confirm title"), isPresented: $vm.showDeleteConfirm) {
+                Button(String(localized: "Cancel", comment: "Cancel delete"), role: .cancel) {}
+                Button(String(localized: "Delete", comment: "Confirm delete"), role: .destructive) {
                     Task {
                         if await vm.deleteNote() { dismiss() }
                     }
                 }
             } message: {
-                Text("This will delete \"\(uiTitle(for: note))\" and all its sub-notes. This cannot be undone easily.")
+                Text(
+                    String(
+                        localized: "This will delete “\(uiTitle(for: note))” and all its sub-notes. This cannot be undone easily.",
+                        comment: "Delete confirmation; note title"
+                    )
+                )
             }
-            .confirmationDialog("Unsaved Draft", isPresented: $vm.showDiscardDraft) {
-                Button("Restore Draft") { vm.restoreDraft() }
-                Button("Discard Draft", role: .destructive) { vm.discardDraft() }
-                Button("Cancel", role: .cancel) {}
+            .confirmationDialog(String(localized: "Unsaved Draft", comment: "Draft dialog title"), isPresented: $vm.showDiscardDraft) {
+                Button(String(localized: "Restore Draft", comment: "Draft dialog")) { vm.restoreDraft() }
+                Button(String(localized: "Discard Draft", comment: "Draft dialog"), role: .destructive) { vm.discardDraft() }
+                Button(String(localized: "Cancel", comment: "Draft dialog"), role: .cancel) {}
             } message: {
-                Text("You have an unsaved draft for this note. Would you like to restore it?")
+                Text(String(localized: "You have an unsaved draft for this note. Would you like to restore it?", comment: "Draft dialog message"))
             }
         }
     }
@@ -574,16 +579,16 @@ struct NoteDetailView: View {
                 .font(.system(size: 56))
                 .foregroundStyle(.secondary)
 
-            Text("Protected Note")
+            Text(String(localized: "Protected Note", comment: "Protected note gate title"))
                 .font(.title2.bold())
 
-            Text("Enter the same document password you use in Trilium for protected notes. It stays active until you sign out or the server ends the session.")
+            Text(String(localized: "Enter the same document password you use in Trilium for protected notes. It stays active until you sign out or the server ends the session.", comment: "Protected note gate"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 28)
 
-            SecureField("Document password", text: $protectedDocumentPassword)
+            SecureField(String(localized: "Document password", comment: "Protected note placeholder"), text: $protectedDocumentPassword)
                 .textContentType(.password)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -606,7 +611,7 @@ struct NoteDetailView: View {
                         ProgressView()
                             .tint(.white)
                     } else {
-                        Text("Unlock")
+                        Text(String(localized: "Unlock", comment: "Protected note button"))
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -645,14 +650,14 @@ struct NoteDetailView: View {
             HStack(spacing: 8) {
                 Image(systemName: "doc.badge.clock")
                     .font(.caption)
-                Text("Unsaved draft available")
+                Text(String(localized: "Unsaved draft available", comment: "Draft banner"))
                     .font(.caption.weight(.medium))
                 Spacer()
-                Button("Restore") { vm.restoreDraft() }
+                Button(String(localized: "Restore", comment: "Draft banner")) { vm.restoreDraft() }
                     .font(.caption)
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
-                Button("Discard") { vm.discardDraft() }
+                Button(String(localized: "Discard", comment: "Draft banner")) { vm.discardDraft() }
                     .font(.caption)
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
@@ -709,16 +714,16 @@ struct NoteDetailView: View {
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            TextField("Title", text: $vm.editedTitle)
+                            TextField(String(localized: "Title", comment: "Note title field"), text: $vm.editedTitle)
                                 .font(.title2.bold())
                                 .textFieldStyle(.roundedBorder)
-                            Button("Save") {
+                            Button(String(localized: "Save", comment: "Save title")) {
                                 Task { await vm.renameNote() }
                             }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                             .disabled(vm.isSaving)
-                            Button("Cancel") { vm.editingTitle = false }
+                            Button(String(localized: "Cancel", comment: "Cancel title edit")) { vm.editingTitle = false }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                         }
@@ -727,7 +732,7 @@ struct NoteDetailView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .accessibilityLabel("Last changed \(modified)")
+                                .accessibilityLabel(String(localized: "Last changed \(modified)", comment: "Accessibility"))
                         }
                     }
                 }
@@ -750,7 +755,7 @@ struct NoteDetailView: View {
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.leading, titleIconColumnWidth + titleIconSpacing)
-                                .accessibilityLabel("Last changed \(modified)")
+                                .accessibilityLabel(String(localized: "Last changed \(modified)", comment: "Accessibility"))
                         }
                     }
                     Spacer(minLength: 0)
@@ -759,7 +764,7 @@ struct NoteDetailView: View {
                     vm.editedTitle = note.title
                     vm.editingTitle = true
                 }
-                .accessibilityLabel("Note title: \(uiTitle(for: note)). Tap to edit.")
+                .accessibilityLabel(String(localized: "Note title: \(uiTitle(for: note)). Tap to edit.", comment: "VoiceOver note title"))
             }
 
             HStack(spacing: 12) {
@@ -768,24 +773,24 @@ struct NoteDetailView: View {
                 //     .foregroundStyle(.secondary)
 
                 if note.isSharedWithMultipleTreePlacements {
-                    Label("Sharing", systemImage: "scale.3d")
+                    Label(String(localized: "Sharing", comment: "Note badge"), systemImage: "scale.3d")
                         .font(.caption)
                         .foregroundStyle(Color.green)
-                    Label("Cloned (\(note.parentNoteIds.count) parents)", systemImage: "arrow.triangle.branch")
+                    Label(String(localized: "Cloned (\(note.parentNoteIds.count) parents)", comment: "Note badge clone count"), systemImage: "arrow.triangle.branch")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 } else if note.showsSharingBadge {
-                    Label("Sharing", systemImage: "scale.3d")
+                    Label(String(localized: "Sharing", comment: "Note badge"), systemImage: "scale.3d")
                         .font(.caption)
                         .foregroundStyle(Color.green)
                 } else if note.showsMultiCloneBadge {
-                    Label("Cloned (\(note.parentNoteIds.count) parents)", systemImage: "arrow.triangle.branch")
+                    Label(String(localized: "Cloned (\(note.parentNoteIds.count) parents)", comment: "Note badge clone count"), systemImage: "arrow.triangle.branch")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
 
                 if note.isProtected {
-                    Label("Protected", systemImage: "lock.fill")
+                    Label(String(localized: "Protected", comment: "Note badge"), systemImage: "lock.fill")
                         .font(.caption)
                         .foregroundStyle(.yellow)
                 }
@@ -798,7 +803,7 @@ struct NoteDetailView: View {
     @ViewBuilder
     private func noteBody(_ vm: NoteDetailViewModel, note: NoteItem, findControl: FindOnPageControl) -> some View {
         if vm.isLoadingContent {
-            ProgressView("Loading content…")
+            ProgressView(String(localized: "Loading content…", comment: "Note body loading"))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 40)
         } else if vm.isEditing && note.type != .text {
@@ -853,7 +858,7 @@ struct NoteDetailView: View {
         if !vm.childNotes.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 Divider()
-                Text("Sub-notes")
+                Text(String(localized: "Sub-notes", comment: "Child notes section header"))
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
@@ -939,14 +944,14 @@ struct NoteDetailView: View {
                 showEditorSaveCancelChip = true
             }
         }
-        .confirmationDialog("Add Image", isPresented: $showEditorImageSourceDialog) {
-            Button("Photo Library") { showEditorImagePicker = true }
+        .confirmationDialog(String(localized: "Add Image", comment: "Editor image dialog title"), isPresented: $showEditorImageSourceDialog) {
+            Button(String(localized: "Photo Library", comment: "Image source")) { showEditorImagePicker = true }
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button("Camera") { showEditorCamera = true }
+                Button(String(localized: "Camera", comment: "Image source")) { showEditorCamera = true }
             }
-            Button("Cancel", role: .cancel) {}
+            Button(String(localized: "Cancel", comment: "Image dialog"), role: .cancel) {}
         } message: {
-            Text("Choose a source for the image")
+            Text(String(localized: "Choose a source for the image", comment: "Editor image dialog"))
         }
         .photosPicker(isPresented: $showEditorImagePicker, selection: $editorImageItem, matching: .images)
         .onChange(of: editorImageItem) { _, item in
@@ -987,7 +992,7 @@ struct NoteDetailView: View {
             ZStack(alignment: .bottomTrailing) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Source")
+                    Text(String(localized: "Source", comment: "Code editor label"))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -1032,7 +1037,7 @@ struct NoteDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
             HStack {
-                Text("Attachments")
+                Text(String(localized: "Attachments", comment: "Note detail section"))
                     .font(.headline)
                 Spacer()
                 AttachmentUploadButton(noteId: vm.noteId, viewModel: vm)
@@ -1041,7 +1046,7 @@ struct NoteDetailView: View {
             .padding(.top, 8)
 
             if vm.attachments.isEmpty {
-                Text("No attachments")
+                Text(String(localized: "No attachments", comment: "Attachments empty"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
@@ -1057,20 +1062,20 @@ struct NoteDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
             Group {
-                LabeledContent("Note ID", value: note.noteId)
-                LabeledContent("Type", value: note.type.displayName)
-                LabeledContent("MIME", value: note.mime)
+                LabeledContent(String(localized: "Note ID", comment: "Metadata field"), value: note.noteId)
+                LabeledContent(String(localized: "Type", comment: "Metadata field"), value: note.type.displayName)
+                LabeledContent(String(localized: "MIME", comment: "Metadata field"), value: note.mime)
                 if !note.dateCreated.isEmpty {
-                    LabeledContent("Created", value: note.dateCreated)
+                    LabeledContent(String(localized: "Created", comment: "Metadata field"), value: note.dateCreated)
                 }
                 if !note.dateModified.isEmpty {
-                    LabeledContent("Modified", value: note.dateModified)
+                    LabeledContent(String(localized: "Modified", comment: "Metadata field"), value: note.dateModified)
                 }
             }
             .font(.caption)
 
             if !note.attributes.isEmpty {
-                Text("Attributes")
+                Text(String(localized: "Attributes", comment: "Metadata section"))
                     .font(.caption.weight(.medium))
                     .padding(.top, 4)
                 ForEach(note.attributes) { attr in
@@ -1143,7 +1148,7 @@ struct NoteDetailView: View {
                         recordToolbarQuickAction(.newChild)
                         vm.showCreateChild = true
                     } label: {
-                        Label("New Child Note", systemImage: "plus")
+                        Label(String(localized: "New Child Note", comment: "Note overflow menu"), systemImage: "plus")
                     }
                 }
 
@@ -1156,7 +1161,7 @@ struct NoteDetailView: View {
                             }
                         }
                     } label: {
-                        Label("Duplicate", systemImage: "doc.on.doc")
+                        Label(String(localized: "Duplicate", comment: "Note overflow menu"), systemImage: "doc.on.doc")
                     }
                     .disabled(vm.isSaving)
                 }
@@ -1175,7 +1180,7 @@ struct NoteDetailView: View {
                     vm.editedTitle = note.title
                     vm.editingTitle = true
                 } label: {
-                    Label("Rename", systemImage: "pencil")
+                    Label(String(localized: "Rename", comment: "Note overflow menu"), systemImage: "pencil")
                 }
 
                 Divider()
@@ -1184,7 +1189,12 @@ struct NoteDetailView: View {
                     recordToolbarQuickAction(.noteDetails)
                     withAnimation { vm.showDetails.toggle() }
                 } label: {
-                    Label(vm.showDetails ? "Hide Details" : "Note Details", systemImage: vm.showDetails ? "info.circle.fill" : "info.circle")
+                    Label(
+                        vm.showDetails
+                            ? String(localized: "Hide Details", comment: "Note overflow toggle details")
+                            : String(localized: "Note Details", comment: "Note overflow toggle details"),
+                        systemImage: vm.showDetails ? "info.circle.fill" : "info.circle"
+                    )
                 }
 
                 Divider()
@@ -1241,9 +1251,9 @@ struct NoteDetailView: View {
                         toggleFavorite(note: note, isFavorite: favoriteNoteIds.contains(note.noteId))
                     } label: {
                         if favoriteNoteIds.contains(note.noteId) {
-                            Label("Remove from Favorites", systemImage: "star.slash")
+                            Label(String(localized: "Remove from Favorites", comment: "Note overflow"), systemImage: "star.slash")
                         } else {
-                            Label("Add to Favorites", systemImage: "star")
+                            Label(String(localized: "Add to Favorites", comment: "Note overflow"), systemImage: "star")
                         }
                     }
                 }
@@ -1271,12 +1281,12 @@ struct NoteDetailView: View {
                 Button(role: .destructive) {
                     vm.showDeleteConfirm = true
                 } label: {
-                    Label("Delete Note", systemImage: "trash")
+                    Label(String(localized: "Delete Note", comment: "Note overflow"), systemImage: "trash")
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
-            .accessibilityLabel("Note actions")
+            .accessibilityLabel(String(localized: "Note actions", comment: "Overflow menu"))
         }
     }
 
@@ -1474,22 +1484,22 @@ struct CreateChildNoteSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Note Title", text: $viewModel.newNoteTitle)
+                TextField(String(localized: "Note Title", comment: "New child sheet"), text: $viewModel.newNoteTitle)
                     .textInputAutocapitalization(.sentences)
 
-                Picker("Type", selection: $viewModel.newNoteType) {
-                    Text("Text").tag(NoteType.text)
-                    Text("Code").tag(NoteType.code)
+                Picker(String(localized: "Type", comment: "New note type"), selection: $viewModel.newNoteType) {
+                    Text(String(localized: "Text", comment: "Note type")).tag(NoteType.text)
+                    Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
                 }
             }
-            .navigationTitle("New Note")
+            .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button(String(localized: "Cancel", comment: "New child sheet")) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
+                    Button(String(localized: "Create", comment: "New child sheet")) {
                         Task { _ = await viewModel.createChildNote() }
                     }
                     .disabled(viewModel.newNoteTitle.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isSaving)

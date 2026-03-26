@@ -22,7 +22,7 @@ struct SearchView: View {
                 ProgressView()
             }
         }
-        .navigationTitle("Search")
+        .navigationTitle(String(localized: "Search", comment: "Search tab title"))
         .task {
             if viewModel == nil {
                 let vm = SearchViewModel(appState: appState)
@@ -47,16 +47,16 @@ struct SearchView: View {
 
             if vm.isSearching {
                 Spacer()
-                ProgressView("Searching…")
+                ProgressView(String(localized: "Searching…", comment: "Search in progress"))
                 Spacer()
             } else if let error = vm.error, vm.results.isEmpty {
                 Spacer()
                 ContentUnavailableView {
-                    Label("Search Error", systemImage: "exclamationmark.triangle")
+                    Label(String(localized: "Search Error", comment: "Search failure title"), systemImage: "exclamationmark.triangle")
                 } description: {
                     Text(error)
                 } actions: {
-                    Button("Retry") { Task { await vm.performSearch() } }
+                    Button(String(localized: "Retry", comment: "Retry search")) { Task { await vm.performSearch() } }
                         .buttonStyle(.bordered)
                 }
                 Spacer()
@@ -77,7 +77,7 @@ struct SearchView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search notes…", text: Binding(
+                TextField(String(localized: "Search notes…", comment: "Search field placeholder"), text: Binding(
                     get: { vm.query },
                     set: { newValue in
                         vm.query = newValue
@@ -88,7 +88,7 @@ struct SearchView: View {
                 .autocorrectionDisabled()
                 .submitLabel(.search)
                 .onSubmit { Task { await vm.performSearch() } }
-                .accessibilityLabel("Search notes")
+                .accessibilityLabel(String(localized: "Search notes", comment: "VoiceOver search field"))
 
                 if !vm.query.isEmpty {
                     Button {
@@ -97,7 +97,7 @@ struct SearchView: View {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
                     }
-                    .accessibilityLabel("Clear search")
+                    .accessibilityLabel(String(localized: "Clear search", comment: "VoiceOver"))
                 }
             }
             .padding(10)
@@ -123,7 +123,7 @@ struct SearchView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "icloud.slash")
                             .font(.caption)
-                        Text("Showing cached results (title match only)")
+                        Text(String(localized: "Showing cached results (title match only)", comment: "Offline search banner"))
                             .font(.caption)
                     }
                     .foregroundStyle(.orange)
@@ -136,7 +136,11 @@ struct SearchView: View {
                     searchResultSection(note: note, vm: vm)
                 }
             } header: {
-                Text("\(vm.results.count) result\(vm.results.count == 1 ? "" : "s")")
+                Text(
+                    vm.results.count == 1
+                        ? String(localized: "1 result", comment: "Search results count")
+                        : String(localized: "\(vm.results.count) results", comment: "Search results count")
+                )
             }
         }
         .listStyle(.insetGrouped)
@@ -191,7 +195,7 @@ struct SearchView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Loading matches…")
+                Text(String(localized: "Loading matches…", comment: "Search expansion"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -229,7 +233,7 @@ struct SearchView: View {
                 Text("–")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                Text("more references in note")
+                Text(String(localized: "more references in note", comment: "Search match truncation"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .italic()
@@ -248,10 +252,10 @@ struct SearchView: View {
                     .font(.system(size: 36))
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                Text("Search your notes")
+                Text(String(localized: "Search your notes", comment: "Search empty state title"))
                     .font(.headline)
                     .foregroundStyle(.secondary)
-                Text("Type to search by title, content, or attributes")
+                Text(String(localized: "Type to search by title, content, or attributes", comment: "Search empty state hint"))
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -260,7 +264,7 @@ struct SearchView: View {
             Spacer()
         } else {
             List {
-                Section("Recent Searches") {
+                Section(String(localized: "Recent Searches", comment: "Search history section")) {
                     ForEach(vm.recentSearches, id: \.id) { search in
                         Button {
                             vm.selectRecentSearch(search)
@@ -365,24 +369,24 @@ struct SearchResultRow: View {
                 if note.showsSharingBadge || note.showsMultiCloneBadge || note.isProtected {
                     HStack(spacing: 8) {
                         if note.isSharedWithMultipleTreePlacements {
-                            Label("Sharing", systemImage: "scale.3d")
+                            Label(String(localized: "Sharing", comment: "Search result badge"), systemImage: "scale.3d")
                                 .font(.caption2)
                                 .foregroundStyle(Color.green)
-                            Label("Cloned", systemImage: "arrow.triangle.branch")
+                            Label(String(localized: "Cloned", comment: "Search result badge"), systemImage: "arrow.triangle.branch")
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
                         } else if note.showsSharingBadge {
-                            Label("Sharing", systemImage: "scale.3d")
+                            Label(String(localized: "Sharing", comment: "Search result badge"), systemImage: "scale.3d")
                                 .font(.caption2)
                                 .foregroundStyle(Color.green)
                         } else if note.showsMultiCloneBadge {
-                            Label("Cloned", systemImage: "arrow.triangle.branch")
+                            Label(String(localized: "Cloned", comment: "Search result badge"), systemImage: "arrow.triangle.branch")
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
                         }
 
                         if note.isProtected {
-                            Label("Protected", systemImage: "lock.fill")
+                            Label(String(localized: "Protected", comment: "Search result badge"), systemImage: "lock.fill")
                                 .font(.caption2)
                                 .foregroundStyle(.yellow)
                         }
@@ -390,7 +394,7 @@ struct SearchResultRow: View {
                 }
 
                 if !note.dateModified.isEmpty {
-                    Text("Modified \(note.dateModified.triliumDate()?.relativeDisplay ?? note.dateModified)")
+                    Text(String(localized: "Modified \(note.dateModified.triliumDate()?.relativeDisplay ?? note.dateModified)", comment: "Search result date"))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }

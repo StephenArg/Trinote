@@ -73,6 +73,7 @@ struct TreeView: View {
     @State private var moveNoteError: String?
 
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
+    @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
     @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
     @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#ffffff"
@@ -86,6 +87,14 @@ struct TreeView: View {
     private var treeBgColor: Color? {
         guard useCustomTreeColors else { return nil }
         return colorScheme == .dark ? Color(hex: treeDarkBgColor) : Color(hex: treeLightBgColor)
+    }
+
+    /// Trilium `#color` label wins when enabled and recognized; else custom tree text color (if on); else `.primary`.
+    private func resolvedTreeTitleColor(for note: NoteItem) -> Color {
+        if useTriliumNoteColors, let c = TriliumNoteColorMapper.swiftUIColor(for: note.colorLabelValue) {
+            return c
+        }
+        return treeTextColor ?? .primary
     }
 
     /// Fills space behind the tree list (scroll content is hidden); must not be `.clear` or the nav host shows white.
@@ -122,7 +131,7 @@ struct TreeView: View {
     /// Split from `body` so Swift can type-check the tree without timing out on one huge expression.
     private var treeViewWithSharedSheetsAndAlerts: some View {
         treeViewChromeAndDestinations
-            .alert("Delete Note", isPresented: noteToDeleteBinding, actions: deleteNoteActions, message: deleteNoteMessage)
+            .alert(String(localized: "Delete Note", comment: "Tree delete alert title"), isPresented: noteToDeleteBinding, actions: deleteNoteActions, message: deleteNoteMessage)
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
             .onChange(of: appState.syncManager.phase) { _, phase in
                 if phase == .done {
@@ -237,14 +246,14 @@ struct TreeView: View {
 
     @ViewBuilder
     private func deleteNoteActions() -> some View {
-        Button("Delete Note and Subnotes", role: .destructive) {
+        Button(String(localized: "Delete Note and Subnotes", comment: "Tree delete confirm"), role: .destructive) {
             guard let (note, treeVm) = noteToDelete else { return }
             Task {
                 _ = await treeVm.deleteNoteAndSubnotes(noteId: note.noteId)
             }
             noteToDelete = nil
         }
-        Button("Cancel", role: .cancel) {
+        Button(String(localized: "Cancel", comment: "Tree delete alert"), role: .cancel) {
             noteToDelete = nil
         }
     }
@@ -252,7 +261,12 @@ struct TreeView: View {
     @ViewBuilder
     private func deleteNoteMessage() -> some View {
         if let (note, _) = noteToDelete {
-            Text("\"\(note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))\" and all its subnotes will be permanently deleted. This cannot be undone.")
+            Text(
+                String(
+                    localized: "“\(note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))” and all its subnotes will be permanently deleted. This cannot be undone.",
+                    comment: "Tree delete message"
+                )
+            )
         }
     }
 
@@ -321,11 +335,11 @@ struct TreeView: View {
 
     @ViewBuilder
     private func treeSharingErrorActions() -> some View {
-        Button("OK", role: .cancel) { treeSharingError = nil }
+        Button(String(localized: "OK", comment: "Dismiss error"), role: .cancel) { treeSharingError = nil }
     }
 
     private func treeSharingErrorMessage() -> Text {
-        Text(treeSharingError ?? "An unknown error occurred.")
+        Text(treeSharingError ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
     }
 
     private func moveNoteParentPickerSheet(_ ctx: MoveNoteSheetContext) -> some View {
@@ -366,7 +380,7 @@ struct TreeView: View {
 
     @ViewBuilder
     private func moveNoteConfirmActions() -> some View {
-        Button("Cancel", role: .cancel) {
+        Button(String(localized: "Cancel", comment: "Cancel move"), role: .cancel) {
             moveNoteConfirmPayload = nil
         }
         Button(String(localized: "Move", comment: "Confirm move note")) {
@@ -398,7 +412,7 @@ struct TreeView: View {
 
     @ViewBuilder
     private func moveNoteErrorActions() -> some View {
-        Button("OK", role: .cancel) { moveNoteError = nil }
+        Button(String(localized: "OK", comment: "Dismiss error"), role: .cancel) { moveNoteError = nil }
     }
 
     private func moveNoteErrorMessage() -> Text {
@@ -635,7 +649,7 @@ struct TreeView: View {
             node: node,
             depth: depth,
             viewModel: vm,
-            customTextColor: treeTextColor,
+            resolvedTitleColor: resolvedTreeTitleColor(for: node.note),
             onSelect: { note, parentBranchId in
                 if let pick = onPickParent {
                     pick(note.noteId, note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive), parentBranchId)
@@ -770,13 +784,16 @@ struct TreeNodeRow: View {
     let node: TreeNode
     let depth: Int
     let viewModel: TreeViewModel
-    var customTextColor: Color?
+    var resolvedTitleColor: Color
     let onSelect: (NoteItem, String) -> Void
     let onDrillDown: (String, String) -> Void
 
     private var isExpanded: Bool { node.children != nil }
     private var shouldDrillDown: Bool { depth >= Self.maxInlineDepth }
-    private var textColor: Color { customTextColor ?? .primary }
+    private var titleForegroundColor: Color {
+        if node.note.isProtected, !appState.protectedSessionActive { return .secondary }
+        return resolvedTitleColor
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -832,7 +849,7 @@ struct TreeNodeRow: View {
             HStack(spacing: 8) {
                 ZStack(alignment: .bottomTrailing) {
                     Image(systemName: node.note.resolvedIconName)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(titleForegroundColor)
                         .font(.callout)
                         .frame(width: 20)
                         .accessibilityHidden(true)
@@ -851,7 +868,7 @@ struct TreeNodeRow: View {
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
-                        .foregroundStyle(node.note.isProtected ? .secondary : textColor)
+                        .foregroundStyle(titleForegroundColor)
                 }
 
                 Spacer()
@@ -914,25 +931,25 @@ private struct CreateChildNoteFromTreeSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Note Title", text: $newNoteTitle)
+                TextField(String(localized: "Note Title", comment: "New note from tree"), text: $newNoteTitle)
                     .textInputAutocapitalization(.sentences)
 
-                Picker("Type", selection: $newNoteType) {
-                    Text("Text").tag(NoteType.text)
-                    Text("Code").tag(NoteType.code)
+                Picker(String(localized: "Type", comment: "New note type"), selection: $newNoteType) {
+                    Text(String(localized: "Text", comment: "Note type")).tag(NoteType.text)
+                    Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
                 }
             }
-            .navigationTitle("New Note")
+            .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button(String(localized: "Cancel", comment: "New note sheet")) {
                         onDismiss()
                         dismiss()
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
+                    Button(String(localized: "Create", comment: "New note sheet")) {
                         Task { await createAndDismiss() }
                     }
                     .disabled(newNoteTitle.trimmingCharacters(in: .whitespaces).isEmpty || isCreating)

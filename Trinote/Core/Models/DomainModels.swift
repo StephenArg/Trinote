@@ -25,6 +25,15 @@ struct NoteItem: Identifiable, Hashable, Sendable {
         attributes.first { $0.type == .label && $0.name == "iconClass" }?.value
     }
 
+    /// Raw value of Trilium’s `#color` label (tree / links), if present.
+    var colorLabelValue: String? {
+        guard let raw = attributes.first(where: {
+            $0.type == .label && $0.name.caseInsensitiveCompare("color") == .orderedSame
+        })?.value else { return nil }
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
     /// SF Symbol name: uses custom Trilium icon if set, otherwise falls back to note type default.
     var resolvedIconName: String {
         NoteIconMapper.sfSymbol(for: iconClass) ?? type.iconName

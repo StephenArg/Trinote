@@ -17,11 +17,11 @@ struct LoginView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Connect")
-            .alert("Error", isPresented: $viewModel.showError) {
-                Button("OK") { viewModel.showError = false }
+            .navigationTitle(String(localized: "Connect", comment: "Login screen title"))
+            .alert(String(localized: "Error", comment: "Login error"), isPresented: $viewModel.showError) {
+                Button(String(localized: "OK", comment: "Dismiss alert")) { viewModel.showError = false }
             } message: {
-                Text(viewModel.errorMessage ?? "An unknown error occurred.")
+                Text(viewModel.errorMessage ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
             }
             .onAppear { viewModel.loadProfiles() }
         }
@@ -33,9 +33,9 @@ struct LoginView: View {
                 .font(.system(size: 48))
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
-            Text("Trinote")
+            Text(String(localized: "Trinote", comment: "App name"))
                 .font(.title.bold())
-            Text("Same login as the Trilium web app (session, not ETAPI)")
+            Text(String(localized: "Same login as the Trilium web app (session, not ETAPI)", comment: "Login subtitle"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -44,16 +44,16 @@ struct LoginView: View {
 
     private var serverForm: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Server")
+            Text(String(localized: "Server", comment: "Login section"))
                 .font(.headline)
 
-            TextField("Display name (optional)", text: $viewModel.serverName)
+            TextField(String(localized: "Display name (optional)", comment: "Server field"), text: $viewModel.serverName)
                 .textContentType(.organizationName)
                 .textInputAutocapitalization(.words)
-                .accessibilityLabel("Server display name")
+                .accessibilityLabel(String(localized: "Server display name", comment: "VoiceOver"))
 
             HStack(spacing: 8) {
-                Picker("Scheme", selection: $viewModel.urlScheme) {
+                Picker(String(localized: "Scheme", comment: "URL scheme picker"), selection: $viewModel.urlScheme) {
                     ForEach(AuthViewModel.URLScheme.allCases, id: \.self) { scheme in
                         Text(scheme.rawValue).tag(scheme)
                     }
@@ -61,15 +61,15 @@ struct LoginView: View {
                 .pickerStyle(.menu)
                 .frame(width: 100)
 
-                TextField("Server URL", text: $viewModel.serverURL)
+                TextField(String(localized: "Server URL", comment: "Login field"), text: $viewModel.serverURL)
                     .textContentType(.URL)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .accessibilityLabel("Server URL")
+                    .accessibilityLabel(String(localized: "Server URL", comment: "VoiceOver"))
             }
 
-            Text("e.g. trilium.example.com or 192.168.1.100:8080")
+            Text(String(localized: "e.g. trilium.example.com or 192.168.1.100:8080", comment: "URL hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -78,35 +78,35 @@ struct LoginView: View {
 
     private var credentialForm: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Authentication")
+            Text(String(localized: "Authentication", comment: "Login section"))
                 .font(.headline)
 
             HStack {
                 Group {
                     if isPasswordVisible {
-                        TextField("Password", text: $viewModel.password)
+                        TextField(String(localized: "Password", comment: "Login field"), text: $viewModel.password)
                             .textContentType(.password)
                             .autocorrectionDisabled()
                     } else {
-                        SecureField("Password", text: $viewModel.password)
+                        SecureField(String(localized: "Password", comment: "Login field"), text: $viewModel.password)
                             .textContentType(.password)
                     }
                 }
-                .accessibilityLabel("Server password")
+                .accessibilityLabel(String(localized: "Server password", comment: "VoiceOver"))
 
                 Button {
                     isPasswordVisible.toggle()
                 } label: {
                     Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel(isPasswordVisible ? "Hide password" : "Reveal password")
+                        .accessibilityLabel(isPasswordVisible ? String(localized: "Hide password", comment: "VoiceOver") : String(localized: "Reveal password", comment: "VoiceOver"))
                 }
             }
 
-            Toggle("Stay signed in (Remember me)", isOn: $viewModel.rememberMe)
+            Toggle(String(localized: "Stay signed in (Remember me)", comment: "Login toggle"), isOn: $viewModel.rememberMe)
                 .font(.subheadline)
 
-            Text("TOTP / SSO must be completed in the browser for now.")
+            Text(String(localized: "TOTP / SSO must be completed in the browser for now.", comment: "Login hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -122,7 +122,7 @@ struct LoginView: View {
                     ProgressView()
                         .tint(.white)
                 } else {
-                    Text("Connect")
+                    Text(String(localized: "Connect", comment: "Login button"))
                         .fontWeight(.semibold)
                 }
             }
@@ -132,14 +132,14 @@ struct LoginView: View {
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
         .disabled(!viewModel.canSubmit || viewModel.isLoading)
-        .accessibilityLabel("Connect to server")
+        .accessibilityLabel(String(localized: "Connect to server", comment: "VoiceOver"))
     }
 
     @ViewBuilder
     private var savedProfilesList: some View {
         if !viewModel.profiles.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Saved Servers")
+                Text(String(localized: "Saved Servers", comment: "Login section"))
                     .font(.headline)
 
                 ForEach(viewModel.profiles, id: \.id) { profile in
@@ -180,7 +180,7 @@ private struct SavedProfileRow: View {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundStyle(.green)
                                 .font(.caption)
-                                .accessibilityLabel("Active")
+                                .accessibilityLabel(String(localized: "Active", comment: "Server profile active"))
                         }
                     }
                     Text(profile.normalizedBaseURL)
@@ -192,13 +192,13 @@ private struct SavedProfileRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Use \(profile.name) server")
-            .accessibilityHint("Fills server URL and name")
+            .accessibilityLabel(String(localized: "Use \(profile.name) server", comment: "VoiceOver profile row"))
+            .accessibilityHint(String(localized: "Fills server URL and name", comment: "VoiceOver hint"))
 
             Spacer()
 
             if !isActive {
-                Button("Connect", action: onConnect)
+                Button(String(localized: "Connect", comment: "Login profile row"), action: onConnect)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
@@ -211,15 +211,15 @@ private struct SavedProfileRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .accessibilityLabel("Remove server")
+            .accessibilityLabel(String(localized: "Remove server", comment: "VoiceOver"))
         }
         .padding(12)
         .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 10))
-        .confirmationDialog("Remove \(profile.name)?", isPresented: $showDeleteConfirm) {
-            Button("Remove Server", role: .destructive, action: onDelete)
-            Button("Cancel", role: .cancel) {}
+        .confirmationDialog(String(localized: "Remove \(profile.name)?", comment: "Remove profile confirm"), isPresented: $showDeleteConfirm) {
+            Button(String(localized: "Remove Server", comment: "Remove profile"), role: .destructive, action: onDelete)
+            Button(String(localized: "Cancel", comment: "Cancel remove profile"), role: .cancel) {}
         } message: {
-            Text("This will remove the server profile and sign out. Your notes on the server will not be affected.")
+            Text(String(localized: "This will remove the server profile and sign out. Your notes on the server will not be affected.", comment: "Remove profile message"))
         }
     }
 }

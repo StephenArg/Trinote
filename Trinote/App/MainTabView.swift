@@ -5,11 +5,22 @@ struct MainTabView: View {
     @State private var selectedTab: Tab = .notes
 
     enum Tab: String, CaseIterable {
-        case notes = "Notes"
-        case favorites = "Favorites"
-        case search = "Search"
-        case recents = "Recents"
-        case settings = "Settings"
+        case notes
+        case favorites
+        case search
+        case recents
+        case settings
+
+        /// Tab bar label (localized).
+        var title: String {
+            switch self {
+            case .notes: String(localized: "Notes", comment: "Main tab: notes tree")
+            case .favorites: String(localized: "Favorites", comment: "Main tab")
+            case .search: String(localized: "Search", comment: "Main tab")
+            case .recents: String(localized: "Recents", comment: "Main tab")
+            case .settings: String(localized: "Settings", comment: "Main tab")
+            }
+        }
 
         var icon: String {
             switch self {
@@ -27,7 +38,7 @@ struct MainTabView: View {
             ForEach(Tab.allCases, id: \.self) { tab in
                 tabContent(for: tab)
                     .tabItem {
-                        Label(tab.rawValue, systemImage: tab.icon)
+                        Label(tab.title, systemImage: tab.icon)
                     }
                     .tag(tab)
             }

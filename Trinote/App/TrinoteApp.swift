@@ -8,6 +8,15 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Localized label for pickers (stored value remains English).
+    var localizedTitle: String {
+        switch self {
+        case .device: String(localized: "Device", comment: "Appearance: follow system")
+        case .light: String(localized: "Light", comment: "Appearance mode")
+        case .dark: String(localized: "Dark", comment: "Appearance mode")
+        }
+    }
+
     var colorScheme: ColorScheme? {
         switch self {
         case .device: return nil
@@ -92,7 +101,7 @@ struct TrinoteApp: App {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 48))
                             .foregroundStyle(.orange)
-                        Text("Could not load database")
+                        Text(String(localized: "Could not load database", comment: "Persistence startup failure"))
                             .font(.headline)
                         Text(persistenceError)
                             .font(.caption)
@@ -102,8 +111,8 @@ struct TrinoteApp: App {
                     .padding()
                 } else {
                     AppLaunchLoadingPanel(
-                        message: "Starting…",
-                        accessibilityLabelText: "Starting. Loading, please wait."
+                        message: String(localized: "Starting…", comment: "Launch loading"),
+                        accessibilityLabelText: String(localized: "Starting. Loading, please wait.", comment: "VoiceOver launch")
                     )
                 }
             }
@@ -148,8 +157,8 @@ struct RootView: View {
 struct LaunchView: View {
     var body: some View {
         AppLaunchLoadingPanel(
-            message: "Connecting…",
-            accessibilityLabelText: "Connecting. Loading, please wait."
+            message: String(localized: "Connecting…", comment: "Launch connecting"),
+            accessibilityLabelText: String(localized: "Connecting. Loading, please wait.", comment: "VoiceOver connecting")
         )
     }
 }

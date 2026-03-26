@@ -46,7 +46,7 @@ struct FavoritesView: View {
 
     private var bulkDuplicateConfirmMessage: String {
         guard let p = duplicateTargetParent else { return "" }
-        return "Create \(selectedCount) duplicate(s) under “\(p.title)”?"
+        return String(localized: "Create \(selectedCount) duplicate(s) under “\(p.title)”?", comment: "Favorites bulk duplicate confirm")
     }
 
     private var groupedFavoriteSections: [FavoriteNotebookSection] {
@@ -62,7 +62,7 @@ struct FavoritesView: View {
                 if titles[key] == nil {
                     if let cached = try? pm.fetchCachedNote(id: topId, serverProfileId: profileId) {
                         let t = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let raw = t.isEmpty ? "Notebook" : t
+                        let raw = t.isEmpty ? String(localized: "Notebook", comment: "Default notebook title") : t
                         titles[key] = NoteItem.maskedStoredTitle(
                             raw,
                             isProtected: cached.isProtected,
@@ -74,7 +74,7 @@ struct FavoritesView: View {
                 }
             } else {
                 key = "__other__"
-                titles[key] = "Other"
+                titles[key] = String(localized: "Other", comment: "Favorites grouping")
             }
             buckets[key, default: []].append(fav)
         }
@@ -106,47 +106,47 @@ struct FavoritesView: View {
 
     var body: some View {
         mainContent
-            .navigationTitle("Favorites")
+            .navigationTitle(String(localized: "Favorites", comment: "Favorites tab title"))
             .toolbar { toolbarContent }
             .task { loadFavorites() }
             .onAppear { loadFavorites() }
             .refreshable { loadFavorites() }
             .onChange(of: appState.protectedSessionActive) { _, _ in loadFavorites() }
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavorites() }
-            .alert("Delete Failed", isPresented: deleteErrorBinding) {
-                Button("OK", role: .cancel) { deleteError = nil }
+            .alert(String(localized: "Delete Failed", comment: "Favorites error"), isPresented: deleteErrorBinding) {
+                Button(String(localized: "OK", comment: "Dismiss"), role: .cancel) { deleteError = nil }
             } message: {
                 Text(deleteError ?? "")
             }
-            .alert("Remove from Favorites?", isPresented: $confirmRemoveFromFavorites) {
-                Button("Cancel", role: .cancel) {}
-                Button("Remove", role: .destructive) {
+            .alert(String(localized: "Remove from Favorites?", comment: "Favorites bulk confirm"), isPresented: $confirmRemoveFromFavorites) {
+                Button(String(localized: "Cancel", comment: "Favorites alert"), role: .cancel) {}
+                Button(String(localized: "Remove", comment: "Favorites alert"), role: .destructive) {
                     performBulkRemoveFromFavorites()
                 }
             } message: {
-                Text("Remove \(selectedCount) note(s) from Favorites? They will not be deleted from the server.")
+                Text(String(localized: "Remove \(selectedCount) note(s) from Favorites? They will not be deleted from the server.", comment: "Favorites bulk remove"))
             }
-            .alert("Delete Notes?", isPresented: $confirmBulkDelete) {
-                Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) {
+            .alert(String(localized: "Delete Notes?", comment: "Favorites bulk delete"), isPresented: $confirmBulkDelete) {
+                Button(String(localized: "Cancel", comment: "Favorites alert"), role: .cancel) {}
+                Button(String(localized: "Delete", comment: "Favorites alert"), role: .destructive) {
                     Task { await performBulkDeleteNotes() }
                 }
             } message: {
-                Text("Permanently delete \(selectedCount) note(s) and all of their sub-notes? This cannot be undone easily.")
+                Text(String(localized: "Permanently delete \(selectedCount) note(s) and all of their sub-notes? This cannot be undone easily.", comment: "Favorites bulk delete"))
             }
-            .alert("Duplicate Notes", isPresented: $confirmOpenDuplicatePicker) {
-                Button("Cancel", role: .cancel) {}
-                Button("Continue") {
+            .alert(String(localized: "Duplicate Notes", comment: "Favorites duplicate flow"), isPresented: $confirmOpenDuplicatePicker) {
+                Button(String(localized: "Cancel", comment: "Favorites alert"), role: .cancel) {}
+                Button(String(localized: "Continue", comment: "Favorites duplicate")) {
                     showDuplicateParentPicker = true
                 }
             } message: {
-                Text("Next, choose a parent in the tree. \(selectedCount) duplicate(s) will be created as children of that note, or you can place them at the top level under Notes.")
+                Text(String(localized: "Next, choose a parent in the tree. \(selectedCount) duplicate(s) will be created as children of that note, or you can place them at the top level under Notes.", comment: "Favorites duplicate hint"))
             }
-            .alert("Create Duplicates?", isPresented: $confirmRunDuplicate) {
-                Button("Cancel", role: .cancel) {
+            .alert(String(localized: "Create Duplicates?", comment: "Favorites duplicate confirm"), isPresented: $confirmRunDuplicate) {
+                Button(String(localized: "Cancel", comment: "Favorites alert"), role: .cancel) {
                     duplicateTargetParent = nil
                 }
-                Button("Create") {
+                Button(String(localized: "Create", comment: "Favorites duplicate")) {
                     Task { await performBulkDuplicate() }
                 }
             } message: {
@@ -188,9 +188,9 @@ struct FavoritesView: View {
     private var mainContent: some View {
         if favorites.isEmpty {
             ContentUnavailableView {
-                Label("No Favorites", systemImage: "star")
+                Label(String(localized: "No Favorites", comment: "Favorites empty"), systemImage: "star")
             } description: {
-                Text("Long-press a note in the tree and choose \"Add to Favorites\" to add it here.")
+                Text(String(localized: "Long-press a note in the tree and choose “Add to Favorites” to add it here.", comment: "Favorites empty hint"))
             }
         } else {
             favoritesList
@@ -256,19 +256,19 @@ struct FavoritesView: View {
     @ViewBuilder
     private func contextMenuContent(for fav: FavoriteNote) -> some View {
         Button { sortOrder = .titleAscending } label: {
-            Label("Sort by Title (A–Z)", systemImage: "arrow.up")
+            Label(String(localized: "Sort by Title (A–Z)", comment: "Favorites context menu"), systemImage: "arrow.up")
         }
         Button { sortOrder = .titleDescending } label: {
-            Label("Sort by Title (Z–A)", systemImage: "arrow.down")
+            Label(String(localized: "Sort by Title (Z–A)", comment: "Favorites context menu"), systemImage: "arrow.down")
         }
         Divider()
         Button(role: .destructive) {
             Task { await deleteNote(fav) }
         } label: {
-            Label("Delete Note", systemImage: "trash")
+            Label(String(localized: "Delete Note", comment: "Favorites context menu"), systemImage: "trash")
         }
         Button { removeFavorite(fav) } label: {
-            Label("Remove from Favorites", systemImage: "star.slash")
+            Label(String(localized: "Remove from Favorites", comment: "Favorites context menu"), systemImage: "star.slash")
         }
     }
 
@@ -281,30 +281,30 @@ struct FavoritesView: View {
                         Button {
                             confirmRemoveFromFavorites = true
                         } label: {
-                            Label("Remove from Favorites", systemImage: "star.slash")
+                            Label(String(localized: "Remove from Favorites", comment: "Favorites bulk menu"), systemImage: "star.slash")
                         }
                         .disabled(isBulkWorking)
 
                         Button(role: .destructive) {
                             confirmBulkDelete = true
                         } label: {
-                            Label("Delete Notes", systemImage: "trash")
+                            Label(String(localized: "Delete Notes", comment: "Favorites bulk menu"), systemImage: "trash")
                         }
                         .disabled(isBulkWorking)
 
                         Button {
                             confirmOpenDuplicatePicker = true
                         } label: {
-                            Label("Duplicate under Parent…", systemImage: "doc.on.doc")
+                            Label(String(localized: "Duplicate under Parent…", comment: "Favorites bulk menu"), systemImage: "doc.on.doc")
                         }
                         .disabled(isBulkWorking)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
-                    .accessibilityLabel("Bulk actions")
+                    .accessibilityLabel(String(localized: "Bulk actions", comment: "Favorites toolbar"))
                 }
                 if !favorites.isEmpty {
-                    Button(isEditMode ? "Done" : "Edit") {
+                    Button(isEditMode ? String(localized: "Done", comment: "Favorites edit mode") : String(localized: "Edit", comment: "Favorites edit mode")) {
                         isEditMode.toggle()
                         if !isEditMode { selectedIds.removeAll() }
                     }

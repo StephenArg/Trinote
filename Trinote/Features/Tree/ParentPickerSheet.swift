@@ -45,7 +45,7 @@ struct ParentPickerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button(String(localized: "Cancel", comment: "Dismiss sheet")) { dismiss() }
                 }
             }
         }

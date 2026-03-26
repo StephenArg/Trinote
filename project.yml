@@ -1,6 +1,19 @@
 name: Trinote
 options:
   bundleIdPrefix: com.trinote
+  developmentLanguage: en
+  knownRegions:
+    - en
+    - es
+    - it
+    - fr
+    - de
+    - ru
+    - ar
+    - hi
+    - hu
+    - cs
+    - pl
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
@@ -29,6 +42,7 @@ targets:
           # npm deps are build-only; bundling them duplicates filenames (package.json, README.md, …) and breaks Copy Bundle Resources.
           - "**/Resources/editor-vendor/node_modules/**"
     resources:
+      - path: Trinote/Resources/Localizable.xcstrings
       - path: Trinote/Resources/Assets.xcassets
       - path: Trinote/Resources/editor-icons
       # Bundle only vendored scripts at repo root — not node_modules (duplicate filenames break the build).

@@ -15,9 +15,9 @@ struct RecentsView: View {
         Group {
             if recentNotes.isEmpty {
                 ContentUnavailableView {
-                    Label("No Recent Notes", systemImage: "clock")
+                    Label(String(localized: "No Recent Notes", comment: "Recents empty"), systemImage: "clock")
                 } description: {
-                    Text("Notes you open will appear here for quick access.")
+                    Text(String(localized: "Notes you open will appear here for quick access.", comment: "Recents empty hint"))
                 }
             } else {
                 List {
@@ -70,7 +70,7 @@ struct RecentsView: View {
                 .listStyle(.insetGrouped)
             }
         }
-        .navigationTitle("Recents")
+        .navigationTitle(String(localized: "Recents", comment: "Recents tab title"))
         .task { loadRecents() }
         .refreshable { loadRecents() }
         .onChange(of: appState.protectedSessionActive) { _, _ in loadRecents() }
