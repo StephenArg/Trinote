@@ -153,29 +153,45 @@ struct NoteDetailView: View {
         }
     }
 
-    /// Uses the same delta rules as `updateFloatingEditVisibility` (`contentOffset.y` / `scrollTop` increases when scrolling down).
-    private func updateEditorSaveCancelChipVisibility(contentOffsetY: CGFloat) {
+    /// Save pill: show on scroll-down sooner than hide on scroll-up (asymmetric thresholds).
+    /// When `verticallyScrollable` is false, the pill always stays visible (no scroll means no scroll events to recover from a hidden state).
+    private func updateEditorSaveCancelChipVisibility(contentOffsetY: CGFloat, verticallyScrollable: Bool = true) {
+        if !verticallyScrollable {
+            lastEditorScrollOffsetY = contentOffsetY
+            editorSaveCancelScrollBaselineReady = true
+            if !showEditorSaveCancelChip {
+                withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
+                    showEditorSaveCancelChip = true
+                }
+            }
+            return
+        }
+
         if !editorSaveCancelScrollBaselineReady {
             editorSaveCancelScrollBaselineReady = true
             lastEditorScrollOffsetY = contentOffsetY
             return
         }
 
-        let directionalThreshold: CGFloat = 10
+        /// Minimum `contentOffset.y` change to count as scrolling **up** (hide pill). Slightly higher avoids jitter.
+        let scrollUpThreshold: CGFloat = 10
+        /// Lower than `scrollUpThreshold` so a small scroll **down** brings the save pill back quickly.
+        let scrollDownThreshold: CGFloat = 3
+
         let delta = contentOffsetY - lastEditorScrollOffsetY
         lastEditorScrollOffsetY = contentOffsetY
 
         let nextVisible: Bool
-        if delta < -directionalThreshold {
+        if delta < -scrollUpThreshold {
             nextVisible = false
-        } else if delta > directionalThreshold {
+        } else if delta > scrollDownThreshold {
             nextVisible = true
         } else {
             return
         }
 
         if nextVisible != showEditorSaveCancelChip {
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
                 showEditorSaveCancelChip = nextVisible
             }
         }
@@ -393,7 +409,7 @@ struct NoteDetailView: View {
                                 }
                             }
                             .background(
-                                NoteDetailScrollOffsetReader { y in
+                                NoteDetailScrollOffsetReader { y, _ in
                                     updateFloatingEditVisibility(
                                         contentOffsetY: y,
                                         vm: vm,
@@ -897,8 +913,8 @@ struct NoteDetailView: View {
                 initialHTML: vm.editableContent,
                 onContentChanged: { html in vm.receiveEditorUpdate(html) },
                 onPickImage: { showEditorImageSourceDialog = true },
-                onEditorScroll: { y in
-                    updateEditorSaveCancelChipVisibility(contentOffsetY: y)
+                onEditorScroll: { y, verticallyScrollable in
+                    updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
                 },
                 imageToInsert: $imageToInsert
             )
@@ -986,8 +1002,8 @@ struct NoteDetailView: View {
                     .scrollContentBackground(.hidden)
                     .background(Color(.systemGroupedBackground))
                     .background(
-                        NoteDetailScrollOffsetReader { y in
-                            updateEditorSaveCancelChipVisibility(contentOffsetY: y)
+                        NoteDetailScrollOffsetReader { y, verticallyScrollable in
+                            updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
                         }
                         .frame(width: 0, height: 0)
                     )
@@ -1091,15 +1107,15 @@ struct NoteDetailView: View {
                 if note.type.isEditable {
                     Button {
                         if vm.isEditing {
-                            vm.cancelEditing()
+                            Task { await vm.saveContent() }
                         } else {
                             vm.startEditing()
                         }
                     } label: {
                         if vm.isEditing {
                             Label(
-                                String(localized: "Read Mode", comment: "Leave note editor"),
-                                systemImage: "eye"
+                                String(localized: "Save", comment: "Save note from editor overflow menu"),
+                                systemImage: "checkmark.circle"
                             )
                         } else {
                             Label {
@@ -1110,7 +1126,7 @@ struct NoteDetailView: View {
                             }
                         }
                     }
-                    .disabled(vm.needsProtectedSession)
+                    .disabled(vm.needsProtectedSession || (vm.isEditing && vm.isSaving))
                 }
 
                 if vm.isEditing {

@@ -834,13 +834,18 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
   const ec = document.getElementById('editor-container');
   if (!ec) return;
   let editorScrollReportScheduled = false;
-  function reportEditorScrollOffset() {
+  function reportEditorScrollMetrics() {
     if (editorScrollReportScheduled) return;
     editorScrollReportScheduled = true;
     requestAnimationFrame(() => {
       editorScrollReportScheduled = false;
       try {
-        window.webkit.messageHandlers.editorScroll.postMessage(ec.scrollTop);
+        const st = ec.scrollTop;
+        const verticallyScrollable = ec.scrollHeight > ec.clientHeight + 1;
+        window.webkit.messageHandlers.editorScroll.postMessage({
+          scrollTop: st,
+          verticallyScrollable: verticallyScrollable
+        });
       } catch (e) {}
     });
   }
@@ -865,7 +870,7 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
       hideListStylePopup(popup);
     });
-    reportEditorScrollOffset();
+    reportEditorScrollMetrics();
   }, { passive: true });
   window.addEventListener('resize', () => {
     document.querySelectorAll('.color-popup.visible').forEach(popup => {
@@ -888,7 +893,15 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       const anchor = popup._anchorButton;
       if (anchor && typeof layoutCalloutPopup === 'function') layoutCalloutPopup(anchor, popup);
     });
+    reportEditorScrollMetrics();
   });
+  try {
+    if (typeof editor !== 'undefined' && editor && typeof editor.on === 'function') {
+      editor.on('update', () => {
+        requestAnimationFrame(() => reportEditorScrollMetrics());
+      });
+    }
+  } catch (e) {}
 })();
 
 function layoutCalloutPopup(anchor, popup) {
@@ -1742,7 +1755,13 @@ document.getElementById('editor-container').addEventListener('click', function(e
 try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch(e) {}
 try {
   const _ecScroll = document.getElementById('editor-container');
-  if (_ecScroll) window.webkit.messageHandlers.editorScroll.postMessage(_ecScroll.scrollTop);
+  if (_ecScroll) {
+    const verticallyScrollable = _ecScroll.scrollHeight > _ecScroll.clientHeight + 1;
+    window.webkit.messageHandlers.editorScroll.postMessage({
+      scrollTop: _ecScroll.scrollTop,
+      verticallyScrollable: verticallyScrollable
+    });
+  }
 } catch (e) {}
 </script>
 </body>

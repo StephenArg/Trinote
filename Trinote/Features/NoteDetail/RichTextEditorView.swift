@@ -6,8 +6,8 @@ struct RichTextEditorView: UIViewRepresentable {
     let initialHTML: String
     var onContentChanged: ((String) -> Void)?
     var onPickImage: (() -> Void)?
-    /// `#editor-container` `scrollTop` (increases when scrolling down); used for native save/cancel chip visibility.
-    var onEditorScroll: ((CGFloat) -> Void)?
+    /// `#editor-container` scroll metrics: `scrollTop` increases when scrolling down; `verticallyScrollable` is false when the body fits without scrolling.
+    var onEditorScroll: ((CGFloat, Bool) -> Void)?
     @Binding var imageToInsert: String?
 
     func makeCoordinator() -> Coordinator {
@@ -136,7 +136,7 @@ struct RichTextEditorView: UIViewRepresentable {
         weak var webView: WKWebView?
         var onContentChanged: ((String) -> Void)?
         var onPickImage: (() -> Void)?
-        var onEditorScroll: ((CGFloat) -> Void)?
+        var onEditorScroll: ((CGFloat, Bool) -> Void)?
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
@@ -145,7 +145,7 @@ struct RichTextEditorView: UIViewRepresentable {
             initialHTML: String,
             onContentChanged: ((String) -> Void)?,
             onPickImage: (() -> Void)?,
-            onEditorScroll: ((CGFloat) -> Void)?
+            onEditorScroll: ((CGFloat, Bool) -> Void)?
         ) {
             self.initialHTML = initialHTML
             self.onContentChanged = onContentChanged
@@ -170,18 +170,26 @@ struct RichTextEditorView: UIViewRepresentable {
                 onPickImage?()
 
             case "editorScroll":
-                let y: CGFloat?
-                if let d = message.body as? Double {
+                var y: CGFloat?
+                var verticallyScrollable = true
+                if let dict = message.body as? [String: Any] {
+                    if let n = dict["scrollTop"] as? NSNumber {
+                        y = CGFloat(truncating: n)
+                    } else if let d = dict["scrollTop"] as? Double {
+                        y = CGFloat(d)
+                    }
+                    if let b = dict["verticallyScrollable"] as? Bool {
+                        verticallyScrollable = b
+                    }
+                } else if let d = message.body as? Double {
                     y = CGFloat(d)
                 } else if let n = message.body as? NSNumber {
                     y = CGFloat(truncating: n)
-                } else {
-                    y = nil
                 }
                 if let y {
                     let callback = onEditorScroll
                     DispatchQueue.main.async {
-                        callback?(y)
+                        callback?(y, verticallyScrollable)
                     }
                 }
 

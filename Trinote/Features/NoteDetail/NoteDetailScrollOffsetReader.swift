@@ -1,12 +1,13 @@
 import SwiftUI
 import UIKit
 
-/// Reads the enclosing `UIScrollView`’s `contentOffset.y`.
+/// Reads the enclosing `UIScrollView`’s `contentOffset.y` and whether content exceeds the viewport vertically.
 ///
 /// SwiftUI `ScrollView` + `GeometryReader` / `PreferenceKey` often **does not** refresh during a drag,
 /// so the floating edit chip never sees scroll deltas. KVO on `contentOffset` matches what the user actually scrolls.
 struct NoteDetailScrollOffsetReader: UIViewRepresentable {
-    var onOffsetChange: (CGFloat) -> Void
+    /// `offset` increases when scrolling **down**. `verticallyScrollable` is false when there is nothing to scroll.
+    var onOffsetChange: (CGFloat, Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onOffsetChange: onOffsetChange)
@@ -29,11 +30,13 @@ struct NoteDetailScrollOffsetReader: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject {
-        var onOffsetChange: (CGFloat) -> Void
+        var onOffsetChange: (CGFloat, Bool) -> Void
         private weak var scrollView: UIScrollView?
-        private var observation: NSKeyValueObservation?
+        private var offsetObservation: NSKeyValueObservation?
+        private var contentSizeObservation: NSKeyValueObservation?
+        private var boundsObservation: NSKeyValueObservation?
 
-        init(onOffsetChange: @escaping (CGFloat) -> Void) {
+        init(onOffsetChange: @escaping (CGFloat, Bool) -> Void) {
             self.onOffsetChange = onOffsetChange
         }
 
@@ -43,20 +46,35 @@ struct NoteDetailScrollOffsetReader: UIViewRepresentable {
                 guard let self, let view, self.scrollView == nil else { return }
                 guard let sv = Self.findEnclosingScrollView(from: view) else { return }
                 self.scrollView = sv
-                self.observation = sv.observe(\.contentOffset, options: [.new]) { scrollView, _ in
-                    let y = scrollView.contentOffset.y
-                    DispatchQueue.main.async {
-                        self.onOffsetChange(y)
-                    }
+                self.offsetObservation = sv.observe(\.contentOffset, options: [.new]) { [weak self] scrollView, _ in
+                    self?.emit(from: scrollView)
                 }
-                self.onOffsetChange(sv.contentOffset.y)
+                self.contentSizeObservation = sv.observe(\.contentSize, options: [.new]) { [weak self] scrollView, _ in
+                    self?.emit(from: scrollView)
+                }
+                self.boundsObservation = sv.observe(\.bounds, options: [.new]) { [weak self] scrollView, _ in
+                    self?.emit(from: scrollView)
+                }
+                self.emit(from: sv)
             }
         }
 
         func detach() {
-            observation?.invalidate()
-            observation = nil
+            offsetObservation?.invalidate()
+            offsetObservation = nil
+            contentSizeObservation?.invalidate()
+            contentSizeObservation = nil
+            boundsObservation?.invalidate()
+            boundsObservation = nil
             scrollView = nil
+        }
+
+        private func emit(from scrollView: UIScrollView) {
+            let y = scrollView.contentOffset.y
+            let verticallyScrollable = scrollView.contentSize.height > scrollView.bounds.height + 0.5
+            DispatchQueue.main.async { [onOffsetChange] in
+                onOffsetChange(y, verticallyScrollable)
+            }
         }
 
         private static func findEnclosingScrollView(from view: UIView) -> UIScrollView? {
