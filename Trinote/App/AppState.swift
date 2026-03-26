@@ -341,7 +341,7 @@ final class AppState {
             if let profile = try persistence.activeProfile() {
                 activeProfile = profile
                 syncManager.restoreSyncState(profileId: profile.id)
-                await activateProfileSilently(profile)
+                await quickActivateProfileForLaunch(profile)
             }
         } catch {
             Log.auth.error("Bootstrap failed: \(error)")
@@ -415,8 +415,8 @@ final class AppState {
         startRealtimeIfPossible()
     }
 
-    /// Restore session cookies; validate with `/api/app-info`.
-    private func activateProfileSilently(_ profile: ServerProfile) async {
+    /// Fast path for cold launch: attach client + profile, show cached UI when cookies exist, then validate session and sync in the background.
+    private func quickActivateProfileForLaunch(_ profile: ServerProfile) async {
         guard let url = profile.url else { return }
         let cookieData = try? await keychain.loadSessionCookies(forServer: profile.id)
         let newClient = TriliumClient(baseURL: url, persistedCookieData: cookieData)
@@ -425,30 +425,45 @@ final class AppState {
         self.client = newClient
         self.activeProfile = profile
 
-        if !networkMonitor.isConnected, hadPersistedSessionCookies {
-            await enterOfflineCacheMode(profile: profile)
+        guard hadPersistedSessionCookies else {
+            self.isAuthenticated = false
             return
         }
 
+        self.isAuthenticated = true
+        self.connectionError = nil
+        try? persistence.setActiveProfile(profile)
+
+        if !networkMonitor.isConnected {
+            Task { @MainActor in
+                await self.enterOfflineCacheMode(profile: profile)
+            }
+            return
+        }
+
+        Task { @MainActor in
+            await self.finishOnlineProfileActivationAfterLaunch(profile: profile, hadPersistedSessionCookies: hadPersistedSessionCookies)
+        }
+    }
+
+    /// Runs after launch: `restoreSession`, offline queues, incremental sync, WebSocket — without blocking the main tab / cached tree.
+    private func finishOnlineProfileActivationAfterLaunch(profile: ServerProfile, hadPersistedSessionCookies: Bool) async {
+        guard let client = self.client as? TriliumClient else { return }
         do {
-            try await restoreSessionWithTimeout(client: newClient, seconds: 12)
+            try await restoreSessionWithTimeout(client: client, seconds: 12)
             await endServerProtectedSessionAndPersistCookies()
-            self.isAuthenticated = true
             self.connectionError = nil
             self.lastRefreshed = .now
-            try persistence.setActiveProfile(profile)
-            let exported = await newClient.exportSessionCookieData()
+            let exported = await client.exportSessionCookieData()
             try? await keychain.saveSessionCookies(exported, forServer: profile.id)
             Log.auth.info("Connected to \(profile.name)")
             _ = try await triliumInstanceId(for: profile)
             await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
-            // Do not block launch on full/incremental sync (large vaults can take a long time).
             await runIncrementalSync(maxWaitSeconds: 0)
             startRealtimeIfPossible()
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError { return }
-            // Without network (or restore timeout), fall back to SwiftData when cookies exist.
             let canUseCacheOffline = hadPersistedSessionCookies && !apiError.isAuthError && apiError.isNetworkError
             if canUseCacheOffline {
                 await enterOfflineCacheMode(profile: profile)

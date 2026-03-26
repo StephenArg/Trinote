@@ -126,15 +126,10 @@ struct TreeView: View {
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
             .onChange(of: appState.syncManager.phase) { _, phase in
                 if phase == .done {
+                    // Sync already merged into SwiftData — rebuild the list from cache instead of refetching the whole tree from the API.
+                    self.viewModel?.pruneDeletedNodes()
                     if self.appState.syncManager.lastCompletedSyncUpdatedLocalDatabase {
-                        if self.appState.isOnline {
-                            Task { await self.viewModel?.refresh() }
-                        } else {
-                            self.viewModel?.reloadFromCache()
-                        }
-                    } else {
-                        self.viewModel?.pruneDeletedNodes()
-                        Task { await self.viewModel?.refresh() }
+                        self.viewModel?.reloadFromCache()
                     }
                 }
             }
@@ -143,7 +138,7 @@ struct TreeView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .trinoteTreeShouldRefresh), perform: handleTreeShouldRefresh)
             .onReceive(NotificationCenter.default.publisher(for: .ghostNoteDetected)) { _ in
-                Task { await self.viewModel?.refresh() }
+                self.viewModel?.reloadFromCache()
             }
             .sheet(item: $createSheetContext, content: createChildNoteSheet)
             .sheet(isPresented: $showSharedNotesManagement) {
@@ -265,12 +260,12 @@ struct TreeView: View {
         let nid = notification.userInfo?["noteId"] as? String
         Log.api.debug("[TreeView] trinoteTreeShouldRefresh received – noteId=\(nid ?? "nil")")
         guard let nid else {
-            Task { await self.viewModel?.refresh() }
+            self.viewModel?.reloadFromCache()
             return
         }
         Task {
             guard let client = appState.client, let vm = viewModel else {
-                await self.viewModel?.refresh()
+                self.viewModel?.reloadFromCache()
                 return
             }
             do {
@@ -279,7 +274,7 @@ struct TreeView: View {
                 Log.api.debug("[TreeView] trinoteTreeShouldRefresh – calling applyNoteMetadataPatch for \(nid)")
                 vm.applyNoteMetadataPatch(noteId: nid, newNote: item, animateList: false)
             } catch {
-                await vm.refresh()
+                vm.reloadFromCache()
             }
         }
     }

@@ -155,13 +155,34 @@ final class TreeViewModel {
             return
         }
 
+        guard client != nil else {
+            if rootChildren.isEmpty { error = "Not connected" }
+            return
+        }
+
+        // First paint: show SwiftData immediately; fetch the live tree in the background so launch is not blocked.
+        if isFirstLoad {
+            Task { @MainActor in
+                await self.loadFreshTreeFromServer()
+            }
+            return
+        }
+
+        await loadFreshTreeFromServer()
+    }
+
+    /// Loads root children from the server, updates the in-memory tree, and persists to SwiftData.
+    private func loadFreshTreeFromServer() async {
         guard let client else {
             if rootChildren.isEmpty { error = "Not connected" }
             return
         }
 
         do {
+            // Cold launch runs this in parallel with bootstrap’s `restoreSession`; tree APIs need CSRF (`postJSON` csrf: true) or they throw `noToken` while cookies are valid.
+            try await client.restoreSession()
             let (parentNote, children) = try await loadTreeFromServerWithTimeout(client: client, seconds: 120)
+            error = nil
             rootChildren = children
             isFromCache = false
 
