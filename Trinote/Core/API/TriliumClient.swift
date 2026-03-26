@@ -48,6 +48,8 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func cloneNoteToParentNote(_ noteId: String, parentNoteId: String) async throws
     /// Resolves the branch linking `childNoteId` as a child of `parentNoteId` (from `POST /api/tree/load`).
     func branchId(fromParentNoteId parentNoteId: String, toChildNoteId childNoteId: String) async throws -> String?
+    /// `PUT /api/branches/:branchId/move-to/:parentBranchId` — moves the branch (tree placement) under the target parent’s branch.
+    func moveBranchToParent(branchId: String, parentBranchId: String) async throws
 
     func getAttribute(_ attributeId: String) async throws -> AttributeResponse
     func createAttribute(_ request: CreateAttributeRequest) async throws
@@ -778,6 +780,27 @@ actor TriliumClient: TriliumClientProtocol {
                 && row.parentNoteId == parentNoteId
                 && row.isDeleted != true
         }?.branchId
+    }
+
+    func moveBranchToParent(branchId: String, parentBranchId: String) async throws {
+        let request = try buildRequest(
+            path: "/api/branches/\(branchId)/move-to/\(parentBranchId)",
+            method: "PUT",
+            queryParams: nil,
+            csrf: true,
+            jsonBody: false
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response, data: data)
+        // Trilium returns HTTP 200 with `{ success: false, message }` when validation fails (e.g. cycle, duplicate placement).
+        struct BranchMoveBody: Decodable {
+            let success: Bool?
+            let message: String?
+        }
+        guard !data.isEmpty, let body = try? decoder.decode(BranchMoveBody.self, from: data) else { return }
+        if body.success == false {
+            throw APIError.serverError(statusCode: 200, message: body.message)
+        }
     }
 
     // MARK: - Attributes

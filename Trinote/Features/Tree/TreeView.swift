@@ -22,16 +22,34 @@ private struct TreeShareSheetPayload: Identifiable {
     let url: URL
 }
 
+private struct MoveNoteSheetContext: Identifiable {
+    let id = UUID()
+    let sourceBranchId: String
+    let sourceNoteId: String
+    let sourceTitle: String
+    let oldParentNoteId: String
+}
+
+private struct MoveNoteConfirmPayload {
+    let sourceBranchId: String
+    let sourceNoteId: String
+    let sourceTitle: String
+    let oldParentNoteId: String
+    let targetParentNoteId: String
+    let targetTitle: String
+    let targetParentBranchId: String
+}
+
 struct TreeView: View {
     let parentNoteId: String
     let parentTitle: String
-    /// When set, tapping a note row selects it as a parent (e.g. bulk duplicate) instead of opening it.
-    var onPickParent: ((String, String) -> Void)?
+    /// When set, tapping a note row selects it as a parent (e.g. bulk duplicate / move). `(parentNoteId, title, parentBranchId)`.
+    var onPickParent: ((String, String, String) -> Void)?
 
     init(
         parentNoteId: String = "root",
         parentTitle: String = "Notes",
-        onPickParent: ((String, String) -> Void)? = nil
+        onPickParent: ((String, String, String) -> Void)? = nil
     ) {
         self.parentNoteId = parentNoteId
         self.parentTitle = parentTitle
@@ -50,6 +68,9 @@ struct TreeView: View {
     @State private var showSharedNotesManagement = false
     @State private var treeShareSheetPayload: TreeShareSheetPayload?
     @State private var treeSharingError: String?
+    @State private var moveNoteSheetContext: MoveNoteSheetContext?
+    @State private var moveNoteConfirmPayload: MoveNoteConfirmPayload?
+    @State private var moveNoteError: String?
 
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
@@ -82,6 +103,63 @@ struct TreeView: View {
     }
 
     var body: some View {
+        treeViewWithSharedSheetsAndAlerts
+            .sheet(item: $moveNoteSheetContext, content: moveNoteParentPickerSheet)
+            .alert(
+                String(localized: "Move Note", comment: "Move confirmation title"),
+                isPresented: moveNoteConfirmBinding,
+                actions: moveNoteConfirmActions,
+                message: moveNoteConfirmMessage
+            )
+            .alert(
+                "Error",
+                isPresented: moveNoteErrorBinding,
+                actions: moveNoteErrorActions,
+                message: moveNoteErrorMessage
+            )
+    }
+
+    /// Split from `body` so Swift can type-check the tree without timing out on one huge expression.
+    private var treeViewWithSharedSheetsAndAlerts: some View {
+        treeViewChromeAndDestinations
+            .alert("Delete Note", isPresented: noteToDeleteBinding, actions: deleteNoteActions, message: deleteNoteMessage)
+            .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
+            .onChange(of: appState.syncManager.phase) { _, phase in
+                if phase == .done {
+                    if self.appState.syncManager.lastCompletedSyncUpdatedLocalDatabase {
+                        if self.appState.isOnline {
+                            Task { await self.viewModel?.refresh() }
+                        } else {
+                            self.viewModel?.reloadFromCache()
+                        }
+                    } else {
+                        self.viewModel?.pruneDeletedNodes()
+                        Task { await self.viewModel?.refresh() }
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .noteDeleted)) { _ in
+                triggerSyncAndReload()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .trinoteTreeShouldRefresh), perform: handleTreeShouldRefresh)
+            .onReceive(NotificationCenter.default.publisher(for: .ghostNoteDetected)) { _ in
+                Task { await self.viewModel?.refresh() }
+            }
+            .sheet(item: $createSheetContext, content: createChildNoteSheet)
+            .sheet(isPresented: $showSharedNotesManagement) {
+                SharedNotesManagementView()
+                    .environment(appState)
+            }
+            .sheet(item: $treeShareSheetPayload, content: treeShareSheet)
+            .alert(
+                "Error",
+                isPresented: treeSharingErrorBinding,
+                actions: treeSharingErrorActions,
+                message: treeSharingErrorMessage
+            )
+    }
+
+    private var treeViewChromeAndDestinations: some View {
         Group {
             if let viewModel {
                 treeContent(viewModel)
@@ -95,51 +173,9 @@ struct TreeView: View {
             }
         }
         .background(treeChromeBackground)
-        /// Root: title + new-note control live in the first list row (same line). Subtrees use the normal navigation title.
         .navigationTitle(parentNoteId == "root" ? "" : parentTitle)
         .toolbarTitleDisplayMode(parentNoteId == "root" ? .inline : .automatic)
-        .toolbar {
-            if parentNoteId == "root", viewModel != nil {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        triggerSyncAndReload()
-                    } label: {
-                        SyncToolbarIcon(isSyncing: appState.syncManager.isSyncing)
-                    }
-                    .disabled(!canTriggerRefresh)
-                    .accessibilityLabel(
-                        appState.syncManager.isSyncing
-                            ? String(localized: "Syncing…", comment: "Accessibility: tree sync in progress")
-                            : String(localized: "Refresh tree", comment: "Toolbar sync tree")
-                    )
-
-                    Menu {
-                        Button {
-                            showSharedNotesManagement = true
-                        } label: {
-                            Label(String(localized: "Shared notes…", comment: "Open shared notes manager"), systemImage: "scale.3d")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .accessibilityLabel(String(localized: "More", comment: "Root tree overflow menu"))
-                }
-            } else {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        triggerSyncAndReload()
-                    } label: {
-                        SyncToolbarIcon(isSyncing: appState.syncManager.isSyncing)
-                    }
-                    .disabled(!canTriggerRefresh)
-                    .accessibilityLabel(
-                        appState.syncManager.isSyncing
-                            ? String(localized: "Syncing…", comment: "Accessibility: tree sync in progress")
-                            : String(localized: "Refresh tree", comment: "Toolbar sync subtree")
-                    )
-                }
-            }
-        }
+        .toolbar { treeToolbarContent }
         .task {
             if viewModel == nil {
                 let vm = TreeViewModel(appState: appState, parentNoteId: parentNoteId)
@@ -148,111 +184,273 @@ struct TreeView: View {
             }
             loadFavoriteIds()
         }
-        .navigationDestination(item: $navigateToNote) { note in
-            NoteDetailView(
-                noteId: note.noteId,
-                title: note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive),
-                seedChildSummaries: viewModel?.childNoteSummariesForDetailNavigation(parentNoteId: note.noteId)
-            )
+        .navigationDestination(item: $navigateToNote, destination: noteDetailDestination)
+        .navigationDestination(item: $navigateToNoteForEdit, destination: noteEditDestination)
+        .navigationDestination(item: $drillDownTarget, destination: subtreeDestination)
+    }
+
+    @ToolbarContentBuilder
+    private var treeToolbarContent: some ToolbarContent {
+        if parentNoteId == "root", viewModel != nil {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    triggerSyncAndReload()
+                } label: {
+                    SyncToolbarIcon(isSyncing: appState.syncManager.isSyncing)
+                }
+                .disabled(!canTriggerRefresh)
+                .accessibilityLabel(
+                    appState.syncManager.isSyncing
+                        ? String(localized: "Syncing…", comment: "Accessibility: tree sync in progress")
+                        : String(localized: "Refresh tree", comment: "Toolbar sync tree")
+                )
+
+                Menu {
+                    Button {
+                        showSharedNotesManagement = true
+                    } label: {
+                        Label(String(localized: "Shared notes…", comment: "Open shared notes manager"), systemImage: "scale.3d")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityLabel(String(localized: "More", comment: "Root tree overflow menu"))
+            }
+        } else {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    triggerSyncAndReload()
+                } label: {
+                    SyncToolbarIcon(isSyncing: appState.syncManager.isSyncing)
+                }
+                .disabled(!canTriggerRefresh)
+                .accessibilityLabel(
+                    appState.syncManager.isSyncing
+                        ? String(localized: "Syncing…", comment: "Accessibility: tree sync in progress")
+                        : String(localized: "Refresh tree", comment: "Toolbar sync subtree")
+                )
+            }
         }
-        .navigationDestination(item: $navigateToNoteForEdit) { target in
-            NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
-        }
-        .navigationDestination(item: $drillDownTarget) { target in
-            TreeView(parentNoteId: target.noteId, parentTitle: target.title, onPickParent: onPickParent)
-        }
-        .alert("Delete Note", isPresented: Binding(
+    }
+
+    private var noteToDeleteBinding: Binding<Bool> {
+        Binding(
             get: { noteToDelete != nil },
             set: { if !$0 { noteToDelete = nil } }
-        )) {
-            Button("Delete Note and Subnotes", role: .destructive) {
-                guard let (note, treeVm) = noteToDelete else { return }
-                Task {
-                    _ = await treeVm.deleteNoteAndSubnotes(noteId: note.noteId)
-                }
-                noteToDelete = nil
+        )
+    }
+
+    @ViewBuilder
+    private func deleteNoteActions() -> some View {
+        Button("Delete Note and Subnotes", role: .destructive) {
+            guard let (note, treeVm) = noteToDelete else { return }
+            Task {
+                _ = await treeVm.deleteNoteAndSubnotes(noteId: note.noteId)
             }
-            Button("Cancel", role: .cancel) {
-                noteToDelete = nil
-            }
-        } message: {
-            if let (note, _) = noteToDelete {
-                Text("\"\(note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))\" and all its subnotes will be permanently deleted. This cannot be undone.")
-            }
+            noteToDelete = nil
         }
-        .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
-        .onChange(of: appState.syncManager.phase) { _, phase in
-            if phase == .done {
-                // When pull applied rows to SwiftData, rebuild from DB (Trilium desktop applies Froca then reads it).
-                if self.appState.syncManager.lastCompletedSyncUpdatedLocalDatabase {
-                    if self.appState.isOnline {
-                        Task { await self.viewModel?.refresh() }
-                    } else {
-                        self.viewModel?.reloadFromCache()
-                    }
-                } else {
-                    self.viewModel?.pruneDeletedNodes()
-                    Task { await self.viewModel?.refresh() }
-                }
-            }
+        Button("Cancel", role: .cancel) {
+            noteToDelete = nil
         }
-        .onReceive(NotificationCenter.default.publisher(for: .noteDeleted)) { _ in
-            triggerSyncAndReload()
+    }
+
+    @ViewBuilder
+    private func deleteNoteMessage() -> some View {
+        if let (note, _) = noteToDelete {
+            Text("\"\(note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))\" and all its subnotes will be permanently deleted. This cannot be undone.")
         }
-        .onReceive(NotificationCenter.default.publisher(for: .trinoteTreeShouldRefresh)) { notification in
-            let nid = notification.userInfo?["noteId"] as? String
-            Log.api.debug("[TreeView] trinoteTreeShouldRefresh received – noteId=\(nid ?? "nil")")
-            guard let nid else {
-                Task { await self.viewModel?.refresh() }
+    }
+
+    private func handleTreeShouldRefresh(_ notification: Notification) {
+        let nid = notification.userInfo?["noteId"] as? String
+        Log.api.debug("[TreeView] trinoteTreeShouldRefresh received – noteId=\(nid ?? "nil")")
+        guard let nid else {
+            Task { await self.viewModel?.refresh() }
+            return
+        }
+        Task {
+            guard let client = appState.client, let vm = viewModel else {
+                await self.viewModel?.refresh()
                 return
             }
-            Task {
-                guard let client = appState.client, let vm = viewModel else {
-                    await self.viewModel?.refresh()
-                    return
-                }
-                do {
-                    let response = try await client.getNote(nid)
-                    let item = NoteItem(from: response)
-                    Log.api.debug("[TreeView] trinoteTreeShouldRefresh – calling applyNoteMetadataPatch for \(nid)")
-                    vm.applyNoteMetadataPatch(noteId: nid, newNote: item, animateList: false)
-                } catch {
-                    await vm.refresh()
-                }
+            do {
+                let response = try await client.getNote(nid)
+                let item = NoteItem(from: response)
+                Log.api.debug("[TreeView] trinoteTreeShouldRefresh – calling applyNoteMetadataPatch for \(nid)")
+                vm.applyNoteMetadataPatch(noteId: nid, newNote: item, animateList: false)
+            } catch {
+                await vm.refresh()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .ghostNoteDetected)) { _ in
-            Task { await self.viewModel?.refresh() }
-        }
-        .sheet(item: $createSheetContext) { ctx in
-            CreateChildNoteFromTreeSheet(
-                parentNote: ctx.parentNote,
-                viewModel: ctx.viewModel,
-                onDismiss: { createSheetContext = nil },
-                onNoteCreated: { noteId, title in
-                    navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
+    }
+
+    private func noteDetailDestination(_ note: NoteItem) -> some View {
+        NoteDetailView(
+            noteId: note.noteId,
+            title: note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive),
+            seedChildSummaries: viewModel?.childNoteSummariesForDetailNavigation(parentNoteId: note.noteId)
+        )
+    }
+
+    private func noteEditDestination(_ target: NoteEditTarget) -> some View {
+        NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
+    }
+
+    private func subtreeDestination(_ target: SubTreeTarget) -> some View {
+        TreeView(parentNoteId: target.noteId, parentTitle: target.title, onPickParent: onPickParent)
+    }
+
+    private func createChildNoteSheet(_ ctx: CreateNoteSheetContext) -> some View {
+        CreateChildNoteFromTreeSheet(
+            parentNote: ctx.parentNote,
+            viewModel: ctx.viewModel,
+            onDismiss: { createSheetContext = nil },
+            onNoteCreated: { noteId, title in
+                navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
+            }
+        )
+    }
+
+    private func treeShareSheet(_ payload: TreeShareSheetPayload) -> some View {
+        ShareSheet(items: [payload.url])
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+    }
+
+    private var treeSharingErrorBinding: Binding<Bool> {
+        Binding(
+            get: { treeSharingError != nil },
+            set: { if !$0 { treeSharingError = nil } }
+        )
+    }
+
+    @ViewBuilder
+    private func treeSharingErrorActions() -> some View {
+        Button("OK", role: .cancel) { treeSharingError = nil }
+    }
+
+    private func treeSharingErrorMessage() -> Text {
+        Text(treeSharingError ?? "An unknown error occurred.")
+    }
+
+    private func moveNoteParentPickerSheet(_ ctx: MoveNoteSheetContext) -> some View {
+        ParentPickerSheet(
+            navigationTitle: String(localized: "Move to…", comment: "Sheet title: pick parent for move"),
+            instruction: String(
+                localized: "Choose where to move the note. Open folders, then tap a note to select it as the new parent.",
+                comment: "Instructions for move-note parent picker"
+            ),
+            topLevelButtonTitle: String(localized: "Top level (under Notes)", comment: "Move note under root"),
+            onPick: { parentNoteId, title, parentBranchId in
+                if parentNoteId == ctx.sourceNoteId {
+                    moveNoteError = String(localized: "A note cannot be moved under itself.", comment: "Move validation")
+                    moveNoteSheetContext = nil
+                    return
                 }
+                moveNoteConfirmPayload = MoveNoteConfirmPayload(
+                    sourceBranchId: ctx.sourceBranchId,
+                    sourceNoteId: ctx.sourceNoteId,
+                    sourceTitle: ctx.sourceTitle,
+                    oldParentNoteId: ctx.oldParentNoteId,
+                    targetParentNoteId: parentNoteId,
+                    targetTitle: title,
+                    targetParentBranchId: parentBranchId
+                )
+                moveNoteSheetContext = nil
+            }
+        )
+        .environment(appState)
+    }
+
+    private var moveNoteConfirmBinding: Binding<Bool> {
+        Binding(
+            get: { moveNoteConfirmPayload != nil },
+            set: { if !$0 { moveNoteConfirmPayload = nil } }
+        )
+    }
+
+    @ViewBuilder
+    private func moveNoteConfirmActions() -> some View {
+        Button("Cancel", role: .cancel) {
+            moveNoteConfirmPayload = nil
+        }
+        Button(String(localized: "Move", comment: "Confirm move note")) {
+            // Capture before the alert dismisses — `isPresented` can clear `moveNoteConfirmPayload` before the Task runs.
+            guard let p = moveNoteConfirmPayload else { return }
+            moveNoteConfirmPayload = nil
+            Task { await performConfirmedTreeMove(payload: p) }
+        }
+    }
+
+    @ViewBuilder
+    private func moveNoteConfirmMessage() -> some View {
+        if let p = moveNoteConfirmPayload {
+            Text(
+                String(
+                    localized: "Move “\(p.sourceTitle)” under “\(p.targetTitle)”? The note will appear in the new location in the tree.",
+                    comment: "Move confirmation: source and destination titles"
+                )
             )
         }
-        .sheet(isPresented: $showSharedNotesManagement) {
-            SharedNotesManagementView()
-                .environment(appState)
+    }
+
+    private var moveNoteErrorBinding: Binding<Bool> {
+        Binding(
+            get: { moveNoteError != nil },
+            set: { if !$0 { moveNoteError = nil } }
+        )
+    }
+
+    @ViewBuilder
+    private func moveNoteErrorActions() -> some View {
+        Button("OK", role: .cancel) { moveNoteError = nil }
+    }
+
+    private func moveNoteErrorMessage() -> Text {
+        Text(moveNoteError ?? "")
+    }
+
+    private func performConfirmedTreeMove(payload p: MoveNoteConfirmPayload) async {
+        let persistence = PersistenceManager.shared
+        if let profileId = appState.activeProfile?.id, !appState.isOnline {
+            do {
+                try persistence.applyOptimisticBranchMove(
+                    sourceBranchId: p.sourceBranchId,
+                    sourceNoteId: p.sourceNoteId,
+                    targetParentNoteId: p.targetParentNoteId,
+                    serverProfileId: profileId
+                )
+                try persistence.enqueuePendingBranchMove(
+                    sourceBranchId: p.sourceBranchId,
+                    targetParentBranchId: p.targetParentBranchId,
+                    sourceNoteId: p.sourceNoteId,
+                    oldParentNoteId: p.oldParentNoteId,
+                    targetParentNoteId: p.targetParentNoteId,
+                    serverProfileId: profileId
+                )
+                NotificationCenter.default.post(
+                    name: .trinoteTreeShouldRefresh,
+                    object: nil,
+                    userInfo: ["noteId": p.sourceNoteId]
+                )
+                viewModel?.reloadFromCache()
+            } catch {
+                moveNoteError = APIError.from(error).localizedDescription
+            }
+            return
         }
-        .sheet(item: $treeShareSheetPayload) { payload in
-            ShareSheet(items: [payload.url])
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-        }
-        .alert(
-            "Error",
-            isPresented: Binding(
-                get: { treeSharingError != nil },
-                set: { if !$0 { treeSharingError = nil } }
+
+        guard let client = appState.client else { return }
+        do {
+            try await client.moveBranchToParent(branchId: p.sourceBranchId, parentBranchId: p.targetParentBranchId)
+            NotificationCenter.default.post(
+                name: .trinoteTreeShouldRefresh,
+                object: nil,
+                userInfo: ["noteId": p.sourceNoteId]
             )
-        ) {
-            Button("OK", role: .cancel) { treeSharingError = nil }
-        } message: {
-            Text(treeSharingError ?? "An unknown error occurred.")
+            await viewModel?.refresh()
+        } catch {
+            moveNoteError = APIError.from(error).localizedDescription
         }
     }
 
@@ -443,9 +641,9 @@ struct TreeView: View {
             depth: depth,
             viewModel: vm,
             customTextColor: treeTextColor,
-            onSelect: { note in
+            onSelect: { note, parentBranchId in
                 if let pick = onPickParent {
-                    pick(note.noteId, note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))
+                    pick(note.noteId, note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive), parentBranchId)
                 } else {
                     navigateToNote = note
                 }
@@ -480,7 +678,15 @@ struct TreeView: View {
                 noteToDelete = (flat.node.note, vm)
             },
             onPresentShareSheet: { scheduleTreeShareSheet(url: $0) },
-            onSharingError: { treeSharingError = $0 }
+            onSharingError: { treeSharingError = $0 },
+            onMove: {
+                moveNoteSheetContext = MoveNoteSheetContext(
+                    sourceBranchId: flat.node.branch.branchId,
+                    sourceNoteId: flat.node.note.noteId,
+                    sourceTitle: flat.node.displayTitle(protectedSessionActive: appState.protectedSessionActive),
+                    oldParentNoteId: flat.node.branch.parentNoteId
+                )
+            }
         )
     }
 
@@ -570,7 +776,7 @@ struct TreeNodeRow: View {
     let depth: Int
     let viewModel: TreeViewModel
     var customTextColor: Color?
-    let onSelect: (NoteItem) -> Void
+    let onSelect: (NoteItem, String) -> Void
     let onDrillDown: (String, String) -> Void
 
     private var isExpanded: Bool { node.children != nil }
@@ -626,7 +832,7 @@ struct TreeNodeRow: View {
 
     private var noteLabel: some View {
         Button {
-            onSelect(node.note)
+            onSelect(node.note, node.branch.branchId)
         } label: {
             HStack(spacing: 8) {
                 ZStack(alignment: .bottomTrailing) {

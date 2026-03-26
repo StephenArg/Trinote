@@ -126,6 +126,7 @@ final class AppState {
             for w in waiters { w.resume() }
         }
         await flushPendingNoteCreationsIfPossible(assumeSessionIsReady: assumeSessionIsReady)
+        await flushPendingBranchMovesIfPossible(assumeSessionIsReady: true)
         await flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
     }
 
@@ -203,6 +204,52 @@ final class AppState {
             }
         }
         if didApplyAny {
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        }
+    }
+
+    /// Applies queued tree moves (`PendingBranchMove`) after offline note creations (branch ids may remap).
+    func flushPendingBranchMovesIfPossible(assumeSessionIsReady: Bool = false) async {
+        guard networkMonitor.isConnected,
+              let client,
+              let profile = activeProfile
+        else { return }
+        let profileId = profile.id
+        let pending: [PendingBranchMove]
+        do {
+            pending = try persistence.fetchPendingBranchMoves(serverProfileId: profileId)
+        } catch {
+            Log.sync.warning("Failed to read pending branch moves: \(error)")
+            return
+        }
+        guard !pending.isEmpty else { return }
+        if !assumeSessionIsReady, let tc = client as? TriliumClient {
+            do {
+                try await restoreSessionWithTimeout(client: tc, seconds: 10)
+            } catch {
+                Log.sync.warning("Pending branch move flush skipped — session refresh failed: \(error)")
+                return
+            }
+        }
+        if protectedSessionActive {
+            try? await client.touchProtectedSession()
+        }
+        var didAny = false
+        for row in pending {
+            do {
+                try await client.moveBranchToParent(branchId: row.sourceBranchId, parentBranchId: row.targetParentBranchId)
+                try persistence.deletePendingBranchMove(id: row.id, serverProfileId: profileId)
+                didAny = true
+                Log.sync.info(
+                    "Flushed queued branch move note \(row.sourceNoteId) (branch \(row.sourceBranchId) → parent branch \(row.targetParentBranchId))"
+                )
+            } catch {
+                Log.sync.warning("Pending branch move failed for note \(row.sourceNoteId): \(error)")
+                NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+                break
+            }
+        }
+        if didAny {
             NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
         }
     }

@@ -39,6 +39,7 @@ actor MockTriliumClient: TriliumClientProtocol {
     var cloneToParentCalls: [(noteId: String, parentNoteId: String)] = []
     var deleteBranchWithTaskCalls: [String] = []
     var branchIdLookupCalls: [(parent: String, child: String)] = []
+    var moveBranchToParentCalls: [(branchId: String, parentBranchId: String)] = []
 
     init(baseURL: URL = URL(string: "https://test.trilium.local")!) {
         self.baseURL = baseURL
@@ -192,6 +193,10 @@ actor MockTriliumClient: TriliumClientProtocol {
         branchIdLookupCalls.append((parentNoteId, childNoteId))
         if parentNoteId == "_share", childNoteId == "n1" { return "brS1" }
         return nil
+    }
+
+    func moveBranchToParent(branchId: String, parentBranchId: String) async throws {
+        moveBranchToParentCalls.append((branchId, parentBranchId))
     }
 
     func getAttribute(_ attributeId: String) async throws -> AttributeResponse {

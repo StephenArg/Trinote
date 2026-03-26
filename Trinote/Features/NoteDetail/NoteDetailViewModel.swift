@@ -919,6 +919,89 @@ final class NoteDetailViewModel {
         }
     }
 
+    /// Moves this note’s placement in the tree to under `targetParentNoteId`, using the target’s branch row (`targetParentBranchId`). Uses the first parent if the note is cloned (same as duplicate).
+    func moveNoteToParent(targetParentNoteId: String, targetParentBranchId: String) async {
+        let nid = self.noteId
+        guard let note else { return }
+        if note.isProtected, !appState.protectedSessionActive {
+            self.saveError = String(localized: "Unlock this protected note before moving.", comment: "Move protected note")
+            self.showSaveError = true
+            return
+        }
+        if targetParentNoteId == nid {
+            self.saveError = String(localized: "A note cannot be moved under itself.", comment: "Move validation")
+            self.showSaveError = true
+            return
+        }
+        if nid == TriliumTreeConstants.rootNoteId {
+            self.saveError = String(localized: "The root notebook cannot be moved.", comment: "Move root note blocked")
+            self.showSaveError = true
+            return
+        }
+        let parentId = note.parentNoteIds.first ?? TriliumTreeConstants.rootNoteId
+        self.isSaving = true
+        defer { self.isSaving = false }
+
+        if !appState.isOnline, let profileId = serverProfileId {
+            do {
+                guard let sourceBranch = try persistence.fetchCachedBranch(
+                    noteId: nid,
+                    parentNoteId: parentId,
+                    serverProfileId: profileId
+                ) else {
+                    self.saveError = String(
+                        localized: "Could not resolve the note’s branch in the local cache.",
+                        comment: "Move branch missing offline"
+                    )
+                    self.showSaveError = true
+                    return
+                }
+                try persistence.applyOptimisticBranchMove(
+                    sourceBranchId: sourceBranch.branchId,
+                    sourceNoteId: nid,
+                    targetParentNoteId: targetParentNoteId,
+                    serverProfileId: profileId
+                )
+                try persistence.enqueuePendingBranchMove(
+                    sourceBranchId: sourceBranch.branchId,
+                    targetParentBranchId: targetParentBranchId,
+                    sourceNoteId: nid,
+                    oldParentNoteId: parentId,
+                    targetParentNoteId: targetParentNoteId,
+                    serverProfileId: profileId
+                )
+                NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil, userInfo: ["noteId": nid])
+                await self.load()
+            } catch {
+                self.saveError = APIError.from(error).localizedDescription
+                self.showSaveError = true
+                Log.api.error("Failed to queue offline move: \(error)")
+            }
+            return
+        }
+
+        guard let client else {
+            self.saveError = String(localized: "Cannot move while offline.", comment: "Move note without client")
+            self.showSaveError = true
+            return
+        }
+
+        do {
+            guard let sourceBranchId = try await client.branchId(fromParentNoteId: parentId, toChildNoteId: nid) else {
+                self.saveError = String(localized: "Could not resolve the note’s branch in the tree.", comment: "Move branch lookup failed")
+                self.showSaveError = true
+                return
+            }
+            try await client.moveBranchToParent(branchId: sourceBranchId, parentBranchId: targetParentBranchId)
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil, userInfo: ["noteId": nid])
+            await self.load()
+        } catch {
+            self.saveError = APIError.from(error).localizedDescription
+            self.showSaveError = true
+            Log.api.error("Failed to move note: \(error)")
+        }
+    }
+
     func createChildNote() async -> String? {
         let nid = self.noteId
         let trimmed = self.newNoteTitle.trimmingCharacters(in: .whitespacesAndNewlines)

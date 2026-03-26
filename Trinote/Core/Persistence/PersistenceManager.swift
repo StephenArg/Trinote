@@ -30,6 +30,7 @@ final class PersistenceManager {
                 DraftContent.self,
                 PendingNoteCreation.self,
                 PendingNoteBodyUpload.self,
+                PendingBranchMove.self,
                 SyncStatus.self,
                 CachedImageData.self,
                 EntityPullCursor.self,
@@ -269,6 +270,18 @@ final class PersistenceManager {
             }
         }
         return results
+    }
+
+    /// Branch row linking `noteId` as a child of `parentNoteId` (one clone per parent).
+    func fetchCachedBranch(noteId: String, parentNoteId: String, serverProfileId: String) throws -> CachedBranch? {
+        let nid = noteId
+        let pid = parentNoteId
+        let profileId = serverProfileId
+        var descriptor = FetchDescriptor<CachedBranch>(
+            predicate: #Predicate { $0.noteId == nid && $0.parentNoteId == pid && $0.serverProfileId == profileId }
+        )
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
     }
 
     /// Child note ids under `parentNoteId` from `CachedBranch` only, tree order (`notePosition`).
@@ -736,6 +749,7 @@ final class PersistenceManager {
 
         try rewriteCachedBranchParentPointers(from: oldId, to: newId, serverProfileId: profileId)
         try rewritePendingNoteCreationParentPointers(from: oldId, to: newId, serverProfileId: profileId)
+        try rewritePendingBranchMoveLocalBranchIds(from: localBranchId, to: response.branch.branchId, serverProfileId: profileId)
 
         try deleteCachedBranch(branchId: localBranchId, serverProfileId: profileId)
         try deleteCachedNotes(noteIds: [localNoteId], serverProfileId: profileId)
@@ -780,6 +794,21 @@ final class PersistenceManager {
         )
         for r in rows where r.parentNoteId == oldP {
             r.parentNoteId = newParentNoteId
+        }
+    }
+
+    private func rewritePendingBranchMoveLocalBranchIds(from oldBranchId: String, to newBranchId: String, serverProfileId: String) throws {
+        let profileId = serverProfileId
+        let oldB = oldBranchId
+        let newB = newBranchId
+        let rows = try context.fetch(
+            FetchDescriptor<PendingBranchMove>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        for r in rows {
+            if r.sourceBranchId == oldB { r.sourceBranchId = newB }
+            if r.targetParentBranchId == oldB { r.targetParentBranchId = newB }
         }
     }
 
@@ -833,6 +862,112 @@ final class PersistenceManager {
             r.id = "\(profileId):\(newId)"
         }
 
+        let moveRows = try context.fetch(
+            FetchDescriptor<PendingBranchMove>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        for m in moveRows {
+            if m.sourceNoteId == from { m.sourceNoteId = newId }
+            if m.oldParentNoteId == from { m.oldParentNoteId = newId }
+            if m.targetParentNoteId == from { m.targetParentNoteId = newId }
+        }
+
+        try context.save()
+    }
+
+    // MARK: - Offline branch move (optimistic cache + queue)
+
+    /// Updates SwiftData tree rows so the note appears under `targetParentNoteId` before the server confirms. `noteId` is unchanged so edits and pending body uploads keep working.
+    func applyOptimisticBranchMove(
+        sourceBranchId: String,
+        sourceNoteId: String,
+        targetParentNoteId: String,
+        serverProfileId: String
+    ) throws {
+        let profileId = serverProfileId
+        let bid = sourceBranchId
+        var branchDesc = FetchDescriptor<CachedBranch>(
+            predicate: #Predicate { $0.branchId == bid && $0.serverProfileId == profileId }
+        )
+        branchDesc.fetchLimit = 1
+        guard let branch = try context.fetch(branchDesc).first else {
+            throw NSError(
+                domain: "PersistenceManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Cached branch not found for optimistic move"]
+            )
+        }
+        guard branch.noteId == sourceNoteId else {
+            throw NSError(
+                domain: "PersistenceManager",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Branch/note mismatch for optimistic move"]
+            )
+        }
+
+        let targetPid = targetParentNoteId
+        let siblings = try context.fetch(
+            FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.parentNoteId == targetPid && $0.serverProfileId == profileId }
+            )
+        )
+        let nextPos = (siblings.map(\.notePosition).max() ?? -1) + 10
+
+        branch.parentNoteId = targetParentNoteId
+        branch.notePosition = nextPos
+
+        try context.save()
+        try reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
+    }
+
+    func enqueuePendingBranchMove(
+        sourceBranchId: String,
+        targetParentBranchId: String,
+        sourceNoteId: String,
+        oldParentNoteId: String,
+        targetParentNoteId: String,
+        serverProfileId: String
+    ) throws {
+        let profileId = serverProfileId
+        let sbid = sourceBranchId
+        let existing = try context.fetch(
+            FetchDescriptor<PendingBranchMove>(
+                predicate: #Predicate { $0.serverProfileId == profileId && $0.sourceBranchId == sbid }
+            )
+        )
+        existing.forEach { context.delete($0) }
+        let row = PendingBranchMove(
+            serverProfileId: profileId,
+            sourceBranchId: sourceBranchId,
+            targetParentBranchId: targetParentBranchId,
+            sourceNoteId: sourceNoteId,
+            oldParentNoteId: oldParentNoteId,
+            targetParentNoteId: targetParentNoteId
+        )
+        context.insert(row)
+        try context.save()
+    }
+
+    func fetchPendingBranchMoves(serverProfileId: String) throws -> [PendingBranchMove] {
+        let pid = serverProfileId
+        return try context.fetch(
+            FetchDescriptor<PendingBranchMove>(
+                predicate: #Predicate { $0.serverProfileId == pid },
+                sortBy: [SortDescriptor(\.queuedAt, order: .forward)]
+            )
+        )
+    }
+
+    func deletePendingBranchMove(id: String, serverProfileId: String) throws {
+        let mid = id
+        let pid = serverProfileId
+        let rows = try context.fetch(
+            FetchDescriptor<PendingBranchMove>(
+                predicate: #Predicate { $0.id == mid && $0.serverProfileId == pid }
+            )
+        )
+        rows.forEach { context.delete($0) }
         try context.save()
     }
 
@@ -1205,6 +1340,11 @@ final class PersistenceManager {
             predicate: #Predicate { $0.serverProfileId == profileId }
         ))
         pendingBodies.forEach { context.delete($0) }
+
+        let pendingMoves = try context.fetch(FetchDescriptor<PendingBranchMove>(
+            predicate: #Predicate { $0.serverProfileId == profileId }
+        ))
+        pendingMoves.forEach { context.delete($0) }
 
         let syncs = try context.fetch(FetchDescriptor<SyncStatus>(
             predicate: #Predicate { $0.serverProfileId == profileId }

@@ -259,6 +259,39 @@ final class PendingNoteBodyUpload {
     }
 }
 
+/// Tree move queued while offline; flushed via `moveBranchToParent` when online. One row per source branch (latest target wins).
+@Model
+final class PendingBranchMove {
+    @Attribute(.unique) var id: String
+    var serverProfileId: String
+    var sourceBranchId: String
+    var targetParentBranchId: String
+    var sourceNoteId: String
+    var oldParentNoteId: String
+    var targetParentNoteId: String
+    var queuedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        serverProfileId: String,
+        sourceBranchId: String,
+        targetParentBranchId: String,
+        sourceNoteId: String,
+        oldParentNoteId: String,
+        targetParentNoteId: String,
+        queuedAt: Date = .now
+    ) {
+        self.id = id
+        self.serverProfileId = serverProfileId
+        self.sourceBranchId = sourceBranchId
+        self.targetParentBranchId = targetParentBranchId
+        self.sourceNoteId = sourceNoteId
+        self.oldParentNoteId = oldParentNoteId
+        self.targetParentNoteId = targetParentNoteId
+        self.queuedAt = queuedAt
+    }
+}
+
 @Model
 final class SyncStatus {
     @Attribute(.unique) var id: String

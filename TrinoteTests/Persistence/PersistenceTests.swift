@@ -18,6 +18,7 @@ final class PersistenceTests: XCTestCase {
             DraftContent.self,
             PendingNoteCreation.self,
             PendingNoteBodyUpload.self,
+            PendingBranchMove.self,
             SyncStatus.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)

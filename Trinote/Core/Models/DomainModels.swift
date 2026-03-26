@@ -201,3 +201,13 @@ struct BreadcrumbItem: Identifiable, Hashable, Sendable {
 
     var id: String { branchId ?? noteId }
 }
+
+// MARK: - Trilium tree (API / ETAPI)
+
+/// Values that match Trilium / TriliumNext’s tree and branch routes.
+enum TriliumTreeConstants {
+    /// Trilium’s top-level container note id.
+    static let rootNoteId = "root"
+    /// Branch id for the `root` note (top-level “Notes” container). Used as `move-to` parent for placing notes at top level.
+    static let rootBranchId = "none_root"
+}

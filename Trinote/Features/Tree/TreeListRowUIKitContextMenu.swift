@@ -16,6 +16,7 @@ struct TreeListRowContextMenuModel {
     var onDelete: () -> Void
     var onPresentShareSheet: (URL) -> Void
     var onSharingError: (String) -> Void
+    var onMove: () -> Void
 }
 
 struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
@@ -83,10 +84,9 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
             }
         }
 
+        /// Sibling `UIMenu` sections (each `.displayInline`) get system separators between groups — unlike a flat list of actions.
         private func buildMenuChildren() -> [UIMenuElement] {
-            var children: [UIMenuElement] = []
-
-            children.append(UIAction(
+            let newNote = UIAction(
                 title: String(localized: "New Note"),
                 image: UIImage(systemName: "plus")
             ) { [weak self] _ in
@@ -94,53 +94,75 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
                 DispatchQueue.main.async {
                     self.model.onNewNote()
                 }
-            })
+            }
 
-            if !model.isRootRow {
-                if !model.note.isProtected {
-                    children.append(UIAction(
-                        title: String(localized: "Duplicate Note"),
-                        image: UIImage(systemName: "doc.on.doc")
-                    ) { [weak self] _ in
-                        guard let self else { return }
-                        Task { @MainActor in
-                            if let newNote = await self.model.vm.duplicateNote(
-                                sourceNoteId: self.model.note.noteId,
-                                parentNoteId: self.model.duplicateParentNoteId
-                            ) {
-                                self.model.onDuplicateSuccess(newNote)
-                            }
+            var sections: [UIMenuElement] = [
+                UIMenu(title: "", options: .displayInline, children: [newNote]),
+            ]
+
+            guard !model.isRootRow else { return sections }
+
+            var duplicateMove: [UIMenuElement] = []
+            if !model.note.isProtected {
+                duplicateMove.append(UIAction(
+                    title: String(localized: "Duplicate Note"),
+                    image: UIImage(systemName: "doc.on.doc")
+                ) { [weak self] _ in
+                    guard let self else { return }
+                    Task { @MainActor in
+                        if let newNote = await self.model.vm.duplicateNote(
+                            sourceNoteId: self.model.note.noteId,
+                            parentNoteId: self.model.duplicateParentNoteId
+                        ) {
+                            self.model.onDuplicateSuccess(newNote)
                         }
-                    })
-                }
-
-                children.append(contentsOf: shareMenuElements())
-
-                children.append(UIAction(
-                    title: model.isFavorite
-                        ? String(localized: "Remove from Favorites")
-                        : String(localized: "Add to Favorites"),
-                    image: UIImage(systemName: model.isFavorite ? "star.slash" : "star")
-                ) { [weak self] _ in
-                    guard let self else { return }
-                    DispatchQueue.main.async {
-                        self.model.onFavoriteToggle()
-                    }
-                })
-
-                children.append(UIAction(
-                    title: String(localized: "Delete Note"),
-                    image: UIImage(systemName: "trash"),
-                    attributes: .destructive
-                ) { [weak self] _ in
-                    guard let self else { return }
-                    DispatchQueue.main.async {
-                        self.model.onDelete()
                     }
                 })
             }
+            if !model.note.isProtected, model.client != nil {
+                duplicateMove.append(UIAction(
+                    title: String(localized: "Move", comment: "Tree context menu: move note under another parent"),
+                    image: UIImage(systemName: "arrow.forward.folder")
+                ) { [weak self] _ in
+                    guard let self else { return }
+                    DispatchQueue.main.async {
+                        self.model.onMove()
+                    }
+                })
+            }
+            if !duplicateMove.isEmpty {
+                sections.append(UIMenu(title: "", options: .displayInline, children: duplicateMove))
+            }
 
-            return children
+            let share = shareMenuElements()
+            if !share.isEmpty {
+                sections.append(UIMenu(title: "", options: .displayInline, children: share))
+            }
+
+            let favorite = UIAction(
+                title: model.isFavorite
+                    ? String(localized: "Remove from Favorites")
+                    : String(localized: "Add to Favorites"),
+                image: UIImage(systemName: model.isFavorite ? "star.slash" : "star")
+            ) { [weak self] _ in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    self.model.onFavoriteToggle()
+                }
+            }
+            let delete = UIAction(
+                title: String(localized: "Delete Note"),
+                image: UIImage(systemName: "trash"),
+                attributes: .destructive
+            ) { [weak self] _ in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    self.model.onDelete()
+                }
+            }
+            sections.append(UIMenu(title: "", options: .displayInline, children: [favorite, delete]))
+
+            return sections
         }
 
         private func shareMenuElements() -> [UIMenuElement] {

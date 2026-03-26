@@ -26,10 +26,15 @@ targets:
       - path: Trinote
         excludes:
           - "**/*.xcassets/*/Contents.json"
+          # npm deps are build-only; bundling them duplicates filenames (package.json, README.md, …) and breaks Copy Bundle Resources.
+          - "**/Resources/editor-vendor/node_modules/**"
     resources:
       - path: Trinote/Resources/Assets.xcassets
       - path: Trinote/Resources/editor-icons
+      # Bundle only vendored scripts at repo root — not node_modules (duplicate filenames break the build).
       - path: Trinote/Resources/editor-vendor
+        excludes:
+          - "node_modules"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.trinote

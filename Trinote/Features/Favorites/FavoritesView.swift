@@ -156,11 +156,16 @@ struct FavoritesView: View {
                 NoteDetailView(noteId: item.noteId, title: item.title)
             }
             .sheet(isPresented: $showDuplicateParentPicker) {
-                DuplicateParentPickerSheet { parentId, title in
-                    duplicateTargetParent = DuplicateParent(id: parentId, title: title)
-                    showDuplicateParentPicker = false
-                    confirmRunDuplicate = true
-                }
+                ParentPickerSheet(
+                    navigationTitle: String(localized: "Choose Parent"),
+                    instruction: String(localized: "Choose where to place the duplicates. Use the tree to open folders, then tap a note to select it as the parent."),
+                    topLevelButtonTitle: String(localized: "Top level (under Notes)"),
+                    onPick: { parentId, title, _ in
+                        duplicateTargetParent = DuplicateParent(id: parentId, title: title)
+                        showDuplicateParentPicker = false
+                        confirmRunDuplicate = true
+                    }
+                )
                 .environment(appState)
             }
     }
@@ -558,47 +563,6 @@ struct FavoritesView: View {
                 deleteError = APIError.from(error).localizedDescription
             }
             Log.api.error("Failed to delete note: \(error)")
-        }
-    }
-}
-
-// MARK: - Parent picker for bulk duplicate
-
-private struct DuplicateParentPickerSheet: View {
-    let onPick: (String, String) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Choose where to place the duplicates. Use the tree to open folders, then tap a note to select it as the parent.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding()
-
-                Button {
-                    onPick("root", "Notes")
-                } label: {
-                    Label("Top level (under Notes)", systemImage: "tray.full")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.bordered)
-                .padding(.horizontal)
-                .padding(.bottom, 8)
-
-                TreeView(parentNoteId: "root", parentTitle: "Notes", onPickParent: { noteId, title in
-                    onPick(noteId, title)
-                })
-            }
-            .navigationTitle("Choose Parent")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
         }
     }
 }

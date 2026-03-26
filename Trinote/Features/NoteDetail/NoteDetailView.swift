@@ -21,6 +21,12 @@ private struct NoteDetailShareURLSheetItem: Identifiable {
     let url: URL
 }
 
+private struct MoveNoteDetailConfirm {
+    let targetParentNoteId: String
+    let targetTitle: String
+    let targetParentBranchId: String
+}
+
 struct NoteDetailView: View {
     let noteId: String
     let title: String
@@ -65,6 +71,8 @@ struct NoteDetailView: View {
     @State private var findControl = FindOnPageControl()
     @State private var findDeepLinkConsumed = false
     @State private var noteDetailShareURLSheetItem: NoteDetailShareURLSheetItem?
+    @State private var showMoveParentPicker = false
+    @State private var moveNoteDetailConfirm: MoveNoteDetailConfirm?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.rename.rawValue
 
@@ -465,6 +473,61 @@ struct NoteDetailView: View {
             }
             .sheet(isPresented: $vm.showCreateChild) {
                 CreateChildNoteSheet(viewModel: vm)
+            }
+            .sheet(isPresented: $showMoveParentPicker) {
+                ParentPickerSheet(
+                    navigationTitle: String(localized: "Move to…", comment: "Sheet title: pick parent for move"),
+                    instruction: String(
+                        localized: "Choose where to move the note. Open folders, then tap a note to select it as the new parent.",
+                        comment: "Instructions for move note parent picker"
+                    ),
+                    topLevelButtonTitle: String(localized: "Top level (under Notes)", comment: "Move under root"),
+                    onPick: { parentNoteId, title, parentBranchId in
+                        if parentNoteId == activeNoteId {
+                            vm.saveError = String(localized: "A note cannot be moved under itself.", comment: "Move validation")
+                            vm.showSaveError = true
+                            showMoveParentPicker = false
+                            return
+                        }
+                        moveNoteDetailConfirm = MoveNoteDetailConfirm(
+                            targetParentNoteId: parentNoteId,
+                            targetTitle: title,
+                            targetParentBranchId: parentBranchId
+                        )
+                        showMoveParentPicker = false
+                    }
+                )
+                .environment(appState)
+            }
+            .alert(
+                String(localized: "Move Note", comment: "Move confirmation title"),
+                isPresented: Binding(
+                    get: { moveNoteDetailConfirm != nil },
+                    set: { if !$0 { moveNoteDetailConfirm = nil } }
+                )
+            ) {
+                Button("Cancel", role: .cancel) {
+                    moveNoteDetailConfirm = nil
+                }
+                Button(String(localized: "Move", comment: "Confirm move note")) {
+                    guard let c = moveNoteDetailConfirm else { return }
+                    moveNoteDetailConfirm = nil
+                    Task {
+                        await vm.moveNoteToParent(
+                            targetParentNoteId: c.targetParentNoteId,
+                            targetParentBranchId: c.targetParentBranchId
+                        )
+                    }
+                }
+            } message: {
+                if let c = moveNoteDetailConfirm {
+                    Text(
+                        String(
+                            localized: "Move “\(uiTitle(for: note))” under “\(c.targetTitle)”? The note will appear in the new location in the tree.",
+                            comment: "Move confirmation from note detail"
+                        )
+                    )
+                }
             }
             .alert("Delete Note?", isPresented: $vm.showDeleteConfirm) {
                 Button("Cancel", role: .cancel) {}
@@ -1080,6 +1143,15 @@ struct NoteDetailView: View {
                         Label("Duplicate", systemImage: "doc.on.doc")
                     }
                     .disabled(vm.isSaving)
+                }
+
+                if note.noteId != TriliumTreeConstants.rootNoteId, !note.isProtected || appState.protectedSessionActive {
+                    Button {
+                        showMoveParentPicker = true
+                    } label: {
+                        Label(String(localized: "Move", comment: "Note overflow: move under another parent"), systemImage: "arrow.forward.folder")
+                    }
+                    .disabled(vm.client == nil || vm.isSaving)
                 }
 
                 Button {
