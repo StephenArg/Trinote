@@ -1,5 +1,8 @@
 # Trinote — iOS Trilium Client
 
+<img width="360" height="360" alt="AppIcon-1024-dark" src="https://github.com/user-attachments/assets/d94bb6a9-904e-49b6-9261-213809fbd248" />
+
+
 A native iOS client for self-hosted [TriliumNext](https://github.com/TriliumNext/Trilium) note-taking servers.
 
 ## Features
@@ -12,7 +15,7 @@ A native iOS client for self-hosted [TriliumNext](https://github.com/TriliumNext
 - **Attachments** — upload from Photos/Files, download, share
 - **Offline cache** — tree structure and recently opened notes cached locally
 - **Multiple servers** — save and switch between server profiles
-- **Dark mode** and Dynamic Type support throughout
+- **Dark mode** and numerous color options
 
 ## Requirements
 
@@ -55,7 +58,7 @@ Select an iOS 17+ simulator or device and press **Cmd+R**.
 1. Enter your server URL (same origin you use in the browser)
 2. Enter your Trilium **password** (same as the web UI)
 3. Optional: **Remember me** — matches Trilium’s longer-lived session cookie
-4. **TOTP / SSO**: complete login in the browser first if your server requires it; password-only flow may not be enough yet
+4. **TOTP / SSO**: complete login in the browser first if your server requires it
 
 ### Self-signed certificates
 
@@ -109,22 +112,19 @@ Tests cover:
 
 ## Known Limitations
 
-- **Text editing** is HTML source mode only — rich text WYSIWYG editing is planned for a future release
-- **Canvas/Mermaid/GeoMap** notes show a placeholder with "Open in Web" fallback
-- **Protected notes** display as protected but decryption is not implemented client-side
-- **No background sync** — data refreshes on app foreground and pull-to-refresh
-- **No file/image note content editing** — only text/code notes can be edited
-- **Search is server-side only** — no offline full-text search
+- **Text editing** includes many toolbar options mirroring the desktop and browser applications
+- **Canvas/Mermaid/GeoMap** notes show a placeholder image of the diagram.
+- **Protected notes** are able to be read (when password is entered) but not generated on this client
+- **Background sync** — data refreshes in the background and on pull-to-refresh. When starting out manually do a full-sync.
+- **Search is server-side only** — no offline full-text search. Can jump to text references
 
 ## Roadmap
 
 - [ ] Rich text editing (block editor or Markdown)
 - [ ] Protected note decryption
 - [ ] Note move/reorder in tree
-- [ ] Widgets / home screen shortcuts
-- [ ] iPad sidebar layout
-- [ ] Share extension (save to Trilium)
-- [ ] Offline search index
+- [ ] Share option - generates link to share read-only note
+- [ ] Offline access to notes
 
 ## License
 
