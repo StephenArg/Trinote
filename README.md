@@ -118,13 +118,6 @@ Tests cover:
 - **Background sync** — data refreshes in the background and on pull-to-refresh. When starting out manually do a full-sync.
 - **Search is server-side only** — no offline full-text search. Can jump to text references
 
-## Roadmap
-
-- [ ] Rich text editing (block editor or Markdown)
-- [ ] Protected note decryption
-- [ ] Note move/reorder in tree
-- [ ] Share option - generates link to share read-only note
-- [ ] Offline access to notes
 
 ## License
 
