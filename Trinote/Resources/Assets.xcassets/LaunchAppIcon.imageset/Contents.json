@@ -1,35 +1,63 @@
 {
-  "images": [
+  "images" : [
     {
-      "filename": "launch-1024.png",
-      "idiom": "universal",
-      "scale": "1x"
+      "filename" : "launch-1024.png",
+      "idiom" : "universal",
+      "scale" : "1x"
     },
     {
-      "filename": "launch-1024-dark.png",
-      "idiom": "universal",
-      "scale": "1x",
-      "appearances": [
+      "appearances" : [
         {
-          "appearance": "luminosity",
-          "value": "dark"
+          "appearance" : "luminosity",
+          "value" : "dark"
         }
-      ]
+      ],
+      "filename" : "launch-1024-dark.png",
+      "idiom" : "universal",
+      "scale" : "1x"
     },
     {
-      "filename": "launch-1024-tinted.png",
-      "idiom": "universal",
-      "scale": "1x",
-      "appearances": [
+      "idiom" : "universal",
+      "scale" : "2x"
+    },
+    {
+      "appearances" : [
         {
-          "appearance": "luminosity",
-          "value": "tinted"
+          "appearance" : "luminosity",
+          "value" : "dark"
         }
-      ]
+      ],
+      "idiom" : "universal",
+      "scale" : "2x"
+    },
+    {
+      "idiom" : "universal",
+      "scale" : "3x"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "idiom" : "universal",
+      "scale" : "3x"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "tinted"
+        }
+      ],
+      "filename" : "launch-1024-tinted.png",
+      "idiom" : "universal",
+      "scale" : "1x"
     }
   ],
-  "info": {
-    "author": "xcode",
-    "version": 1
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
   }
 }
