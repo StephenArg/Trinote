@@ -118,6 +118,12 @@ Tests cover:
 - **Background sync** — data refreshes in the background and on pull-to-refresh. When starting out manually do a full-sync.
 - **Search is server-side only** — no offline full-text search. Can jump to text references
 
+---
+
+<a href="buymeacoffee.com/vero.fide">Buy me a coffee</a> ☕️ 
+
+<img width="100" height="100" alt="qr-code" src="https://github.com/user-attachments/assets/2ebab2dd-4bf6-4d86-a29c-4cf75fcf834e" />
+
 
 ## License
 
