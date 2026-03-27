@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import Trinote
 
@@ -39,19 +40,50 @@ final class TriliumClientTests: XCTestCase {
         }
     }
 
-    // MARK: - Session + CSRF
+    private let appInfoJSON = #"{"appVersion":"0.95.0","dbVersion":228}"#
+
+    /// Standard response for `/bootstrap` on v0.101 servers (not found).
+    private func bootstrapNotFound(_ request: URLRequest) -> (HTTPURLResponse, Data) {
+        (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+    }
+
+    // MARK: - Session + CSRF (v0.102+ bootstrap)
+
+    /// v0.102+: `GET /bootstrap` returns JSON with `csrfToken`.
+    func testRestoreSessionUsesCsrfFromBootstrapJSON() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"boot_csrf_42","device":"mobile","triliumVersion":"0.102.1"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        try await client.restoreSession()
+        _ = try await client.getAppInfo()
+    }
+
+    // MARK: - Session + CSRF (v0.101 HTML fallback)
 
     func testGetAppInfoUsesNoBearer() async throws {
-        MockURLProtocol.requestHandler = { request in
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
             XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
             let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+            }
             if path.isEmpty || path == "/" {
                 let html = "<html>window.glob = { csrfToken: 'csrf_ok' };</html>"
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
             }
             if path.contains("api/app-info") {
-                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                        Data(#"{"appVersion":"0.95.0","dbVersion":228}"#.utf8))
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
             }
             XCTFail("Unexpected path: \(path)")
             return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
@@ -63,17 +95,129 @@ final class TriliumClientTests: XCTestCase {
     }
 
     func testCsrfExtractsDoubleQuotedTokenInGlob() async throws {
-        MockURLProtocol.requestHandler = { request in
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
             let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+            }
             if path.isEmpty || path == "/" {
                 let html = #"<html>window.glob = { csrfToken: "csrf_double" };</html>"#
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
             }
             if path.contains("api/app-info") {
-                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                        Data(#"{"appVersion":"0.95.0","dbVersion":228}"#.utf8))
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
             }
             XCTFail("Unexpected path: \(String(describing: request.url))")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        try await client.restoreSession()
+        _ = try await client.getAppInfo()
+    }
+
+    /// When HTML has no token but the `_csrf` cookie is in the jar (Vite SPA), the client
+    /// extracts the plain token from the `token|hash` cookie value (csrf-csrf v3 format).
+    func testRestoreSessionUsesCsrfCookieWhenShellHasNoToken() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+            }
+            if path.isEmpty || path == "/" {
+                let html = "<html><body>no token in page</body></html>"
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        let cookie = HTTPCookie(properties: [
+            .domain: "trilium.test", .path: "/", .name: "_csrf",
+            .value: "plaintoken123|hashvalue456", .version: 0
+        ])!
+        HTTPCookieStorage.shared.setCookie(cookie)
+        defer { HTTPCookieStorage.shared.deleteCookie(cookie) }
+
+        try await client.restoreSession()
+        _ = try await client.getAppInfo()
+    }
+
+    /// Vite SPA: no HTML token, but `Set-Cookie: _csrf=token|hash` in the response
+    /// headers.  The client must extract the token from the raw header (bypassing the
+    /// broken HTTPCookie.cookies() parsing that drops _csrf).
+    func testRestoreSessionExtractsCsrfFromSetCookieHeader() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+            }
+            if path.isEmpty || path == "/" {
+                let html = "<html><head><title>Trilium Notes</title></head><body><script type=\"module\" crossorigin src=\"/assets/index.js\"></script></body></html>"
+                let headers = [
+                    "Set-Cookie": "trilium.sid=s%3Aabc.xyz; Path=/; Expires=Thu, 01 Jan 2099 00:00:00 GMT; HttpOnly; SameSite=Strict, _csrf=headerTok42|headerHash99; Path=/; HttpOnly; SameSite=Strict"
+                ]
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!, Data(html.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        try await client.restoreSession()
+        _ = try await client.getAppInfo()
+    }
+
+    /// When neither /bootstrap, HTML, nor cookies contain a token, restore
+    /// should still succeed (server may not require CSRF).
+    func testRestoreSessionSucceedsWithoutCsrf() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+            }
+            if path.isEmpty || path == "/" {
+                let html = "<html><body>no token in page</body></html>"
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        try await client.restoreSession()
+        _ = try await client.getAppInfo()
+    }
+
+    /// Pretty-printed `window.glob` spans lines; extraction must not require a single-line block.
+    func testRestoreSessionExtractsMultilineWindowGlob() async throws {
+        let multilineGlob = """
+        <html><script>
+        window.glob = {
+            device: "mobile",
+            csrfToken: 'multiline_csrf',
+        };
+        </script></html>
+        """
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+            }
+            if path.isEmpty || path == "/" {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(multilineGlob.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
             return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
         }
 
@@ -99,9 +243,13 @@ final class TriliumClientTests: XCTestCase {
 
     func testGetNoteMergesTreeLoad() async throws {
         var call = 0
-        MockURLProtocol.requestHandler = { request in
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
             call += 1
             let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"csrf_test","device":"desktop"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
             if path.hasSuffix("/api/notes/abc") {
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                         Data(#"{"noteId":"abc","title":"Hi","isProtected":false,"type":"text","mime":"text/html","blobId":"b1","utcDateModified":"2024-01-15T13:00:00.000Z"}"#.utf8))
@@ -111,9 +259,8 @@ final class TriliumClientTests: XCTestCase {
                 let tree = #"{"notes":[{"noteId":"abc","title":"Hi","isProtected":false,"type":"text","mime":"text/html","blobId":"b1"}],"branches":[{"branchId":"br1","noteId":"abc","parentNoteId":"root","prefix":null,"notePosition":0,"isExpanded":true}],"attributes":[]}"#
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(tree.utf8))
             }
-            if path == "/" || path.isEmpty {
-                let html = "<html>window.glob = { csrfToken: 'csrf_test' };</html>"
-                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
             }
             XCTFail("Unexpected path: \(path)")
             return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
@@ -132,15 +279,14 @@ final class TriliumClientTests: XCTestCase {
     // MARK: - Search
 
     func testSearchUsesNativePath() async throws {
-        MockURLProtocol.requestHandler = { request in
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
             let path = request.url?.path ?? ""
-            if path.isEmpty || path == "/" {
-                let html = "<html>window.glob = { csrfToken: 'x' };</html>"
-                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(html.utf8))
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"x","device":"desktop"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
             }
             if path.contains("/api/app-info") {
-                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                        Data(#"{"appVersion":"0.95.0","dbVersion":228}"#.utf8))
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
             }
             if path.contains("/api/search/") {
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("[]".utf8))

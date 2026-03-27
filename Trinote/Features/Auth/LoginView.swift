@@ -1,9 +1,16 @@
 import SwiftUI
 
 struct LoginView: View {
+    private enum Field: Hashable {
+        case displayName
+        case serverURL
+        case password
+    }
+
     @Environment(AppState.self) private var appState
     @State private var viewModel = AuthViewModel()
     @State private var isPasswordVisible = false
+    @FocusState private var focusedField: Field?
 
     var body: some View {
         NavigationStack {
@@ -17,21 +24,32 @@ struct LoginView: View {
                 }
                 .padding()
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(String(localized: "Connect", comment: "Login screen title"))
+            .navigationBarTitleDisplayMode(.inline)
             .alert(String(localized: "Error", comment: "Login error"), isPresented: $viewModel.showError) {
                 Button(String(localized: "OK", comment: "Dismiss alert")) { viewModel.showError = false }
             } message: {
                 Text(viewModel.errorMessage ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
             }
             .onAppear { viewModel.loadProfiles() }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button(String(localized: "Done", comment: "Dismiss keyboard")) {
+                        focusedField = nil
+                    }
+                }
+            }
         }
     }
 
     private var header: some View {
         VStack(spacing: 8) {
-            Image(systemName: "note.text")
-                .font(.system(size: 48))
-                .foregroundStyle(.tint)
+            Image("BootstrapAppIcon")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 72, height: 72)
                 .accessibilityHidden(true)
             Text(String(localized: "Trinote", comment: "App name"))
                 .font(.title.bold())
@@ -50,6 +68,7 @@ struct LoginView: View {
             TextField(String(localized: "Display name (optional)", comment: "Server field"), text: $viewModel.serverName)
                 .textContentType(.organizationName)
                 .textInputAutocapitalization(.words)
+                .focused($focusedField, equals: .displayName)
                 .accessibilityLabel(String(localized: "Server display name", comment: "VoiceOver"))
 
             HStack(spacing: 8) {
@@ -66,6 +85,7 @@ struct LoginView: View {
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .focused($focusedField, equals: .serverURL)
                     .accessibilityLabel(String(localized: "Server URL", comment: "VoiceOver"))
             }
 
@@ -87,9 +107,11 @@ struct LoginView: View {
                         TextField(String(localized: "Password", comment: "Login field"), text: $viewModel.password)
                             .textContentType(.password)
                             .autocorrectionDisabled()
+                            .focused($focusedField, equals: .password)
                     } else {
                         SecureField(String(localized: "Password", comment: "Login field"), text: $viewModel.password)
                             .textContentType(.password)
+                            .focused($focusedField, equals: .password)
                     }
                 }
                 .accessibilityLabel(String(localized: "Server password", comment: "VoiceOver"))
@@ -115,6 +137,7 @@ struct LoginView: View {
 
     private var loginButton: some View {
         Button {
+            focusedField = nil
             Task { await viewModel.login(appState: appState) }
         } label: {
             Group {

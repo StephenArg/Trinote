@@ -9,7 +9,7 @@ protocol TriliumClientProtocol: Actor, Sendable {
     var isSessionValid: Bool { get }
 
     func login(password: String, rememberMe: Bool) async throws
-    /// Validates cookies against `/api/app-info` and refreshes CSRF from `/`.
+    /// Validates cookies against `/api/app-info` and acquires CSRF token.
     func restoreSession() async throws
     func logout() async throws
 
@@ -194,7 +194,6 @@ actor TriliumClient: TriliumClientProtocol {
 
         var body = "password=\(Self.applicationFormEncode(password))"
         if rememberMe {
-            // Match the web login form (`<input name="rememberMe" value="1">`).
             body += "&rememberMe=1"
         }
 
@@ -204,18 +203,19 @@ actor TriliumClient: TriliumClientProtocol {
         req.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
         req.httpBody = Data(body.utf8)
 
-        // Do NOT auto-follow redirects: iOS can drop or merge multiple `Set-Cookie` headers on 3xx responses.
-        // Trilium sends `trilium.sid` (and sometimes `_csrf`) on the 302 from `POST /login`.
         let (redirectStopData, redirectStopHTTP, loginSession) = try await postLoginStoppingAtRedirect(request: req)
         defer { loginSession.finishTasksAndInvalidate() }
 
         TriliumCookieResponseParser.storeCookies(from: redirectStopHTTP, in: httpCookieStorage)
+        manuallyStoreCsrfCookie(from: redirectStopHTTP)
+        stripSameSiteFromCookies()
 
         if redirectStopHTTP.statusCode == 401 {
             throw APIError.unauthorized
         }
 
         var shellData = redirectStopData
+        var shellHTTP = redirectStopHTTP
         if [301, 302, 303, 307, 308].contains(redirectStopHTTP.statusCode) {
             let rawLoc = redirectStopHTTP.value(forHTTPHeaderField: "Location")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "/"
             guard let target = Self.resolveRedirectURL(rawLoc, loginURL: loginURL, baseURL: baseURL) else {
@@ -238,25 +238,41 @@ actor TriliumClient: TriliumClientProtocol {
             let (d, r) = try await session.data(for: getReq)
             guard let h = r as? HTTPURLResponse else { throw APIError.invalidResponse }
             TriliumCookieResponseParser.storeCookies(from: h, in: httpCookieStorage)
+            manuallyStoreCsrfCookie(from: h)
+            stripSameSiteFromCookies()
             if h.statusCode == 401 { throw APIError.unauthorized }
             guard (200...399).contains(h.statusCode) else {
                 throw APIError.serverError(statusCode: h.statusCode, message: String(data: d, encoding: .utf8))
             }
             shellData = d
+            shellHTTP = h
         } else if !(200...399).contains(redirectStopHTTP.statusCode) {
             throw APIError.serverError(statusCode: redirectStopHTTP.statusCode, message: String(data: redirectStopData, encoding: .utf8))
         }
 
-        if let html = String(data: shellData, encoding: .utf8),
-           let fromShell = Self.extractCsrfToken(from: html), !fromShell.isEmpty {
-            csrfToken = fromShell
+        // v0.102+: the redirect target is a Vite SPA with no embedded CSRF.
+        // Try /bootstrap first (JSON with csrfToken), then fall back to HTML parsing.
+        if await fetchCsrfFromBootstrap() {
+            Log.auth.info("login: acquired CSRF from /bootstrap")
         } else {
-            try await refreshCsrfFromAppShell()
+            // v0.101 and earlier: CSRF is in the redirect HTML (window.glob)
+            let shellHTML = String(data: shellData, encoding: .utf8)
+            if let token = shellHTML.flatMap({ Self.extractCsrfToken(from: $0) }), !token.isEmpty {
+                csrfToken = token
+                Log.auth.info("login: extracted CSRF from redirect HTML")
+            } else if let token = Self.extractCsrfFromSetCookieHeader(shellHTTP), !token.isEmpty {
+                csrfToken = token
+                Log.auth.info("login: extracted CSRF from Set-Cookie header")
+            } else if let token = extractCsrfTokenFromCookie(), !token.isEmpty {
+                csrfToken = token
+                Log.auth.info("login: extracted CSRF from _csrf cookie jar")
+            } else {
+                Log.auth.warning("login: no CSRF token found after all attempts")
+            }
         }
 
-        applyCsrfTokenFromCookiesIfMissing()
-
         _ = try await getAppInfo()
+
         isSessionValid = true
     }
 
@@ -298,7 +314,7 @@ actor TriliumClient: TriliumClientProtocol {
 
 
     func restoreSession() async throws {
-        try await refreshCsrfFromAppShell()
+        try await refreshCsrf()
         _ = try await getAppInfo()
         isSessionValid = true
     }
@@ -311,7 +327,7 @@ actor TriliumClient: TriliumClientProtocol {
         }
 
         guard csrfToken != nil else { return }
-        try await refreshCsrfFromAppShell()
+        try await refreshCsrf()
         guard let csrfToken else { return }
 
         var req = URLRequest(url: baseURL.appendingPathComponent("logout"))
@@ -329,9 +345,8 @@ actor TriliumClient: TriliumClientProtocol {
 
     func enterProtectedSession(password: String) async throws {
         if csrfToken == nil {
-            try await refreshCsrfFromAppShell()
+            try await refreshCsrf()
         }
-        guard csrfToken != nil else { throw APIError.noToken }
         struct Body: Encodable { let password: String }
         let body = Body(password: password)
         let resp: ProtectedSessionLoginResponse = try await postJSON("/api/login/protected", body: body, csrf: true)
@@ -342,105 +357,190 @@ actor TriliumClient: TriliumClientProtocol {
 
     func touchProtectedSession() async throws {
         if csrfToken == nil {
-            try await refreshCsrfFromAppShell()
+            try await refreshCsrf()
         }
-        guard csrfToken != nil else { throw APIError.noToken }
         try await postWithoutBody(path: "/api/login/protected/touch", method: "POST", csrf: true)
     }
 
     func exitProtectedSession() async throws {
         if csrfToken == nil {
-            try await refreshCsrfFromAppShell()
+            try await refreshCsrf()
         }
         guard csrfToken != nil else { return }
         try await postWithoutBody(path: "/api/logout/protected", method: "POST", csrf: true)
     }
 
-    private func refreshCsrfFromAppShell() async throws {
-        var lastHTML = ""
-        for variant in AppShellFetchVariant.allCases {
-            let html = try await fetchAppShellHTML(variant: variant)
-            lastHTML = html
-            if let token = Self.extractCsrfToken(from: html), !token.isEmpty {
-                csrfToken = token
-                return
-            }
-            applyCsrfTokenFromCookiesIfMissing()
-            if csrfToken != nil {
-                return
-            }
-        }
+    // MARK: - CSRF token acquisition
 
-        applyCsrfTokenFromCookiesIfMissing()
-        if csrfToken != nil {
+    /// v0.102+ serves CSRF via `GET /bootstrap` (JSON with `csrfToken` field).
+    /// The response also sets the `_csrf` cookie needed for double-submit.
+    private func fetchCsrfFromBootstrap() async -> Bool {
+        do {
+            let url = try Self.makeURL(baseURL: baseURL, path: "/bootstrap", queryParams: nil)
+            var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+            let (data, response) = try await session.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return false }
+
+            TriliumCookieResponseParser.storeCookies(from: http, in: httpCookieStorage)
+            manuallyStoreCsrfCookie(from: http)
+            stripSameSiteFromCookies()
+
+            guard (200...299).contains(http.statusCode) else {
+                Log.auth.debug("fetchCsrfFromBootstrap: status \(http.statusCode), not a v0.102+ server")
+                return false
+            }
+
+            struct BootstrapResponse: Decodable { let csrfToken: String? }
+            if let bootstrap = try? JSONDecoder().decode(BootstrapResponse.self, from: data),
+               let token = bootstrap.csrfToken, !token.isEmpty {
+                csrfToken = token
+                Log.auth.info("fetchCsrfFromBootstrap: acquired CSRF token from /bootstrap JSON")
+                return true
+            }
+
+            if let fromCookie = extractCsrfTokenFromCookie(), !fromCookie.isEmpty {
+                csrfToken = fromCookie
+                Log.auth.info("fetchCsrfFromBootstrap: acquired CSRF token from _csrf cookie (set by /bootstrap)")
+                return true
+            }
+
+            Log.auth.debug("fetchCsrfFromBootstrap: /bootstrap returned 200 but no csrfToken found")
+            return false
+        } catch {
+            Log.auth.debug("fetchCsrfFromBootstrap: failed (\(error.localizedDescription))")
+            return false
+        }
+    }
+
+    /// v0.101 and earlier: `GET /` returns server-rendered HTML with `window.glob = { csrfToken: '...' }`.
+    private func fetchCsrfFromAppShellHTML() async throws {
+        let (html, httpResponse) = try await fetchAppShellHTML()
+
+        if let token = Self.extractCsrfToken(from: html), !token.isEmpty {
+            csrfToken = token
+            Log.auth.info("refreshCsrf: extracted token from HTML")
             return
         }
 
-        let looksLikeLoginPage = lastHTML.localizedCaseInsensitiveContains("login-page")
-            || lastHTML.localizedCaseInsensitiveContains("Trilium Login")
-        let looksLikeHTML = lastHTML.localizedCaseInsensitiveContains("<html")
-            || lastHTML.localizedCaseInsensitiveContains("window.glob")
-        let hint: String
+        if let token = Self.extractCsrfFromSetCookieHeader(httpResponse), !token.isEmpty {
+            csrfToken = token
+            Log.auth.info("refreshCsrf: extracted token from Set-Cookie header")
+            return
+        }
+
+        if let token = extractCsrfTokenFromCookie(), !token.isEmpty {
+            csrfToken = token
+            Log.auth.info("refreshCsrf: extracted token from _csrf cookie jar")
+            return
+        }
+
+        let looksLikeLoginPage = html.localizedCaseInsensitiveContains("login-page")
+            || html.localizedCaseInsensitiveContains("Trilium Login")
+            || html.localizedCaseInsensitiveContains("login-form")
+
         if looksLikeLoginPage {
-            hint = "The server still shows the login page — the session cookie may not be sticking after sign-in (password wrong, or cookie/SameSite/proxy). Confirm the password in Safari."
-        } else if !looksLikeHTML {
-            hint = "The server did not return Trilium’s HTML app shell. Use the same base URL as in Safari (scheme, host, port, and any subpath, e.g. https://notes.example.com/trilium)."
-        } else {
-            hint = "Trilium’s page was received but no CSRF token was found in HTML or cookies. Try updating the server."
+            throw APIError.decodingFailed(
+                "The server still shows the login page \u{2014} the session cookie may not be sticking after sign-in. Confirm the password in Safari."
+            )
         }
-        throw APIError.decodingFailed("Could not read CSRF token. \(hint)")
+
+        Log.auth.warning("refreshCsrf: no CSRF token found in HTML or cookies")
     }
 
-    /// Trilium’s `csrf-csrf` package sets an httpOnly cookie (commonly `_csrf`); native clients can read it from `HTTPCookieStorage` and send the same value in `x-csrf-token`.
-    private func applyCsrfTokenFromCookiesIfMissing() {
-        guard csrfToken == nil || csrfToken?.isEmpty == true else { return }
-        let buckets: [URL] = [
-            baseURL,
-            baseURL.appendingPathComponent("login"),
-            baseURL.appendingPathComponent("api")
-        ]
-        var seen = Set<String>()
-        for bucket in buckets {
-            for c in httpCookieStorage.cookies(for: bucket) ?? [] {
-                let dedupe = "\(c.name)|\(c.domain)|\(c.path)"
-                guard seen.insert(dedupe).inserted else { continue }
-                let name = c.name.lowercased()
-                guard name == "_csrf" || name == "csrf-token" || name.hasSuffix("csrf-token") || name.contains("csrf") else { continue }
-                let raw = c.value
-                let decoded = raw.removingPercentEncoding ?? raw
-                if !decoded.isEmpty {
-                    csrfToken = decoded
-                    return
-                }
+    /// Tries `/bootstrap` (v0.102+) then falls back to HTML parsing (v0.101 and earlier).
+    private func refreshCsrf() async throws {
+        if await fetchCsrfFromBootstrap() { return }
+        try await fetchCsrfFromAppShellHTML()
+    }
+
+    /// `csrf-csrf` v3 stores the cookie as `token|hash` (delimiter `|`).
+    /// The `x-csrf-token` header must send only the `token` part (before `|`).
+    /// This works even when the HTML is a Vite SPA shell with no embedded token.
+    private func extractCsrfTokenFromCookie() -> String? {
+        guard let host = baseURL.host?.lowercased() else { return nil }
+        for c in httpCookieStorage.cookies ?? [] {
+            guard Self.cookieDomainMatchesHost(c.domain, host: host) else { continue }
+            let name = c.name.lowercased()
+            guard name == "_csrf" || name == "csrf-token" else { continue }
+            let raw = c.value.removingPercentEncoding ?? c.value
+            guard let pipeIdx = raw.firstIndex(of: "|") else {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+                continue
+            }
+            let token = String(raw[raw.startIndex..<pipeIdx]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !token.isEmpty { return token }
+        }
+        return nil
+    }
+
+    /// iOS collapses multiple `Set-Cookie` headers into one comma-separated string inside
+    /// `allHeaderFields`.  When `trilium.sid` has an `Expires` date containing commas,
+    /// `HTTPCookie.cookies(withResponseHeaderFields:for:)` misparses the combined string
+    /// and silently drops the `_csrf` cookie.  This method extracts the token directly.
+    private nonisolated static func extractCsrfFromSetCookieHeader(_ response: HTTPURLResponse) -> String? {
+        var rawSetCookie: String?
+        for (key, value) in response.allHeaderFields {
+            if let k = key as? String, k.lowercased() == "set-cookie", let v = value as? String {
+                rawSetCookie = v
+                break
+            }
+        }
+        guard let raw = rawSetCookie,
+              let nameRange = raw.range(of: "_csrf=", options: .caseInsensitive) else { return nil }
+
+        let afterEquals = raw[nameRange.upperBound...]
+        let valueEnd = afterEquals.firstIndex(of: ";") ?? afterEquals.endIndex
+        let decoded = String(afterEquals[afterEquals.startIndex..<valueEnd])
+            .removingPercentEncoding ?? String(afterEquals[afterEquals.startIndex..<valueEnd])
+
+        if let pipe = decoded.firstIndex(of: "|") {
+            let token = String(decoded[decoded.startIndex..<pipe]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return token.isEmpty ? nil : token
+        }
+        let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func manuallyStoreCsrfCookie(from response: HTTPURLResponse) {
+        TriliumCookieResponseParser.manuallyStoreCsrfCookie(from: response, in: httpCookieStorage)
+    }
+
+    /// Strips `SameSite` from all cookies for this host.
+    /// TriliumNext sets `SameSite=Strict` on the `_csrf` cookie; iOS may refuse to send
+    /// strict-SameSite cookies on cross-origin requests from a native app, which breaks
+    /// the double-submit CSRF validation on POST/PUT/DELETE API calls.
+    private func stripSameSiteFromCookies() {
+        guard let host = baseURL.host?.lowercased() else { return }
+        for cookie in httpCookieStorage.cookies ?? [] {
+            guard Self.cookieDomainMatchesHost(cookie.domain, host: host) else { continue }
+            guard cookie.sameSitePolicy != nil, var props = cookie.properties else { continue }
+            props.removeValue(forKey: .sameSitePolicy)
+            httpCookieStorage.deleteCookie(cookie)
+            if let cleaned = HTTPCookie(properties: props) {
+                httpCookieStorage.setCookie(cleaned)
             }
         }
     }
 
-    private enum AppShellFetchVariant: CaseIterable {
-        case plain
-        case desktopQuery
-        case mobileQuery
+    /// Whether `cookie.domain` (with optional leading `.`) matches request `host`.
+    private nonisolated static func cookieDomainMatchesHost(_ cookieDomain: String, host: String) -> Bool {
+        let d = cookieDomain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let h = host.lowercased()
+        if d.isEmpty { return false }
+        if d.hasPrefix(".") {
+            let suffix = String(d.dropFirst())
+            return h == suffix || h.hasSuffix("." + suffix)
+        }
+        return h == d
     }
 
-    /// Fetches `/` (optionally `?desktop=1` / `?mobile=1`) like a browser; some proxies only serve the real SPA HTML to browser user agents.
-    private func fetchAppShellHTML(variant: AppShellFetchVariant) async throws -> String {
-        let url: URL
-        switch variant {
-        case .plain:
-            url = baseURL
-        case .desktopQuery, .mobileQuery:
-            guard var c = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { throw APIError.invalidURL }
-            var items = c.queryItems ?? []
-            let key = variant == .desktopQuery ? "desktop" : "mobile"
-            if !items.contains(where: { $0.name == key }) {
-                items.append(URLQueryItem(name: key, value: "1"))
-            }
-            c.queryItems = items
-            guard let u = c.url else { throw APIError.invalidURL }
-            url = u
-        }
-
-        var req = URLRequest(url: url)
+    /// Fetches `GET /` for v0.101 and earlier (server-rendered HTML with `window.glob`).
+    private func fetchAppShellHTML() async throws -> (String, HTTPURLResponse) {
+        var req = URLRequest(url: baseURL)
         req.httpMethod = "GET"
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
@@ -452,26 +552,34 @@ actor TriliumClient: TriliumClientProtocol {
 
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+
+        TriliumCookieResponseParser.storeCookies(from: http, in: httpCookieStorage)
+        manuallyStoreCsrfCookie(from: http)
+        stripSameSiteFromCookies()
+
         guard (200...399).contains(http.statusCode) else {
             if http.statusCode == 401 { throw APIError.unauthorized }
             throw APIError.serverError(statusCode: http.statusCode, message: nil)
         }
-        if let html = String(data: data, encoding: .utf8) { return html }
-        if let html = String(data: data, encoding: .isoLatin1) { return html }
+        if let html = String(data: data, encoding: .utf8) { return (html, http) }
+        if let html = String(data: data, encoding: .isoLatin1) { return (html, http) }
         throw APIError.decodingFailed("HTML encoding")
     }
 
-    /// TriliumNext renders `csrfToken: '<%= csrfToken %>'` inside `window.glob` ([windowGlobal.ejs](https://github.com/TriliumNext/Notes/blob/develop/apps/server/src/assets/views/partials/windowGlobal.ejs)). Older or proxied pages may differ slightly.
+    /// v0.101 and earlier: extracts CSRF token from `window.glob = { csrfToken: '...' }` in HTML.
     private static func extractCsrfToken(from html: String) -> String? {
         let patterns: [String] = [
-            #"csrfToken:\s*'([^']*)'"#, // TriliumNext default
-            #"csrfToken:\s*"([^"]*)""#, // double-quoted variant
-            #""csrfToken"\s*:\s*"([^"]+)""#, // JSON-like
-            #"'csrfToken'\s*:\s*'([^']*)'"#, // quoted keys
-            #"<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']"# // generic meta (if ever used)
+            #"csrfToken:\s*'([^']+)'"#,
+            #"csrfToken:\s*"([^"]+)""#,
+            #"window\.glob\s*=\s*\{.{0,4000}?csrfToken\s*:\s*'([^']+)'"#,
+            #"window\.glob\s*=\s*\{.{0,4000}?csrfToken\s*:\s*"([^"]+)""#,
+            #""csrfToken"\s*:\s*"([^"]+)""#,
+            #"'csrfToken'\s*:\s*'([^']+)'"#,
+            #"<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']"#
         ]
+        let regexOpts: NSRegularExpression.Options = [.caseInsensitive, .dotMatchesLineSeparators]
         for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: regexOpts) else { continue }
             let range = NSRange(html.startIndex..., in: html)
             guard let match = regex.firstMatch(in: html, options: [], range: range),
                   match.numberOfRanges > 1,
@@ -479,6 +587,27 @@ actor TriliumClient: TriliumClientProtocol {
             else { continue }
             let token = String(html[tokenRange]).trimmingCharacters(in: .whitespacesAndNewlines)
             if !token.isEmpty { return token }
+        }
+
+        // Manual string search fallback when regex fails on unusual encodings
+        if let token = manualCsrfSearch(in: html) {
+            return token
+        }
+        return nil
+    }
+
+    /// Brute-force search for `csrfToken` followed by a quoted value.
+    private static func manualCsrfSearch(in html: String) -> String? {
+        guard let keyRange = html.range(of: "csrfToken", options: .caseInsensitive) else { return nil }
+        let after = html[keyRange.upperBound...]
+        for quote: Character in ["'", "\""] {
+            guard let openIdx = after.firstIndex(of: quote) else { continue }
+            let valueStart = after.index(after: openIdx)
+            guard valueStart < after.endIndex,
+                  let closeIdx = after[valueStart...].firstIndex(of: quote)
+            else { continue }
+            let token = String(after[valueStart..<closeIdx]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !token.isEmpty && token.count < 256 { return token }
         }
         return nil
     }
@@ -884,7 +1013,6 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     func uploadAttachmentContent(_ attachmentId: String, data: Data, contentType: String) async throws {
-        guard let csrf = csrfToken else { throw APIError.noToken }
         let boundary = "Boundary-\(UUID().uuidString)"
         var body = Data()
         func append(_ s: String) { body.append(Data(s.utf8)) }
@@ -899,7 +1027,9 @@ actor TriliumClient: TriliumClientProtocol {
         var req = URLRequest(url: url)
         req.httpMethod = "PUT"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        req.setValue(csrf, forHTTPHeaderField: TriliumHTTP.csrfHeader)
+        if let csrf = csrfToken {
+            req.setValue(csrf, forHTTPHeaderField: TriliumHTTP.csrfHeader)
+        }
         req.httpBody = body
 
         let (respData, response) = try await session.data(for: req)
@@ -1010,8 +1140,7 @@ actor TriliumClient: TriliumClientProtocol {
             request.setValue("application/json, text/html;q=0.8,*/*;q=0.5", forHTTPHeaderField: "Accept")
         }
 
-        if csrf {
-            guard let csrfToken else { throw APIError.noToken }
+        if csrf, let csrfToken {
             request.setValue(csrfToken, forHTTPHeaderField: TriliumHTTP.csrfHeader)
         }
 
@@ -1039,6 +1168,11 @@ actor TriliumClient: TriliumClientProtocol {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
+
+        // Capture CSRF cookie from ANY API response — newer TriliumNext (Vite SPA)
+        // sets _csrf on API GETs, not on the HTML page load.
+        captureCsrfFromResponse(http)
+
         switch http.statusCode {
         case 200...299:
             return
@@ -1051,6 +1185,20 @@ actor TriliumClient: TriliumClientProtocol {
         default:
             let message = extractErrorMessage(from: data)
             throw APIError.serverError(statusCode: http.statusCode, message: message)
+        }
+    }
+
+    /// Opportunistically captures `_csrf` from any API response's Set-Cookie header.
+    private func captureCsrfFromResponse(_ response: HTTPURLResponse) {
+        TriliumCookieResponseParser.storeCookies(from: response, in: httpCookieStorage)
+        TriliumCookieResponseParser.manuallyStoreCsrfCookie(from: response, in: httpCookieStorage)
+
+        if csrfToken == nil {
+            if let fromHeader = Self.extractCsrfFromSetCookieHeader(response) {
+                csrfToken = fromHeader
+            } else if let fromCookie = extractCsrfTokenFromCookie() {
+                csrfToken = fromCookie
+            }
         }
     }
 
@@ -1134,13 +1282,49 @@ fileprivate enum TriliumCookieResponseParser {
             guard let key = k as? String, let value = v as? String else { continue }
             headerDict[key] = value
         }
+
         let parsed = HTTPCookie.cookies(withResponseHeaderFields: headerDict, for: url)
         let normalized = normalizeCookiesForSharedJar(parsed, requestURL: url)
-
-        // Prefer batch API (matches “response for this URL”); also set individually for older stacks.
         jar.setCookies(normalized, for: url, mainDocumentURL: url)
         for c in normalized {
             jar.setCookie(c)
+        }
+    }
+
+    /// Parses `_csrf=value` directly from the raw `Set-Cookie` header and stores it.
+    /// This bypasses `HTTPCookie.cookies(withResponseHeaderFields:for:)` which drops
+    /// `_csrf` when multiple cookies with comma-containing `Expires` dates are collapsed.
+    /// Parses `_csrf=value` directly from raw `Set-Cookie` header and stores it,
+    /// bypassing `HTTPCookie.cookies()` which drops `_csrf` when multiple cookies
+    /// with comma-containing `Expires` dates are collapsed into one header.
+    static func manuallyStoreCsrfCookie(from response: HTTPURLResponse, in jar: HTTPCookieStorage) {
+        guard let url = response.url, let host = url.host?.lowercased() else { return }
+        var rawSetCookie: String?
+        for (key, value) in response.allHeaderFields {
+            if let k = key as? String, k.lowercased() == "set-cookie", let v = value as? String {
+                rawSetCookie = v
+                break
+            }
+        }
+        guard let raw = rawSetCookie,
+              let nameRange = raw.range(of: "_csrf=", options: .caseInsensitive) else { return }
+
+        let afterEquals = raw[nameRange.upperBound...]
+        let valueEnd = afterEquals.firstIndex(of: ";") ?? afterEquals.endIndex
+        let fullValue = String(afterEquals[afterEquals.startIndex..<valueEnd])
+        guard !fullValue.isEmpty else { return }
+
+        var props: [HTTPCookiePropertyKey: Any] = [
+            .name: "_csrf",
+            .value: fullValue,
+            .domain: host,
+            .path: "/"
+        ]
+        if url.scheme?.lowercased() == "https" {
+            props[.secure] = "TRUE"
+        }
+        if let cookie = HTTPCookie(properties: props) {
+            jar.setCookie(cookie)
         }
     }
 
@@ -1169,10 +1353,8 @@ fileprivate enum TriliumCookieResponseParser {
                 if let version = orig[.version] {
                     props[.version] = version
                 }
-                let sameSite = HTTPCookiePropertyKey("SameSite")
-                if let ss = orig[sameSite] {
-                    props[sameSite] = ss
-                }
+                // Intentionally omit SameSite: iOS may refuse to send SameSite=Strict
+                // cookies from a native app, breaking CSRF double-submit validation.
             }
             return HTTPCookie(properties: props) ?? original
         }
@@ -1196,6 +1378,7 @@ private final class TriliumStopRedirectDelegate: NSObject, URLSessionTaskDelegat
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
         TriliumCookieResponseParser.storeCookies(from: response, in: cookieStorage)
+        TriliumCookieResponseParser.manuallyStoreCsrfCookie(from: response, in: cookieStorage)
         completionHandler(nil)
     }
 }
