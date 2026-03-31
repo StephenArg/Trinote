@@ -69,9 +69,12 @@ private struct AppLaunchLoadingPanel: View {
 struct TrinoteApp: App {
     @State private var appState: AppState?
     @State private var persistenceError: String?
+    @State private var isAppLocked = false
+    @State private var pinShake = false
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearanceMode") private var appearanceMode: String = AppearanceMode.device.rawValue
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
+    @AppStorage("appPinEnabled") private var appPinEnabled = false
 
     private var resolvedColorScheme: ColorScheme? {
         AppearanceMode(rawValue: appearanceMode)?.colorScheme
@@ -83,37 +86,45 @@ struct TrinoteApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if let appState {
-                    RootView()
-                        .environment(appState)
-                        .modelContainer(PersistenceManager.shared.container)
-                        .task { await appState.bootstrap() }
-                        .onChange(of: scenePhase) { _, newPhase in
-                            if newPhase == .active {
-                                Task { await appState.onForegroundResume() }
-                            } else if newPhase == .background {
-                                Task { await appState.onBackground() }
+            ZStack {
+                Group {
+                    if let appState {
+                        RootView()
+                            .environment(appState)
+                            .modelContainer(PersistenceManager.shared.container)
+                            .task { await appState.bootstrap() }
+                            .onChange(of: scenePhase) { _, newPhase in
+                                if newPhase == .active {
+                                    Task { await appState.onForegroundResume() }
+                                } else if newPhase == .background {
+                                    Task { await appState.onBackground() }
+                                    if appPinEnabled { isAppLocked = true }
+                                }
                             }
+                    } else if let persistenceError {
+                        VStack(spacing: 16) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 48))
+                                .foregroundStyle(.orange)
+                            Text(String(localized: "Could not load database", comment: "Persistence startup failure"))
+                                .font(.headline)
+                            Text(persistenceError)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
                         }
-                } else if let persistenceError {
-                    VStack(spacing: 16) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 48))
-                            .foregroundStyle(.orange)
-                        Text(String(localized: "Could not load database", comment: "Persistence startup failure"))
-                            .font(.headline)
-                        Text(persistenceError)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+                        .padding()
+                    } else {
+                        AppLaunchLoadingPanel(
+                            message: String(localized: "Starting…", comment: "Launch loading"),
+                            accessibilityLabelText: String(localized: "Starting. Loading, please wait.", comment: "VoiceOver launch")
+                        )
                     }
-                    .padding()
-                } else {
-                    AppLaunchLoadingPanel(
-                        message: String(localized: "Starting…", comment: "Launch loading"),
-                        accessibilityLabelText: String(localized: "Starting. Loading, please wait.", comment: "VoiceOver launch")
-                    )
+                }
+
+                if isAppLocked {
+                    pinLockOverlay
+                        .transition(.opacity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -123,6 +134,7 @@ struct TrinoteApp: App {
             .foregroundStyle(Color.appText)
             .task {
                 guard appState == nil else { return }
+                if appPinEnabled { isAppLocked = true }
                 do {
                     try await PersistenceManager.initializeShared()
                     appState = AppState()
@@ -131,6 +143,28 @@ struct TrinoteApp: App {
                 }
             }
         }
+    }
+
+    private var pinLockOverlay: some View {
+        ManagedPinEntryView(
+            title: String(localized: "Enter PIN", comment: "Lock screen title"),
+            subtitle: nil,
+            onComplete: { pin in
+                Task {
+                    let match = (try? await KeychainManager.shared.verifyAppPin(pin)) ?? false
+                    if match {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            isAppLocked = false
+                        }
+                    } else {
+                        pinShake = true
+                    }
+                }
+            },
+            triggerShake: $pinShake
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
     }
 }
 

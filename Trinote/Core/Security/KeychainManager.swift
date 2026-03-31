@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -204,6 +205,63 @@ actor KeychainManager: KeychainManaging {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "\(servicePrefix).\(serverID)",
             kSecAttrAccount as String: "trilium-instance-id",
+        ]
+    }
+
+    // MARK: - App PIN (app-global, not per-server)
+
+    func saveAppPin(_ pin: String) throws {
+        try deleteAppPinEntry()
+        let hash = SHA256.hash(data: Data(pin.utf8))
+        let hex = hash.compactMap { String(format: "%02x", $0) }.joined()
+        var query = appPinBaseQuery
+        query[kSecValueData as String] = Data(hex.utf8)
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
+    }
+
+    func loadAppPinHash() throws -> String? {
+        var query = appPinBaseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data else { return nil }
+            return String(data: data, encoding: .utf8)
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw KeychainError.loadFailed(status)
+        }
+    }
+
+    func deleteAppPin() throws {
+        try deleteAppPinEntry()
+    }
+
+    /// Verifies a candidate PIN against the stored hash.
+    func verifyAppPin(_ pin: String) throws -> Bool {
+        guard let stored = try loadAppPinHash() else { return false }
+        let hash = SHA256.hash(data: Data(pin.utf8))
+        let hex = hash.compactMap { String(format: "%02x", $0) }.joined()
+        return hex == stored
+    }
+
+    private func deleteAppPinEntry() throws {
+        let status = SecItemDelete(appPinBaseQuery as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError.deleteFailed(status)
+        }
+    }
+
+    private var appPinBaseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "\(servicePrefix).app",
+            kSecAttrAccount as String: "app-pin",
         ]
     }
 }

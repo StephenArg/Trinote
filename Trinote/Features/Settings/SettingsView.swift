@@ -23,11 +23,14 @@ struct SettingsView: View {
     @State private var cacheSizeBytes: Int?
     @State private var syncStatuses: [SyncStatus] = []
     @State private var showSyncDetails = false
+    @AppStorage("appPinEnabled") private var appPinEnabled = false
+    @State private var showPinSetup = false
 
     var body: some View {
         List {
             appearanceSection
             treeViewSection
+            securitySection
             serverSection
             connectionSection
             cacheSection
@@ -36,6 +39,9 @@ struct SettingsView: View {
         }
         .navigationTitle(String(localized: "Settings", comment: "Settings screen title"))
         .task { await loadDiagnostics() }
+        .sheet(isPresented: $showPinSetup) {
+            PinSetupSheet(isCurrentlyEnabled: appPinEnabled) {}
+        }
     }
 
     private var appearanceSection: some View {
@@ -171,6 +177,24 @@ struct SettingsView: View {
             get: { Color(hex: treeDarkBgColor) },
             set: { treeDarkBgColor = $0.hexString }
         )
+    }
+
+    private var securitySection: some View {
+        Section(String(localized: "Security", comment: "Settings section")) {
+            Button {
+                showPinSetup = true
+            } label: {
+                HStack {
+                    Text(String(localized: "App PIN", comment: "Settings: app PIN lock"))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Text(appPinEnabled
+                         ? String(localized: "On", comment: "PIN status")
+                         : String(localized: "Off", comment: "PIN status"))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     private var serverSection: some View {
