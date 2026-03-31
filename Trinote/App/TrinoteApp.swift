@@ -93,7 +93,7 @@ struct TrinoteApp: App {
                             if newPhase == .active {
                                 Task { await appState.onForegroundResume() }
                             } else if newPhase == .background {
-                                Task { await appState.endServerProtectedSessionAndPersistCookies() }
+                                Task { await appState.onBackground() }
                             }
                         }
                 } else if let persistenceError {

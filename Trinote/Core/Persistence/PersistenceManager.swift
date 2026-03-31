@@ -1045,6 +1045,16 @@ final class PersistenceManager {
         try context.save()
     }
 
+    func deleteSyncStatus(domain: String, serverProfileId: String) throws {
+        let id = "\(serverProfileId):\(domain)"
+        var descriptor = FetchDescriptor<SyncStatus>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        if let existing = try context.fetch(descriptor).first {
+            context.delete(existing)
+            try context.save()
+        }
+    }
+
     func recordSyncError(domain: String, error: String, serverProfileId: String) throws {
         let id = "\(serverProfileId):\(domain)"
         var descriptor = FetchDescriptor<SyncStatus>(predicate: #Predicate { $0.id == id })

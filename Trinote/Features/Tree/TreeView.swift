@@ -560,6 +560,43 @@ struct TreeView: View {
         .padding(.horizontal)
     }
 
+    private func fullSyncBanner(_ sync: SyncManager) -> some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(fullSyncPhaseLabel(sync))
+                        .font(.subheadline.weight(.medium))
+                    Text("Please keep the app open while syncing")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if sync.totalNoteCount > 0 {
+                    Text("\(sync.syncedNoteCount)/\(sync.totalNoteCount)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if sync.totalNoteCount > 0 {
+                ProgressView(value: sync.syncProgress)
+                    .tint(.accentColor)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+    }
+
+    private func fullSyncPhaseLabel(_ sync: SyncManager) -> String {
+        switch sync.phase {
+        case .walkingTree:       String(localized: "Building note tree…", comment: "Full sync phase")
+        case .downloadingContent: String(localized: "Downloading notes…", comment: "Full sync phase")
+        case .cleaningUp:        String(localized: "Finishing up…", comment: "Full sync phase")
+        default:                 String(localized: "Syncing…", comment: "Full sync phase")
+        }
+    }
+
     private func rootNotebookHeaderRow(viewModel vm: TreeViewModel) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -613,6 +650,12 @@ struct TreeView: View {
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.red.opacity(0.08))
+            }
+            if sync.isSyncing, !sync.hasCompletedFullSync {
+                fullSyncBanner(sync)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.accentColor.opacity(0.08))
             }
             if parentNoteId == "root" {
                 rootNotebookHeaderRow(viewModel: vm)

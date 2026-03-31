@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 @Observable
 @MainActor
@@ -33,6 +34,28 @@ final class SyncManager {
     private static let maxConcurrency = 8
     private static let pullBatchLimit = 1000
 
+    private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
+
+    /// Best-effort background time extension for in-flight sync.
+    /// iOS will still suspend us eventually; this usually provides a short grace period
+    /// to finish the current work and persist progress.
+    func beginBackgroundTimeExtensionIfNeeded() {
+        guard isSyncing else { return }
+        guard backgroundTaskId == .invalid else { return }
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "TrinoteSync") { [weak self] in
+            Task { @MainActor in
+                self?.cancel()
+                self?.endBackgroundTimeExtension()
+            }
+        }
+    }
+
+    func endBackgroundTimeExtension() {
+        guard backgroundTaskId != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskId)
+        backgroundTaskId = .invalid
+    }
+
     private static let hiddenNoteIds: Set<String> = [
         "_hidden", "_share", "_lbRoot",
         "_lbAvailableLaunchers", "_lbVisibleLaunchers"
@@ -47,6 +70,8 @@ final class SyncManager {
 
     func restoreSyncState(profileId: String) {
         let statuses = (try? self.persistence.fetchSyncStatuses(serverProfileId: profileId)) ?? []
+        self.lastFullSyncDate = nil
+        self.lastIncrementalSyncDate = nil
         for status in statuses {
             if status.domain == "fullSync" {
                 self.lastFullSyncDate = status.lastSyncedAt
@@ -105,9 +130,11 @@ final class SyncManager {
         downloadChangedBodies: Bool = true
     ) {
         guard self.hasCompletedFullSync else {
+            if isSyncing { return }
             self.fullSync(client: client, profileId: profileId)
             return
         }
+        if isSyncing { return }
         self.syncTask?.cancel()
         self.syncGeneration &+= 1
         let gen = self.syncGeneration
@@ -131,6 +158,7 @@ final class SyncManager {
         self.syncGeneration &+= 1
         self.isSyncing = false
         self.phase = .idle
+        self.endBackgroundTimeExtension()
     }
 
     private func isStale(_ generation: UInt64) -> Bool {
@@ -144,6 +172,7 @@ final class SyncManager {
             if !isStale(generation) {
                 self.isSyncing = false
             }
+            self.endBackgroundTimeExtension()
         }
         self.syncProgress = 0
         self.syncedNoteCount = 0
@@ -201,11 +230,11 @@ final class SyncManager {
             // Seed the pull cursor from the server's current max change ID
             // so incremental sync picks up from here.
             let check = try await client.syncCheck()
-            try? self.persistence.setEntityPullCursor(serverProfileId: profileId, lastEntityChangeId: check.maxEntityChangeId)
+            try self.persistence.setEntityPullCursor(serverProfileId: profileId, lastEntityChangeId: check.maxEntityChangeId)
 
-            try? self.persistence.updateSyncStatus(domain: "fullSync", serverProfileId: profileId)
+            // Only mark the full sync as completed if we successfully persist the status.
+            try self.persistence.updateSyncStatus(domain: "fullSync", serverProfileId: profileId)
             self.lastFullSyncDate = .now
-            self.lastIncrementalSyncDate = .now
             self.lastCompletedSyncUpdatedLocalDatabase = true
             self.phase = .done
             self.syncProgress = 1.0
@@ -239,6 +268,7 @@ final class SyncManager {
             if !isStale(generation) {
                 self.isSyncing = false
             }
+            self.endBackgroundTimeExtension()
         }
         self.syncProgress = 0
         self.syncedNoteCount = 0

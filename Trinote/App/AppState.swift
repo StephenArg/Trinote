@@ -38,6 +38,13 @@ final class AppState {
         }
     }
 
+    /// Called when the app enters background.
+    /// Starts a short background execution window if a sync is running, and persists cookies.
+    func onBackground() async {
+        syncManager.beginBackgroundTimeExtensionIfNeeded()
+        await endServerProtectedSessionAndPersistCookies()
+    }
+
     /// Runs entity-pull incremental sync (or full sync if none completed yet) when session + instance id exist.
     /// Waits until the sync task finishes or `maxWaitSeconds` elapses so callers (e.g. tree reload) see fresh data.
     /// - Parameter downloadChangedBodies: Pass `false` for pull-to-refresh / tree toolbar: metadata updates only; bodies load on note open.
@@ -104,10 +111,6 @@ final class AppState {
         let deadline = Date().addingTimeInterval(seconds)
         while syncManager.isSyncing, Date() < deadline {
             try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-        if syncManager.isSyncing {
-            Log.sync.warning("Sync still running after \(Int(seconds))s wait — cancelling so the user can retry")
-            syncManager.cancel()
         }
     }
 
@@ -457,6 +460,7 @@ final class AppState {
             let exported = await client.exportSessionCookieData()
             try? await keychain.saveSessionCookies(exported, forServer: profile.id)
             Log.auth.info("Connected to \(profile.name)")
+            syncManager.restoreSyncState(profileId: profile.id)
             _ = try await triliumInstanceId(for: profile)
             await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
             await runIncrementalSync(maxWaitSeconds: 0)
@@ -546,6 +550,9 @@ final class AppState {
 
         if let profile = activeProfile {
             try? await keychain.clearServerAuthArtifacts(forServer: profile.id)
+            try? persistence.deleteSyncStatus(domain: "fullSync", serverProfileId: profile.id)
+            // Refresh in-memory sync state after removing the persisted full-sync marker.
+            syncManager.restoreSyncState(profileId: profile.id)
         }
 
         client = nil
@@ -572,6 +579,7 @@ final class AppState {
 
     /// Called when app returns to foreground
     func onForegroundResume() async {
+        syncManager.endBackgroundTimeExtension()
         guard isAuthenticated, let client, let profile = activeProfile else { return }
         guard networkMonitor.isConnected else { return }
         do {
