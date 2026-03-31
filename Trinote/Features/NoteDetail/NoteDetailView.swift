@@ -930,7 +930,7 @@ struct NoteDetailView: View {
             if showEditorSaveCancelChip {
                 editorSaveChip(vm: vm)
                     .padding(.trailing, 16)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 62)
                     .transition(.scale(scale: 0.88).combined(with: .opacity))
                     .zIndex(2)
             }

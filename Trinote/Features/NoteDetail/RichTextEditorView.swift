@@ -53,6 +53,7 @@ struct RichTextEditorView: UIViewRepresentable {
         }
 
         coordinator.webView = webView
+        coordinator.startKeyboardToolbarGapTracking()
         Self.removeInputAccessoryView(from: webView)
 
         if let fileURL = Bundle.main.url(forResource: "editor", withExtension: "html") {
@@ -96,6 +97,7 @@ struct RichTextEditorView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        coordinator.stopKeyboardToolbarGapTracking()
         let uc = webView.configuration.userContentController
         uc.removeScriptMessageHandler(forName: "editorReady")
         uc.removeScriptMessageHandler(forName: "contentChanged")
@@ -140,6 +142,13 @@ struct RichTextEditorView: UIViewRepresentable {
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
+        private var keyboardToolbarGapObservers: [NSObjectProtocol] = []
+        private var pendingKeyboardToolbarGapPoints: CGFloat?
+
+        /// Visual gap between HTML formatting toolbar and keyboard (CSS px ≈ points in WKWebView).
+        private static let keyboardToolbarGapPoints: CGFloat = 10
+        /// Minimum intersection height (points) of keyboard frame with the web view before showing the gap.
+        private static let keyboardOverlapThreshold: CGFloat = 60
 
         init(
             initialHTML: String,
@@ -156,10 +165,12 @@ struct RichTextEditorView: UIViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "editorReady":
-                editorReady = true
                 let html = pendingContent ?? initialHTML
-                setContent(html)
                 pendingContent = nil
+                editorReady = true
+                setContent(html)
+                setKeyboardToolbarGap(pendingKeyboardToolbarGapPoints ?? 0)
+                pendingKeyboardToolbarGapPoints = nil
 
             case "contentChanged":
                 if let html = message.body as? String {
@@ -226,6 +237,49 @@ struct RichTextEditorView: UIViewRepresentable {
             guard editorReady, let webView else { completion(nil); return }
             webView.evaluateJavaScript("window.editorBridge.getContent()") { result, _ in
                 completion(result as? String)
+            }
+        }
+
+        func startKeyboardToolbarGapTracking() {
+            guard keyboardToolbarGapObservers.isEmpty else { return }
+            let center = NotificationCenter.default
+            keyboardToolbarGapObservers.append(
+                center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] note in
+                    self?.syncKeyboardToolbarGap(notification: note)
+                }
+            )
+            keyboardToolbarGapObservers.append(
+                center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+                    self?.setKeyboardToolbarGap(0)
+                }
+            )
+        }
+
+        func stopKeyboardToolbarGapTracking() {
+            keyboardToolbarGapObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            keyboardToolbarGapObservers.removeAll()
+            guard let webView, editorReady else { return }
+            webView.evaluateJavaScript("window.editorBridge.setKeyboardToolbarGap(0)", completionHandler: nil)
+        }
+
+        private func syncKeyboardToolbarGap(notification: Notification) {
+            guard let webView else { return }
+            guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            let keyboardInWebView = webView.convert(frame, from: nil)
+            let overlap = webView.bounds.intersection(keyboardInWebView).height
+            let gap = overlap > Self.keyboardOverlapThreshold ? Self.keyboardToolbarGapPoints : 0
+            setKeyboardToolbarGap(gap)
+        }
+
+        private func setKeyboardToolbarGap(_ gapPoints: CGFloat) {
+            let clamped = max(0, min(32, gapPoints))
+            guard editorReady, let webView else {
+                pendingKeyboardToolbarGapPoints = clamped
+                return
+            }
+            let px = Int(clamped.rounded())
+            webView.evaluateJavaScript("window.editorBridge.setKeyboardToolbarGap(\(px))") { _, error in
+                if let error { Log.api.error("setKeyboardToolbarGap failed: \(error)") }
             }
         }
 

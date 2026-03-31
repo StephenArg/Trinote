@@ -52,17 +52,16 @@ html, body {
 }
 body { display: flex; flex-direction: column; }
 
-/* Toolbar — full natural height; horizontal scroll only inside the strip */
+/* Toolbar — bottom of flex column, just above the keyboard */
 .toolbar-wrap {
-  flex-shrink: 0; border-bottom: 1px solid var(--toolbar-border); background: var(--toolbar-bg);
+  flex-shrink: 0; border-top: 1px solid var(--toolbar-border); background: var(--editor-bg);
   overflow-x: hidden; overflow-y: visible;
-  /* Subpixel / WK clipping: avoid the first row of controls being sheared at the top */
   padding-top: 2px;
 }
 .toolbar {
   display: flex; flex-wrap: nowrap; align-items: center; gap: 1px;
-  padding: 4px 6px;
-  min-height: 42px;
+  padding: 2px 6px;
+  min-height: 34px;
   overflow-x: auto; overflow-y: visible;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: none;
@@ -74,13 +73,13 @@ body { display: flex; flex-direction: column; }
 .toolbar button {
   flex-shrink: 0; border: none; background: var(--btn-bg);
   color: var(--fg); font-size: 15px; font-weight: 600;
-  width: 36px; min-height: 34px; border-radius: 6px;
+  width: 34px; min-height: 30px; border-radius: 5px;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 .toolbar button:active { opacity: 0.6; }
 .toolbar button.active { color: var(--btn-active); background: var(--btn-active-bg); }
-.toolbar button svg { width: 18px; height: 18px; fill: currentColor; }
+.toolbar button svg { width: 21px; height: 21px; fill: currentColor; }
 /* Small dropdown hint next to icon (lists, colors, callout) */
 .toolbar button svg.toolbar-btn-chevron {
   width: 11px;
@@ -99,22 +98,22 @@ body { display: flex; flex-direction: column; }
 }
 .toolbar button.toolbar-btn-with-chevron img.icon {
   flex-shrink: 0;
-  width: 18px;
-  height: 18px;
+  width: 21px;
+  height: 21px;
 }
 /* Callout toolbar: larger info glyph */
 .toolbar button.toolbar-callout-btn svg:first-of-type {
-  width: 23px;
-  height: 23px;
+  width: 25px;
+  height: 25px;
 }
 .toolbar button.toolbar-font-size-btn svg.toolbar-font-size-icon {
-  width: 18px;
-  height: 18px;
+  width: 21px;
+  height: 21px;
   flex-shrink: 0;
 }
-.toolbar button img.icon { width: 18px; height: 18px; object-fit: contain; filter: var(--icon-filter); }
+.toolbar button img.icon { width: 21px; height: 21px; object-fit: contain; filter: var(--icon-filter); }
 .toolbar button .toolbar-code-glyph {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   letter-spacing: -0.12em;
@@ -122,11 +121,21 @@ body { display: flex; flex-direction: column; }
   user-select: none;
 }
 .toolbar .sep { width: 1px; height: 22px; background: var(--toolbar-border); margin: 0 3px; flex-shrink: 0; }
-.toolbar select {
-  flex-shrink: 0; border: 1px solid var(--border); background: var(--toolbar-bg);
-  color: var(--fg); font-size: 13px; height: 34px; border-radius: 6px; padding: 0 6px;
-  -webkit-appearance: none; appearance: none; cursor: pointer;
+/* Heading popup (same positioning model as callout/font-size popups) */
+.heading-popup {
+  display: none; position: fixed; left: 0; top: 0; z-index: 10000;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 8px; box-shadow: 0 4px 20px var(--popup-shadow);
+  min-width: 180px; max-width: min(92vw, 260px);
 }
+.heading-popup.visible { display: block; }
+.heading-popup-row {
+  display: flex; align-items: center; padding: 8px 12px; margin: 2px 0; border-radius: 8px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  font-weight: 600; color: var(--fg);
+}
+.heading-popup-row:active { opacity: 0.7; }
+.heading-popup-row.active { color: var(--btn-active); background: var(--btn-active-bg); }
 
 /* Color popup — fixed to viewport (appended to body) so toolbar overflow never clips or scrolls it */
 .color-popup {
@@ -223,10 +232,9 @@ body { display: flex; flex-direction: column; }
 #editor-container {
   flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; cursor: text;
   background: var(--editor-bg);
-  padding-bottom: max(25px, calc(env(safe-area-inset-bottom, 0px) + 20px));
 }
 .tiptap {
-  padding: 16px 16px 20px; outline: none; min-height: 100%; font-size: 16px; line-height: 1.6; color: var(--fg);
+  padding: 16px 16px 20px; outline: none; min-height: 100%; font-size: 18px; line-height: 1.6; color: var(--fg);
   background: var(--editor-bg);
 }
 .tiptap p { margin: 0.4em 0; }
@@ -319,12 +327,12 @@ body { display: flex; flex-direction: column; }
 </head>
 <body>
 
-<div class="toolbar-wrap" id="toolbar-wrap" style="display:none">
-<div class="toolbar" id="toolbar"></div>
-</div>
 <div id="editor-container">
   <div id="loading">Loading editor…</div>
   <div id="editor" style="display:none"></div>
+</div>
+<div class="toolbar-wrap" id="toolbar-wrap" style="display:none">
+<div class="toolbar" id="toolbar"></div>
 </div>
 
 <script src="tiptap-bundle.min.js"></script>
@@ -434,7 +442,7 @@ editor.on('selectionUpdate', ({ editor }) => {
 // IMPORTANT: Do not refocus on a timer/hold — that runs when tapping the color *button* (before the
 // panel is visible) and steals the tap so the synthetic click never opens the picker.
 function refocusEditorIfNeeded() {
-  if (!document.querySelector('.color-popup.visible') && !document.querySelector('.callout-popup.visible') && !document.querySelector('.font-size-popup.visible') && !document.querySelector('.list-style-popup.visible')) return;
+  if (!document.querySelector('.color-popup.visible') && !document.querySelector('.callout-popup.visible') && !document.querySelector('.font-size-popup.visible') && !document.querySelector('.list-style-popup.visible') && !document.querySelector('.heading-popup.visible')) return;
   requestAnimationFrame(() => {
     try {
       if (editor.view && editor.view.dom) {
@@ -447,6 +455,16 @@ editor.view.dom.addEventListener('blur', refocusEditorIfNeeded);
 
 // --- Toolbar Setup ---
 const toolbar = document.getElementById('toolbar');
+toolbar.addEventListener('mousedown', function(e) {
+  e.preventDefault();
+});
+document.addEventListener('mousedown', function(e) {
+  if (e.target.closest('.color-popup') || e.target.closest('.callout-popup') ||
+      e.target.closest('.font-size-popup') || e.target.closest('.list-style-popup') ||
+      e.target.closest('.heading-popup')) {
+    e.preventDefault();
+  }
+}, true);
 function ic(name) { return '<img class="icon" src="' + name + '" width="18" height="18" alt="" />'; }
 const TOOLBAR_CHEVRON_SVG = '<svg class="toolbar-btn-chevron" width="10" height="10" viewBox="0 0 12 12" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2 4l4 4 4-4"/></svg>';
 /* Task list: inline SVG (viewBox 48×48); toolbar .toolbar button svg → ~18×18 like other icons */
@@ -476,38 +494,114 @@ function btnWithChevron(title, iconHtml, action, isActive) {
   return b;
 }
 function sep() { const s = document.createElement('div'); s.className='sep'; toolbar.appendChild(s); }
-function heading() {
-  const sel = document.createElement('select');
-  sel.title = 'Block type';
-  ['Paragraph','H1','H2','H3','H4','H5','H6'].forEach((label, i) => {
-    const o = document.createElement('option'); o.value = i; o.textContent = label; sel.appendChild(o);
+const HEADING_TOOLBAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 4v16h2v-7h10v7h2V4h-2v7H7V4H5z"/></svg>';
+const HEADING_KINDS = [
+  { id: 0, label: 'Paragraph', tag: 'p', fontSize: '1em' },
+  { id: 1, label: 'Heading 1', tag: 'h1', fontSize: '1.6em' },
+  { id: 2, label: 'Heading 2', tag: 'h2', fontSize: '1.4em' },
+  { id: 3, label: 'Heading 3', tag: 'h3', fontSize: '1.2em' },
+  { id: 4, label: 'Heading 4', tag: 'h4', fontSize: '1.05em' },
+  { id: 5, label: 'Heading 5', tag: 'h5', fontSize: '0.95em' },
+  { id: 6, label: 'Heading 6', tag: 'h6', fontSize: '0.85em' },
+];
+function makeHeadingToolbar() {
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'inline-flex';
+  wrapper.style.alignItems = 'center';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = 'Block type';
+  b.classList.add('toolbar-btn-with-chevron');
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;height:34px;border-radius:6px;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;display:flex;align-items:center;justify-content:center;gap:2px;padding:0 5px;min-width:40px;';
+  b.innerHTML = HEADING_TOOLBAR_SVG + TOOLBAR_CHEVRON_SVG;
+  const popup = document.createElement('div');
+  popup.className = 'heading-popup';
+  popup._anchorButton = b;
+  HEADING_KINDS.forEach((k) => {
+    const row = document.createElement('div');
+    row.className = 'heading-popup-row';
+    row.dataset.level = k.id;
+    row.style.fontSize = k.fontSize;
+    if (k.id === 0) row.style.fontWeight = '400';
+    const lab = document.createElement('span');
+    lab.textContent = k.label;
+    row.appendChild(lab);
+    function pick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const sel = editor.state.selection;
+      const savedFrom = sel.from, savedTo = sel.to;
+      hideHeadingPopup(popup);
+      if (k.id === 0) editor.chain().focus().setParagraph().run();
+      else editor.chain().focus().toggleHeading({ level: k.id }).run();
+      restoreSelectionAfterPopup(savedFrom, savedTo);
+    }
+    row.addEventListener('pointerdown', pick, true);
+    row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    row.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); }, true);
+    popup.appendChild(row);
   });
-  sel.addEventListener('change', () => {
-    const v = parseInt(sel.value);
-    if (v === 0) editor.chain().focus().setParagraph().run();
-    else editor.chain().focus().toggleHeading({ level: v }).run();
+  document.body.appendChild(popup);
+  function updatePopupActiveState() {
+    let activeLevel = 0;
+    for (let l = 1; l <= 6; l++) { if (editor.isActive('heading', { level: l })) { activeLevel = l; break; } }
+    popup.querySelectorAll('.heading-popup-row').forEach(r => {
+      r.classList.toggle('active', parseInt(r.dataset.level) === activeLevel);
+    });
+  }
+  b.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    if (!popup.classList.contains('visible')) markHeadingPopupJustOpened(popup);
+  }, true);
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    document.querySelectorAll('.heading-popup.visible').forEach((p) => { if (p !== popup) hideHeadingPopup(p); });
+    document.querySelectorAll('.color-popup.visible').forEach((p) => hideColorPopup(p));
+    document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
+    document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
+    document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
+    document.querySelectorAll('.list-style-popup.visible').forEach((p) => hideListStylePopup(p));
+    if (opening) {
+      markHeadingPopupJustOpened(popup);
+      updatePopupActiveState();
+      popup.classList.add('visible');
+      requestAnimationFrame(() => {
+        layoutCalloutPopup(b, popup);
+        requestAnimationFrame(() => layoutCalloutPopup(b, popup));
+      });
+    } else {
+      hideHeadingPopup(popup);
+    }
   });
-  sel._updateState = () => {
-    for (let l = 1; l <= 6; l++) { if (editor.isActive('heading', { level: l })) { sel.value = l; return; } }
-    sel.value = 0;
-  };
-  toolbar.appendChild(sel);
-  return sel;
+  wrapper.appendChild(b);
+  toolbar.appendChild(wrapper);
+  b._isActive = () => editor.isActive('heading');
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideHeadingPopup(popup);
+  });
 }
+// Headings
+makeHeadingToolbar();
+makeFontSizeToolbar();
+sep();
+
+// Undo/Redo
+btn('Undo', ic('undo-left-svgrepo-com.svg'), () => editor.chain().focus().undo().run(), () => false);
+btn('Redo', ic('redo-svgrepo-com.svg'), () => editor.chain().focus().redo().run(), () => false);
+sep();
 
 // Text formatting
 btn('Bold', ic('foundation--bold.svg'), () => editor.chain().focus().toggleBold().run(), () => editor.isActive('bold'));
 btn('Italic', ic('foundation--italic.svg'), () => editor.chain().focus().toggleItalic().run(), () => editor.isActive('italic'));
 btn('Underline', ic('foundation--underline.svg'), () => editor.chain().focus().toggleUnderline().run(), () => editor.isActive('underline'));
 btn('Strike', ic('foundation--strikethrough.svg'), () => editor.chain().focus().toggleStrike().run(), () => editor.isActive('strike'));
-btn('Code', codeInlineGlyph(), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
+sep();
 btn('Superscript', ic('foundation--superscript.svg'), () => editor.chain().focus().toggleSuperscript().run(), () => editor.isActive('superscript'));
 btn('Subscript', ic('foundation--subscript.svg'), () => editor.chain().focus().toggleSubscript().run(), () => editor.isActive('subscript'));
-makeFontSizeToolbar();
-sep();
-
-// Headings
-const headingSel = heading();
 sep();
 
 // Lists — bullet/ordered style popups match CKEditor / Trilium list properties when list-styles-extension.js loads
@@ -519,18 +613,6 @@ if (useTriliumListStyles) {
   btnWithChevron('Ordered list', ic('foundation--list-number.svg'), () => editor.chain().focus().toggleOrderedList().run(), () => editor.isActive('orderedList'));
 }
 btn('Task list', TASK_LIST_TOOLBAR_SVG, () => editor.chain().focus().toggleTaskList().run(), () => editor.isActive('taskList'));
-sep();
-
-// Alignment
-btn('Left', ic('foundation--align-left.svg'), () => editor.chain().focus().setTextAlign('left').run(), () => editor.isActive({ textAlign:'left' }));
-btn('Center', ic('foundation--align-center.svg'), () => editor.chain().focus().setTextAlign('center').run(), () => editor.isActive({ textAlign:'center' }));
-btn('Right', ic('foundation--align-right.svg'), () => editor.chain().focus().setTextAlign('right').run(), () => editor.isActive({ textAlign:'right' }));
-btn('Justify', ic('foundation--align-justify.svg'), () => editor.chain().focus().setTextAlign('justify').run(), () => editor.isActive({ textAlign:'justify' }));
-sep();
-
-// Indent
-btn('Outdent', ic('foundation--indent-less.svg'), () => { if(editor.isActive('bulletList')||editor.isActive('orderedList')||editor.isActive('taskList')) editor.chain().focus().liftListItem('listItem').run(); }, () => false);
-btn('Indent', ic('foundation--indent-more.svg'), () => { if(editor.isActive('bulletList')||editor.isActive('orderedList')||editor.isActive('taskList')) editor.chain().focus().sinkListItem('listItem').run(); }, () => false);
 sep();
 
 // Color pickers — restore range before applying marks (see editorSavedRange above).
@@ -608,16 +690,54 @@ editor.on('focus', function () {
   scheduleScrollCaretIntoViewAfterKeyboard();
 });
 
+(function trackKeyboardAndBodyHeight() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const GAP = 10;
+  var baseline = Math.max(vv.height, window.innerHeight, screen.height * 0.6);
+  let scheduled = false;
+  const tw = document.getElementById('toolbar-wrap');
+  function update() {
+    scheduled = false;
+    const h = vv.height;
+    if (h > baseline) baseline = h;
+    const kbOpen = h < baseline - 90;
+    const bodyH = kbOpen ? h - GAP : h;
+    document.body.style.height = bodyH + 'px';
+    document.body.style.minHeight = bodyH + 'px';
+    if (tw) tw.style.paddingBottom = kbOpen ? '0px' : 'env(safe-area-inset-bottom, 0px)';
+  }
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(update);
+  }
+  vv.addEventListener('resize', schedule);
+  window.addEventListener('resize', schedule);
+  editor.on('focus', function () { setTimeout(schedule, 120); setTimeout(schedule, 350); setTimeout(schedule, 700); });
+  editor.on('blur', function () { setTimeout(schedule, 120); setTimeout(schedule, 350); });
+  update();
+})();
+
+function restoreSelectionAfterPopup(from, to) {
+  function restore() {
+    try { editor.commands.setTextSelection(from === to ? from : { from, to }); } catch (_) {}
+  }
+  restore();
+  setTimeout(restore, 10);
+  setTimeout(restore, 50);
+  setTimeout(restore, 120);
+  setTimeout(restore, 250);
+}
+
 function afterColorMarkEdit() {
   const dom = editor.view && editor.view.dom;
-  if (dom) {
-    try {
-      dom.focus({ preventScroll: true });
-    } catch (e) {
-      dom.focus();
-    }
+  function focusDom() {
+    if (!dom) return;
+    try { dom.focus({ preventScroll: true }); } catch (e) { try { dom.focus(); } catch (_) {} }
   }
-  const bump = () => scrollEditorRangeIntoView();
+  focusDom();
+  const bump = () => { focusDom(); scrollEditorRangeIntoView(); };
   bump();
   requestAnimationFrame(() => {
     bump();
@@ -634,13 +754,12 @@ function withColorMarkEdit(editFn) {
 }
 
 function colorPickerApplyRange(wrapper) {
-  const sel = editor.state.selection;
-  if (!sel.empty) return { from: sel.from, to: sel.to };
   if (wrapper._rangeAtOpen && wrapper._rangeAtOpen.from !== wrapper._rangeAtOpen.to)
     return wrapper._rangeAtOpen;
-  if (editorSavedRange && editorSavedRange.from !== editorSavedRange.to)
-    return editorSavedRange;
-  return null;
+  const sel = editor.state.selection;
+  if (!sel.empty) return { from: sel.from, to: sel.to };
+  if (wrapper._rangeAtOpen) return wrapper._rangeAtOpen;
+  return { from: sel.from, to: sel.to };
 }
 
 const COLOR_POPUP_OUTSIDE_GRACE_MS = 450;
@@ -711,6 +830,23 @@ function hideFontSizePopup(popup) {
   popup._ignoreScrollUntil = 0;
 }
 
+const HEADING_POPUP_OUTSIDE_GRACE_MS = 450;
+
+function markHeadingPopupJustOpened(popup) {
+  const t = performance.now();
+  popup._ignoreOutsideUntil = t + HEADING_POPUP_OUTSIDE_GRACE_MS;
+  popup._ignoreScrollUntil = t + COLOR_POPUP_SCROLL_GRACE_MS;
+}
+
+function hideHeadingPopup(popup) {
+  popup.classList.remove('visible');
+  popup.style.left = '';
+  popup.style.top = '';
+  popup.style.visibility = '';
+  popup._ignoreOutsideUntil = 0;
+  popup._ignoreScrollUntil = 0;
+}
+
 const LIST_STYLE_POPUP_OUTSIDE_GRACE_MS = 450;
 
 function markListStylePopupJustOpened(popup) {
@@ -736,13 +872,18 @@ function layoutColorPopup(anchor, popup) {
   const pr = popup.getBoundingClientRect();
   const ar = anchor.getBoundingClientRect();
   const margin = 8;
-  let top = ar.bottom + 4;
+  const vv = window.visualViewport;
+  const viewBottom = vv ? (vv.offsetTop + vv.height) : window.innerHeight;
   let left = ar.left;
   const pw = Math.max(pr.width, 1);
   const ph = Math.max(pr.height, 1);
   left = Math.max(margin, Math.min(left, window.innerWidth - pw - margin));
-  if (top + ph > window.innerHeight - margin) {
-    top = Math.max(margin, ar.top - ph - 4);
+  let top = ar.top - ph - 4;
+  if (top < margin) {
+    top = ar.bottom + 4;
+    if (top + ph > viewBottom - margin) {
+      top = Math.max(margin, viewBottom - ph - margin);
+    }
   }
   popup.style.left = `${Math.round(left)}px`;
   popup.style.top = `${Math.round(top)}px`;
@@ -771,9 +912,10 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
     e.preventDefault();
     e.stopPropagation();
     const r = colorPickerApplyRange(wrapper);
-    hideColorPopup(popup);
-    if (!r) return;
+    if (!r) { hideColorPopup(popup); return; }
     clearRangeFn(r.from, r.to);
+    hideColorPopup(popup);
+    restoreSelectionAfterPopup(r.from, r.to);
   }
   clearBtn.addEventListener('pointerdown', runClear, true);
   clearBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
@@ -787,9 +929,10 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       e.preventDefault();
       e.stopPropagation();
       const r = colorPickerApplyRange(wrapper);
-      hideColorPopup(popup);
-      if (!r) return;
+      if (!r) { hideColorPopup(popup); return; }
       applyRangeFn(r.from, r.to, c);
+      hideColorPopup(popup);
+      restoreSelectionAfterPopup(r.from, r.to);
     }
     sw.addEventListener('pointerdown', runApply, true);
     sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
@@ -809,6 +952,7 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
     document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
+    document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
     if (willOpen) {
       markColorPopupJustOpened(popup);
       popup.classList.add('visible');
@@ -870,6 +1014,10 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
       hideListStylePopup(popup);
     });
+    document.querySelectorAll('.heading-popup.visible').forEach(popup => {
+      if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
+      hideHeadingPopup(popup);
+    });
     reportEditorScrollMetrics();
   }, { passive: true });
   window.addEventListener('resize', () => {
@@ -893,6 +1041,10 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       const anchor = popup._anchorButton;
       if (anchor && typeof layoutCalloutPopup === 'function') layoutCalloutPopup(anchor, popup);
     });
+    document.querySelectorAll('.heading-popup.visible').forEach(popup => {
+      const anchor = popup._anchorButton;
+      if (anchor && typeof layoutCalloutPopup === 'function') layoutCalloutPopup(anchor, popup);
+    });
     reportEditorScrollMetrics();
   });
   try {
@@ -912,13 +1064,18 @@ function layoutCalloutPopup(anchor, popup) {
   const pr = popup.getBoundingClientRect();
   const ar = anchor.getBoundingClientRect();
   const margin = 8;
-  let top = ar.bottom + 4;
+  const vv = window.visualViewport;
+  const viewBottom = vv ? (vv.offsetTop + vv.height) : window.innerHeight;
   let left = ar.left;
   const pw = Math.max(pr.width, 1);
   const ph = Math.max(pr.height, 1);
   left = Math.max(margin, Math.min(left, window.innerWidth - pw - margin));
-  if (top + ph > window.innerHeight - margin) {
-    top = Math.max(margin, ar.top - ph - 4);
+  let top = ar.top - ph - 4;
+  if (top < margin) {
+    top = ar.bottom + 4;
+    if (top + ph > viewBottom - margin) {
+      top = Math.max(margin, viewBottom - ph - margin);
+    }
   }
   popup.style.left = `${Math.round(left)}px`;
   popup.style.top = `${Math.round(top)}px`;
@@ -979,8 +1136,11 @@ function makeCalloutToolbar() {
     function pick(e) {
       e.preventDefault();
       e.stopPropagation();
+      const sel = editor.state.selection;
+      const savedFrom = sel.from, savedTo = sel.to;
       hideCalloutPopup(popup);
       applyCalloutType(k.type);
+      restoreSelectionAfterPopup(savedFrom, savedTo);
     }
     row.addEventListener('pointerdown', pick, true);
     row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
@@ -1003,6 +1163,7 @@ function makeCalloutToolbar() {
     document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
+    document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
     if (opening) {
       markCalloutPopupJustOpened(popup);
       popup.classList.add('visible');
@@ -1086,8 +1247,11 @@ function makeBulletListToolbar() {
     function pick(e) {
       e.preventDefault();
       e.stopPropagation();
+      const sel = editor.state.selection;
+      const savedFrom = sel.from, savedTo = sel.to;
       hideListStylePopup(popup);
       applyBulletListStyle(opt.id);
+      restoreSelectionAfterPopup(savedFrom, savedTo);
     }
     row.addEventListener('pointerdown', pick, true);
     row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
@@ -1107,6 +1271,7 @@ function makeBulletListToolbar() {
     document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
     document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
+    document.querySelectorAll('.heading-popup.visible').forEach((p) => hideHeadingPopup(p));
     if (opening) {
       markListStylePopupJustOpened(popup);
       popup.classList.add('visible');
@@ -1160,8 +1325,11 @@ function makeOrderedListToolbar() {
     function pick(e) {
       e.preventDefault();
       e.stopPropagation();
+      const sel = editor.state.selection;
+      const savedFrom = sel.from, savedTo = sel.to;
       hideListStylePopup(popup);
       applyOrderedListStyle(opt.id);
+      restoreSelectionAfterPopup(savedFrom, savedTo);
     }
     row.addEventListener('pointerdown', pick, true);
     row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
@@ -1181,6 +1349,7 @@ function makeOrderedListToolbar() {
     document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
     document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
+    document.querySelectorAll('.heading-popup.visible').forEach((p) => hideHeadingPopup(p));
     if (opening) {
       markListStylePopupJustOpened(popup);
       popup.classList.add('visible');
@@ -1229,20 +1398,20 @@ function makeFontSizeToolbar() {
     function pick(e) {
       e.preventDefault();
       e.stopPropagation();
-      hideFontSizePopup(popup);
       const r = colorPickerApplyRange(wrapper);
-      if (!r) return;
-      withColorMarkEdit(() => {
-        const ch = editor.chain().focus().setTextSelection({ from: r.from, to: r.to });
-        if (k.id === 'default') {
-          ch.extendMarkRange('triliumFontSize').unsetTriliumFontSize().run();
-        } else {
-          ch.extendMarkRange('triliumFontSize').setTriliumFontSize(k.id).run();
-        }
-      });
+      if (!r) { hideFontSizePopup(popup); return; }
+      hideFontSizePopup(popup);
+      editor.chain().focus().setTextSelection({ from: r.from, to: r.to }).run();
+      if (k.id === 'default') {
+        editor.chain().focus().setTextSelection({ from: r.from, to: r.to }).unsetTriliumFontSize().run();
+      } else {
+        editor.chain().focus().setTextSelection({ from: r.from, to: r.to }).setTriliumFontSize(k.id).run();
+      }
+      restoreSelectionAfterPopup(r.from, r.to);
     }
     row.addEventListener('pointerdown', pick, true);
     row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    row.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); }, true);
     popup.appendChild(row);
   });
   document.body.appendChild(popup);
@@ -1261,6 +1430,7 @@ function makeFontSizeToolbar() {
     document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
     document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach((p) => hideListStylePopup(p));
+    document.querySelectorAll('.heading-popup.visible').forEach((p) => hideHeadingPopup(p));
     if (opening) {
       const { from, to } = editor.state.selection;
       wrapper._rangeAtOpen = { from, to };
@@ -1395,6 +1565,7 @@ function makeLinkToolbar() {
     document.querySelectorAll('.callout-popup.visible').forEach(p => hideCalloutPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
+    document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
     document.querySelectorAll('.link-popup.visible').forEach(p => {
       if (p !== popup) hideLinkPopup(p);
     });
@@ -1442,43 +1613,53 @@ function makeLinkToolbar() {
 makeColorPicker('Text color', ic('foundation--text-color.svg'),
   (from, to, c) => {
     withColorMarkEdit(() => {
-      editor.chain().setTextSelection({ from, to }).setColor(c).run();
+      editor.chain().focus().setTextSelection({ from, to }).setColor(c).run();
     });
   },
   (from, to) => {
     withColorMarkEdit(() => {
-      editor.chain().setTextSelection({ from, to }).unsetColor().run();
+      editor.chain().focus().setTextSelection({ from, to }).unsetColor().run();
     });
   });
 makeColorPicker('Background', ic('foundation--background-color.svg'),
   (from, to, c) => {
     withColorMarkEdit(() => {
-      editor.chain().setTextSelection({ from, to }).setHighlight({ color: c }).run();
+      editor.chain().focus().setTextSelection({ from, to }).setHighlight({ color: c }).run();
     });
   },
   (from, to) => {
     withColorMarkEdit(() => {
-      editor.chain().setTextSelection({ from, to }).unsetHighlight().run();
+      editor.chain().focus().setTextSelection({ from, to }).unsetHighlight().run();
     });
   });
 sep();
 
 // Insert
+btn('Image', ic('foundation--photo.svg'), () => {
+  try { window.webkit.messageHandlers.pickImage.postMessage('pick'); } catch(e) {}
+}, () => false);
 makeLinkToolbar();
 btn('Table', ic('grid-1524-svgrepo-com.svg'), () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(), () => false);
 btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () => false);
 btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
 makeCalloutToolbar();
+btn('Code', codeInlineGlyph(), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
+
 btn('Code block', ic('brackets-curly-fill-svgrepo-com.svg'), () => editor.chain().focus().toggleCodeBlock().run(), () => editor.isActive('codeBlock'));
-btn('Image', ic('foundation--photo.svg'), () => {
-  try { window.webkit.messageHandlers.pickImage.postMessage('pick'); } catch(e) {}
-}, () => false);
 sep();
 
-// Undo/Redo
-btn('Undo', ic('undo-left-svgrepo-com.svg'), () => editor.chain().focus().undo().run(), () => false);
-btn('Redo', ic('redo-svgrepo-com.svg'), () => editor.chain().focus().redo().run(), () => false);
+// Alignment
+btn('Left', ic('foundation--align-left.svg'), () => editor.chain().focus().setTextAlign('left').run(), () => editor.isActive({ textAlign:'left' }));
+btn('Center', ic('foundation--align-center.svg'), () => editor.chain().focus().setTextAlign('center').run(), () => editor.isActive({ textAlign:'center' }));
+btn('Right', ic('foundation--align-right.svg'), () => editor.chain().focus().setTextAlign('right').run(), () => editor.isActive({ textAlign:'right' }));
+btn('Justify', ic('foundation--align-justify.svg'), () => editor.chain().focus().setTextAlign('justify').run(), () => editor.isActive({ textAlign:'justify' }));
 sep();
+
+// Indent
+btn('Outdent', ic('foundation--indent-less.svg'), () => { if(editor.isActive('bulletList')||editor.isActive('orderedList')||editor.isActive('taskList')) editor.chain().focus().liftListItem('listItem').run(); }, () => false);
+btn('Indent', ic('foundation--indent-more.svg'), () => { if(editor.isActive('bulletList')||editor.isActive('orderedList')||editor.isActive('taskList')) editor.chain().focus().sinkListItem('listItem').run(); }, () => false);
+sep();
+
 
 // Clear formatting
 btn('Clear', ic('remove-format-svgrepo-com.svg'), () => editor.chain().focus().unsetAllMarks().clearNodes().run(), () => false);
@@ -1496,7 +1677,6 @@ function updateToolbarState() {
   toolbar.querySelectorAll('button').forEach(b => {
     if (b._isActive) b.classList.toggle('active', b._isActive());
   });
-  toolbar.querySelectorAll('select').forEach(s => { if (s._updateState) s._updateState(); });
 }
 
 // --- CKEditor ↔ TipTap HTML conversion ---
@@ -1701,6 +1881,7 @@ function tiptapToCk(html) {
 
 // --- Bridge ---
 window.editorBridge = {
+  setKeyboardToolbarGap(px) {},
   setContent(html) { editor.commands.setContent(ckToTiptap(html) || '', false); },
   getContent() {
     clearTimeout(_contentTimer);
@@ -1720,8 +1901,6 @@ document.getElementById('editor').style.display = 'block';
 document.getElementById('toolbar-wrap').style.display = 'block';
 updateToolbarState();
 
-// First tap while unfocused: for very short notes, jump caret to end + keyboard (iOS WKWebView).
-// If there are 2+ logical lines (blocks / hard breaks) or multiple top-level blocks, let the tap place the caret.
 function editorDocumentHasFocus() {
   if (editor.isFocused === true) return true;
   try {
@@ -1730,26 +1909,20 @@ function editorDocumentHasFocus() {
     return false;
   }
 }
-function shouldJumpCaretToEndOnFirstUnfocusedTap() {
-  try {
-    const doc = editor.state.doc;
-    if (doc.childCount >= 2) return false;
-    const plain = editor.getText({ blockSeparator: '\n' });
-    const nonEmptyLines = plain.split('\n').filter(function (l) { return l.trim().length > 0; }).length;
-    if (nonEmptyLines >= 2) return false;
-    return true;
-  } catch (err) {
-    return true;
-  }
-}
 document.getElementById('editor-container').addEventListener('click', function(e) {
   if (e.target.closest('a[href]')) return;
-  if (editorDocumentHasFocus()) return;
-  if (!shouldJumpCaretToEndOnFirstUnfocusedTap()) return;
-  e.preventDefault();
-  e.stopPropagation();
-  editor.commands.focus('end');
-  scheduleScrollCaretIntoViewAfterKeyboard();
+  var lineCount = 1;
+  try { lineCount = editor.state.doc.childCount; } catch (err) {}
+  var ecRect = this.getBoundingClientRect();
+  var midY = ecRect.top + ecRect.height / 2;
+  if (lineCount < 5 && e.clientY > midY) {
+    e.preventDefault();
+    e.stopPropagation();
+    editor.commands.focus('end');
+    scheduleScrollCaretIntoViewAfterKeyboard();
+    return;
+  }
+  if (!editorDocumentHasFocus()) return;
 }, true);
 
 try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch(e) {}

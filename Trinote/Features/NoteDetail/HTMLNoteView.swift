@@ -134,7 +134,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         * { -webkit-text-size-adjust: 100%; }
         body {
             font: -apple-system-body;
-            font-size: 16px;
+            font-size: 18px;
             line-height: 1.6;
             padding: 16px;
             margin: 0;
