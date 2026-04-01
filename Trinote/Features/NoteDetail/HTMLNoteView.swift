@@ -153,6 +153,23 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             a { color: \(theme.lightLink); }
         }
         img { max-width: 100%; height: auto; border-radius: 6px; }
+        figure.image { display: block; clear: both; text-align: center; margin: 0.9em auto; max-width: 100%; overflow: hidden; }
+        figure.image img { display: block; margin: 0 auto; max-width: 100%; height: auto; border-radius: 6px; }
+        figure.image figcaption {
+          word-break: break-word;
+          color: #8e8e93; background: rgba(128,128,128,0.06);
+          font-size: 0.75em; line-height: 1.4; padding: 6px 10px;
+        }
+        figure.image.image_resized { max-width: 100%; }
+        figure.image.image_resized img { width: 100%; }
+        figure.image-style-inline { display: inline-block; margin: 0.3em 0.5em; vertical-align: bottom; }
+        figure.image-style-align-left { float: left; margin: 0.5em 1.2em 0.5em 0; max-width: 50%; }
+        figure.image-style-align-right { float: right; margin: 0.5em 0 0.5em 1.2em; max-width: 50%; }
+        figure.image-style-block-align-center,
+        figure.image:not([class*="image-style-"]) { display: table; margin-left: auto; margin-right: auto; clear: both; }
+        figure.image-style-block-align-left { display: table; margin-left: 0; margin-right: auto; clear: both; }
+        figure.image-style-block-align-right { display: table; margin-left: auto; margin-right: 0; clear: both; }
+        figure.image-style-side { float: right; margin: 0.5em 0 0.5em 1.2em; max-width: 50%; }
         pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 14px; }
         code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14px; }
         pre code { background: none; padding: 0; }
@@ -231,7 +248,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         .text-small { font-size: 0.85em; }
         .text-big { font-size: 1.4em; }
         .text-huge { font-size: 1.8em; }
-        hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+        hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; clear: both; }
         .math-tex { overflow-x: auto; }
         mark.trinote-find-hit { background-color: rgba(255, 204, 0, 0.45); color: inherit; padding: 0; }
         mark.trinote-find-hit-active { background-color: rgba(255, 149, 0, 0.72); color: inherit; padding: 0; }

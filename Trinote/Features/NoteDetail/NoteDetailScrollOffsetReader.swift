@@ -7,7 +7,8 @@ import UIKit
 /// so the floating edit chip never sees scroll deltas. KVO on `contentOffset` matches what the user actually scrolls.
 struct NoteDetailScrollOffsetReader: UIViewRepresentable {
     /// `offset` increases when scrolling **down**. `verticallyScrollable` is false when there is nothing to scroll.
-    var onOffsetChange: (CGFloat, Bool) -> Void
+    /// `scrollFraction` is 0–1 representing how far down the user has scrolled.
+    var onOffsetChange: (CGFloat, Bool, CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onOffsetChange: onOffsetChange)
@@ -30,13 +31,13 @@ struct NoteDetailScrollOffsetReader: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject {
-        var onOffsetChange: (CGFloat, Bool) -> Void
+        var onOffsetChange: (CGFloat, Bool, CGFloat) -> Void
         private weak var scrollView: UIScrollView?
         private var offsetObservation: NSKeyValueObservation?
         private var contentSizeObservation: NSKeyValueObservation?
         private var boundsObservation: NSKeyValueObservation?
 
-        init(onOffsetChange: @escaping (CGFloat, Bool) -> Void) {
+        init(onOffsetChange: @escaping (CGFloat, Bool, CGFloat) -> Void) {
             self.onOffsetChange = onOffsetChange
         }
 
@@ -72,8 +73,10 @@ struct NoteDetailScrollOffsetReader: UIViewRepresentable {
         private func emit(from scrollView: UIScrollView) {
             let y = scrollView.contentOffset.y
             let verticallyScrollable = scrollView.contentSize.height > scrollView.bounds.height + 0.5
+            let maxOffset = scrollView.contentSize.height - scrollView.bounds.height
+            let fraction = verticallyScrollable && maxOffset > 0 ? min(max(y / maxOffset, 0), 1) : 0
             DispatchQueue.main.async { [onOffsetChange] in
-                onOffsetChange(y, verticallyScrollable)
+                onOffsetChange(y, verticallyScrollable, fraction)
             }
         }
 

@@ -83,6 +83,8 @@ struct NoteDetailView: View {
     @State private var showFloatingEditButton = false
     @State private var lastScrollContentOffsetY: CGFloat = 0
     @State private var floatingEditScrollBaselineReady = false
+    /// Scroll fraction (0–1) of the read-only ScrollView, used to restore position in the editor.
+    @State private var readOnlyScrollFraction: CGFloat = 0
 
     /// Save/cancel chip while editing: hide on scroll up, show on scroll down (same rules as read-mode edit FAB).
     @State private var showEditorSaveCancelChip = true
@@ -268,14 +270,16 @@ struct NoteDetailView: View {
         .navigationBarBackButtonHidden(viewModel?.isEditing == true)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    dismiss()
-                } label: {
-                    Label(String(localized: "Back", comment: "Back from note detail"), systemImage: "chevron.left")
-                        .labelStyle(.iconOnly)
+            if viewModel?.isEditing == true {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label(String(localized: "Back", comment: "Back from note detail"), systemImage: "chevron.left")
+                            .labelStyle(.iconOnly)
+                    }
+                    .accessibilityLabel(String(localized: "Back", comment: "Back button on note detail"))
                 }
-                .accessibilityLabel(String(localized: "Back", comment: "Back button on note detail"))
             }
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 6) {
@@ -420,7 +424,8 @@ struct NoteDetailView: View {
                                 }
                             }
                             .background(
-                                NoteDetailScrollOffsetReader { y, _ in
+                                NoteDetailScrollOffsetReader { y, _, fraction in
+                                    readOnlyScrollFraction = fraction
                                     updateFloatingEditVisibility(
                                         contentOffsetY: y,
                                         vm: vm,
@@ -932,7 +937,8 @@ struct NoteDetailView: View {
                 onEditorScroll: { y, verticallyScrollable in
                     updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
                 },
-                imageToInsert: $imageToInsert
+                imageToInsert: $imageToInsert,
+                initialScrollFraction: readOnlyScrollFraction
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
             // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).
@@ -1018,7 +1024,7 @@ struct NoteDetailView: View {
                     .scrollContentBackground(.hidden)
                     .background(Color(.systemGroupedBackground))
                     .background(
-                        NoteDetailScrollOffsetReader { y, verticallyScrollable in
+                        NoteDetailScrollOffsetReader { y, verticallyScrollable, _ in
                             updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
                         }
                         .frame(width: 0, height: 0)
@@ -1380,7 +1386,7 @@ struct NoteDetailView: View {
         case .newChild:
             Image(systemName: "plus")
         case .rename:
-            Image(systemName: "square.and.pencil")
+            Image(systemName: "pencil")
         case .noteDetails:
             Image(systemName: vm.showDetails ? "info.circle.fill" : "info.circle")
         case .duplicate:

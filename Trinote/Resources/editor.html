@@ -298,8 +298,64 @@ body { display: flex; flex-direction: column; }
 .tiptap pre { background: rgba(128,128,128,0.1); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }
 .tiptap code { background: rgba(128,128,128,0.1); padding: 2px 6px; border-radius: 4px; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }
 .tiptap pre code { background: none; padding: 0; }
-.tiptap img { max-width: 100%; height: auto; border-radius: 6px; }
-.tiptap hr { border: none; border-top: 2px solid var(--border); margin: 1em 0; }
+.tiptap img { max-width: 100%; height: auto; border-radius: 6px; cursor: pointer; }
+.tiptap img.ProseMirror-selectednode { outline: 2px solid var(--btn-active); outline-offset: 2px; border-radius: 6px; }
+
+/* CKEditor-compatible figure/image styles */
+.tiptap figure.image { display: block; clear: both; text-align: center; margin: 0.9em auto; max-width: 100%; overflow: hidden; }
+.tiptap figure.image img { display: block; margin: 0 auto; max-width: 100%; height: auto; border-radius: 6px; cursor: pointer; }
+.tiptap figure.image figcaption {
+  word-break: break-word;
+  color: var(--placeholder); background: rgba(128,128,128,0.06);
+  font-size: 0.75em; line-height: 1.4; padding: 6px 10px; outline: none;
+}
+.tiptap figure.image.image_resized { max-width: 100%; }
+.tiptap figure.image.image_resized img { width: 100%; }
+
+/* Alignment: inline (default) — flows with text */
+.tiptap figure.image-style-inline { display: inline-block; margin: 0.3em 0.5em; vertical-align: bottom; }
+
+/* Wrap text: float left/right — cap width so text always has room to wrap beside the image */
+.tiptap figure.image-style-align-left { float: left; margin: 0.5em 1.2em 0.5em 0; max-width: 50%; }
+.tiptap figure.image-style-align-right { float: right; margin: 0.5em 0 0.5em 1.2em; max-width: 50%; }
+/* Block centered (default block style) */
+.tiptap figure.image-style-block-align-center,
+.tiptap figure.image:not([class*="image-style-"]) { display: table; margin-left: auto; margin-right: auto; clear: both; }
+/* Block left */
+.tiptap figure.image-style-block-align-left { display: table; margin-left: 0; margin-right: auto; clear: both; }
+/* Block right */
+.tiptap figure.image-style-block-align-right { display: table; margin-left: auto; margin-right: 0; clear: both; }
+/* Side image (CKEditor "side" semantic style — float right, capped width) */
+.tiptap figure.image-style-side { float: right; margin: 0.5em 0 0.5em 1.2em; max-width: 50%; }
+
+/* Image popup (anchored to image, not toolbar) */
+.image-popup {
+  display: none; position: fixed; z-index: 10000;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 8px 10px; box-shadow: 0 4px 20px var(--popup-shadow);
+  min-width: min(88vw, 280px); max-width: min(92vw, 340px);
+}
+.image-popup.visible { display: flex; flex-direction: column; gap: 6px; }
+.image-popup-section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--placeholder); padding: 2px 4px 0; }
+.image-popup-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px;
+  cursor: pointer; font-size: 14px; font-weight: 500; color: var(--fg);
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.image-popup-row:active { opacity: 0.7; }
+.image-popup-row.active { background: var(--btn-active-bg); color: var(--btn-active); }
+.image-popup-row svg { width: 18px; height: 18px; flex-shrink: 0; }
+.image-popup-size-grid { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 4px; }
+.image-popup-size-btn {
+  flex: 1; min-width: 50px; text-align: center; padding: 6px 4px; border-radius: 8px;
+  border: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--fg);
+  cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  background: transparent;
+}
+.image-popup-size-btn:active { opacity: 0.7; }
+.image-popup-size-btn.active { background: var(--btn-active-bg); color: var(--btn-active); border-color: var(--btn-active); }
+
+.tiptap hr { border: none; border-top: 2px solid var(--border); margin: 1em 0; clear: both; }
 .tiptap a { color: var(--btn-active); text-decoration: underline; }
 /* TipTap Highlight → <mark>; ensure multicolor backgrounds paint (esp. WebKit / line wraps) */
 .tiptap mark {
@@ -387,6 +443,77 @@ const ORDERED_LIST_STYLE_OPTIONS = [
 let _contentTimer = null;
 let _toolbarScheduled = false;
 
+/* ── CKEditor-compatible Figure Image node ── */
+const FigureImage = Image.extend({
+  name: 'image',
+  group: 'block',
+  inline: false,
+  draggable: true,
+  addAttributes() {
+    return {
+      src:            { default: null },
+      alt:            { default: null },
+      title:          { default: null },
+      imageStyle:     { default: null },
+      width:          { default: null },
+      hasCaption:     { default: false },
+      captionText:    { default: '' },
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: 'figure',
+        getAttrs(dom) {
+          const img = dom.querySelector('img');
+          if (!img) return false;
+          const cls = dom.className || '';
+          let imageStyle = null;
+          const styleMatch = cls.match(/image-style-[\w-]+/);
+          if (styleMatch) imageStyle = styleMatch[0];
+          let width = null;
+          const inlineW = dom.style.width;
+          if (inlineW) width = inlineW;
+          const cap = dom.querySelector('figcaption');
+          return {
+            src: img.getAttribute('src'),
+            alt: img.getAttribute('alt'),
+            title: img.getAttribute('title'),
+            imageStyle,
+            width,
+            hasCaption: !!cap,
+            captionText: cap ? cap.textContent : '',
+          };
+        },
+      },
+      {
+        tag: 'img[src]',
+        getAttrs(dom) {
+          return {
+            src: dom.getAttribute('src'),
+            alt: dom.getAttribute('alt'),
+            title: dom.getAttribute('title'),
+          };
+        },
+      },
+    ];
+  },
+  renderHTML({ HTMLAttributes }) {
+    const figClasses = ['image'];
+    if (HTMLAttributes.imageStyle) figClasses.push(HTMLAttributes.imageStyle);
+    if (HTMLAttributes.width) figClasses.push('image_resized');
+    const figAttrs = { class: figClasses.join(' ') };
+    if (HTMLAttributes.width) figAttrs.style = 'width:' + HTMLAttributes.width;
+    const imgAttrs = { src: HTMLAttributes.src };
+    if (HTMLAttributes.alt) imgAttrs.alt = HTMLAttributes.alt;
+    if (HTMLAttributes.title) imgAttrs.title = HTMLAttributes.title;
+    if (HTMLAttributes.hasCaption) {
+      return ['figure', figAttrs, ['img', imgAttrs], ['figcaption', {}, HTMLAttributes.captionText || '']];
+    }
+    return ['figure', figAttrs, ['img', imgAttrs]];
+  },
+});
+
 const editorExtensions = [
   StarterKit.configure({
     heading: { levels: [1,2,3,4,5,6] },
@@ -407,7 +534,7 @@ const editorExtensions = [
   Placeholder.configure({ placeholder: 'Start writing…' }),
   Subscript,
   Superscript,
-  Image.configure({ inline: true, allowBase64: true, HTMLAttributes: { class: '' } }),
+  FigureImage,
 ];
 if (CalloutExt) editorExtensions.push(CalloutExt);
 if (FontSizeExt) editorExtensions.push(FontSizeExt);
@@ -442,8 +569,11 @@ editor.on('selectionUpdate', ({ editor }) => {
 // IMPORTANT: Do not refocus on a timer/hold — that runs when tapping the color *button* (before the
 // panel is visible) and steals the tap so the synthetic click never opens the picker.
 function refocusEditorIfNeeded() {
-  if (!document.querySelector('.color-popup.visible') && !document.querySelector('.callout-popup.visible') && !document.querySelector('.font-size-popup.visible') && !document.querySelector('.list-style-popup.visible') && !document.querySelector('.heading-popup.visible')) return;
+  if (!document.querySelector('.color-popup.visible') && !document.querySelector('.callout-popup.visible') && !document.querySelector('.font-size-popup.visible') && !document.querySelector('.list-style-popup.visible') && !document.querySelector('.heading-popup.visible') && !document.querySelector('.image-popup.visible')) return;
+  // Don't steal focus from the caption input
+  if (document.activeElement && document.activeElement.id === 'image-popup-caption-input') return;
   requestAnimationFrame(() => {
+    if (document.activeElement && document.activeElement.id === 'image-popup-caption-input') return;
     try {
       if (editor.view && editor.view.dom) {
         editor.view.dom.focus({ preventScroll: true });
@@ -459,9 +589,11 @@ toolbar.addEventListener('mousedown', function(e) {
   e.preventDefault();
 });
 document.addEventListener('mousedown', function(e) {
+  // Allow caption input to receive focus normally
+  if (e.target.id === 'image-popup-caption-input') return;
   if (e.target.closest('.color-popup') || e.target.closest('.callout-popup') ||
       e.target.closest('.font-size-popup') || e.target.closest('.list-style-popup') ||
-      e.target.closest('.heading-popup')) {
+      e.target.closest('.heading-popup') || e.target.closest('.image-popup')) {
     e.preventDefault();
   }
 }, true);
@@ -563,6 +695,7 @@ function makeHeadingToolbar() {
     document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach((p) => hideListStylePopup(p));
+    hideImagePopup();
     if (opening) {
       markHeadingPopupJustOpened(popup);
       updatePopupActiveState();
@@ -729,6 +862,278 @@ function restoreSelectionAfterPopup(from, to) {
   setTimeout(restore, 120);
   setTimeout(restore, 250);
 }
+
+/* ── Image popup (appears above a clicked image) ── */
+const IMAGE_STYLES = [
+  { id: null,                           label: 'Centered',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="5" width="12" height="14" rx="2"/><line x1="3" y1="22" x2="21" y2="22" stroke-dasharray="2 2"/></svg>' },
+  { id: 'image-style-align-left',       label: 'Wrap left',   icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="10" height="8" rx="2"/><line x1="15" y1="5" x2="22" y2="5"/><line x1="15" y1="8" x2="22" y2="8"/><line x1="15" y1="11" x2="22" y2="11"/><line x1="2" y1="15" x2="22" y2="15"/><line x1="2" y1="18" x2="22" y2="18"/></svg>' },
+  { id: 'image-style-align-right',      label: 'Wrap right',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="12" y="4" width="10" height="8" rx="2"/><line x1="2" y1="5" x2="9" y2="5"/><line x1="2" y1="8" x2="9" y2="8"/><line x1="2" y1="11" x2="9" y2="11"/><line x1="2" y1="15" x2="22" y2="15"/><line x1="2" y1="18" x2="22" y2="18"/></svg>' },
+  { id: 'image-style-side',             label: 'Side image',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="12" y="3" width="10" height="8" rx="2"/><line x1="2" y1="4" x2="9" y2="4"/><line x1="2" y1="7" x2="9" y2="7"/><line x1="2" y1="10" x2="9" y2="10"/><line x1="2" y1="14" x2="22" y2="14"/><line x1="2" y1="17" x2="22" y2="17"/><line x1="2" y1="20" x2="22" y2="20"/></svg>' },
+  { id: 'image-style-block-align-left', label: 'Block left',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="12" height="14" rx="2"/></svg>' },
+  { id: 'image-style-block-align-right',label: 'Block right', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="10" y="5" width="12" height="14" rx="2"/></svg>' },
+];
+const IMAGE_SIZES = [
+  { label: 'Original', value: null },
+  { label: '25%', value: '25%' },
+  { label: '50%', value: '50%' },
+  { label: '75%', value: '75%' },
+];
+
+const imagePopup = document.createElement('div');
+imagePopup.className = 'image-popup';
+imagePopup._targetPos = null;
+
+// Alignment section
+const alignLabel = document.createElement('div');
+alignLabel.className = 'image-popup-section-label';
+alignLabel.textContent = 'Alignment';
+imagePopup.appendChild(alignLabel);
+IMAGE_STYLES.forEach(s => {
+  const row = document.createElement('div');
+  row.className = 'image-popup-row';
+  row.dataset.style = s.id || '';
+  row.innerHTML = s.icon + '<span>' + s.label + '</span>';
+  function pick(e) {
+    e.preventDefault(); e.stopPropagation();
+    const pos = imagePopup._targetPos;
+    if (pos == null) return;
+    editor.chain().focus().setNodeSelection(pos).updateAttributes('image', { imageStyle: s.id }).run();
+    updateImagePopupState();
+    requestAnimationFrame(() => relayoutImagePopup());
+  }
+  row.addEventListener('pointerdown', pick, true);
+  row.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
+  row.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+  imagePopup.appendChild(row);
+});
+
+// Size section
+const sizeLabel = document.createElement('div');
+sizeLabel.className = 'image-popup-section-label';
+sizeLabel.textContent = 'Size';
+imagePopup.appendChild(sizeLabel);
+const sizeGrid = document.createElement('div');
+sizeGrid.className = 'image-popup-size-grid';
+IMAGE_SIZES.forEach(sz => {
+  const btn = document.createElement('div');
+  btn.className = 'image-popup-size-btn';
+  btn.textContent = sz.label;
+  btn.dataset.size = sz.value || '';
+  function pick(e) {
+    e.preventDefault(); e.stopPropagation();
+    const pos = imagePopup._targetPos;
+    if (pos == null) return;
+    editor.chain().focus().setNodeSelection(pos).updateAttributes('image', { width: sz.value }).run();
+    updateImagePopupState();
+    requestAnimationFrame(() => relayoutImagePopup());
+  }
+  btn.addEventListener('pointerdown', pick, true);
+  btn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
+  btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+  sizeGrid.appendChild(btn);
+});
+imagePopup.appendChild(sizeGrid);
+
+// Caption toggle + input
+const captionRow = document.createElement('div');
+captionRow.className = 'image-popup-row';
+captionRow.id = 'image-popup-caption-toggle';
+captionRow.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"/><line x1="7" y1="20" x2="17" y2="20"/></svg><span>Caption</span>';
+function toggleCaption(e) {
+  e.preventDefault(); e.stopPropagation();
+  const pos = imagePopup._targetPos;
+  if (pos == null) return;
+  const node = editor.state.doc.nodeAt(pos);
+  if (!node) return;
+  const has = node.attrs.hasCaption;
+  editor.chain().focus().setNodeSelection(pos).updateAttributes('image', { hasCaption: !has, captionText: has ? '' : (node.attrs.captionText || '') }).run();
+  updateImagePopupState();
+  updateCaptionInput();
+}
+captionRow.addEventListener('pointerdown', toggleCaption, true);
+captionRow.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
+captionRow.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+imagePopup.appendChild(captionRow);
+
+const captionInput = document.createElement('input');
+captionInput.type = 'text';
+captionInput.placeholder = 'Enter caption…';
+captionInput.id = 'image-popup-caption-input';
+captionInput.style.cssText = 'display:none;width:100%;box-sizing:border-box;padding:8px 10px;font-size:14px;line-height:1.3;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--fg);-webkit-appearance:none;appearance:none;margin:0 4px;';
+captionInput.addEventListener('mousedown', e => { e.stopPropagation(); });
+captionInput.addEventListener('touchstart', e => { e.stopPropagation(); });
+captionInput.addEventListener('focus', () => {
+  editor.view.dom.removeEventListener('blur', refocusEditorIfNeeded);
+});
+captionInput.addEventListener('blur', () => {
+  editor.view.dom.addEventListener('blur', refocusEditorIfNeeded);
+});
+captionInput.addEventListener('input', () => {
+  const pos = imagePopup._targetPos;
+  if (pos == null) return;
+  const tr = editor.state.tr.setNodeMarkup(pos, undefined, {
+    ...editor.state.doc.nodeAt(pos).attrs,
+    captionText: captionInput.value,
+  });
+  editor.view.dispatch(tr);
+});
+imagePopup.appendChild(captionInput);
+
+// Remove image
+const removeRow = document.createElement('div');
+removeRow.className = 'image-popup-row';
+removeRow.style.color = '#ff3b30';
+removeRow.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><line x1="9" y1="3" x2="15" y2="3"/></svg><span>Remove</span>';
+function removeImage(e) {
+  e.preventDefault(); e.stopPropagation();
+  const pos = imagePopup._targetPos;
+  if (pos == null) return;
+  const node = editor.state.doc.nodeAt(pos);
+  if (!node) return;
+  hideImagePopup();
+  editor.chain().focus().setNodeSelection(pos).deleteSelection().run();
+}
+removeRow.addEventListener('pointerdown', removeImage, true);
+removeRow.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
+removeRow.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+imagePopup.appendChild(removeRow);
+
+function updateCaptionInput() {
+  const pos = imagePopup._targetPos;
+  if (pos == null) { captionInput.style.display = 'none'; return; }
+  const node = editor.state.doc.nodeAt(pos);
+  if (!node || !node.attrs.hasCaption) { captionInput.style.display = 'none'; return; }
+  captionInput.style.display = 'block';
+  captionInput.value = node.attrs.captionText || '';
+}
+
+document.body.appendChild(imagePopup);
+
+function updateImagePopupState() {
+  const pos = imagePopup._targetPos;
+  if (pos == null) return;
+  const node = editor.state.doc.nodeAt(pos);
+  if (!node) return;
+  const currentStyle = node.attrs.imageStyle || '';
+  imagePopup.querySelectorAll('.image-popup-row[data-style]').forEach(r => {
+    r.classList.toggle('active', (r.dataset.style || '') === currentStyle);
+  });
+  const currentWidth = node.attrs.width || '';
+  imagePopup.querySelectorAll('.image-popup-size-btn').forEach(b => {
+    b.classList.toggle('active', (b.dataset.size || '') === currentWidth);
+  });
+  const capRow = document.getElementById('image-popup-caption-toggle');
+  if (capRow) capRow.classList.toggle('active', !!node.attrs.hasCaption);
+  updateCaptionInput();
+}
+
+function showImagePopup(imgEl, pos) {
+  hideImagePopup();
+  document.querySelectorAll('.color-popup.visible').forEach(p => hideColorPopup(p));
+  document.querySelectorAll('.callout-popup.visible').forEach(p => hideCalloutPopup(p));
+  document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
+  document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
+  document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
+  document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
+  imagePopup._targetPos = pos;
+  updateImagePopupState();
+  imagePopup.classList.add('visible');
+  layoutImagePopup(imgEl);
+}
+
+function hideImagePopup() {
+  imagePopup.classList.remove('visible');
+  imagePopup._targetPos = null;
+}
+
+function relayoutImagePopup() {
+  const pos = imagePopup._targetPos;
+  if (pos == null || !imagePopup.classList.contains('visible')) return;
+  try {
+    const domAtPos = editor.view.nodeDOM(pos);
+    const img = domAtPos && domAtPos.querySelector ? domAtPos.querySelector('img') : null;
+    if (img) layoutImagePopup(img);
+  } catch (_) {}
+}
+
+function layoutImagePopup(imgEl) {
+  if (!imagePopup.classList.contains('visible')) return;
+  imagePopup.style.visibility = 'hidden';
+  imagePopup.style.left = '0px';
+  imagePopup.style.top = '0px';
+  const pr = imagePopup.getBoundingClientRect();
+  const ir = imgEl.getBoundingClientRect();
+  const margin = 8;
+  const vv = window.visualViewport;
+  const viewTop = vv ? vv.offsetTop : 0;
+  const viewBottom = vv ? (vv.offsetTop + vv.height) : window.innerHeight;
+  const pw = Math.max(pr.width, 1);
+  const ph = Math.max(pr.height, 1);
+  let left = ir.left + (ir.width - pw) / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - pw - margin));
+  let top = ir.top - ph - 8;
+  if (top < viewTop + margin) {
+    top = ir.bottom + 8;
+    if (top + ph > viewBottom - margin) {
+      top = Math.max(viewTop + margin, viewBottom - ph - margin);
+    }
+  }
+  imagePopup.style.left = Math.round(left) + 'px';
+  imagePopup.style.top = Math.round(top) + 'px';
+  imagePopup.style.visibility = '';
+}
+
+// Click handler on editor images — also handles re-click to toggle
+function findImageNodePos(img) {
+  const view = editor.view;
+  const domPos = view.posAtDOM(img, 0);
+  const resolved = editor.state.doc.resolve(domPos);
+  let pos = domPos;
+  for (let d = resolved.depth; d >= 0; d--) {
+    if (resolved.node(d).type.name === 'image') {
+      pos = resolved.before(d);
+      break;
+    }
+  }
+  return pos;
+}
+document.getElementById('editor-container').addEventListener('click', function(e) {
+  const img = e.target.closest('.tiptap img');
+  if (!img) {
+    if (!e.target.closest('.image-popup')) hideImagePopup();
+    return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  const pos = findImageNodePos(img);
+  if (imagePopup.classList.contains('visible') && imagePopup._targetPos === pos) {
+    hideImagePopup();
+    editor.commands.setTextSelection(pos);
+    return;
+  }
+  editor.commands.setNodeSelection(pos);
+  showImagePopup(img, pos);
+}, true);
+
+// Also catch clicks directly on figure elements (when img is selected, ProseMirror
+// may handle the click on the selected node wrapper instead of the img itself)
+document.addEventListener('click', function(e) {
+  if (e.target.closest('.image-popup')) return;
+  const figure = e.target.closest('.tiptap figure.image');
+  if (!figure) return;
+  const img = figure.querySelector('img');
+  if (!img) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const pos = findImageNodePos(img);
+  if (imagePopup.classList.contains('visible') && imagePopup._targetPos === pos) {
+    hideImagePopup();
+    editor.commands.setTextSelection(pos);
+    return;
+  }
+  editor.commands.setNodeSelection(pos);
+  showImagePopup(img, pos);
+}, true);
 
 function afterColorMarkEdit() {
   const dom = editor.view && editor.view.dom;
@@ -953,6 +1358,7 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
     document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
+    hideImagePopup();
     if (willOpen) {
       markColorPopupJustOpened(popup);
       popup.classList.add('visible');
@@ -1018,6 +1424,7 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
       hideHeadingPopup(popup);
     });
+    relayoutImagePopup();
     reportEditorScrollMetrics();
   }, { passive: true });
   window.addEventListener('resize', () => {
@@ -1045,6 +1452,7 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       const anchor = popup._anchorButton;
       if (anchor && typeof layoutCalloutPopup === 'function') layoutCalloutPopup(anchor, popup);
     });
+    relayoutImagePopup();
     reportEditorScrollMetrics();
   });
   try {
@@ -1164,6 +1572,7 @@ function makeCalloutToolbar() {
     document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
+    hideImagePopup();
     if (opening) {
       markCalloutPopupJustOpened(popup);
       popup.classList.add('visible');
@@ -1272,6 +1681,7 @@ function makeBulletListToolbar() {
     document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach((p) => hideHeadingPopup(p));
+    hideImagePopup();
     if (opening) {
       markListStylePopupJustOpened(popup);
       popup.classList.add('visible');
@@ -1350,6 +1760,7 @@ function makeOrderedListToolbar() {
     document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach((p) => hideHeadingPopup(p));
+    hideImagePopup();
     if (opening) {
       markListStylePopupJustOpened(popup);
       popup.classList.add('visible');
@@ -1431,6 +1842,7 @@ function makeFontSizeToolbar() {
     document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach((p) => hideListStylePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach((p) => hideHeadingPopup(p));
+    hideImagePopup();
     if (opening) {
       const { from, to } = editor.state.selection;
       wrapper._rangeAtOpen = { from, to };
@@ -1566,6 +1978,7 @@ function makeLinkToolbar() {
     document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
+    hideImagePopup();
     document.querySelectorAll('.link-popup.visible').forEach(p => {
       if (p !== popup) hideLinkPopup(p);
     });
@@ -1799,6 +2212,14 @@ function ckToTiptap(html) {
   if (!html) return html;
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
+  // Clean up any stale float-clear markers from earlier versions
+  doc.querySelectorAll('[data-trinote-clear-after-float]').forEach(el => {
+    el.removeAttribute('data-trinote-clear-after-float');
+    const s = (el.getAttribute('style') || '').replace(/(^|;)\s*clear\s*:\s*both\s*;?/gi, '$1').replace(/^;|;;+/g, ';').trim();
+    if (s) el.setAttribute('style', s.replace(/^;\s*/, ''));
+    else el.removeAttribute('style');
+  });
+
   doc.querySelectorAll('ul.todo-list').forEach(ul => {
     ul.removeAttribute('class');
     ul.setAttribute('data-type', 'taskList');
@@ -1892,7 +2313,19 @@ window.editorBridge = {
     scheduleScrollCaretIntoViewAfterKeyboard();
   },
   insertHTML(html) { editor.commands.insertContent(html); },
-  insertImage(src) { editor.chain().focus().setImage({ src }).run(); },
+  insertImage(src) { editor.chain().focus().insertContent({ type: 'image', attrs: { src } }).run(); },
+  scrollToFraction(fraction) {
+    const ec = document.getElementById('editor-container');
+    if (!ec) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const maxScroll = ec.scrollHeight - ec.clientHeight;
+        if (maxScroll > 0) {
+          ec.scrollTop = Math.round(maxScroll * fraction);
+        }
+      });
+    });
+  },
 };
 
 // Show editor, hide loading
@@ -1911,6 +2344,7 @@ function editorDocumentHasFocus() {
 }
 document.getElementById('editor-container').addEventListener('click', function(e) {
   if (e.target.closest('a[href]')) return;
+  if (e.target.closest('.tiptap img')) return;
   var lineCount = 1;
   try { lineCount = editor.state.doc.childCount; } catch (err) {}
   var ecRect = this.getBoundingClientRect();

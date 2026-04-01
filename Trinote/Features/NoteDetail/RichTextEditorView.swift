@@ -9,13 +9,16 @@ struct RichTextEditorView: UIViewRepresentable {
     /// `#editor-container` scroll metrics: `scrollTop` increases when scrolling down; `verticallyScrollable` is false when the body fits without scrolling.
     var onEditorScroll: ((CGFloat, Bool) -> Void)?
     @Binding var imageToInsert: String?
+    /// Fraction (0–1) the read-only view was scrolled; the editor scrolls to this position after loading.
+    var initialScrollFraction: CGFloat = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             initialHTML: initialHTML,
             onContentChanged: onContentChanged,
             onPickImage: onPickImage,
-            onEditorScroll: onEditorScroll
+            onEditorScroll: onEditorScroll,
+            initialScrollFraction: initialScrollFraction
         )
     }
 
@@ -144,6 +147,7 @@ struct RichTextEditorView: UIViewRepresentable {
         private var pendingContent: String?
         private var keyboardToolbarGapObservers: [NSObjectProtocol] = []
         private var pendingKeyboardToolbarGapPoints: CGFloat?
+        private let initialScrollFraction: CGFloat
 
         /// Visual gap between HTML formatting toolbar and keyboard (CSS px ≈ points in WKWebView).
         private static let keyboardToolbarGapPoints: CGFloat = 10
@@ -154,12 +158,14 @@ struct RichTextEditorView: UIViewRepresentable {
             initialHTML: String,
             onContentChanged: ((String) -> Void)?,
             onPickImage: (() -> Void)?,
-            onEditorScroll: ((CGFloat, Bool) -> Void)?
+            onEditorScroll: ((CGFloat, Bool) -> Void)?,
+            initialScrollFraction: CGFloat = 0
         ) {
             self.initialHTML = initialHTML
             self.onContentChanged = onContentChanged
             self.onPickImage = onPickImage
             self.onEditorScroll = onEditorScroll
+            self.initialScrollFraction = initialScrollFraction
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -171,6 +177,9 @@ struct RichTextEditorView: UIViewRepresentable {
                 setContent(html)
                 setKeyboardToolbarGap(pendingKeyboardToolbarGapPoints ?? 0)
                 pendingKeyboardToolbarGapPoints = nil
+                if initialScrollFraction > 0 {
+                    scrollToFraction(initialScrollFraction)
+                }
 
             case "contentChanged":
                 if let html = message.body as? String {
@@ -220,6 +229,14 @@ struct RichTextEditorView: UIViewRepresentable {
                 .replacingOccurrences(of: "${", with: "\\${")
             webView.evaluateJavaScript("window.editorBridge.setContent(`\(escaped)`);") { _, error in
                 if let error { Log.api.error("Failed to set editor content: \(error)") }
+            }
+        }
+
+        func scrollToFraction(_ fraction: CGFloat) {
+            guard editorReady, let webView else { return }
+            let clamped = min(max(fraction, 0), 1)
+            webView.evaluateJavaScript("window.editorBridge.scrollToFraction(\(clamped));") { _, error in
+                if let error { Log.api.error("scrollToFraction failed: \(error)") }
             }
         }
 
