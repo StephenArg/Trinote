@@ -40,6 +40,26 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     }
 
     var sortableTitle: String { title.lowercased() }
+
+    /// True when this note is a Trilium Journal / calendar root (has `#calendarRoot` label).
+    var isCalendarRoot: Bool {
+        attributes.contains { $0.type == .label && $0.name == "calendarRoot" }
+    }
+
+    /// Value of the `#dateNote` label (e.g. "2026-04-01"), if present.
+    var dateNoteValue: String? {
+        attributes.first { $0.type == .label && $0.name == "dateNote" }?.value
+    }
+
+    /// Value of the `#yearNote` label (e.g. "2026"), if present.
+    var yearNoteValue: String? {
+        attributes.first { $0.type == .label && $0.name == "yearNote" }?.value
+    }
+
+    /// Value of the `#monthNote` label (e.g. "2026-04"), if present.
+    var monthNoteValue: String? {
+        attributes.first { $0.type == .label && $0.name == "monthNote" }?.value
+    }
 }
 
 extension NoteItem {

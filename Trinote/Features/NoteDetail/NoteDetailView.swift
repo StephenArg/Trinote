@@ -871,7 +871,11 @@ struct NoteDetailView: View {
         case .canvas:
             CanvasNoteView(noteId: note.noteId, attachments: vm.attachments, client: vm.client, excalidrawJSON: vm.contentString)
         case .book:
-            BookNoteView(note: note)
+            if note.isCalendarRoot {
+                CalendarNoteView(calendarRootNote: note)
+            } else {
+                BookNoteView(note: note)
+            }
         default:
             UnsupportedNoteView(note: note, serverURL: appState.activeProfile?.normalizedBaseURL)
         }
