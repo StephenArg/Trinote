@@ -745,6 +745,86 @@ final class NoteDetailViewModel {
         }
     }
 
+    /// Saves canvas content (Excalidraw JSON body + SVG preview attachment).
+    func saveCanvasContent(json: String, svg: String) {
+        guard let note else {
+            saveError = String(localized: "Could not load this note.", comment: "Save without cached note")
+            showSaveError = true
+            return
+        }
+        let nid = noteId
+        let data = Data(json.utf8)
+        guard let profileId = serverProfileId else { return }
+        isSaving = true
+        saveError = nil
+        showSaveError = false
+
+        do {
+            try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
+            try persistence.upsertPendingNoteBodyUpload(
+                noteId: nid,
+                body: data,
+                mime: note.mime.isEmpty ? "application/json" : note.mime,
+                serverProfileId: profileId,
+                baseUtcDateModified: nil
+            )
+            content = data
+            contentString = json
+            rawContentString = json
+            serverContentHash = json.hashValue
+            try? persistence.deleteDraft(noteId: nid, serverProfileId: profileId)
+            isEditing = false
+            hasDraft = false
+            draftAutoSaveTask?.cancel()
+            Log.api.info("Saved canvas body locally (queued for sync): \(nid)")
+        } catch {
+            saveError = error.localizedDescription
+            showSaveError = true
+            isSaving = false
+            return
+        }
+
+        isSaving = false
+        appState.backgroundSyncPendingChanges()
+
+        // Upload SVG attachment in the background (best-effort, non-blocking)
+        if !svg.isEmpty {
+            Task { [weak self] in
+                await self?.uploadCanvasSVGAttachment(svg: svg)
+            }
+        }
+    }
+
+    /// Uploads or updates the `canvas-export.svg` attachment for the current canvas note.
+    private func uploadCanvasSVGAttachment(svg: String) async {
+        guard let client else { return }
+        let nid = noteId
+        let svgData = Data(svg.utf8)
+
+        let existingAttachment = attachments.first { $0.title == "canvas-export.svg" && $0.mime == "image/svg+xml" }
+
+        do {
+            if let existing = existingAttachment {
+                try await client.uploadAttachmentContent(existing.attachmentId, data: svgData, contentType: "image/svg+xml")
+            } else {
+                let base64 = svgData.base64EncodedString()
+                let request = CreateAttachmentRequest(
+                    ownerId: nid,
+                    role: "image",
+                    mime: "image/svg+xml",
+                    title: "canvas-export.svg",
+                    content: base64,
+                    position: 0
+                )
+                _ = try await client.createAttachment(request)
+            }
+            await loadAttachments()
+            Log.api.info("Canvas SVG attachment uploaded for note: \(nid)")
+        } catch {
+            Log.api.error("Failed to upload canvas SVG attachment: \(error)")
+        }
+    }
+
     func unlockProtectedNote(documentPassword: String) async {
         guard let client, let note, note.isProtected else { return }
         let trimmed = documentPassword.trimmingCharacters(in: .whitespacesAndNewlines)

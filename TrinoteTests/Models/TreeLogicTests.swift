@@ -76,7 +76,7 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertTrue(NoteType.text.isEditable)
         XCTAssertTrue(NoteType.code.isEditable)
         XCTAssertFalse(NoteType.image.isEditable)
-        XCTAssertFalse(NoteType.canvas.isEditable)
+        XCTAssertTrue(NoteType.canvas.isEditable)
     }
 
     func testNoteTypeAdvanced() {

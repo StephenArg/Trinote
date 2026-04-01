@@ -91,6 +91,10 @@ struct NoteDetailView: View {
     @State private var lastEditorScrollOffsetY: CGFloat = 0
     @State private var editorSaveCancelScrollBaselineReady = false
 
+    /// Bridge to communicate with the canvas editor WKWebView (call getSceneData on save).
+    @StateObject private var canvasEditorBridge = CanvasEditorBridge()
+    @State private var canvasHasUnsavedChanges = false
+
     private var principalTitleText: String {
         if let n = viewModel?.note {
             return n.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
@@ -406,6 +410,8 @@ struct NoteDetailView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
                     .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+                } else if vm.isEditing && note.type == .canvas {
+                    canvasEditingView(vm)
                 } else {
                     ZStack(alignment: .bottomTrailing) {
                         ScrollView {
@@ -980,6 +986,66 @@ struct NoteDetailView: View {
         }
     }
 
+    // MARK: - Canvas editing
+
+    @ViewBuilder
+    private func canvasEditingView(_ vm: NoteDetailViewModel) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            CanvasEditorView(
+                initialJSON: vm.editableContent,
+                bridge: canvasEditorBridge,
+                onSceneChanged: { canvasHasUnsavedChanges = true }
+            )
+            .onAppear {
+                canvasHasUnsavedChanges = false
+            }
+
+            canvasSaveChip(vm: vm)
+                .padding(.trailing, 16)
+                .padding(.bottom, 72)
+                .transition(.scale(scale: 0.88).combined(with: .opacity))
+                .zIndex(2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(uiColor: .trinoteCanvasBackground).ignoresSafeArea(edges: [.bottom, .horizontal]))
+    }
+
+    @ViewBuilder
+    private func canvasSaveChip(vm: NoteDetailViewModel) -> some View {
+        Button {
+            saveCanvasContent(vm: vm)
+        } label: {
+            ZStack {
+                if vm.isSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image("SaveNoteFloating")
+                        .resizable()
+                        .renderingMode(.template)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 24, height: 24)
+                }
+            }
+            .foregroundStyle(.primary)
+            .frame(width: 48, height: 48)
+            .background(.ultraThinMaterial, in: Circle())
+            .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+        }
+        .buttonStyle(.plain)
+        .disabled(vm.isSaving)
+        .accessibilityLabel(String(localized: "Save", comment: "Canvas save chip"))
+    }
+
+    private func saveCanvasContent(vm: NoteDetailViewModel) {
+        canvasEditorBridge.getSceneData { json, svg in
+            DispatchQueue.main.async {
+                vm.saveCanvasContent(json: json, svg: svg)
+                canvasHasUnsavedChanges = false
+            }
+        }
+    }
+
     private func handleEditorImagePick(_ item: PhotosPickerItem) async {
         defer { editorImageItem = nil }
         guard let data = try? await item.loadTransferable(type: Data.self) else { return }
@@ -1129,7 +1195,11 @@ struct NoteDetailView: View {
                 if note.type.isEditable {
                     Button {
                         if vm.isEditing {
-                            vm.saveContent()
+                            if note.type == .canvas {
+                                saveCanvasContent(vm: vm)
+                            } else {
+                                vm.saveContent()
+                            }
                         } else {
                             vm.startEditing()
                         }

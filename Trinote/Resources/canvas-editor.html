@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: transparent;
+    -webkit-touch-callout: none;
+  }
+  #root {
+    width: 100%;
+    height: 100%;
+    position: fixed; top: 0; left: 0; right: 0;
+    overflow: hidden;
+  }
+  .excalidraw-wrapper { width: 100%; height: 100%; }
+
+  /* Match Trilium desktop: hide collaboration and library buttons */
+  .CollabButton { display: none !important; }
+
+  /* Prevent Bootstrap-style conflicts (same fix as desktop Trilium) */
+  .excalidraw .dropdown-menu { display: block; }
+
+  :root[dir="ltr"] .excalidraw .layer-ui__wrapper .zen-mode-transition.App-menu_bottom--transition-left {
+    transform: none;
+  }
+
+  /* Safe area insets for iOS */
+  .excalidraw .App-menu_top { padding-top: env(safe-area-inset-top, 0px); }
+</style>
+<link rel="stylesheet" href="canvas-editor-assets/excalidraw-bundle.css">
+<script>
+  window.EXCALIDRAW_ASSET_PATH = new URL("canvas-editor-assets/dist/prod/", window.location.href).toString();
+  window.onerror = function(msg, src, line, col, err) {
+    try { window.webkit.messageHandlers.canvasLog.postMessage('ONERROR: ' + msg + ' at ' + src + ':' + line); } catch(e) {}
+  };
+</script>
+</head>
+<body>
+<div id="root"></div>
+<script src="canvas-editor-assets/excalidraw-bundle.js"></script>
+</body>
+</html>
