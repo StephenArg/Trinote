@@ -436,33 +436,6 @@ final class TreeViewModel {
         default: mime = "text/html"
         }
 
-        if appState.isOnline, let client {
-            do {
-                let request = CreateNoteRequest(
-                    parentNoteId: parentNoteId,
-                    title: trimmed,
-                    type: type.rawValue,
-                    mime: mime,
-                    content: "",
-                    notePosition: nil,
-                    prefix: nil,
-                    isProtected: nil,
-                    noteId: nil,
-                    branchId: nil
-                )
-                let response = try await client.createNote(request)
-                try? persistence.cacheNote(from: response.note, serverProfileId: profileId)
-                try? persistence.cacheBranch(from: response.branch, serverProfileId: profileId)
-                try? persistence.commitBatch()
-                await refresh()
-                return response.note.noteId
-            } catch {
-                self.error = APIError.from(error).localizedDescription
-                Log.api.error("Failed to create note: \(error)")
-                return nil
-            }
-        }
-
         do {
             let (noteId, _) = try persistence.createOfflineChildNote(
                 parentNoteId: parentNoteId,
@@ -473,10 +446,11 @@ final class TreeViewModel {
                 serverProfileId: profileId
             )
             await refresh()
+            appState.backgroundSyncPendingChanges()
             return noteId
         } catch {
             self.error = APIError.from(error).localizedDescription
-            Log.api.error("Failed to create offline note: \(error)")
+            Log.api.error("Failed to create child note locally: \(error)")
             return nil
         }
     }

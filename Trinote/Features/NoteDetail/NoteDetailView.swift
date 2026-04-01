@@ -220,7 +220,7 @@ struct NoteDetailView: View {
     @ViewBuilder
     private func editorSaveChip(vm: NoteDetailViewModel) -> some View {
         Button {
-            Task { await vm.saveContent() }
+            vm.saveContent()
         } label: {
             ZStack {
                 if vm.isSaving {
@@ -246,6 +246,7 @@ struct NoteDetailView: View {
 
     var body: some View {
         bodyCore
+            .background(NavigationPopGestureBlocker(blocked: viewModel?.isEditing == true).frame(width: 0, height: 0))
             .task(id: activeNoteId) { await initialLoad() }
             .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
                 NoteDetailView(noteId: linkedNoteId, title: "")
@@ -264,8 +265,18 @@ struct NoteDetailView: View {
                 ProgressView()
             }
         }
+        .navigationBarBackButtonHidden(viewModel?.isEditing == true)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Label(String(localized: "Back", comment: "Back from note detail"), systemImage: "chevron.left")
+                        .labelStyle(.iconOnly)
+                }
+                .accessibilityLabel(String(localized: "Back", comment: "Back button on note detail"))
+            }
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 6) {
                     if viewModel?.serverVerified == false && viewModel?.note != nil {
@@ -1112,7 +1123,7 @@ struct NoteDetailView: View {
                 if note.type.isEditable {
                     Button {
                         if vm.isEditing {
-                            Task { await vm.saveContent() }
+                            vm.saveContent()
                         } else {
                             vm.startEditing()
                         }
@@ -1560,6 +1571,64 @@ private extension View {
             self.menuActionDismissBehavior(.disabled)
         } else {
             self
+        }
+    }
+}
+
+// MARK: - Navigation pop-gesture blocker
+
+/// Blocks iOS interactive back-swipe while this view is visible.
+private struct NavigationPopGestureBlocker: UIViewControllerRepresentable {
+    let blocked: Bool
+
+    func makeUIViewController(context: Context) -> Controller {
+        let vc = Controller()
+        vc.blocked = blocked
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: Controller, context: Context) {
+        uiViewController.blocked = blocked
+        uiViewController.applyBlocking()
+    }
+
+    final class Controller: UIViewController, UIGestureRecognizerDelegate {
+        var blocked = true
+        private weak var previousDelegate: UIGestureRecognizerDelegate?
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            applyBlocking()
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            restoreDelegate()
+        }
+
+        func applyBlocking() {
+            guard let gesture = navigationController?.interactivePopGestureRecognizer else { return }
+            if blocked {
+                if gesture.delegate !== self {
+                    previousDelegate = gesture.delegate
+                    gesture.delegate = self
+                }
+                gesture.isEnabled = true
+            } else {
+                restoreDelegate()
+            }
+        }
+
+        private func restoreDelegate() {
+            guard let gesture = navigationController?.interactivePopGestureRecognizer else { return }
+            if gesture.delegate === self {
+                gesture.delegate = previousDelegate
+            }
+            gesture.isEnabled = true
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            !blocked
         }
     }
 }

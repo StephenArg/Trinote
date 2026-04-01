@@ -1029,6 +1029,37 @@ final class PersistenceManager {
         }
     }
 
+    /// Updates the `baseUtcDateModified` on a pending body upload row (if it still exists).
+    /// Called after a successful server upload so that a surviving row (new local save arrived
+    /// mid-flight) uses the fresh server timestamp for its next conflict check.
+    func updatePendingBodyUploadBase(noteId: String, serverProfileId: String, newBase: String) throws {
+        let rowId = "\(serverProfileId):\(noteId)"
+        var descriptor = FetchDescriptor<PendingNoteBodyUpload>(predicate: #Predicate { $0.id == rowId })
+        descriptor.fetchLimit = 1
+        if let existing = try context.fetch(descriptor).first {
+            existing.baseUtcDateModified = newBase
+            try context.save()
+        }
+    }
+
+    /// Deletes the pending body upload only if it hasn't been updated since `snapshotDate`.
+    /// Returns `true` if the row was deleted, `false` if a newer write superseded it.
+    @discardableResult
+    func deletePendingNoteBodyUploadIfUnchanged(noteId: String, serverProfileId: String, snapshotDate: Date) throws -> Bool {
+        let rowId = "\(serverProfileId):\(noteId)"
+        var descriptor = FetchDescriptor<PendingNoteBodyUpload>(predicate: #Predicate { $0.id == rowId })
+        descriptor.fetchLimit = 1
+        if let existing = try context.fetch(descriptor).first {
+            if existing.queuedAt > snapshotDate {
+                return false
+            }
+            context.delete(existing)
+            try context.save()
+            return true
+        }
+        return true
+    }
+
     // MARK: - Sync Status
 
     func updateSyncStatus(domain: String, serverProfileId: String) throws {

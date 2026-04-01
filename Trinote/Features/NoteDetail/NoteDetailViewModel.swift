@@ -593,43 +593,32 @@ final class NoteDetailViewModel {
             }
         }
 
-        Task { @MainActor in
-            await saveCheckboxChange(newRaw)
-        }
+        saveCheckboxChange(newRaw)
     }
 
-    private func saveCheckboxChange(_ html: String) async {
-        guard let note else { return }
+    private func saveCheckboxChange(_ html: String) {
         let nid = self.noteId
         let data = Data(html.utf8)
-        let mime = note.mime
+        let mime = note?.mime ?? "text/html"
         guard let profileId = serverProfileId else { return }
 
-        if !appState.isOnline {
-            do {
-                try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
-                try persistence.upsertPendingNoteBodyUpload(
-                    noteId: nid,
-                    body: data,
-                    mime: mime,
-                    serverProfileId: profileId,
-                    baseUtcDateModified: serverUtcDateModified
-                )
-                self.content = data
-            } catch {
-                Log.api.error("Failed to save checkbox state offline: \(error)")
-            }
-            return
-        }
-
-        guard let client else { return }
         do {
-            try await client.updateNoteContent(nid, content: data, contentType: "text/html")
+            try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
+            // Pass nil so the upsert reads baseUtcDateModified from the cache for new rows.
+            // The cache is kept current by the flush after each successful upload, preventing
+            // false conflicts when rapid checkbox toggles create successive pending rows.
+            try persistence.upsertPendingNoteBodyUpload(
+                noteId: nid,
+                body: data,
+                mime: mime,
+                serverProfileId: profileId,
+                baseUtcDateModified: nil
+            )
             self.content = data
-            try? self.persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId)
         } catch {
-            Log.api.error("Failed to save checkbox state: \(error)")
+            Log.api.error("Failed to save checkbox state locally: \(error)")
         }
+        appState.backgroundSyncPendingChanges()
     }
 
     // MARK: - Drafts
@@ -721,8 +710,9 @@ final class NoteDetailViewModel {
         }
     }
 
-    /// Persists edited HTML locally and queues upload when the API session (CSRF) is available again.
-    private func saveNoteBodyOffline(note: NoteItem) async {
+    /// Persists edited HTML locally and queues a background upload to the server.
+    /// This is the primary save path for both online and offline scenarios (optimistic save).
+    private func saveNoteBodyLocally(note: NoteItem) {
         let nid = noteId
         let data = Data(editableContent.utf8)
         guard let profileId = serverProfileId else { return }
@@ -737,7 +727,7 @@ final class NoteDetailViewModel {
                 body: data,
                 mime: note.mime,
                 serverProfileId: profileId,
-                baseUtcDateModified: serverUtcDateModified
+                baseUtcDateModified: nil
             )
             content = data
             contentString = editableContent
@@ -747,10 +737,7 @@ final class NoteDetailViewModel {
             isEditing = false
             hasDraft = false
             draftAutoSaveTask?.cancel()
-            showTransientEditorMessage(
-                String(localized: "Saved on this device. Your edit will upload when you're back online.", comment: "After offline note save")
-            )
-            Log.api.info("Saved note body locally (queued for upload): \(nid)")
+            Log.api.info("Saved note body locally (queued for sync): \(nid)")
         } catch {
             saveError = error.localizedDescription
             showSaveError = true
@@ -781,7 +768,7 @@ final class NoteDetailViewModel {
         }
     }
 
-    func saveContent() async {
+    func saveContent() {
         flushPendingEditorContent()
         guard let note else {
             self.saveError = String(localized: "Could not load this note.", comment: "Save without cached note")
@@ -790,84 +777,8 @@ final class NoteDetailViewModel {
             return
         }
 
-        if !appState.isOnline {
-            await saveNoteBodyOffline(note: note)
-            return
-        }
-
-        guard let client else {
-            self.saveError = String(localized: "Sign in and connect to your server to save.", comment: "Save without API client")
-            self.showSaveError = true
-            self.saveDraftLocally()
-            return
-        }
-
-        let nid = self.noteId
-        self.isSaving = true
-        self.saveError = nil
-        defer { self.isSaving = false }
-
-        // Conflict check: reload server content and compare
-        if let serverHash = self.serverContentHash {
-            do {
-                let freshData = try await client.getNoteContent(nid)
-                let freshString = String(data: freshData, encoding: .utf8)
-                if freshString?.hashValue != serverHash && freshString != self.contentString {
-                    self.saveError = "Note was modified on the server since you started editing. Your draft has been preserved locally. Please review the changes."
-                    self.showSaveError = true
-                    self.saveDraftLocally()
-                    return
-                }
-            } catch {
-                if note.isProtected, Self.protectedSessionLikelyEnded(error) {
-                    self.appState.protectedSessionActive = false
-                    self.needsProtectedSession = true
-                    await resyncNoteTitlesWithProtectedSession()
-                    self.saveError = "Protected session expired. Unlock the note again to save."
-                    self.showSaveError = true
-                    self.saveDraftLocally()
-                    return
-                }
-                Log.api.warning("Could not verify server content before save")
-            }
-        }
-
-        if note.isProtected, appState.protectedSessionActive {
-            try? await client.touchProtectedSession()
-        }
-
-        do {
-            let data = Data(self.editableContent.utf8)
-            try await client.updateNoteContent(nid, content: data, contentType: note.mime)
-            self.content = data
-            self.contentString = self.editableContent
-            // Keep in sync with contentString so read-only checkbox toggles patch the saved body,
-            // not stale HTML from the last network load (see toggleCheckbox / saveCheckboxChange).
-            self.rawContentString = self.editableContent
-            self.serverContentHash = self.editableContent.hashValue
-            self.isEditing = false
-            self.hasDraft = false
-            self.draftAutoSaveTask?.cancel()
-
-            if let profileId = self.serverProfileId {
-                try? self.persistence.deleteDraft(noteId: nid, serverProfileId: profileId)
-                try? self.persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId)
-                try? self.persistence.deletePendingNoteBodyUpload(noteId: nid, serverProfileId: profileId)
-            }
-            Log.api.info("Saved content for note")
-        } catch {
-            if note.isProtected, Self.protectedSessionLikelyEnded(error) {
-                self.appState.protectedSessionActive = false
-                self.needsProtectedSession = true
-                await resyncNoteTitlesWithProtectedSession()
-                self.saveError = "Protected session expired. Unlock the note again, then save."
-            } else {
-                self.saveError = APIError.from(error).localizedDescription
-            }
-            self.showSaveError = true
-            self.saveDraftLocally()
-            Log.api.error("Failed to save content")
-        }
+        saveNoteBodyLocally(note: note)
+        appState.backgroundSyncPendingChanges()
     }
 
     func renameNote() async {
@@ -1006,6 +917,11 @@ final class NoteDetailViewModel {
         let nid = self.noteId
         let trimmed = self.newNoteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let profileId = serverProfileId else { return nil }
+        guard appState.isAuthenticated else {
+            self.saveError = String(localized: "Sign in to create notes.", comment: "Error when creating child offline without session")
+            self.showSaveError = true
+            return nil
+        }
         self.isSaving = true
         defer { self.isSaving = false }
 
@@ -1014,38 +930,6 @@ final class NoteDetailViewModel {
         case .code: mime = "text/plain"
         case .file: mime = "application/octet-stream"
         default: mime = "text/html"
-        }
-
-        if isOnline, let client {
-            do {
-                let request = CreateNoteRequest(
-                    parentNoteId: nid,
-                    title: trimmed,
-                    type: self.newNoteType.rawValue,
-                    mime: mime,
-                    content: "",
-                    notePosition: nil,
-                    prefix: nil,
-                    isProtected: nil,
-                    noteId: nil,
-                    branchId: nil
-                )
-                let response = try await client.createNote(request)
-                self.showCreateChild = false
-                self.newNoteTitle = ""
-                await self.load()
-                return response.note.noteId
-            } catch {
-                self.saveError = APIError.from(error).localizedDescription
-                self.showSaveError = true
-                return nil
-            }
-        }
-
-        guard appState.isAuthenticated else {
-            self.saveError = String(localized: "Sign in to create notes.", comment: "Error when creating child offline without session")
-            self.showSaveError = true
-            return nil
         }
 
         do {
@@ -1060,11 +944,12 @@ final class NoteDetailViewModel {
             self.showCreateChild = false
             self.newNoteTitle = ""
             await self.loadChildNotes()
+            appState.backgroundSyncPendingChanges()
             return newId
         } catch {
             self.saveError = APIError.from(error).localizedDescription
             self.showSaveError = true
-            Log.api.error("Failed to create offline child note: \(error)")
+            Log.api.error("Failed to create child note locally: \(error)")
             return nil
         }
     }

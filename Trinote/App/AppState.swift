@@ -25,6 +25,11 @@ final class AppState {
     private var offlineFlushInFlight = false
     private var offlineFlushWaiters: [CheckedContinuation<Void, Never>] = []
 
+    /// Tracks server timestamps resulting from our own successful uploads, keyed by noteId.
+    /// Used to distinguish "server changed because we uploaded" from "another client changed the note"
+    /// when the post-upload getNote call fails on a flaky connection.
+    private var lastOwnUploadTimestamps: [String: String] = [:]
+
     var isOnline: Bool { networkMonitor.isConnected }
 
     /// Ends the Trilium protected-note session on the server and persists cookies. Call after restoring the main session and when the app goes to the background so the document password is required again.
@@ -131,6 +136,25 @@ final class AppState {
         await flushPendingNoteCreationsIfPossible(assumeSessionIsReady: assumeSessionIsReady)
         await flushPendingBranchMovesIfPossible(assumeSessionIsReady: true)
         await flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
+    }
+
+    /// Fire-and-forget: tries to push all pending local changes to the server in the background.
+    /// Safe to call at any time; returns immediately. The flush serializes itself, respects
+    /// network availability, and leaves pending rows in SwiftData on failure for later retry.
+    /// Re-runs automatically if new changes arrived while a flush was in flight.
+    func backgroundSyncPendingChanges() {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.flushPendingLocalChangesIfPossible()
+            // If new writes landed while we were flushing (conditional delete kept them),
+            // run one more pass so the latest content reaches the server.
+            guard let pid = self.activeProfile?.id else { return }
+            let hasCreations = (try? self.persistence.fetchPendingNoteCreations(serverProfileId: pid))?.isEmpty == false
+            let hasUploads = (try? self.persistence.fetchPendingNoteBodyUploads(serverProfileId: pid))?.isEmpty == false
+            if hasCreations || hasUploads {
+                await self.flushPendingLocalChangesIfPossible()
+            }
+        }
     }
 
     func flushPendingNoteCreationsIfPossible(assumeSessionIsReady: Bool = false) async {
@@ -285,13 +309,20 @@ final class AppState {
             try? await client.touchProtectedSession()
         }
         for row in pending {
+            let snapshotDate = row.queuedAt
             do {
                 let fresh = try? await client.getNote(row.noteId)
                 let base = row.baseUtcDateModified.trimmingCharacters(in: .whitespacesAndNewlines)
+                var isRealConflict = false
                 if let fresh {
                     let serverMod = fresh.utcDateModified.trimmingCharacters(in: .whitespacesAndNewlines)
                     let canDetectConflict = !base.isEmpty && !serverMod.isEmpty
                     if canDetectConflict, serverMod != base {
+                        // Check whether the timestamp mismatch was caused by our own previous upload.
+                        let ownUpload = lastOwnUploadTimestamps[row.noteId] ?? ""
+                        isRealConflict = (ownUpload != serverMod)
+                    }
+                    if isRealConflict {
                         if fresh.isProtected {
                             try await client.updateNoteContent(row.noteId, content: row.body, contentType: row.mime)
                             Log.sync.warning(
@@ -321,13 +352,25 @@ final class AppState {
                                 "Offline body conflict for \(row.noteId): saved iOS copy as new note \(response.note.noteId) under \(parentId)"
                             )
                         }
-                        try? persistence.deletePendingNoteBodyUpload(noteId: row.noteId, serverProfileId: profileId)
+                        try? persistence.deletePendingNoteBodyUploadIfUnchanged(noteId: row.noteId, serverProfileId: profileId, snapshotDate: snapshotDate)
                         NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
                         continue
                     }
                 }
                 try await client.updateNoteContent(row.noteId, content: row.body, contentType: row.mime)
-                try? persistence.deletePendingNoteBodyUpload(noteId: row.noteId, serverProfileId: profileId)
+                // Fetch the server's new utcDateModified after our upload so that
+                // (a) the cache is current for future pending rows, and
+                // (b) any surviving pending row won't false-conflict against our own upload.
+                let afterUpload = try? await client.getNote(row.noteId)
+                let newServerMod = afterUpload?.utcDateModified ?? ""
+                if !newServerMod.isEmpty {
+                    lastOwnUploadTimestamps[row.noteId] = newServerMod
+                    try? persistence.cacheNoteContent(row.noteId, content: row.body, serverProfileId: profileId, utcDateModified: newServerMod)
+                }
+                let deleted = (try? persistence.deletePendingNoteBodyUploadIfUnchanged(noteId: row.noteId, serverProfileId: profileId, snapshotDate: snapshotDate)) ?? true
+                if !deleted, !newServerMod.isEmpty {
+                    try? persistence.updatePendingBodyUploadBase(noteId: row.noteId, serverProfileId: profileId, newBase: newServerMod)
+                }
                 Log.sync.info("Flushed offline-edited body for note \(row.noteId)")
             } catch {
                 Log.sync.warning("Pending body upload failed for \(row.noteId): \(error)")
