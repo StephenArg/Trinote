@@ -95,6 +95,10 @@ struct NoteDetailView: View {
     @StateObject private var canvasEditorBridge = CanvasEditorBridge()
     @State private var canvasHasUnsavedChanges = false
 
+    /// Bridge to communicate with the mind map editor WKWebView (call getMapData on save).
+    @StateObject private var mindMapEditorBridge = MindMapEditorBridge()
+    @State private var mindMapHasUnsavedChanges = false
+
     private var principalTitleText: String {
         if let n = viewModel?.note {
             return n.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
@@ -412,8 +416,12 @@ struct NoteDetailView: View {
                     .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
                 } else if vm.isEditing && note.type == .mermaid {
                     mermaidEditingView(vm)
+                } else if vm.isEditing && note.type == .mindMap {
+                    mindMapEditingView(vm)
                 } else if vm.isEditing && note.type == .canvas {
                     canvasEditingView(vm)
+                } else if note.type == .mindMap {
+                    mindMapReadOnlyView(vm, note: note)
                 } else {
                     ZStack(alignment: .bottomTrailing) {
                         ScrollView {
@@ -870,6 +878,10 @@ struct NoteDetailView: View {
             FileNoteView(note: note, attachments: vm.attachments, viewModel: vm)
         case .canvas:
             CanvasNoteView(noteId: note.noteId, attachments: vm.attachments, client: vm.client, excalidrawJSON: vm.contentString)
+        case .mindMap:
+            if let json = vm.contentString {
+                MindMapNoteView(json: json)
+            }
         case .book:
             if note.isCalendarRoot {
                 CalendarNoteView(calendarRootNote: note)
@@ -1063,6 +1075,115 @@ struct NoteDetailView: View {
             DispatchQueue.main.async {
                 vm.saveCanvasContent(json: json, svg: svg)
                 canvasHasUnsavedChanges = false
+            }
+        }
+    }
+
+    // MARK: - Mind Map read-only
+
+    @ViewBuilder
+    private func mindMapReadOnlyView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 0) {
+                editorStatusBanner(vm)
+                draftBanner(vm)
+                breadcrumbsBar(vm)
+                titleSection(vm, note: note)
+                Divider()
+
+                if let json = vm.contentString {
+                    MindMapNoteView(json: json)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Spacer()
+                }
+            }
+
+            if showFloatingEditButton {
+                floatingEditFAB(vm: vm)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 12)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                    .zIndex(2)
+            }
+        }
+        .onAppear {
+            let eligible = note.type.isEditable && !vm.needsProtectedSession && !vm.isEditing
+            if eligible {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = true
+                }
+            }
+        }
+        .onChange(of: vm.isEditing) { _, editing in
+            if editing {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = false
+                }
+            } else if note.type.isEditable && !vm.needsProtectedSession {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = true
+                }
+            }
+        }
+    }
+
+    // MARK: - Mind Map editing
+
+    @ViewBuilder
+    private func mindMapEditingView(_ vm: NoteDetailViewModel) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            MindMapEditorView(
+                initialJSON: vm.editableContent,
+                bridge: mindMapEditorBridge,
+                onMapChanged: { mindMapHasUnsavedChanges = true }
+            )
+            .onAppear {
+                mindMapHasUnsavedChanges = false
+            }
+
+            mindMapSaveChip(vm: vm)
+                .padding(.trailing, 16)
+                .padding(.bottom, 72)
+                .transition(.scale(scale: 0.88).combined(with: .opacity))
+                .zIndex(2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func mindMapSaveChip(vm: NoteDetailViewModel) -> some View {
+        Button {
+            saveMindMapContent(vm: vm)
+        } label: {
+            ZStack {
+                if vm.isSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image("SaveNoteFloating")
+                        .resizable()
+                        .renderingMode(.template)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 24, height: 24)
+                }
+            }
+            .foregroundStyle(.primary)
+            .frame(width: 48, height: 48)
+            .background(.ultraThinMaterial, in: Circle())
+            .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+        }
+        .buttonStyle(.plain)
+        .disabled(vm.isSaving)
+        .accessibilityLabel(String(localized: "Save", comment: "Mind map save chip"))
+    }
+
+    private func saveMindMapContent(vm: NoteDetailViewModel) {
+        mindMapEditorBridge.getMapData { json in
+            DispatchQueue.main.async {
+                vm.editableContent = json
+                vm.saveContent()
+                mindMapHasUnsavedChanges = false
             }
         }
     }
@@ -1600,6 +1721,7 @@ struct CreateChildNoteSheet: View {
                     Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
                     Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
                     Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
+                    Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
                 }
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))

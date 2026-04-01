@@ -66,14 +66,14 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
 
     var isEditable: Bool {
         switch self {
-        case .text, .code, .mermaid, .canvas: return true
+        case .text, .code, .mermaid, .canvas, .mindMap: return true
         default: return false
         }
     }
 
     var isRenderable: Bool {
         switch self {
-        case .text, .code, .image, .file, .book, .render, .mermaid: return true
+        case .text, .code, .image, .file, .book, .render, .mermaid, .mindMap: return true
         default: return false
         }
     }
@@ -100,12 +100,15 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     /// Minimal valid Excalidraw document for an empty canvas note (Trilium desktop compatible).
     static let emptyCanvasNoteJSON = "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[],\"files\":{},\"appState\":{}}"
 
+    /// Minimal MindElixir JSON for an empty mind map note.
+    static let emptyMindMapJSON = "{\"nodeData\":{\"id\":\"root\",\"topic\":\"New Mind Map\",\"root\":true,\"children\":[]}}"
+
     /// MIME type used when creating a new note of this type.
     var creationMime: String {
         switch self {
         case .code: return "text/plain"
         case .file: return "application/octet-stream"
-        case .canvas: return "application/json"
+        case .canvas, .mindMap: return "application/json"
         default: return "text/html"
         }
     }
@@ -114,6 +117,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     var creationInitialContent: String {
         switch self {
         case .canvas: return Self.emptyCanvasNoteJSON
+        case .mindMap: return Self.emptyMindMapJSON
         default: return ""
         }
     }

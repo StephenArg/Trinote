@@ -212,4 +212,11 @@ window.canvasBridge = {
   }
 };
 
-render(createElement(App), document.getElementById("root"));
+// Expose exportToSvg for the read-only canvas viewer (canvas-viewer.html)
+// which loads this same bundle but has no #root element.
+window.ExcalidrawUtils = { exportToSvg };
+
+const rootEl = document.getElementById("root");
+if (rootEl) {
+  render(createElement(App), rootEl);
+}

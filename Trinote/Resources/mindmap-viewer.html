@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="stylesheet" href="vendor/MindElixir.css">
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-touch-callout: none; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; touch-action: none; }
+    #map { width: 100%; height: 100%; }
+    #loading {
+        font-family: -apple-system, system-ui, sans-serif;
+        color: #888; font-size: 15px;
+        text-align: center; padding: 40px;
+        position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+    }
+    #error {
+        color: #e55;
+        font-family: -apple-system, system-ui, sans-serif;
+        font-size: 13px; padding: 12px 16px;
+        white-space: pre-wrap;
+        position: fixed; bottom: 0; left: 0; right: 0;
+        background: rgba(0,0,0,0.06);
+        display: none; z-index: 10;
+    }
+    @media (prefers-color-scheme: dark) {
+        #error { background: rgba(255,255,255,0.08); }
+    }
+</style>
+</head>
+<body>
+<div id="loading">Loading mind map…</div>
+<div id="map"></div>
+<div id="error"></div>
+
+<script src="vendor/MindElixir.iife.js"></script>
+<script>
+const ME = MindElixir.default || MindElixir;
+const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+let mind = null;
+
+window.mindmapViewer = {
+    load(jsonString) {
+        const loadEl = document.getElementById('loading');
+        const errEl = document.getElementById('error');
+        try {
+            const data = JSON.parse(jsonString);
+            loadEl.style.display = 'none';
+
+            mind = new ME({
+                el: '#map',
+                direction: data.direction || ME.SIDE,
+                draggable: true,
+                editable: false,
+                contextMenu: false,
+                toolBar: false,
+                nodeMenu: false,
+                keypress: false,
+                theme: isDark ? MindElixir.DARK_THEME : null
+            });
+            mind.init(data);
+        } catch (e) {
+            loadEl.style.display = 'none';
+            errEl.style.display = 'block';
+            errEl.textContent = 'Mind map error: ' + (e.message || e);
+        }
+    }
+};
+
+try {
+    window.webkit.messageHandlers.mindmapViewerReady.postMessage('ready');
+} catch(e) {}
+</script>
+</body>
+</html>

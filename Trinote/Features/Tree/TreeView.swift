@@ -982,6 +982,7 @@ private struct CreateChildNoteFromTreeSheet: View {
                     Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
                     Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
                     Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
+                    Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
                 }
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="stylesheet" href="vendor/MindElixir.css">
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-touch-callout: none; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; touch-action: none; }
+    #map { width: 100%; height: 100%; }
+    #loading {
+        font-family: -apple-system, system-ui, sans-serif;
+        color: #888; font-size: 15px;
+        text-align: center;
+        position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+    }
+    #error {
+        color: #e55;
+        font-family: -apple-system, system-ui, sans-serif;
+        font-size: 13px; padding: 12px 16px;
+        white-space: pre-wrap;
+        position: fixed; bottom: 0; left: 0; right: 0;
+        background: rgba(0,0,0,0.06);
+        display: none; z-index: 10;
+    }
+    @media (prefers-color-scheme: dark) {
+        #error { background: rgba(255,255,255,0.08); }
+    }
+
+    #link-popup {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        background: #fff;
+        border-radius: 10px;
+        box-shadow: 0 2px 16px rgba(0,0,0,0.18);
+        padding: 4px;
+        font-family: -apple-system, system-ui, sans-serif;
+    }
+    #link-popup button {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 16px;
+        border: none;
+        background: none;
+        font-size: 15px;
+        color: #e33;
+        border-radius: 8px;
+        -webkit-tap-highlight-color: transparent;
+    }
+    #link-popup button:active { background: rgba(0,0,0,0.06); }
+    @media (prefers-color-scheme: dark) {
+        #link-popup { background: #2c2c2e; box-shadow: 0 2px 16px rgba(0,0,0,0.5); }
+        #link-popup button { color: #ff6b6b; }
+        #link-popup button:active { background: rgba(255,255,255,0.08); }
+    }
+</style>
+</head>
+<body>
+<div id="loading">Loading mind map…</div>
+<div id="map"></div>
+<div id="error"></div>
+<div id="link-popup">
+    <button id="link-remove-btn">🗑 Remove</button>
+</div>
+
+<script src="vendor/MindElixir.iife.js"></script>
+<script>
+const ME = MindElixir.default || MindElixir;
+const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+let mind = null;
+
+window.mindmapEditor = {
+    load(jsonString) {
+        const loadEl = document.getElementById('loading');
+        const errEl = document.getElementById('error');
+        try {
+            const data = JSON.parse(jsonString);
+            loadEl.style.display = 'none';
+
+            mind = new ME({
+                el: '#map',
+                direction: data.direction || ME.SIDE,
+                draggable: true,
+                editable: true,
+                contextMenu: true,
+                toolBar: true,
+                nodeMenu: true,
+                keypress: true,
+                theme: isDark ? MindElixir.DARK_THEME : null
+            });
+            mind.init(data);
+
+            mind.bus.addListener('operation', function() {
+                try { window.webkit.messageHandlers.mindmapChanged.postMessage('changed'); } catch(e) {}
+            });
+
+            // Long-press to trigger context menu on touch devices.
+            // MindElixir uses long-press (500ms) for node dragging. We fire at 400ms
+            // and dispatch 'blur' to cancel MindElixir's drag timer, then show the
+            // context menu via the bus directly (bypassing the button===2 check).
+            // Also handles long-press on arrow/link SVGs to show a remove popup.
+            var cmTimer = null;
+            var cmPos = null;
+            var container = document.querySelector('.map-container');
+            var linkPopup = document.getElementById('link-popup');
+            var selectedArrowGroup = null;
+
+            function hideLinkPopup() {
+                linkPopup.style.display = 'none';
+                selectedArrowGroup = null;
+            }
+
+            // Find the arrow <g> element with arrowObj, matching MindElixir's own approach
+            function findArrowGroup(el) {
+                if (!el) return null;
+                // Walk up to check if we're inside the topiclinks SVG
+                var inTopicLinks = false;
+                var node = el;
+                while (node) {
+                    if (node.classList && node.classList.contains('topiclinks')) { inTopicLinks = true; break; }
+                    node = node.parentElement || node.parentNode;
+                }
+                if (!inTopicLinks) return null;
+                // Find the closest <g> with arrowObj (walk up from el)
+                var g = el.closest ? el.closest('g') : null;
+                while (g) {
+                    if (g.arrowObj) return g;
+                    g = g.parentElement || g.parentNode;
+                    if (!g || g.tagName === 'svg' || g.tagName === 'SVG') break;
+                    if (g.tagName !== 'g' && g.tagName !== 'G') {
+                        g = g.closest ? g.closest('g') : null;
+                    }
+                }
+                return null;
+            }
+
+            document.getElementById('link-remove-btn').addEventListener('click', function() {
+                if (selectedArrowGroup && mind) {
+                    mind.removeArrow(selectedArrowGroup);
+                }
+                hideLinkPopup();
+            });
+
+            document.addEventListener('touchstart', function(e) {
+                if (linkPopup.style.display !== 'none' && !linkPopup.contains(e.target)) {
+                    hideLinkPopup();
+                }
+            }, { passive: true });
+
+            container.addEventListener('touchstart', function(e) {
+                if (e.touches.length !== 1) { clearTimeout(cmTimer); cmPos = null; return; }
+                var touch = e.touches[0];
+                var el = document.elementFromPoint(touch.clientX, touch.clientY);
+
+                // Check for arrow/link SVG element
+                var arrowG = findArrowGroup(el);
+
+                // Check for node (me-tpc)
+                var tpc = el ? el.closest('me-tpc') : null;
+
+                if (arrowG) {
+                    cmPos = { x: touch.clientX, y: touch.clientY, arrow: arrowG };
+                    cmTimer = setTimeout(function() {
+                        if (!cmPos || !cmPos.arrow) return;
+                        selectedArrowGroup = cmPos.arrow;
+                        var px = cmPos.x;
+                        var py = cmPos.y - 50;
+                        if (py < 10) py = cmPos.y + 20;
+                        var pw = 120;
+                        if (px + pw > window.innerWidth) px = window.innerWidth - pw - 10;
+                        if (px < 10) px = 10;
+                        linkPopup.style.left = px + 'px';
+                        linkPopup.style.top = py + 'px';
+                        linkPopup.style.display = 'block';
+                        cmPos = null;
+                    }, 400);
+                } else if (tpc) {
+                    cmPos = { x: touch.clientX, y: touch.clientY, tpc: tpc };
+                    cmTimer = setTimeout(function() {
+                        if (!cmPos || !cmPos.tpc) return;
+                        container.dispatchEvent(new Event('blur'));
+                        mind.selectNode(cmPos.tpc);
+                        mind.bus.fire('showContextMenu', {
+                            clientX: cmPos.x, clientY: cmPos.y, target: cmPos.tpc
+                        });
+                        cmPos = null;
+                    }, 400);
+                } else {
+                    cmPos = null;
+                }
+            }, { passive: true });
+
+            container.addEventListener('touchmove', function(e) {
+                if (cmTimer && cmPos && e.touches.length === 1) {
+                    var t = e.touches[0];
+                    var dx = t.clientX - cmPos.x;
+                    var dy = t.clientY - cmPos.y;
+                    if (dx * dx + dy * dy > 100) {
+                        clearTimeout(cmTimer);
+                        cmPos = null;
+                    }
+                }
+            }, { passive: true });
+
+            container.addEventListener('touchend', function() {
+                clearTimeout(cmTimer);
+                cmPos = null;
+            }, { passive: true });
+        } catch (e) {
+            loadEl.style.display = 'none';
+            errEl.style.display = 'block';
+            errEl.textContent = 'Mind map error: ' + (e.message || e);
+        }
+    },
+
+    getData() {
+        if (!mind) return '{}';
+        return JSON.stringify(mind.getData());
+    }
+};
+
+try {
+    window.webkit.messageHandlers.mindmapEditorReady.postMessage('ready');
+} catch(e) {}
+</script>
+</body>
+</html>

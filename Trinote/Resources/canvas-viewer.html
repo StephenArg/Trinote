@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes">
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; background: transparent; overflow: auto; }
-    body { display: flex; align-items: center; justify-content: center; padding: 16px; }
-    svg { max-width: 100%; height: auto; }
+    html, body { width: 100%; background: transparent; }
+    body { padding: 16px; }
+    #canvas-svg { text-align: center; }
+    #canvas-svg svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
     #status { font-family: -apple-system, system-ui; color: #888; font-size: 15px;
               text-align: center; padding: 40px; }
     @media (prefers-color-scheme: dark) {
@@ -19,9 +20,11 @@
 <div id="status">Rendering canvas...</div>
 <div id="canvas-svg" style="display:none;"></div>
 
-<script type="module">
-import { exportToSvg } from 'https://esm.sh/@excalidraw/utils@0.2?bundle';
-
+<script>
+  window.EXCALIDRAW_ASSET_PATH = new URL("canvas-editor-assets/dist/prod/", window.location.href).toString();
+</script>
+<script src="canvas-editor-assets/excalidraw-bundle.js"></script>
+<script>
 window.canvasViewer = {
     async loadScene(jsonString) {
         const statusEl = document.getElementById('status');
@@ -39,7 +42,7 @@ window.canvasViewer = {
                 }
             }
 
-            const svg = await exportToSvg({
+            const svg = await window.ExcalidrawUtils.exportToSvg({
                 elements: elements,
                 files: files,
                 appState: {
@@ -50,12 +53,13 @@ window.canvasViewer = {
             });
 
             statusEl.style.display = 'none';
-            svgEl.style.display = 'flex';
+            svgEl.style.display = 'block';
             svgEl.appendChild(svg);
 
-            window.webkit.messageHandlers.canvasRendered.postMessage(
-                String(svg.getAttribute('height') || '400')
-            );
+            requestAnimationFrame(() => {
+                const h = document.body.scrollHeight;
+                window.webkit.messageHandlers.canvasRendered.postMessage(String(h || 400));
+            });
         } catch (e) {
             statusEl.textContent = 'Could not render canvas: ' + e.message;
             console.error(e);

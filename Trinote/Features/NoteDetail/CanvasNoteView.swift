@@ -210,7 +210,7 @@ private struct ExcalidrawReadOnlyWebView: UIViewRepresentable {
             case "canvasRendered":
                 if let str = message.body as? String, let h = Double(str), h > 0 {
                     DispatchQueue.main.async {
-                        self.onHeightChanged?(CGFloat(h) + 40)
+                        self.onHeightChanged?(CGFloat(h))
                     }
                 }
             default:
