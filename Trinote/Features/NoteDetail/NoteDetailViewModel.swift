@@ -1005,12 +1005,8 @@ final class NoteDetailViewModel {
         self.isSaving = true
         defer { self.isSaving = false }
 
-        let mime: String
-        switch self.newNoteType {
-        case .code: mime = "text/plain"
-        case .file: mime = "application/octet-stream"
-        default: mime = "text/html"
-        }
+        let mime = self.newNoteType.creationMime
+        let initial = self.newNoteType.creationInitialContent
 
         do {
             let (newId, _) = try persistence.createOfflineChildNote(
@@ -1018,7 +1014,7 @@ final class NoteDetailViewModel {
                 title: trimmed,
                 noteType: self.newNoteType.rawValue,
                 mime: mime,
-                initialContent: "",
+                initialContent: initial,
                 serverProfileId: profileId
             )
             self.showCreateChild = false

@@ -94,4 +94,27 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         default: return false
         }
     }
+
+    // MARK: - New note creation (offline + Trilium API)
+
+    /// Minimal valid Excalidraw document for an empty canvas note (Trilium desktop compatible).
+    static let emptyCanvasNoteJSON = "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[],\"files\":{},\"appState\":{}}"
+
+    /// MIME type used when creating a new note of this type.
+    var creationMime: String {
+        switch self {
+        case .code: return "text/plain"
+        case .file: return "application/octet-stream"
+        case .canvas: return "application/json"
+        default: return "text/html"
+        }
+    }
+
+    /// Initial body string for `createNote` / offline creation queue.
+    var creationInitialContent: String {
+        switch self {
+        case .canvas: return Self.emptyCanvasNoteJSON
+        default: return ""
+        }
+    }
 }

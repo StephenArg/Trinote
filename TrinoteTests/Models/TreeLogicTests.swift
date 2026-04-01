@@ -85,6 +85,15 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertFalse(NoteType.text.isAdvanced)
     }
 
+    func testNoteTypeCreationParameters() {
+        XCTAssertEqual(NoteType.text.creationMime, "text/html")
+        XCTAssertEqual(NoteType.text.creationInitialContent, "")
+        XCTAssertEqual(NoteType.code.creationMime, "text/plain")
+        XCTAssertEqual(NoteType.canvas.creationMime, "application/json")
+        XCTAssertEqual(NoteType.canvas.creationInitialContent, NoteType.emptyCanvasNoteJSON)
+        XCTAssertTrue(NoteType.emptyCanvasNoteJSON.contains("\"type\":\"excalidraw\""))
+    }
+
     func testNoteTypeFromRawValue() {
         XCTAssertEqual(NoteType(rawValue: "text"), .text)
         XCTAssertEqual(NoteType(rawValue: "noteMap"), .noteMap)

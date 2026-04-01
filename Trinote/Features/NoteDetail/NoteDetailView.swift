@@ -410,6 +410,8 @@ struct NoteDetailView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
                     .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+                } else if vm.isEditing && note.type == .mermaid {
+                    mermaidEditingView(vm)
                 } else if vm.isEditing && note.type == .canvas {
                     canvasEditingView(vm)
                 } else {
@@ -983,6 +985,21 @@ struct NoteDetailView: View {
         }
         .fullScreenCover(isPresented: $showEditorCamera) {
             CameraPickerView(imageToInsert: $imageToInsert) { showEditorCamera = false }
+        }
+    }
+
+    // MARK: - Mermaid editing
+
+    @ViewBuilder
+    private func mermaidEditingView(_ vm: NoteDetailViewModel) -> some View {
+        @Bindable var vm = vm
+        VStack(spacing: 0) {
+            editorStatusBanner(vm)
+            MermaidEditorView(
+                editableContent: $vm.editableContent,
+                onSave: { vm.saveContent() },
+                isSaving: vm.isSaving
+            )
         }
     }
 
@@ -1577,6 +1594,8 @@ struct CreateChildNoteSheet: View {
                 Picker(String(localized: "Type", comment: "New note type"), selection: $viewModel.newNoteType) {
                     Text(String(localized: "Text", comment: "Note type")).tag(NoteType.text)
                     Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
+                    Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
+                    Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
                 }
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))

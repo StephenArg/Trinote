@@ -980,6 +980,8 @@ private struct CreateChildNoteFromTreeSheet: View {
                 Picker(String(localized: "Type", comment: "New note type"), selection: $newNoteType) {
                     Text(String(localized: "Text", comment: "Note type")).tag(NoteType.text)
                     Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
+                    Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
+                    Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
                 }
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))

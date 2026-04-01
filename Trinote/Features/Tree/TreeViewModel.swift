@@ -429,12 +429,8 @@ final class TreeViewModel {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let profileId = serverProfileId, appState.isAuthenticated else { return nil }
 
-        let mime: String
-        switch type {
-        case .code: mime = "text/plain"
-        case .file: mime = "application/octet-stream"
-        default: mime = "text/html"
-        }
+        let mime = type.creationMime
+        let initial = type.creationInitialContent
 
         do {
             let (noteId, _) = try persistence.createOfflineChildNote(
@@ -442,7 +438,7 @@ final class TreeViewModel {
                 title: trimmed,
                 noteType: type.rawValue,
                 mime: mime,
-                initialContent: "",
+                initialContent: initial,
                 serverProfileId: profileId
             )
             await refresh()
