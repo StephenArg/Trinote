@@ -89,10 +89,56 @@ actor MockTriliumClient: TriliumClientProtocol {
         return try syncPullResult.get()
     }
 
-    func getNote(_ noteId: String) async throws -> NoteResponse {
+    func getNoteWithBranches(_ noteId: String) async throws -> (NoteResponse, [BranchResponse]) {
         getNoteCalls.append(noteId)
-        if let result = noteResults[noteId] { return try result.get() }
-        return TestFixtures.noteResponse(id: noteId, title: "Note \(noteId)")
+        let note: NoteResponse
+        if let result = noteResults[noteId] {
+            note = try result.get()
+        } else {
+            note = TestFixtures.noteResponse(id: noteId, title: "Note \(noteId)")
+        }
+        var branches: [BranchResponse] = []
+        for i in note.childBranchIds.indices {
+            let bid = note.childBranchIds[i]
+            let nid = i < note.childNoteIds.count ? note.childNoteIds[i] : bid
+            if let r = branchResults[bid] {
+                branches.append(try r.get())
+            } else {
+                branches.append(
+                    BranchResponse(
+                        branchId: bid,
+                        noteId: nid,
+                        parentNoteId: noteId,
+                        prefix: nil,
+                        notePosition: i,
+                        isExpanded: false,
+                        utcDateModified: nil
+                    )
+                )
+            }
+        }
+        return (note, branches)
+    }
+
+    func getNote(_ noteId: String) async throws -> NoteResponse {
+        try await getNoteWithBranches(noteId).0
+    }
+
+    var batchTreeLoadCalls: [[String]] = []
+
+    func batchTreeLoad(noteIds: [String]) async throws -> TreeLoadResponse {
+        batchTreeLoadCalls.append(noteIds)
+        return TreeLoadResponse(notes: [], branches: [], attributes: [])
+    }
+
+    func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry] {
+        var out: [FullSyncTreeBatchEntry] = []
+        for id in noteIds {
+            let (note, branches) = try await getNoteWithBranches(id)
+            if note.isDeleted { continue }
+            out.append(FullSyncTreeBatchEntry(note: note, childBranches: branches))
+        }
+        return out
     }
 
     func getNoteContent(_ noteId: String) async throws -> Data {

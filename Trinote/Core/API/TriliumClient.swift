@@ -25,6 +25,12 @@ protocol TriliumClientProtocol: Actor, Sendable {
 
     func getAppInfo() async throws -> AppInfoResponse
     func getNote(_ noteId: String) async throws -> NoteResponse
+    /// Same HTTP as `getNote`, but also returns child `BranchResponse`s from the shared `tree/load` payload (avoids N extra `tree/load` calls per parent).
+    func getNoteWithBranches(_ noteId: String) async throws -> (NoteResponse, [BranchResponse])
+    /// Batched `POST /api/tree/load` for full-sync BFS (multiple note IDs per request).
+    func batchTreeLoad(noteIds: [String]) async throws -> TreeLoadResponse
+    /// One batched `tree/load` plus parallel `GET /api/notes/:id` for each id, merged in request order.
+    func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry]
     func getNoteContent(_ noteId: String) async throws -> Data
     func updateNote(_ noteId: String, request: UpdateNoteRequest) async throws -> NoteResponse
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws
@@ -118,6 +124,33 @@ private struct NativeNoteDetailRow: Decodable {
     let dateModified: String?
     let utcDateCreated: String?
     let utcDateModified: String?
+
+    /// Used when `GET /api/notes/:id` fails but `tree/load` still returned a note row.
+    init(
+        noteId: String,
+        title: String?,
+        isProtected: Bool,
+        type: String,
+        mime: String,
+        blobId: String?,
+        isDeleted: Bool?,
+        dateCreated: String?,
+        dateModified: String?,
+        utcDateCreated: String?,
+        utcDateModified: String?
+    ) {
+        self.noteId = noteId
+        self.title = title
+        self.isProtected = isProtected
+        self.type = type
+        self.mime = mime
+        self.blobId = blobId
+        self.isDeleted = isDeleted
+        self.dateCreated = dateCreated
+        self.dateModified = dateModified
+        self.utcDateCreated = utcDateCreated
+        self.utcDateModified = utcDateModified
+    }
 }
 
 private enum TriliumHTTP {
@@ -635,9 +668,87 @@ actor TriliumClient: TriliumClientProtocol {
     // MARK: - Notes
 
     func getNote(_ noteId: String) async throws -> NoteResponse {
+        try await getNoteWithBranches(noteId).0
+    }
+
+    func getNoteWithBranches(_ noteId: String) async throws -> (NoteResponse, [BranchResponse]) {
         async let detailRow: NativeNoteDetailRow = try await get("/api/notes/\(noteId)", csrf: false)
         async let treeResponse: TreeLoadResponse = try await postJSON("/api/tree/load", body: TreeLoadRequest(noteIds: [noteId]), csrf: true)
-        return Self.buildNoteResponse(detail: try await detailRow, tree: try await treeResponse, noteId: noteId)
+        let detail = try await detailRow
+        let tree = try await treeResponse
+        let note = Self.buildNoteResponse(detail: detail, tree: tree, noteId: noteId)
+        let branches = Self.liveChildBranchResponses(tree: tree, parentNoteId: noteId)
+        return (note, branches)
+    }
+
+    func batchTreeLoad(noteIds: [String]) async throws -> TreeLoadResponse {
+        try await postJSON("/api/tree/load", body: TreeLoadRequest(noteIds: noteIds), csrf: true)
+    }
+
+    func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry] {
+        guard !noteIds.isEmpty else { return [] }
+        let tree: TreeLoadResponse = try await postJSON("/api/tree/load", body: TreeLoadRequest(noteIds: noteIds), csrf: true)
+        var rowsById: [String: TreeLoadNoteRow] = [:]
+        rowsById.reserveCapacity(tree.notes.count)
+        for n in tree.notes { rowsById[n.noteId] = n }
+        let details = await fetchNativeNoteDetailsParallel(noteIds: noteIds, maxConcurrency: 8)
+        var entries: [FullSyncTreeBatchEntry] = []
+        entries.reserveCapacity(noteIds.count)
+        for noteId in noteIds {
+            let detail: NativeNoteDetailRow
+            if let d = details[noteId] {
+                detail = d
+            } else if let row = rowsById[noteId] {
+                detail = Self.nativeDetailFallback(from: row)
+            } else {
+                continue
+            }
+            if detail.isDeleted == true { continue }
+            let note = Self.buildNoteResponse(detail: detail, tree: tree, noteId: noteId)
+            let childBranches = Self.liveChildBranchResponses(tree: tree, parentNoteId: noteId)
+            entries.append(FullSyncTreeBatchEntry(note: note, childBranches: childBranches))
+        }
+        return entries
+    }
+
+    /// Parallel `GET /api/notes/:id` for full sync; failures return no key (caller may fall back to `tree.notes`).
+    private func fetchNativeNoteDetailsParallel(noteIds: [String], maxConcurrency: Int) async -> [String: NativeNoteDetailRow] {
+        guard !noteIds.isEmpty else { return [:] }
+        return await withTaskGroup(of: (String, NativeNoteDetailRow?).self) { group in
+            var byId: [String: NativeNoteDetailRow] = [:]
+            byId.reserveCapacity(noteIds.count)
+            var index = 0
+            let ids = noteIds
+            let start = min(maxConcurrency, ids.count)
+            for _ in 0..<start {
+                let id = ids[index]
+                index += 1
+                group.addTask {
+                    do {
+                        let row: NativeNoteDetailRow = try await self.get("/api/notes/\(id)", csrf: false)
+                        return (id, row)
+                    } catch {
+                        return (id, nil)
+                    }
+                }
+            }
+            for await pair in group {
+                if let row = pair.1 { byId[pair.0] = row }
+                if index < ids.count {
+                    let id = ids[index]
+                    index += 1
+                    group.addTask {
+                        do {
+                            let row: NativeNoteDetailRow = try await self.get("/api/notes/\(id)", csrf: false)
+                            return (id, row)
+                        } catch {
+                            return (id, nil)
+                        }
+                    }
+                }
+            }
+            return byId
+        }
     }
 
     func getNoteContent(_ noteId: String) async throws -> Data {
@@ -1233,6 +1344,49 @@ actor TriliumClient: TriliumClientProtocol {
         guard let body = try? decoder.decode(ErrorBody.self, from: data) else { return nil }
         if let message = body.message { return message }
         return body.code
+    }
+
+    private static func nativeDetailFallback(from row: TreeLoadNoteRow) -> NativeNoteDetailRow {
+        NativeNoteDetailRow(
+            noteId: row.noteId,
+            title: row.title,
+            isProtected: row.isProtected,
+            type: row.type,
+            mime: row.mime,
+            blobId: row.blobId,
+            isDeleted: row.isDeleted,
+            dateCreated: nil,
+            dateModified: nil,
+            utcDateCreated: nil,
+            utcDateModified: nil
+        )
+    }
+
+    /// Child branches under `parentNoteId` as API models (same filtering as `buildNoteResponse`).
+    private static func liveChildBranchResponses(tree: TreeLoadResponse, parentNoteId: String) -> [BranchResponse] {
+        let childBranches = tree.branches.filter { $0.parentNoteId == parentNoteId }.sorted { $0.notePosition < $1.notePosition }
+        let deletedNoteIds: Set<String> = {
+            var ids = Set<String>()
+            for n in tree.notes where n.isDeleted == true {
+                ids.insert(n.noteId)
+            }
+            return ids
+        }()
+        let live = childBranches.filter { branch in
+            if branch.isDeleted == true { return false }
+            return !deletedNoteIds.contains(branch.noteId)
+        }
+        return live.map { row in
+            BranchResponse(
+                branchId: row.branchId,
+                noteId: row.noteId,
+                parentNoteId: row.parentNoteId,
+                prefix: row.prefix,
+                notePosition: row.notePosition,
+                isExpanded: row.isExpanded,
+                utcDateModified: nil
+            )
+        }
     }
 
     private static func buildNoteResponse(detail: NativeNoteDetailRow, tree: TreeLoadResponse, noteId: String) -> NoteResponse {

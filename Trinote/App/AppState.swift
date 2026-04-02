@@ -298,6 +298,11 @@ final class AppState {
                     Log.noteDiag.info(
                         "NoteDiag CREATE flush skipPostAttributes noteId=\(newId) reason=templateNoteId_applied_on_server parsedAttrCount=\(parsedAttrs.count)"
                     )
+                    await Self.applyCalendarJournalLabelsAfterTemplateCreateIfNeeded(
+                        client: client,
+                        noteId: newId,
+                        parsedAttrs: parsedAttrs
+                    )
                 }
                 if resolvedTemplateNoteId == nil {
                     for attr in parsedAttrs {
@@ -884,6 +889,44 @@ final class AppState {
             try? persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
         }
         try? persistence.commitBatch()
+    }
+
+    /// After `createNote` with `templateNoteId`, the server clones the template but the new note often lacks Trilium journal labels `#calendarRoot` and `#sorted`. Those remain in `parsedAttrs` from `NoteType.calendar.creationInitialAttributes`; apply them here so desktop and search treat the note as a calendar root.
+    private static func applyCalendarJournalLabelsAfterTemplateCreateIfNeeded(
+        client: any TriliumClientProtocol,
+        noteId: String,
+        parsedAttrs: [[String: Any]]
+    ) async {
+        let journalLabelNames: Set<String> = ["calendarRoot", "sorted"]
+        for attr in parsedAttrs {
+            guard (attr["type"] as? String) == "label",
+                  let name = attr["name"] as? String,
+                  journalLabelNames.contains(name)
+            else { continue }
+            let value: String
+            if let s = attr["value"] as? String {
+                value = s
+            } else if let n = attr["value"] as? NSNumber {
+                value = n.stringValue
+            } else {
+                value = ""
+            }
+            let inheritable = (attr["isInheritable"] as? Bool) ?? false
+            do {
+                try await client.createAttribute(CreateAttributeRequest(
+                    noteId: noteId,
+                    type: "label",
+                    name: name,
+                    value: value,
+                    isInheritable: inheritable ? true : nil,
+                    position: nil
+                ))
+            } catch {
+                Log.sync.warning(
+                    "createAttribute failed for journal label \(name) on \(noteId) after template create: \(error)"
+                )
+            }
+        }
     }
 
     /// Resolves a human-readable template title to a concrete note ID.

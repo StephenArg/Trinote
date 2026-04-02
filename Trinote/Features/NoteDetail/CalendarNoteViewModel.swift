@@ -365,6 +365,7 @@ final class CalendarNoteViewModel {
             serverProfileId: profileId,
             initialAttributes: [
                 NoteCreationAttribute(type: "label", name: "dateNote", value: isoDate),
+                NoteCreationAttribute(type: "label", name: "sorted", value: ""),
             ]
         )
         return noteId
@@ -563,15 +564,20 @@ final class CalendarNoteViewModel {
             templateNoteId: nil
         )
         let response = try await client.createNote(request)
+        let newId = response.note.noteId
         try await client.createAttribute(CreateAttributeRequest(
-            noteId: response.note.noteId,
+            noteId: newId,
             type: "label",
             name: "dateNote",
             value: isoDate,
             isInheritable: nil,
             position: nil
         ))
-        return response.note.noteId
+        try await client.createAttribute(CreateAttributeRequest(
+            noteId: newId, type: "label", name: "sorted", value: "",
+            isInheritable: nil, position: nil
+        ))
+        return newId
     }
 
     // MARK: - Calendar helpers

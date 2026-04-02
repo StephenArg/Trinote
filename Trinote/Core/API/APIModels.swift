@@ -133,6 +133,16 @@ struct BranchResponse: Decodable {
     let isExpanded: Bool
     /// Omitted in some native payloads (e.g. `/api/tree/load`).
     let utcDateModified: String?
+
+    init(branchId: String, noteId: String, parentNoteId: String, prefix: String?, notePosition: Int, isExpanded: Bool, utcDateModified: String?) {
+        self.branchId = branchId
+        self.noteId = noteId
+        self.parentNoteId = parentNoteId
+        self.prefix = prefix
+        self.notePosition = notePosition
+        self.isExpanded = isExpanded
+        self.utcDateModified = utcDateModified
+    }
 }
 
 struct CreateBranchRequest: Encodable {
@@ -315,6 +325,12 @@ struct TreeLoadResponse: Decodable {
     let notes: [TreeLoadNoteRow]
     let branches: [TreeLoadBranchRow]
     let attributes: [TreeLoadAttributeRow]
+}
+
+/// One note merged from batched `POST /api/tree/load` plus `GET /api/notes/:id` during full-sync tree walk.
+struct FullSyncTreeBatchEntry: Sendable {
+    let note: NoteResponse
+    let childBranches: [BranchResponse]
 }
 
 struct TreeLoadNoteRow: Decodable {

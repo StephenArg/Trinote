@@ -32,6 +32,8 @@ final class SyncManager {
     private var syncGeneration: UInt64 = 0
     private let persistence = PersistenceManager.shared
     private static let maxConcurrency = 8
+    /// `POST /api/tree/load` note IDs per request during full-sync BFS (split on failure).
+    private static let treeWalkBatchSize = 50
     private static let pullBatchLimit = 1000
 
     private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
@@ -165,7 +167,7 @@ final class SyncManager {
         Task.isCancelled || self.syncGeneration != generation
     }
 
-    // MARK: - Full Sync (tree walk — unchanged approach for initial data)
+    // MARK: - Full Sync (batched BFS tree walk + content + reconciliation)
 
     private func performFullSync(client: any TriliumClientProtocol, profileId: String, generation: UInt64) async {
         defer {
@@ -182,7 +184,7 @@ final class SyncManager {
         let syncStartedAt = Date.now
 
         do {
-            let serverNotes = try await self.walkTree(client: client, profileId: profileId)
+            let serverNotes = try await self.walkTree(client: client, profileId: profileId, generation: generation)
             if isStale(generation) { return }
 
             try? self.persistence.reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
@@ -580,79 +582,111 @@ final class SyncManager {
         _ = blobId
     }
 
-    // MARK: - Phase 1: Tree Walk (full sync only)
+    // MARK: - Phase 1: Tree Walk (full sync only, batched BFS)
+
+    private func fullSyncFetchTreeBatchWithSplit(
+        client: any TriliumClientProtocol,
+        noteIds: [String]
+    ) async throws -> [FullSyncTreeBatchEntry] {
+        do {
+            return try await client.fullSyncFetchTreeBatch(noteIds: noteIds)
+        } catch {
+            if noteIds.count > 1 {
+                let mid = noteIds.count / 2
+                let left = try await fullSyncFetchTreeBatchWithSplit(client: client, noteIds: Array(noteIds[..<mid]))
+                let right = try await fullSyncFetchTreeBatchWithSplit(client: client, noteIds: Array(noteIds[mid...]))
+                return left + right
+            }
+            throw error
+        }
+    }
 
     private func walkTree(
         client: any TriliumClientProtocol,
-        profileId: String
+        profileId: String,
+        generation: UInt64
     ) async throws -> [String: String] {
         var serverNotes: [String: String] = [:]
         var visited = Set<String>()
+        var frontier: [String] = ["root"]
+        var maxTotalEstimate = 1
 
-        try await self.walkNote(
-            noteId: "root",
-            client: client,
-            profileId: profileId,
-            serverNotes: &serverNotes,
-            visited: &visited
-        )
+        var knownNoteIds = try self.persistence.prefetchExistingNoteIds(serverProfileId: profileId)
+        var knownBranchIds = try self.persistence.prefetchExistingBranchIds(serverProfileId: profileId)
+        var knownAttributeIds = try self.persistence.prefetchExistingAttributeIds(serverProfileId: profileId)
+
+        while !frontier.isEmpty {
+            if isStale(generation) { return serverNotes }
+            if Task.isCancelled { return serverNotes }
+
+            maxTotalEstimate = max(maxTotalEstimate, visited.count + frontier.count)
+            self.totalNoteCount = maxTotalEstimate
+            self.syncProgress = min(0.99, Double(visited.count) / Double(max(maxTotalEstimate, 1)))
+
+            var batch: [String] = []
+            while batch.count < Self.treeWalkBatchSize, !frontier.isEmpty {
+                let id = frontier.removeFirst()
+                guard !visited.contains(id) else { continue }
+                guard !Self.hiddenNoteIds.contains(id) else { continue }
+                batch.append(id)
+            }
+            if batch.isEmpty { continue }
+
+            var entries = try await fullSyncFetchTreeBatchWithSplit(client: client, noteIds: batch)
+            var returnedIds = Set(entries.map(\.note.noteId))
+            for id in batch where !returnedIds.contains(id) {
+                guard !visited.contains(id), !Self.hiddenNoteIds.contains(id) else { continue }
+                do {
+                    let (note, branches) = try await client.getNoteWithBranches(id)
+                    if note.isDeleted {
+                        visited.insert(id)
+                        returnedIds.insert(id)
+                        continue
+                    }
+                    entries.append(FullSyncTreeBatchEntry(note: note, childBranches: branches))
+                    returnedIds.insert(note.noteId)
+                } catch {
+                    Log.sync.warning("Full sync tree walk: could not load note \(id): \(error)")
+                }
+            }
+
+            var nextNoteIds: [String] = []
+            for entry in entries {
+                if isStale(generation) { return serverNotes }
+                let response = entry.note
+                if response.isDeleted {
+                    visited.insert(response.noteId)
+                    continue
+                }
+                if visited.contains(response.noteId) { continue }
+                visited.insert(response.noteId)
+                serverNotes[response.noteId] = response.utcDateModified
+
+                try self.persistence.cacheNoteBatchForFullSync(from: response, serverProfileId: profileId, knownExisting: &knownNoteIds)
+                for attr in response.attributes {
+                    try? self.persistence.cacheAttributeBatchForFullSync(from: attr, serverProfileId: profileId, knownExisting: &knownAttributeIds)
+                }
+                for br in entry.childBranches {
+                    try? self.persistence.cacheBranchBatchForFullSync(from: br, serverProfileId: profileId, knownExisting: &knownBranchIds)
+                }
+
+                for cid in response.childNoteIds where !Self.hiddenNoteIds.contains(cid) {
+                    if !visited.contains(cid) {
+                        nextNoteIds.append(cid)
+                    }
+                }
+            }
+
+            try? self.persistence.commitBatch()
+            frontier.append(contentsOf: nextNoteIds)
+
+            self.syncedNoteCount = visited.count
+            maxTotalEstimate = max(maxTotalEstimate, visited.count + frontier.count)
+            self.totalNoteCount = maxTotalEstimate
+            self.syncProgress = min(0.99, Double(visited.count) / Double(max(maxTotalEstimate, 1)))
+        }
 
         return serverNotes
-    }
-
-    private func walkNote(
-        noteId: String,
-        client: any TriliumClientProtocol,
-        profileId: String,
-        serverNotes: inout [String: String],
-        visited: inout Set<String>
-    ) async throws {
-        guard !visited.contains(noteId) else { return }
-        visited.insert(noteId)
-        if Task.isCancelled { return }
-        if Self.hiddenNoteIds.contains(noteId) { return }
-
-        let response = try await client.getNote(noteId)
-        if response.isDeleted {
-            return
-        }
-        serverNotes[response.noteId] = response.utcDateModified
-
-        try self.persistence.cacheNoteBatch(from: response, serverProfileId: profileId)
-        for attr in response.attributes {
-            try? self.persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
-        }
-
-        let childBranchIds = response.childBranchIds
-        if childBranchIds.isEmpty {
-            try? self.persistence.commitBatch()
-            return
-        }
-
-        let branchResponses = try await self.fetchInParallel(
-            ids: childBranchIds,
-            maxConcurrency: Self.maxConcurrency
-        ) { branchId in
-            try await client.getBranch(branchId, parentNoteId: noteId)
-        }
-
-        for br in branchResponses {
-            try? self.persistence.cacheBranchBatch(from: br, serverProfileId: profileId)
-        }
-        try? self.persistence.commitBatch()
-
-        let childNoteIds = branchResponses.map(\.noteId)
-        for childId in childNoteIds {
-            if Task.isCancelled { return }
-            if Self.hiddenNoteIds.contains(childId) { continue }
-            try await self.walkNote(
-                noteId: childId,
-                client: client,
-                profileId: profileId,
-                serverNotes: &serverNotes,
-                visited: &visited
-            )
-        }
     }
 
     // MARK: - Phase 2: Content Download

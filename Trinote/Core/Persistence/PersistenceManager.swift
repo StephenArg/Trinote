@@ -210,6 +210,150 @@ final class PersistenceManager {
         try context.save()
     }
 
+    // MARK: - Full sync tree walk (prefetch + upsert without redundant existence checks)
+
+    func prefetchExistingNoteIds(serverProfileId: String) throws -> Set<String> {
+        let profileId = serverProfileId
+        let rows = try context.fetch(
+            FetchDescriptor<CachedNote>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        return Set(rows.map(\.noteId))
+    }
+
+    func prefetchExistingBranchIds(serverProfileId: String) throws -> Set<String> {
+        let profileId = serverProfileId
+        let rows = try context.fetch(
+            FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        return Set(rows.map(\.branchId))
+    }
+
+    func prefetchExistingAttributeIds(serverProfileId: String) throws -> Set<String> {
+        let profileId = serverProfileId
+        let rows = try context.fetch(
+            FetchDescriptor<CachedAttribute>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        return Set(rows.map(\.attributeId))
+    }
+
+    func cacheNoteBatchForFullSync(from response: NoteResponse, serverProfileId: String, knownExisting: inout Set<String>) throws {
+        if knownExisting.contains(response.noteId) {
+            guard let existing = try fetchCachedNote(id: response.noteId, serverProfileId: serverProfileId) else {
+                knownExisting.remove(response.noteId)
+                try cacheNoteBatchForFullSync(from: response, serverProfileId: serverProfileId, knownExisting: &knownExisting)
+                return
+            }
+            existing.title = response.title
+            existing.noteType = response.type
+            existing.mime = response.mime
+            existing.isProtected = response.isProtected
+            existing.parentNoteIds = response.parentNoteIds
+            existing.childNoteIds = response.childNoteIds
+            existing.parentBranchIds = response.parentBranchIds
+            existing.childBranchIds = response.childBranchIds
+            existing.metadataFetchedAt = .now
+        } else {
+            let cached = CachedNote(
+                noteId: response.noteId,
+                title: response.title,
+                noteType: response.type,
+                mime: response.mime,
+                isProtected: response.isProtected,
+                parentNoteIds: response.parentNoteIds,
+                childNoteIds: response.childNoteIds,
+                parentBranchIds: response.parentBranchIds,
+                childBranchIds: response.childBranchIds,
+                utcDateModified: nil,
+                serverProfileId: serverProfileId
+            )
+            context.insert(cached)
+            knownExisting.insert(response.noteId)
+        }
+    }
+
+    func cacheBranchBatchForFullSync(from response: BranchResponse, serverProfileId: String, knownExisting: inout Set<String>) throws {
+        if knownExisting.contains(response.branchId) {
+            guard let existing = try fetchCachedBranchById(branchId: response.branchId, serverProfileId: serverProfileId) else {
+                knownExisting.remove(response.branchId)
+                try cacheBranchBatchForFullSync(from: response, serverProfileId: serverProfileId, knownExisting: &knownExisting)
+                return
+            }
+            existing.noteId = response.noteId
+            existing.parentNoteId = response.parentNoteId
+            existing.prefix = response.prefix
+            existing.notePosition = response.notePosition
+            existing.isExpanded = response.isExpanded
+            existing.fetchedAt = .now
+        } else {
+            let cached = CachedBranch(
+                branchId: response.branchId,
+                noteId: response.noteId,
+                parentNoteId: response.parentNoteId,
+                prefix: response.prefix,
+                notePosition: response.notePosition,
+                isExpanded: response.isExpanded,
+                serverProfileId: serverProfileId
+            )
+            context.insert(cached)
+            knownExisting.insert(response.branchId)
+        }
+    }
+
+    func cacheAttributeBatchForFullSync(from response: AttributeResponse, serverProfileId: String, knownExisting: inout Set<String>) throws {
+        if knownExisting.contains(response.attributeId) {
+            guard let existing = try fetchCachedAttributeById(attributeId: response.attributeId, serverProfileId: serverProfileId) else {
+                knownExisting.remove(response.attributeId)
+                try cacheAttributeBatchForFullSync(from: response, serverProfileId: serverProfileId, knownExisting: &knownExisting)
+                return
+            }
+            existing.noteId = response.noteId
+            existing.type = response.type
+            existing.name = response.name
+            existing.value = response.value
+            existing.position = response.position
+            existing.isInheritable = response.isInheritable
+        } else {
+            let cached = CachedAttribute(
+                attributeId: response.attributeId,
+                noteId: response.noteId,
+                type: response.type,
+                name: response.name,
+                value: response.value,
+                position: response.position,
+                isInheritable: response.isInheritable,
+                serverProfileId: serverProfileId
+            )
+            context.insert(cached)
+            knownExisting.insert(response.attributeId)
+        }
+    }
+
+    private func fetchCachedBranchById(branchId: String, serverProfileId: String) throws -> CachedBranch? {
+        let bid = branchId
+        let profileId = serverProfileId
+        var descriptor = FetchDescriptor<CachedBranch>(
+            predicate: #Predicate { $0.branchId == bid && $0.serverProfileId == profileId }
+        )
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
+    private func fetchCachedAttributeById(attributeId: String, serverProfileId: String) throws -> CachedAttribute? {
+        let aid = attributeId
+        let profileId = serverProfileId
+        var descriptor = FetchDescriptor<CachedAttribute>(
+            predicate: #Predicate { $0.attributeId == aid && $0.serverProfileId == profileId }
+        )
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
     // MARK: - Cached Branches
 
     func cacheBranch(from response: BranchResponse, serverProfileId: String) throws {
