@@ -408,7 +408,7 @@ struct SearchResultRow: View {
                     .foregroundStyle(.quaternary)
             }
         }
-        .accessibilityLabel("\(displayTitle), \(note.type.displayName)")
+        .accessibilityLabel("\(displayTitle), \(note.uiNoteTypeDisplayName)")
     }
 }
 

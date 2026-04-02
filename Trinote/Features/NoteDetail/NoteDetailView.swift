@@ -99,6 +99,10 @@ struct NoteDetailView: View {
     @StateObject private var mindMapEditorBridge = MindMapEditorBridge()
     @State private var mindMapHasUnsavedChanges = false
 
+    /// Bridge to communicate with the geo map editor WKWebView.
+    @StateObject private var geoMapEditorBridge = GeoMapEditorBridge()
+    @State private var geoMapPins: [GeoMapPin] = []
+
     private var principalTitleText: String {
         if let n = viewModel?.note {
             return n.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
@@ -256,7 +260,7 @@ struct NoteDetailView: View {
 
     var body: some View {
         bodyCore
-            .background(NavigationPopGestureBlocker(blocked: viewModel?.isEditing == true).frame(width: 0, height: 0))
+            .background(NavigationPopGestureBlocker(blocked: viewModel?.isEditing == true || isGeoMapNote(viewModel?.note, contentString: viewModel?.contentString, vm: viewModel)).frame(width: 0, height: 0))
             .task(id: activeNoteId) { await initialLoad() }
             .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
                 NoteDetailView(noteId: linkedNoteId, title: "")
@@ -318,6 +322,7 @@ struct NoteDetailView: View {
             async let attachTask: () = vm.loadAttachments()
             await vm.loadChildNotes()
             _ = await (contentTask, attachTask)
+            await vm.prefetchChildNotesForGeoMapBookIfNeeded()
             if startInEditMode, vm.note != nil {
                 vm.isEditing = true
             }
@@ -369,7 +374,26 @@ struct NoteDetailView: View {
             .onChange(of: appState.syncManager.phase) { _, phase in
                 guard phase == .done else { return }
                 guard let vm = viewModel else { return }
-                Task { await vm.loadChildNotes() }
+                Task {
+                    await vm.loadChildNotes()
+                    guard let n = vm.note,
+                          isGeoMapNote(n, contentString: vm.contentString, vm: vm) else { return }
+                    loadGeoMapPins(vm: vm, note: n)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .trinoteTreeShouldRefresh)) { notification in
+                guard let vm = viewModel, let n = vm.note,
+                      isGeoMapNote(n, contentString: vm.contentString, vm: vm) else { return }
+                if let rid = notification.userInfo?["noteId"] as? String {
+                    guard rid == n.noteId || vm.childNotes.contains(where: { $0.noteId == rid }) else { return }
+                } else {
+                    return
+                }
+                Task {
+                    await vm.refreshDirectChildrenMetadataFromServer()
+                    guard let parent = vm.note else { return }
+                    loadGeoMapPins(vm: vm, note: parent)
+                }
             }
     }
 
@@ -404,9 +428,14 @@ struct NoteDetailView: View {
                     .buttonStyle(.bordered)
             }
         } else if let note = vm.note {
+            let _ = vm.geoMapDetectionTick
             VStack(spacing: 0) {
                 if vm.needsProtectedSession {
                     protectedNoteOverlay(vm, note: note)
+                } else if note.isCalendarRoot {
+                    calendarDetailView(vm, note: note)
+                } else if isGeoMapNote(note, contentString: vm.contentString, vm: vm) {
+                    geoMapDetailView(vm, note: note)
                 } else if vm.isEditing && note.type == .text {
                     VStack(spacing: 0) {
                         editorStatusBanner(vm)
@@ -882,9 +911,11 @@ struct NoteDetailView: View {
             if let json = vm.contentString {
                 MindMapNoteView(json: json)
             }
+        case .geoMap:
+            GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
         case .book:
-            if note.isCalendarRoot {
-                CalendarNoteView(calendarRootNote: note)
+            if isGeoMapNote(note, contentString: vm.contentString, vm: vm) {
+                GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
             } else {
                 BookNoteView(note: note)
             }
@@ -1188,6 +1219,283 @@ struct NoteDetailView: View {
         }
     }
 
+    // MARK: - Calendar (own layout to avoid nested ScrollViews)
+
+    @ViewBuilder
+    private func calendarDetailView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        VStack(spacing: 0) {
+            editorStatusBanner(vm)
+            draftBanner(vm)
+            breadcrumbsBar(vm)
+            titleSection(vm, note: note)
+            Divider()
+            CalendarNoteView(calendarRootNote: note)
+        }
+    }
+
+    // MARK: - Geo Map (map + scrollable sub-notes; long-press map to add pins)
+
+    /// Fixed band height for the map editor. A `GeometryReader` wrapping the whole column (including a flexible `ScrollView`) often collapses the WKWebView in navigation, so Leaflet sees 0×0 and shows nothing.
+    private static func geoMapEditorBandHeight() -> CGFloat {
+        let screenH = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .map { $0.screen.bounds.height }
+            .max() ?? 736
+        return min(460, max(280, screenH * 0.38))
+    }
+
+    @ViewBuilder
+    private func geoMapDetailView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        VStack(spacing: 0) {
+            editorStatusBanner(vm)
+            draftBanner(vm)
+            breadcrumbsBar(vm)
+            titleSection(vm, note: note)
+            Divider()
+
+            GeoMapEditorView(
+                viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString),
+                markers: geoMapPins,
+                bridge: geoMapEditorBridge,
+                onCreatePin: { lat, lng in
+                    handleGeoMapCreatePin(vm: vm, note: note, lat: lat, lng: lng)
+                },
+                onMovePin: { noteId, lat, lng in
+                    handleGeoMapMovePin(vm: vm, noteId: noteId, lat: lat, lng: lng)
+                },
+                onRemovePin: { noteId in
+                    handleGeoMapRemovePin(vm: vm, noteId: noteId)
+                },
+                onViewportChanged: { json in
+                    let canon = Self.canonicalGeoMapViewportJSONForTriliumDesktop(json)
+                    let trimmed = (vm.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard canon != trimmed else { return }
+                    vm.editableContent = canon
+                    vm.saveContent()
+                },
+                onOpenPinNote: { pinNoteId in
+                    navigateToNoteId = pinNoteId
+                }
+            )
+            .frame(height: Self.geoMapEditorBandHeight())
+            .frame(maxWidth: .infinity)
+            .clipped()
+
+            geoMapSubnotesScrollArea(vm: vm, mapParentNote: note)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            if !vm.hasDraft {
+                vm.editableContent = vm.contentString ?? ""
+            }
+            loadGeoMapPins(vm: vm, note: note)
+        }
+        .onChange(of: note.noteId) { _, _ in
+            geoMapPins = []
+            if !vm.hasDraft {
+                vm.editableContent = vm.contentString ?? ""
+            }
+            loadGeoMapPins(vm: vm, note: note)
+        }
+    }
+
+    @ViewBuilder
+    private func geoMapSubnotesScrollArea(vm: NoteDetailViewModel, mapParentNote: NoteItem) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: 16)
+                if vm.childNotes.isEmpty && !vm.isLoadingChildren {
+                    Text(
+                        String(
+                            localized: "Sub-notes appear here. Long-press the map to add a location.",
+                            comment: "Geo map: empty sub-note list hint below map"
+                        )
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+                }
+                childNotesSection(vm)
+                Color.clear.frame(minHeight: 80)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .refreshable {
+            await vm.refresh()
+            loadGeoMapPins(vm: vm, note: mapParentNote)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func loadGeoMapPins(vm: NoteDetailViewModel, note: NoteItem) {
+        Task {
+            let pins: [GeoMapPin]
+            if vm.client != nil, vm.isOnline {
+                pins = await vm.fetchGeoMapPinsFromServer(note: note)
+            } else {
+                pins = vm.geoMapPinsFromCache()
+            }
+            geoMapPins = pins
+        }
+    }
+
+    private func handleGeoMapCreatePin(vm: NoteDetailViewModel, note: NoteItem, lat: Double, lng: Double) {
+        Task {
+            guard let profileId = vm.serverProfileId else { return }
+            let title = String(localized: "New Location", comment: "Default title for new geo map pin")
+            do {
+                let (newNoteId, _) = try PersistenceManager.shared.createOfflineChildNote(
+                    parentNoteId: note.noteId,
+                    title: title,
+                    noteType: "text",
+                    mime: "text/html",
+                    initialContent: "",
+                    serverProfileId: profileId,
+                    initialAttributes: [
+                        NoteCreationAttribute(type: "label", name: "geolocation", value: "\(lat),\(lng)"),
+                        NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-map-pin")
+                    ]
+                )
+
+                let pin = GeoMapPin(noteId: newNoteId, title: title, lat: lat, lng: lng)
+                geoMapPins.append(pin)
+                geoMapEditorBridge.addPin(noteId: newNoteId, title: title, lat: lat, lng: lng)
+                await vm.loadChildNotes()
+                appState.backgroundSyncPendingChanges()
+            } catch {
+                Log.geoMap.error("Failed to create geo map pin: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func handleGeoMapMovePin(vm: NoteDetailViewModel, noteId: String, lat: Double, lng: Double) {
+        Task {
+            guard let client = vm.client else { return }
+            do {
+                let noteResp = try await client.getNote(noteId)
+                let noteItem = NoteItem(from: noteResp)
+                if let existingAttr = noteItem.attributes.first(where: { $0.type == .label && $0.name == "geolocation" }) {
+                    try await client.deleteAttribute(noteId: noteId, attributeId: existingAttr.attributeId)
+                }
+                try await client.createAttribute(CreateAttributeRequest(
+                    noteId: noteId, type: "label", name: "geolocation",
+                    value: "\(lat),\(lng)", isInheritable: nil, position: nil
+                ))
+                if let idx = geoMapPins.firstIndex(where: { $0.noteId == noteId }) {
+                    geoMapPins[idx] = GeoMapPin(noteId: noteId, title: geoMapPins[idx].title, lat: lat, lng: lng)
+                }
+                if let n = vm.note {
+                    loadGeoMapPins(vm: vm, note: n)
+                }
+            } catch {
+                Log.geoMap.error("Failed to move geo map pin: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func handleGeoMapRemovePin(vm: NoteDetailViewModel, noteId: String) {
+        Task {
+            let ok = await vm.deleteChildNote(noteId: noteId)
+            guard ok else { return }
+            if vm.client != nil, vm.isOnline {
+                await vm.refreshDirectChildrenMetadataFromServer()
+            } else {
+                await vm.loadChildNotes()
+            }
+            if let n = vm.note {
+                loadGeoMapPins(vm: vm, note: n)
+            }
+        }
+    }
+
+    /// Rewrites geo map blob to Trilium desktop’s shape: `{ "view": { "center": { "lat", "lng" }, "zoom" } }`.
+    /// Fixes legacy top-level `{ center, zoom }`, and bad longitude keys (`Ing` vs `lng`) so Leaflet on desktop can parse.
+    private static func canonicalGeoMapViewportJSONForTriliumDesktop(_ raw: String) -> String {
+        guard let data = raw.data(using: .utf8),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return raw
+        }
+        var view = root["view"] as? [String: Any]
+        if view == nil, root["center"] != nil, root["zoom"] != nil {
+            view = ["center": root["center"] as Any, "zoom": root["zoom"] as Any]
+        }
+        guard var viewDict = view, let zoom = viewDict["zoom"] else { return raw }
+
+        let centerAny = viewDict["center"]
+        var latVal: Double?
+        var lngVal: Double?
+
+        if let arr = centerAny as? [Any], arr.count >= 2 {
+            latVal = doubleFromJSONNumber(arr[0])
+            lngVal = doubleFromJSONNumber(arr[1])
+        } else if let dict = centerAny as? [String: Any] {
+            latVal = doubleFromJSONNumber(dict["lat"])
+            lngVal = doubleFromJSONNumber(dict["lng"])
+                ?? doubleFromJSONNumber(dict["Ing"])
+                ?? doubleFromJSONNumber(dict["long"])
+                ?? doubleFromJSONNumber(dict["lon"])
+        }
+
+        guard let lat = latVal, let lng = lngVal else { return raw }
+
+        let canonical: [String: Any] = [
+            "view": [
+                "center": ["lat": lat, "lng": lng],
+                "zoom": zoom
+            ]
+        ]
+        guard let out = try? JSONSerialization.data(withJSONObject: canonical, options: [.sortedKeys]),
+              let s = String(data: out, encoding: .utf8) else { return raw }
+        return s
+    }
+
+    private static func doubleFromJSONNumber(_ any: Any?) -> Double? {
+        if let n = any as? NSNumber { return n.doubleValue }
+        if let d = any as? Double { return d }
+        if let i = any as? Int { return Double(i) }
+        if let s = any as? String { return Double(s) }
+        return nil
+    }
+
+    /// JSON body shape Trilium uses for geo map viewport (`view.center` + `view.zoom`).
+    /// Also accepts legacy Trinote saves that omitted the `view` wrapper.
+    private func geoMapViewportJSONMatches(_ contentString: String?) -> Bool {
+        guard let content = contentString, !content.isEmpty,
+              let data = content.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        func hasZoom(_ any: Any?) -> Bool { any is NSNumber }
+        if let view = obj["view"] as? [String: Any], view["center"] != nil, hasZoom(view["zoom"]) {
+            return true
+        }
+        if obj["center"] != nil, hasZoom(obj["zoom"]) { return true }
+        return false
+    }
+
+    /// Detects geo map notes: semantic geo (`geoMap` or `book` + `#viewType=geoMap`), viewport JSON in the body, or `book` with a child that has `#geolocation` in cache.
+    /// Calendar roots are excluded even if children have geolocation labels.
+    private func isGeoMapNote(_ note: NoteItem?, contentString: String?, vm: NoteDetailViewModel?) -> Bool {
+        guard let note else { return false }
+        if note.isCalendarRoot { return false }
+        if note.isSemanticGeoMap { return true }
+        if geoMapViewportJSONMatches(contentString) { return true }
+        if note.type == .book, let vm, vm.cachedAnyChildHasGeolocationLabel() { return true }
+        return false
+    }
+
+    /// Valid Trilium-shaped viewport JSON for map WebViews; defaults when body is empty or not yet loaded.
+    private func effectiveGeoMapViewportJSONForDisplay(_ contentString: String?) -> String {
+        let trimmed = (contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, geoMapViewportJSONMatches(contentString) else {
+            return NoteType.emptyGeoMapJSON
+        }
+        return Self.canonicalGeoMapViewportJSONForTriliumDesktop(trimmed)
+    }
+
     private func handleEditorImagePick(_ item: PhotosPickerItem) async {
         defer { editorImageItem = nil }
         guard let data = try? await item.loadTransferable(type: Data.self) else { return }
@@ -1288,7 +1596,7 @@ struct NoteDetailView: View {
             Divider()
             Group {
                 LabeledContent(String(localized: "Note ID", comment: "Metadata field"), value: note.noteId)
-                LabeledContent(String(localized: "Type", comment: "Metadata field"), value: note.type.displayName)
+                LabeledContent(String(localized: "Type", comment: "Metadata field"), value: note.uiNoteTypeDisplayName)
                 LabeledContent(String(localized: "MIME", comment: "Metadata field"), value: note.mime)
                 if !note.dateCreated.isEmpty {
                     LabeledContent(String(localized: "Created", comment: "Metadata field"), value: note.dateCreated)
@@ -1722,6 +2030,8 @@ struct CreateChildNoteSheet: View {
                     Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
                     Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
                     Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
+                    Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
+                    Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
                 }
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))

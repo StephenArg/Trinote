@@ -16,10 +16,8 @@ struct CalendarNoteView: View {
                 ProgressView()
             }
         }
-        .onAppear {
-            if vm == nil {
-                vm = CalendarNoteViewModel(calendarRootId: calendarRootNote.noteId, appState: appState)
-            }
+        .task(id: calendarRootNote.noteId) {
+            vm = CalendarNoteViewModel(calendarRootId: calendarRootNote.noteId, appState: appState)
         }
         .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
             NoteDetailView(noteId: linkedNoteId, title: "")

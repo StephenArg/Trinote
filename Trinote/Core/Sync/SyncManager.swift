@@ -238,6 +238,7 @@ final class SyncManager {
             self.lastCompletedSyncUpdatedLocalDatabase = true
             self.phase = .done
             self.syncProgress = 1.0
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
             Log.sync.info("Full sync complete: \(self.syncedNoteCount) notes synced")
 
         } catch {
@@ -409,6 +410,7 @@ final class SyncManager {
             self.lastIncrementalSyncDate = .now
             self.phase = .done
             self.syncProgress = 1.0
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
             Log.sync.info(
                 "Incremental sync complete: \(self.syncedNoteCount) notes updated, \(deletionCount) deletions\(downloadChangedBodies ? "" : " (metadata only)")"
             )

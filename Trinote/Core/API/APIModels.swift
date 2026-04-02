@@ -245,6 +245,9 @@ struct CreateNoteRequest: Encodable {
     let isProtected: Bool?
     let noteId: String?
     let branchId: String?
+    /// When set, the server applies the template atomically: copies content/type/mime/children
+    /// and adds a `~template` relation. Matches Trilium desktop's `createNote` behaviour.
+    let templateNoteId: String?
 }
 
 struct CreateNoteResponse: Decodable {

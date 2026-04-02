@@ -133,15 +133,6 @@ struct TreeView: View {
         treeViewChromeAndDestinations
             .alert(String(localized: "Delete Note", comment: "Tree delete alert title"), isPresented: noteToDeleteBinding, actions: deleteNoteActions, message: deleteNoteMessage)
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
-            .onChange(of: appState.syncManager.phase) { _, phase in
-                if phase == .done {
-                    // Sync already merged into SwiftData — rebuild the list from cache instead of refetching the whole tree from the API.
-                    self.viewModel?.pruneDeletedNodes()
-                    if self.appState.syncManager.lastCompletedSyncUpdatedLocalDatabase {
-                        self.viewModel?.reloadFromCache()
-                    }
-                }
-            }
             .onReceive(NotificationCenter.default.publisher(for: .noteDeleted)) { _ in
                 triggerSyncAndReload()
             }
@@ -272,8 +263,8 @@ struct TreeView: View {
 
     private func handleTreeShouldRefresh(_ notification: Notification) {
         let nid = notification.userInfo?["noteId"] as? String
-        Log.api.debug("[TreeView] trinoteTreeShouldRefresh received – noteId=\(nid ?? "nil")")
         guard let nid else {
+            self.viewModel?.pruneDeletedNodes()
             self.viewModel?.reloadFromCache()
             return
         }
@@ -285,7 +276,6 @@ struct TreeView: View {
             do {
                 let response = try await client.getNote(nid)
                 let item = NoteItem(from: response)
-                Log.api.debug("[TreeView] trinoteTreeShouldRefresh – calling applyNoteMetadataPatch for \(nid)")
                 vm.applyNoteMetadataPatch(noteId: nid, newNote: item, animateList: false)
             } catch {
                 vm.reloadFromCache()
@@ -491,10 +481,7 @@ struct TreeView: View {
     }
 
     private func triggerSyncAndReload() {
-        Task {
-            await self.appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
-            // refresh() is triggered by onChange(of: phase == .done)
-        }
+        Task { await refreshWithSync() }
     }
 
     private func refreshWithSync() async {
@@ -954,7 +941,7 @@ struct TreeNodeRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        .accessibilityLabel("\(displayTitle), \(node.note.type.displayName) note")
+        .accessibilityLabel("\(displayTitle), \(node.note.uiNoteTypeDisplayName) note")
     }
 }
 
@@ -983,6 +970,8 @@ private struct CreateChildNoteFromTreeSheet: View {
                     Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
                     Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
                     Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
+                    Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
+                    Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
                 }
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))

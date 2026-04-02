@@ -134,6 +134,8 @@ final class AppState {
             for w in waiters { w.resume() }
         }
         await flushPendingNoteCreationsIfPossible(assumeSessionIsReady: assumeSessionIsReady)
+        await flushPendingNotePatchesIfPossible(assumeSessionIsReady: true)
+        await flushPendingNoteDeletionsIfPossible(assumeSessionIsReady: true)
         await flushPendingBranchMovesIfPossible(assumeSessionIsReady: true)
         await flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
     }
@@ -150,8 +152,10 @@ final class AppState {
             // run one more pass so the latest content reaches the server.
             guard let pid = self.activeProfile?.id else { return }
             let hasCreations = (try? self.persistence.fetchPendingNoteCreations(serverProfileId: pid))?.isEmpty == false
+            let hasPatches = (try? self.persistence.fetchPendingNotePatches(serverProfileId: pid))?.isEmpty == false
+            let hasDeletions = (try? self.persistence.fetchPendingNoteDeletions(serverProfileId: pid))?.isEmpty == false
             let hasUploads = (try? self.persistence.fetchPendingNoteBodyUploads(serverProfileId: pid))?.isEmpty == false
-            if hasCreations || hasUploads {
+            if hasCreations || hasPatches || hasDeletions || hasUploads {
                 await self.flushPendingLocalChangesIfPossible()
             }
         }
@@ -195,22 +199,83 @@ final class AppState {
             }
             guard let row = rows.first else { break }
             let resolvedParent = idMap[row.parentNoteId] ?? row.parentNoteId
+
+            // Pre-parse attributes to find & resolve ~template before createNote.
+            var parsedAttrs: [[String: Any]] = []
+            var resolvedTemplateNoteId: String?
+            var templateTitleFromAttrs: String?
+            let attrsJSON = row.initialAttributesJSON
+            if attrsJSON != "[]", !attrsJSON.isEmpty,
+               let data = attrsJSON.data(using: .utf8),
+               let raw = try? JSONSerialization.jsonObject(with: data) as? [Any] {
+                for item in raw {
+                    guard let attr = item as? [String: Any] else { continue }
+                    parsedAttrs.append(attr)
+                }
+                for attr in parsedAttrs {
+                    guard let type = attr["type"] as? String, type == "relation",
+                          let name = attr["name"] as? String, name == "template",
+                          let value = attr["value"] as? String else { continue }
+                    templateTitleFromAttrs = value
+                    resolvedTemplateNoteId = await Self.resolveTemplateTitle(client: client, title: value)
+                    break
+                }
+            }
+            if let templateTitleFromAttrs, resolvedTemplateNoteId == nil {
+                Log.sync.warning(
+                    "Could not resolve template title '\(templateTitleFromAttrs)' for pending note \(row.localNoteId); falling back to non-template create."
+                )
+            }
+
+            // Templates only clone attributes; the create request's content is always the
+            // note's own body. Sending empty content here used to discard the initial
+            // viewport JSON for geo maps (and any other initial body).
+            let contentToSend = row.initialContent
+
             let request = CreateNoteRequest(
                 parentNoteId: resolvedParent,
                 title: row.title,
                 type: row.noteType,
                 mime: row.mime,
-                content: row.initialContent,
+                content: contentToSend,
                 notePosition: nil,
                 prefix: nil,
                 isProtected: nil,
                 noteId: nil,
-                branchId: nil
+                branchId: nil,
+                templateNoteId: resolvedTemplateNoteId
+            )
+            let attrsForLog: String = {
+                let raw = row.initialAttributesJSON
+                if raw.count > 2800 {
+                    return String(raw.prefix(2800)) + "…(+\(raw.count - 2800) chars)"
+                }
+                return raw
+            }()
+            let flushCreateLog = NoteDiagnostics.describeFlushPendingCreate(
+                localNoteId: row.localNoteId,
+                resolvedParent: resolvedParent,
+                title: row.title,
+                noteType: row.noteType,
+                mime: row.mime,
+                initialContentLen: row.initialContent.count,
+                contentToSendLen: contentToSend.count,
+                templateTitleFromAttrs: templateTitleFromAttrs,
+                resolvedTemplateNoteId: resolvedTemplateNoteId,
+                attrsJSONTruncated: attrsForLog,
+                willPostCreateAttributes: resolvedTemplateNoteId == nil
+            )
+            Log.noteDiag.info("\(flushCreateLog)")
+            Log.sync.info(
+                "Flushing pending create \(row.localNoteId) type=\(row.noteType) templateNoteId=\(resolvedTemplateNoteId ?? "nil")"
             )
             do {
                 let response = try await client.createNote(request)
                 let newId = response.note.noteId
                 idMap[row.localNoteId] = newId
+
+                // Apply cache + dequeue **before** attributes. If any `createAttribute` fails, we must not
+                // leave the row queued or the next flush would call `createNote` again (duplicate notes).
                 try persistence.applyOfflineNoteCreationServerResult(
                     queueRowId: row.id,
                     localNoteId: row.localNoteId,
@@ -223,6 +288,70 @@ final class AppState {
                     object: nil,
                     userInfo: ["from": row.localNoteId, "to": newId]
                 )
+
+                // When templateNoteId was provided, the server handles everything:
+                // ~template relation, content, type/mime, and child subtree. All other
+                // attributes are inherited from the template — adding them directly
+                // creates duplicates that break the desktop layout system.
+                // Only add attributes when no template was resolved (plain note).
+                if resolvedTemplateNoteId != nil {
+                    Log.noteDiag.info(
+                        "NoteDiag CREATE flush skipPostAttributes noteId=\(newId) reason=templateNoteId_applied_on_server parsedAttrCount=\(parsedAttrs.count)"
+                    )
+                }
+                if resolvedTemplateNoteId == nil {
+                    for attr in parsedAttrs {
+                        guard let type = attr["type"] as? String,
+                              let name = attr["name"] as? String else { continue }
+                        if type == "relation", name == "template" {
+                            guard let value = attr["value"] as? String else { continue }
+                            let fallbackId = await Self.resolveTemplateTitle(client: client, title: value)
+                            guard let resolvedId = fallbackId else {
+                                Log.sync.warning("Skipping unresolvable ~template for note \(newId) (title: \(value))")
+                                continue
+                            }
+                            do {
+                                try await client.createAttribute(CreateAttributeRequest(
+                                    noteId: newId, type: type, name: name,
+                                    value: resolvedId, isInheritable: nil, position: nil
+                                ))
+                            } catch {
+                                Log.sync.warning("createAttribute failed for ~template on \(newId): \(error)")
+                            }
+                            continue
+                        }
+                        let value: String
+                        if let s = attr["value"] as? String {
+                            value = s
+                        } else if let n = attr["value"] as? NSNumber {
+                            value = n.stringValue
+                        } else {
+                            continue
+                        }
+                        let inheritable = (attr["isInheritable"] as? Bool) ?? false
+                        do {
+                            try await client.createAttribute(CreateAttributeRequest(
+                                noteId: newId, type: type, name: name,
+                                value: value,
+                                isInheritable: inheritable ? true : nil,
+                                position: nil
+                            ))
+                        } catch {
+                            Log.sync.warning(
+                                "createAttribute failed for flushed note \(newId) (\(type)/\(name)): \(error)"
+                            )
+                        }
+                    }
+                }
+
+                if let fresh = try? await client.getNote(newId) {
+                    let postCreatePhase = "create.flush.postGetNote serverId=\(newId)"
+                    Log.noteDiag.info("\(NoteDiagnostics.describeNoteResponse(fresh, phase: postCreatePhase))")
+                    Self.persistNoteResponseToCache(fresh, profileId: profileId, persistence: persistence)
+                } else {
+                    Log.noteDiag.warning("NoteDiag CREATE flush postGetNote failed for serverId=\(newId)")
+                }
+
                 didApplyAny = true
                 Log.sync.info("Flushed offline-created note \(row.localNoteId) → \(newId)")
             } catch {
@@ -231,6 +360,108 @@ final class AppState {
             }
         }
         if didApplyAny {
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        }
+    }
+
+    /// Pushes queued title changes (`PendingNotePatch`) to the server.
+    func flushPendingNotePatchesIfPossible(assumeSessionIsReady: Bool = false) async {
+        guard networkMonitor.isConnected,
+              let client,
+              let profile = activeProfile
+        else { return }
+        let profileId = profile.id
+        let pending: [PendingNotePatch]
+        do {
+            pending = try persistence.fetchPendingNotePatches(serverProfileId: profileId)
+        } catch {
+            Log.sync.warning("Failed to read pending note patches: \(error)")
+            return
+        }
+        guard !pending.isEmpty else { return }
+        if !assumeSessionIsReady, let tc = client as? TriliumClient {
+            do {
+                try await restoreSessionWithTimeout(client: tc, seconds: 10)
+            } catch {
+                Log.sync.warning("Pending note patch flush skipped — session refresh failed: \(error)")
+                return
+            }
+        }
+        if protectedSessionActive {
+            try? await client.touchProtectedSession()
+        }
+        var didAny = false
+        for row in pending {
+            do {
+                let updated = try await client.updateNote(row.noteId, request: UpdateNoteRequest(title: row.title, type: nil, mime: nil))
+                if let cached = try? persistence.fetchCachedNote(id: row.noteId, serverProfileId: profileId) {
+                    cached.title = updated.title
+                }
+                try persistence.deletePendingNotePatch(noteId: row.noteId, serverProfileId: profileId)
+                didAny = true
+                Log.sync.info("Flushed offline title patch for note \(row.noteId)")
+            } catch {
+                let apiErr = APIError.from(error)
+                if case .notFound = apiErr {
+                    try? persistence.deletePendingNotePatch(noteId: row.noteId, serverProfileId: profileId)
+                    didAny = true
+                } else {
+                    Log.sync.warning("Pending note patch failed for \(row.noteId): \(error)")
+                    break
+                }
+            }
+        }
+        if didAny {
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        }
+    }
+
+    /// Pushes queued note deletions (`PendingNoteDeletion`) to the server. Treats 404 (already gone) as success.
+    func flushPendingNoteDeletionsIfPossible(assumeSessionIsReady: Bool = false) async {
+        guard networkMonitor.isConnected,
+              let client,
+              let profile = activeProfile
+        else { return }
+        let profileId = profile.id
+        let pending: [PendingNoteDeletion]
+        do {
+            pending = try persistence.fetchPendingNoteDeletions(serverProfileId: profileId)
+        } catch {
+            Log.sync.warning("Failed to read pending note deletions: \(error)")
+            return
+        }
+        guard !pending.isEmpty else { return }
+        if !assumeSessionIsReady, let tc = client as? TriliumClient {
+            do {
+                try await restoreSessionWithTimeout(client: tc, seconds: 10)
+            } catch {
+                Log.sync.warning("Pending note deletion flush skipped — session refresh failed: \(error)")
+                return
+            }
+        }
+        if protectedSessionActive {
+            try? await client.touchProtectedSession()
+        }
+        var didAny = false
+        for row in pending {
+            do {
+                try await client.deleteNote(row.noteId)
+                try persistence.deletePendingNoteDeletion(id: row.id, serverProfileId: profileId)
+                didAny = true
+                Log.sync.info("Flushed offline-queued deletion for note \(row.noteId)")
+            } catch {
+                let apiErr = APIError.from(error)
+                if case .notFound = apiErr {
+                    try? persistence.deletePendingNoteDeletion(id: row.id, serverProfileId: profileId)
+                    didAny = true
+                    Log.sync.info("Note \(row.noteId) already deleted on server, removed queue entry")
+                } else {
+                    Log.sync.warning("Pending note deletion failed for \(row.noteId): \(error)")
+                    break
+                }
+            }
+        }
+        if didAny {
             NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
         }
     }
@@ -642,6 +873,159 @@ final class AppState {
             startRealtimeIfPossible()
         } catch {
             connectionError = APIError.from(error).localizedDescription
+        }
+    }
+
+    // MARK: - Offline flush helpers
+
+    private static func persistNoteResponseToCache(_ response: NoteResponse, profileId: String, persistence: PersistenceManager) {
+        try? persistence.cacheNote(from: response, serverProfileId: profileId)
+        for attr in response.attributes {
+            try? persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
+        }
+        try? persistence.commitBatch()
+    }
+
+    /// Resolves a human-readable template title to a concrete note ID.
+    /// Uses fast search first, then falls back to scanning `_templates` children directly.
+    /// This handles title variants across Trilium versions (e.g. "Geo Map", "GeoMap", "Geo Map (beta)").
+    private static func resolveTemplateTitle(client: any TriliumClientProtocol, title: String) async -> String? {
+        let raw = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = normalizeTemplateTitle(raw)
+        var titlesToTry: [String] = [raw]
+        var preferredType: String?
+        if normalized == "geomap" {
+            titlesToTry = ["Geo Map", "GeoMap", "Geo Map (beta)"]
+            preferredType = "geoMap"
+        } else if normalized == "calendar" {
+            titlesToTry = ["Calendar"]
+        }
+
+        // 1) Fast search by title (cheap and usually enough).
+        for t in titlesToTry {
+            if let id = await resolveTemplateRelationTargetNoteId(client: client, title: t) {
+                return id
+            }
+        }
+
+        // 2) Fallback: desktop's own endpoint (`/api/search-templates`) + note fetch.
+        if let id = await resolveTemplateFromSearchTemplates(client: client, preferredTitles: titlesToTry, preferredType: preferredType) {
+            return id
+        }
+
+        // 3) Fallback: inspect `_templates` children directly and match by title/type.
+        if let id = await resolveTemplateFromTemplatesRoot(
+            client: client,
+            preferredTitles: titlesToTry,
+            preferredType: preferredType
+        ) {
+            return id
+        }
+
+        return nil
+    }
+
+    private static func resolveTemplateFromSearchTemplates(
+        client: any TriliumClientProtocol,
+        preferredTitles: [String],
+        preferredType: String?
+    ) async -> String? {
+        guard let tc = client as? TriliumClient,
+              let ids = try? await tc.searchTemplateNoteIds(),
+              !ids.isEmpty
+        else {
+            return nil
+        }
+
+        var candidates: [NoteResponse] = []
+        for id in ids {
+            if let note = try? await client.getNote(id), !note.isDeleted {
+                candidates.append(note)
+            }
+        }
+        guard !candidates.isEmpty else { return nil }
+
+        for wanted in preferredTitles {
+            if let match = candidates.first(where: { $0.title.caseInsensitiveCompare(wanted) == .orderedSame }) {
+                return match.noteId
+            }
+        }
+
+        let normalizedWanted = Set(preferredTitles.map(normalizeTemplateTitle))
+        if let match = candidates.first(where: { normalizedWanted.contains(normalizeTemplateTitle($0.title)) }) {
+            return match.noteId
+        }
+
+        if let preferredType, let match = candidates.first(where: { $0.type == preferredType }) {
+            return match.noteId
+        }
+        return nil
+    }
+
+    private static func resolveTemplateFromTemplatesRoot(
+        client: any TriliumClientProtocol,
+        preferredTitles: [String],
+        preferredType: String?
+    ) async -> String? {
+        guard let templatesRoot = try? await client.getNote("_templates") else {
+            return nil
+        }
+        var children: [NoteResponse] = []
+        for childId in templatesRoot.childNoteIds {
+            if let child = try? await client.getNote(childId), !child.isDeleted {
+                children.append(child)
+            }
+        }
+        guard !children.isEmpty else { return nil }
+
+        // Exact case-insensitive title match first.
+        for wanted in preferredTitles {
+            if let match = children.first(where: { $0.title.caseInsensitiveCompare(wanted) == .orderedSame }) {
+                return match.noteId
+            }
+        }
+
+        // Normalized title match (ignores spaces/punctuation/case).
+        let normalizedWanted = Set(preferredTitles.map(normalizeTemplateTitle))
+        if let match = children.first(where: { normalizedWanted.contains(normalizeTemplateTitle($0.title)) }) {
+            return match.noteId
+        }
+
+        // Last resort for geo map variants: pick first `_templates` child with matching note type.
+        if let preferredType, let match = children.first(where: { $0.type == preferredType }) {
+            return match.noteId
+        }
+        return nil
+    }
+
+    private static func normalizeTemplateTitle(_ title: String) -> String {
+        let lower = title.lowercased()
+        let filtered = lower.unicodeScalars.filter {
+            CharacterSet.alphanumerics.contains($0)
+        }
+        return String(String.UnicodeScalarView(filtered))
+    }
+
+    /// Trilium relation `template` values are note ids; resolve from the built-in template title when possible.
+    /// Multi-word titles must be quoted in search (e.g. `#title = "Geo Map"`).
+    private static func resolveTemplateRelationTargetNoteId(client: any TriliumClientProtocol, title: String) async -> String? {
+        let escaped = title
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let q = "#title = \"\(escaped)\""
+        do {
+            let resp = try await client.searchNotes(
+                query: q,
+                fastSearch: true,
+                includeArchived: false,
+                ancestorNoteId: nil,
+                orderBy: nil,
+                orderDirection: nil,
+                limit: 30
+            )
+            return resp.results.first(where: { $0.title == title })?.noteId ?? resp.results.first?.noteId
+        } catch {
+            return nil
         }
     }
 }

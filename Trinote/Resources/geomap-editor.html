@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<script src="vendor/leaflet.js"></script>
+<style>
+* { margin: 0; padding: 0; -webkit-touch-callout: none; }
+html, body { width: 100%; height: 100%; overflow: hidden; touch-action: none; position: relative; }
+#map { width: 100%; height: 100%; position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+.trinote-geo-pin-popup { min-width: 200px; padding: 2px 0; }
+.trinote-geo-pin-popup .trinote-geo-open-note {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 10px;
+    -webkit-tap-highlight-color: transparent;
+    text-decoration: underline;
+    color: inherit;
+}
+.trinote-geo-pin-popup button {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #ccc;
+    background: #f2f2f7;
+    font-size: 15px;
+    cursor: pointer;
+    text-align: center;
+}
+.trinote-geo-pin-popup button:first-of-type { margin-top: 0; }
+.trinote-geo-pin-popup button:active { opacity: 0.85; }
+@media (prefers-color-scheme: dark) {
+    .trinote-geo-pin-popup button {
+        background: #3a3a3c;
+        border-color: #555;
+        color: #fff;
+    }
+}
+#move-mode-banner {
+    display: none;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10001;
+    background: rgba(0,0,0,0.82);
+    color: #fff;
+    padding: 14px 16px 18px;
+    padding-bottom: max(18px, env(safe-area-inset-bottom));
+    font-size: 15px;
+    text-align: center;
+    box-shadow: 0 -2px 12px rgba(0,0,0,0.3);
+}
+#move-mode-banner.visible { display: block; }
+#move-mode-banner #move-mode-cancel {
+    margin-top: 12px;
+    padding: 10px 20px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.35);
+    background: rgba(255,255,255,0.12);
+    color: #fff;
+    font-size: 15px;
+    width: 100%;
+    max-width: 280px;
+}
+#move-mode-banner #move-mode-cancel:active { background: rgba(255,255,255,0.22); }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="move-mode-banner">
+    <div id="move-mode-text"></div>
+    <button type="button" id="move-mode-cancel">Cancel</button>
+</div>
+<div id="geo-diag" style="display:none; position:absolute; top:0; left:0; right:0; background:rgba(200,0,0,0.85); color:#fff; font:13px/1.4 -apple-system,system-ui; padding:8px 12px; z-index:99999; word-break:break-all;"></div>
+<script>
+window.onerror = function(msg, src, line) {
+    var txt = 'JS error: ' + msg + ' (' + (src||'?') + ':' + line + ')';
+    var d = document.getElementById('geo-diag');
+    if (d) { d.textContent = txt; d.style.display = 'block'; }
+    try { window.webkit.messageHandlers.geoMapJSError.postMessage(txt); } catch(e) {}
+};
+</script>
+<script>
+(function() {
+    var tileURL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+    var defaultCenter = [0, 0];
+    var defaultZoom = 2;
+    var map = null;
+    var markers = {};
+    var viewportSaveTimer = null;
+    var longPressTimer = null;
+    /** When set, the next map long-press places this pin instead of creating a new note. */
+    var pendingMoveNoteId = null;
+
+    var defaultIcon = L.icon({
+        iconUrl: 'vendor/images/marker-icon.png',
+        iconRetinaUrl: 'vendor/images/marker-icon-2x.png',
+        shadowUrl: 'vendor/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+    });
+
+    function escapeHtml(str) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(str || ''));
+        return div.innerHTML;
+    }
+
+    function escapeAttr(str) {
+        return String(str || '')
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;');
+    }
+
+    function normalizeCenter(c) {
+        if (c == null) return defaultCenter;
+        if (Array.isArray(c) && c.length >= 2) return [Number(c[0]), Number(c[1])];
+        if (typeof c === 'object') {
+            var lat = typeof c.lat === 'number' ? c.lat : Number(c.lat);
+            var lng = typeof c.lng === 'number' ? c.lng : Number(c.lng);
+            if (!Number.isFinite(lng) && c.Ing != null) lng = Number(c.Ing);
+            if (!Number.isFinite(lng) && c.Lng != null) lng = Number(c.Lng);
+            if (!Number.isFinite(lng) && c.long != null) lng = Number(c.long);
+            if (!Number.isFinite(lng) && c.lon != null) lng = Number(c.lon);
+            if (Number.isFinite(lat) && Number.isFinite(lng)) return [lat, lng];
+        }
+        return defaultCenter;
+    }
+
+    function invalidateMapSizeSoon() {
+        if (!map) return;
+        function run() { try { map.invalidateSize(true); } catch (e) {} }
+        setTimeout(run, 0);
+        setTimeout(run, 100);
+        setTimeout(run, 400);
+    }
+
+    function saveViewport() {
+        if (!map) return;
+        var c = map.getCenter();
+        var z = map.getZoom();
+        // Match Trilium desktop GeoMapTypeWidget.getData(); use explicit keys so longitude is always "lng".
+        var centerObj = { lat: c.lat, lng: c.lng };
+        var payload = JSON.stringify({ view: { center: centerObj, zoom: z } });
+        window.webkit.messageHandlers.geoMapViewportChanged.postMessage(payload);
+    }
+
+    function debouncedSaveViewport() {
+        if (viewportSaveTimer) clearTimeout(viewportSaveTimer);
+        viewportSaveTimer = setTimeout(saveViewport, 1000);
+    }
+
+    function clearMovePinMode() {
+        pendingMoveNoteId = null;
+        var b = document.getElementById('move-mode-banner');
+        if (b) b.classList.remove('visible');
+    }
+
+    function startMovePinMode(noteId) {
+        pendingMoveNoteId = noteId;
+        var b = document.getElementById('move-mode-banner');
+        var t = document.getElementById('move-mode-text');
+        if (t) {
+            t.textContent = 'Long-press the map to place this pin at a new location.';
+        }
+        if (b) b.classList.add('visible');
+    }
+
+    function removePinById(noteId) {
+        window.webkit.messageHandlers.geoMapPinRemoved.postMessage(
+            JSON.stringify({ noteId: noteId })
+        );
+        if (pendingMoveNoteId === noteId) {
+            clearMovePinMode();
+        }
+    }
+
+    function addMarkerToMap(noteId, title, lat, lng) {
+        if (!map) return;
+        var m = L.marker([lat, lng], { icon: defaultIcon, draggable: false }).addTo(map);
+        var popupHtml =
+            '<div class="trinote-geo-pin-popup">' +
+            '<a href="#" class="trinote-geo-open-note" data-note-id="' + escapeAttr(noteId) + '">' + escapeHtml(title) + '</a>' +
+            '<button type="button" class="trinote-geo-move-pin-btn">Move pin…</button>' +
+            '<button type="button" class="trinote-geo-remove-pin-btn">Delete note</button>' +
+            '</div>';
+        m.bindPopup(popupHtml);
+        m._trinoteNoteId = noteId;
+        markers[noteId] = m;
+
+        m.on('popupopen', function() {
+            var el = m.getPopup() && m.getPopup().getElement();
+            if (!el) return;
+            var openLink = el.querySelector('.trinote-geo-open-note');
+            if (openLink) {
+                openLink.onclick = function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.geoMapOpenPinNote) {
+                        window.webkit.messageHandlers.geoMapOpenPinNote.postMessage(noteId);
+                    }
+                };
+            }
+            var moveBtn = el.querySelector('.trinote-geo-move-pin-btn');
+            if (moveBtn) {
+                moveBtn.onclick = function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    m.closePopup();
+                    startMovePinMode(noteId);
+                };
+            }
+            var remBtn = el.querySelector('.trinote-geo-remove-pin-btn');
+            if (remBtn) {
+                remBtn.onclick = function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    m.closePopup();
+                    removePinById(noteId);
+                };
+            }
+        });
+    }
+
+    /** Skip map long-press when touching markers, shadows, or Leaflet UI (e.g. popups). */
+    function shouldIgnoreMapLongPressTarget(target) {
+        if (!target || !target.closest) return false;
+        if (target.closest('.leaflet-marker-icon') || target.closest('.leaflet-marker-shadow')) return true;
+        if (target.closest('.leaflet-popup') || target.closest('.leaflet-popup-tip')) return true;
+        if (target.closest('.leaflet-control')) return true;
+        return false;
+    }
+
+    function attachMapLongPress(mapEl) {
+        mapEl.addEventListener('touchstart', function(e) {
+            if (e.touches.length !== 1) return;
+            if (shouldIgnoreMapLongPressTarget(e.target)) {
+                return;
+            }
+            var touch = e.touches[0];
+            var startX = touch.clientX;
+            var startY = touch.clientY;
+            longPressTimer = setTimeout(function() {
+                longPressTimer = null;
+                var point = L.point(startX, startY);
+                var latlng = map.containerPointToLatLng(point);
+                if (pendingMoveNoteId) {
+                    var id = pendingMoveNoteId;
+                    clearMovePinMode();
+                    var mm = markers[id];
+                    if (mm) {
+                        mm.setLatLng(latlng);
+                        mm.closePopup();
+                    }
+                    window.webkit.messageHandlers.geoMapPinMoved.postMessage(
+                        JSON.stringify({ noteId: id, lat: latlng.lat, lng: latlng.lng })
+                    );
+                    return;
+                }
+                window.webkit.messageHandlers.geoMapCreatePin.postMessage(
+                    JSON.stringify({ lat: latlng.lat, lng: latlng.lng })
+                );
+            }, 600);
+            mapEl._lpMoveHandler = function(ev) {
+                var t = ev.touches[0];
+                if (Math.abs(t.clientX - startX) > 10 || Math.abs(t.clientY - startY) > 10) {
+                    clearTimeout(longPressTimer);
+                    longPressTimer = null;
+                }
+            };
+            mapEl.addEventListener('touchmove', mapEl._lpMoveHandler);
+        }, { passive: true });
+        mapEl.addEventListener('touchend', function() {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+            if (mapEl._lpMoveHandler) {
+                mapEl.removeEventListener('touchmove', mapEl._lpMoveHandler);
+            }
+        });
+        mapEl.addEventListener('touchcancel', function() {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+            if (mapEl._lpMoveHandler) {
+                mapEl.removeEventListener('touchmove', mapEl._lpMoveHandler);
+            }
+        });
+    }
+
+    window.geoMapEditor = {
+        init: function(viewportJSON) {
+            clearMovePinMode();
+            if (map) {
+                try { map.remove(); } catch (e) {}
+                map = null;
+                markers = {};
+            }
+            var viewport = {};
+            try { viewport = JSON.parse(viewportJSON); } catch(e) {}
+            var v = viewport.view || {};
+            // Legacy saves (missing `view`) from older Trinote builds
+            if (!v.center && viewport.center != null) {
+                v = { center: viewport.center, zoom: viewport.zoom };
+            }
+            var center = normalizeCenter(v.center);
+            var zoom = typeof v.zoom === 'number' ? v.zoom : defaultZoom;
+
+            map = L.map('map', {
+                center: center,
+                zoom: zoom,
+                zoomControl: false,
+                attributionControl: false
+            });
+
+            L.tileLayer(tileURL, { maxZoom: 19 }).addTo(map);
+            invalidateMapSizeSoon();
+
+            map.on('moveend', debouncedSaveViewport);
+            map.on('zoomend', debouncedSaveViewport);
+
+            var mapEl = document.getElementById('map');
+            attachMapLongPress(mapEl);
+        },
+
+        loadMarkers: function(markersJSON) {
+            if (!map) return;
+            var list = [];
+            try { list = JSON.parse(markersJSON); } catch(e) {}
+            for (var k in markers) {
+                try { map.removeLayer(markers[k]); } catch (e) {}
+            }
+            markers = {};
+
+            for (var i = 0; i < list.length; i++) {
+                var pin = list[i];
+                addMarkerToMap(pin.noteId, pin.title, pin.lat, pin.lng);
+            }
+            invalidateMapSizeSoon();
+        },
+
+        addPin: function(noteId, title, lat, lng) {
+            addMarkerToMap(noteId, title, lat, lng);
+        },
+
+        removePin: function(noteId) {
+            if (!map) return;
+            if (markers[noteId]) {
+                map.removeLayer(markers[noteId]);
+                delete markers[noteId];
+            }
+            if (pendingMoveNoteId === noteId) {
+                clearMovePinMode();
+            }
+        },
+
+        /** Called from native after layout so tiles render when WKWebView gains a non-zero size. */
+        invalidateSize: function() {
+            invalidateMapSizeSoon();
+        },
+
+        getViewport: function() {
+            if (!map) return '{}';
+            var c = map.getCenter();
+            var centerObj = { lat: c.lat, lng: c.lng };
+            return JSON.stringify({ view: { center: centerObj, zoom: map.getZoom() } });
+        }
+    };
+
+    document.getElementById('move-mode-cancel').addEventListener('click', function() {
+        clearMovePinMode();
+    });
+})();
+
+try {
+    if (typeof L !== 'undefined' && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.geoMapEditorReady) {
+        window.webkit.messageHandlers.geoMapEditorReady.postMessage('ready');
+    } else if (typeof L === 'undefined') {
+        var msg = 'Leaflet (L) not loaded — vendor/leaflet.js may be missing from bundle';
+        var d = document.getElementById('geo-diag');
+        if (d) { d.textContent = msg; d.style.display = 'block'; }
+        try { window.webkit.messageHandlers.geoMapJSError.postMessage(msg); } catch(x) {}
+    }
+} catch (e) {}
+</script>
+</body>
+</html>

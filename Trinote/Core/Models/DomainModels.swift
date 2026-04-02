@@ -34,9 +34,11 @@ struct NoteItem: Identifiable, Hashable, Sendable {
         return t.isEmpty ? nil : t
     }
 
-    /// SF Symbol name: uses custom Trilium icon if set, otherwise falls back to note type default.
+    /// SF Symbol name: custom Trilium `#iconClass` if mapped; else semantic geo map uses map icon; else note `type` default.
     var resolvedIconName: String {
-        NoteIconMapper.sfSymbol(for: iconClass) ?? type.iconName
+        if let mapped = NoteIconMapper.sfSymbol(for: iconClass) { return mapped }
+        if isSemanticGeoMap { return NoteType.geoMap.iconName }
+        return type.iconName
     }
 
     var sortableTitle: String { title.lowercased() }
@@ -59,6 +61,50 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     /// Value of the `#monthNote` label (e.g. "2026-04"), if present.
     var monthNoteValue: String? {
         attributes.first { $0.type == .label && $0.name == "monthNote" }?.value
+    }
+
+    /// Trilium `#viewType` label (e.g. `geoMap`, `calendar`, `list`).
+    var viewTypeLabelValue: String? {
+        guard let raw = attributes.first(where: {
+            $0.type == .label && $0.name.caseInsensitiveCompare("viewType") == .orderedSame
+        })?.value else { return nil }
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
+    /// Target of `~template` relation (note id or title), if present.
+    var templateRelationValue: String? {
+        guard let raw = attributes.first(where: {
+            $0.type == .relation && $0.name == "template"
+        })?.value else { return nil }
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
+    /// True when the `~template` relation points at the built-in geo map template.
+    /// Server may store the type as `book`, `geoMap`, or even `file`; the template is the reliable indicator.
+    private var hasGeoMapTemplateRelation: Bool {
+        guard let v = templateRelationValue else { return false }
+        return v.caseInsensitiveCompare("_template_geo_map") == .orderedSame
+    }
+
+    /// True when this note should use geo map UI:
+    /// - native `geoMap` type, OR
+    /// - `book` + `#viewType=geoMap`, OR
+    /// - any non-calendar note with `~template=_template_geo_map`
+    var isSemanticGeoMap: Bool {
+        if type == .geoMap { return true }
+        if isCalendarRoot { return false }
+        if type == .book, let v = viewTypeLabelValue, v.caseInsensitiveCompare("geoMap") == .orderedSame {
+            return true
+        }
+        return hasGeoMapTemplateRelation
+    }
+
+    /// User-facing type string for tree accessibility and metadata (maps semantic geo map over raw `book`).
+    var uiNoteTypeDisplayName: String {
+        if isSemanticGeoMap { return NoteType.geoMap.displayName }
+        return type.displayName
     }
 }
 

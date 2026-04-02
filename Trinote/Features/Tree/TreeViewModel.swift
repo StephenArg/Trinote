@@ -389,19 +389,34 @@ final class TreeViewModel {
     }
 
     func deleteNoteAndSubnotes(noteId: String) async -> Bool {
-        guard let client, noteId != "root" else { return false }
-        do {
-            try await client.deleteNote(noteId)
-            if let profileId = serverProfileId {
-                GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
-                persistence.removeFavoritesForCachedSubtree(rootNoteId: noteId, serverProfileId: profileId)
-                try? persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
+        guard noteId != "root" else { return false }
+
+        if let client, appState.isOnline {
+            do {
+                try await client.deleteNote(noteId)
+                if let profileId = serverProfileId {
+                    GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
+                    persistence.removeFavoritesForCachedSubtree(rootNoteId: noteId, serverProfileId: profileId)
+                    try? persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
+                }
+                await refresh()
+                return true
+            } catch {
+                self.error = APIError.from(error).localizedDescription
+                Log.api.error("Failed to delete note: \(error)")
+                return false
             }
+        }
+
+        guard let profileId = serverProfileId else { return false }
+        do {
+            try persistence.enqueueOfflineNoteDeletion(noteId: noteId, serverProfileId: profileId)
+            appState.backgroundSyncPendingChanges()
             await refresh()
             return true
         } catch {
             self.error = APIError.from(error).localizedDescription
-            Log.api.error("Failed to delete note: \(error)")
+            Log.api.error("Failed to enqueue offline deletion: \(error)")
             return false
         }
     }
@@ -431,15 +446,18 @@ final class TreeViewModel {
 
         let mime = type.creationMime
         let initial = type.creationInitialContent
+        let storageType = type.triliumStorageType
+        let attrs = type.creationInitialAttributes
 
         do {
             let (noteId, _) = try persistence.createOfflineChildNote(
                 parentNoteId: parentNoteId,
                 title: trimmed,
-                noteType: type.rawValue,
+                noteType: storageType,
                 mime: mime,
                 initialContent: initial,
-                serverProfileId: profileId
+                serverProfileId: profileId,
+                initialAttributes: attrs
             )
             await refresh()
             appState.backgroundSyncPendingChanges()

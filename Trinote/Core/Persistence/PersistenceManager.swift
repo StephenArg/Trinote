@@ -30,6 +30,8 @@ final class PersistenceManager {
                 DraftContent.self,
                 PendingNoteCreation.self,
                 PendingNoteBodyUpload.self,
+                PendingNotePatch.self,
+                PendingNoteDeletion.self,
                 PendingBranchMove.self,
                 SyncStatus.self,
                 CachedImageData.self,
@@ -651,13 +653,15 @@ final class PersistenceManager {
     // MARK: - Offline note creation queue
 
     /// Inserts a placeholder note + branch, enqueues `PendingNoteCreation`, and reconciles tree metadata.
+    /// Pass `initialAttributes` for labels that should be created alongside the note (e.g. geolocation).
     func createOfflineChildNote(
         parentNoteId: String,
         title: String,
         noteType: String,
         mime: String,
         initialContent: String,
-        serverProfileId: String
+        serverProfileId: String,
+        initialAttributes: [NoteCreationAttribute] = []
     ) throws -> (noteId: String, branchId: String) {
         let profileId = serverProfileId
         let pid = parentNoteId
@@ -709,6 +713,35 @@ final class PersistenceManager {
             }
         }
 
+        for (idx, attr) in initialAttributes.enumerated() {
+            let attrId = "ol_attr_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+            let cachedAttr = CachedAttribute(
+                attributeId: attrId,
+                noteId: noteId,
+                type: attr.type,
+                name: attr.name,
+                value: attr.value,
+                position: idx * 10,
+                isInheritable: attr.isInheritable,
+                serverProfileId: serverProfileId
+            )
+            context.insert(cachedAttr)
+        }
+
+        var attrsJSON = "[]"
+        if !initialAttributes.isEmpty {
+            let arr: [[String: Any]] = initialAttributes.map { a in
+                if a.isInheritable {
+                    return ["type": a.type, "name": a.name, "value": a.value, "isInheritable": true]
+                }
+                return ["type": a.type, "name": a.name, "value": a.value]
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: arr),
+               let str = String(data: data, encoding: .utf8) {
+                attrsJSON = str
+            }
+        }
+
         let pending = PendingNoteCreation(
             serverProfileId: serverProfileId,
             localNoteId: noteId,
@@ -717,11 +750,24 @@ final class PersistenceManager {
             title: title,
             noteType: noteType,
             mime: mime,
-            initialContent: initialContent
+            initialContent: initialContent,
+            initialAttributesJSON: attrsJSON
         )
         context.insert(pending)
         try context.save()
         try reconcileCachedNoteBranchesMetadata(serverProfileId: serverProfileId)
+        let offlineQueuedLog = NoteDiagnostics.describeOfflineCreateQueued(
+            parentNoteId: parentNoteId,
+            localNoteId: noteId,
+            localBranchId: branchId,
+            title: title,
+            noteType: noteType,
+            mime: mime,
+            contentByteCount: contentData.count,
+            initialAttributesCount: initialAttributes.count,
+            attrsJSON: attrsJSON
+        )
+        Log.noteDiag.info("\(offlineQueuedLog)")
         return (noteId, branchId)
     }
 
@@ -873,6 +919,34 @@ final class PersistenceManager {
             if m.targetParentNoteId == from { m.targetParentNoteId = newId }
         }
 
+        let attrRows = try context.fetch(
+            FetchDescriptor<CachedAttribute>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId }
+            )
+        )
+        for a in attrRows {
+            a.noteId = newId
+        }
+
+        let delRows = try context.fetch(
+            FetchDescriptor<PendingNoteDeletion>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        for d in delRows where d.noteId == from {
+            d.noteId = newId
+        }
+
+        let oldPatchId = "\(profileId):\(from)"
+        var patchDesc = FetchDescriptor<PendingNotePatch>(predicate: #Predicate { $0.id == oldPatchId })
+        patchDesc.fetchLimit = 1
+        if let p = try context.fetch(patchDesc).first {
+            let title = p.title
+            context.delete(p)
+            try context.save()
+            try upsertPendingNotePatch(noteId: newId, title: title, serverProfileId: profileId)
+        }
+
         try context.save()
     }
 
@@ -969,6 +1043,144 @@ final class PersistenceManager {
         )
         rows.forEach { context.delete($0) }
         try context.save()
+    }
+
+    // MARK: - Offline note deletion queue
+
+    /// Queues a note for server-side deletion when connectivity returns.
+    /// If the note was created offline (`ol_` prefix), cancels the pending creation instead.
+    func enqueueOfflineNoteDeletion(noteId: String, serverProfileId: String) throws {
+        let profileId = serverProfileId
+
+        if noteId.hasPrefix("ol_") {
+            let nid = noteId
+            let creations = try context.fetch(
+                FetchDescriptor<PendingNoteCreation>(
+                    predicate: #Predicate { $0.localNoteId == nid && $0.serverProfileId == profileId }
+                )
+            )
+            creations.forEach { context.delete($0) }
+
+            let childCreations = try context.fetch(
+                FetchDescriptor<PendingNoteCreation>(
+                    predicate: #Predicate { $0.parentNoteId == nid && $0.serverProfileId == profileId }
+                )
+            )
+            childCreations.forEach { context.delete($0) }
+
+            try deletePendingNoteBodyUpload(noteId: noteId, serverProfileId: profileId)
+            try deletePendingNotePatch(noteId: noteId, serverProfileId: profileId)
+            try deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
+
+            if let parent = try findParentOfCachedNote(noteId: noteId, serverProfileId: profileId) {
+                parent.childNoteIds.removeAll { $0 == noteId }
+            }
+
+            try context.save()
+            try reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
+            return
+        }
+
+        GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
+        removeFavoritesForCachedSubtree(rootNoteId: noteId, serverProfileId: profileId)
+
+        if let parent = try findParentOfCachedNote(noteId: noteId, serverProfileId: profileId) {
+            parent.childNoteIds.removeAll { $0 == noteId }
+        }
+
+        try deletePendingNoteBodyUpload(noteId: noteId, serverProfileId: profileId)
+        try deletePendingNotePatch(noteId: noteId, serverProfileId: profileId)
+        try deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
+
+        let pending = PendingNoteDeletion(
+            serverProfileId: profileId,
+            noteId: noteId
+        )
+        context.insert(pending)
+        try context.save()
+        try reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
+    }
+
+    func fetchPendingNoteDeletions(serverProfileId: String) throws -> [PendingNoteDeletion] {
+        let pid = serverProfileId
+        return try context.fetch(
+            FetchDescriptor<PendingNoteDeletion>(
+                predicate: #Predicate { $0.serverProfileId == pid },
+                sortBy: [SortDescriptor(\.queuedAt, order: .forward)]
+            )
+        )
+    }
+
+    func deletePendingNoteDeletion(id: String, serverProfileId: String) throws {
+        let did = id
+        let pid = serverProfileId
+        let rows = try context.fetch(
+            FetchDescriptor<PendingNoteDeletion>(
+                predicate: #Predicate { $0.id == did && $0.serverProfileId == pid }
+            )
+        )
+        rows.forEach { context.delete($0) }
+        try context.save()
+    }
+
+    /// Finds the cached parent note for a given child note id (first parent from branches or parentNoteIds).
+    private func findParentOfCachedNote(noteId: String, serverProfileId: String) throws -> CachedNote? {
+        let nid = noteId
+        let pid = serverProfileId
+        let branches = try context.fetch(
+            FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
+            )
+        )
+        if let parentId = branches.first?.parentNoteId {
+            return try fetchCachedNote(id: parentId, serverProfileId: serverProfileId)
+        }
+        if let cached = try fetchCachedNote(id: noteId, serverProfileId: serverProfileId),
+           let parentId = cached.parentNoteIds.first {
+            return try fetchCachedNote(id: parentId, serverProfileId: serverProfileId)
+        }
+        return nil
+    }
+
+    // MARK: - Offline note title patch queue
+
+    /// Saves a pending title change. Upserts: last title wins per note.
+    func upsertPendingNotePatch(noteId: String, title: String, serverProfileId: String) throws {
+        let rowId = "\(serverProfileId):\(noteId)"
+        var descriptor = FetchDescriptor<PendingNotePatch>(predicate: #Predicate { $0.id == rowId })
+        descriptor.fetchLimit = 1
+        if let existing = try context.fetch(descriptor).first {
+            existing.title = title
+            existing.queuedAt = .now
+        } else {
+            let row = PendingNotePatch(
+                serverProfileId: serverProfileId,
+                noteId: noteId,
+                title: title
+            )
+            context.insert(row)
+        }
+        try context.save()
+    }
+
+    func fetchPendingNotePatches(serverProfileId: String) throws -> [PendingNotePatch] {
+        let pid = serverProfileId
+        return try context.fetch(
+            FetchDescriptor<PendingNotePatch>(
+                predicate: #Predicate { $0.serverProfileId == pid },
+                sortBy: [SortDescriptor(\.queuedAt, order: .forward)]
+            )
+        )
+    }
+
+    func deletePendingNotePatch(noteId: String, serverProfileId: String) throws {
+        let rowId = "\(serverProfileId):\(noteId)"
+        var descriptor = FetchDescriptor<PendingNotePatch>(predicate: #Predicate { $0.id == rowId })
+        descriptor.fetchLimit = 1
+        if let existing = try context.fetch(descriptor).first {
+            context.delete(existing)
+            try context.save()
+        }
     }
 
     // MARK: - Offline note body upload queue
@@ -1386,6 +1598,16 @@ final class PersistenceManager {
             predicate: #Predicate { $0.serverProfileId == profileId }
         ))
         pendingMoves.forEach { context.delete($0) }
+
+        let pendingDeletions = try context.fetch(FetchDescriptor<PendingNoteDeletion>(
+            predicate: #Predicate { $0.serverProfileId == profileId }
+        ))
+        pendingDeletions.forEach { context.delete($0) }
+
+        let pendingPatches = try context.fetch(FetchDescriptor<PendingNotePatch>(
+            predicate: #Predicate { $0.serverProfileId == profileId }
+        ))
+        pendingPatches.forEach { context.delete($0) }
 
         let syncs = try context.fetch(FetchDescriptor<SyncStatus>(
             predicate: #Predicate { $0.serverProfileId == profileId }

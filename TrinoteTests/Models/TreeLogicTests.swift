@@ -15,6 +15,97 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertFalse(item.isRoot)
     }
 
+    /// Desktop-style geo map: Trilium `type=book` with `#viewType=geoMap` on the note.
+    func testSemanticGeoMapBookWithViewTypeLabel() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "a1", noteId: "gm1", type: "label", name: "viewType", value: "geoMap",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+            AttributeResponse(
+                attributeId: "a2", noteId: "gm1", type: "label", name: "collection", value: "",
+                position: 10, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let response = TestFixtures.noteResponse(id: "gm1", title: "Map", type: "book", mime: "text/html", attributes: attrs)
+        let item = NoteItem(from: response)
+        XCTAssertTrue(item.isSemanticGeoMap)
+        XCTAssertEqual(item.viewTypeLabelValue, "geoMap")
+        XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.geoMap.displayName)
+        XCTAssertEqual(item.resolvedIconName, NoteType.geoMap.iconName)
+    }
+
+    func testSemanticGeoMapViewTypeCaseInsensitive() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "a1", noteId: "gm2", type: "label", name: "viewType", value: "GEOMAP",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let response = TestFixtures.noteResponse(id: "gm2", title: "M", type: "book", attributes: attrs)
+        XCTAssertTrue(NoteItem(from: response).isSemanticGeoMap)
+    }
+
+    /// Desktop default: `book` + `~template` → `_template_geo_map` without `#viewType` (matches Trilium’s built-in geographic map template).
+    func testSemanticGeoMapBookWithTemplateRelationOnly() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "t1", noteId: "gm3", type: "relation", name: "template", value: "_template_geo_map",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+            AttributeResponse(
+                attributeId: "h1", noteId: "gm3", type: "label", name: "hidePromotedAttributes", value: "",
+                position: 10, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let response = TestFixtures.noteResponse(id: "gm3", title: "Trilium", type: "book", mime: "", attributes: attrs)
+        let item = NoteItem(from: response)
+        XCTAssertEqual(item.templateRelationValue, "_template_geo_map")
+        XCTAssertNil(item.viewTypeLabelValue)
+        XCTAssertTrue(item.isSemanticGeoMap)
+        XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.geoMap.displayName)
+    }
+
+    /// Server may store the type as `file` when a template is applied; the `~template` relation is the reliable signal.
+    func testSemanticGeoMapFileTypeWithTemplateRelation() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "t1", noteId: "gm4", type: "relation", name: "template", value: "_template_geo_map",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let response = TestFixtures.noteResponse(id: "gm4", title: "Map", type: "file", mime: "application/json", attributes: attrs)
+        let item = NoteItem(from: response)
+        XCTAssertTrue(item.isSemanticGeoMap)
+        XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.geoMap.displayName)
+    }
+
+    /// Calendar journal root is `book` + `#calendarRoot`; must not be classified as geo map.
+    func testCalendarRootBookIsNotSemanticGeoMapEvenWithViewType() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "a1", noteId: "cal1", type: "label", name: "calendarRoot", value: "",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+            AttributeResponse(
+                attributeId: "a2", noteId: "cal1", type: "label", name: "viewType", value: "calendar",
+                position: 10, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let response = TestFixtures.noteResponse(id: "cal1", title: "Journal", type: "book", attributes: attrs)
+        let item = NoteItem(from: response)
+        XCTAssertTrue(item.isCalendarRoot)
+        XCTAssertFalse(item.isSemanticGeoMap)
+        XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.book.displayName)
+    }
+
+    func testNativeGeoMapTypeIsSemanticGeoMap() {
+        let response = TestFixtures.noteResponse(id: "g1", title: "G", type: "geoMap", mime: "application/json")
+        let item = NoteItem(from: response)
+        XCTAssertTrue(item.isSemanticGeoMap)
+        XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.geoMap.displayName)
+    }
+
     func testRootNoteDetection() {
         let response = TestFixtures.noteResponse(id: "root", title: "Root", parentNoteIds: [], childNoteIds: ["c1"])
         let item = NoteItem(from: response)
@@ -49,13 +140,17 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(node.title, "Chapter")
     }
 
-    func testTreeNodeHashIsIdentityBased() {
+    /// `TreeNode` hashes `branch.branchId` and `note` so rows refresh when metadata changes (see `DomainModels.swift`).
+    func testTreeNodeHashIncludesBranchAndNote() {
         let node1 = makeNode(branchId: "b1", noteTitle: "Note A")
         let node2 = makeNode(branchId: "b1", noteTitle: "Note B (different title)")
-        XCTAssertEqual(node1.hashValue, node2.hashValue)
+        XCTAssertNotEqual(node1.hashValue, node2.hashValue, "Different note payload should change hash")
 
-        let node3 = makeNode(branchId: "b2", noteTitle: "Note A")
-        XCTAssertNotEqual(node1.hashValue, node3.hashValue)
+        let node3 = makeNode(branchId: "b1", noteTitle: "Note A")
+        XCTAssertEqual(node1.hashValue, node3.hashValue)
+
+        let node4 = makeNode(branchId: "b2", noteTitle: "Note A")
+        XCTAssertNotEqual(node1.hashValue, node4.hashValue)
     }
 
     // MARK: - BranchItem
@@ -92,6 +187,30 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(NoteType.canvas.creationMime, "application/json")
         XCTAssertEqual(NoteType.canvas.creationInitialContent, NoteType.emptyCanvasNoteJSON)
         XCTAssertTrue(NoteType.emptyCanvasNoteJSON.contains("\"type\":\"excalidraw\""))
+        XCTAssertEqual(NoteType.calendar.triliumStorageType, "book")
+        let calAttrs = NoteType.calendar.creationInitialAttributes
+        XCTAssertEqual(calAttrs.count, 6)
+        let byName = Dictionary(uniqueKeysWithValues: calAttrs.map { ($0.name, $0) })
+        XCTAssertEqual(byName["calendarRoot"]?.type, "label")
+        XCTAssertEqual(byName["sorted"]?.type, "label")
+        XCTAssertEqual(byName["iconClass"], NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-calendar"))
+        XCTAssertEqual(byName["template"], NoteCreationAttribute(type: "relation", name: "template", value: "Calendar"))
+        XCTAssertEqual(byName["calendar:view"], NoteCreationAttribute(type: "label", name: "calendar:view", value: "dayGridMonth"))
+        XCTAssertEqual(byName["viewType"], NoteCreationAttribute(type: "label", name: "viewType", value: "calendar"))
+
+        let geoAttrs = NoteType.geoMap.creationInitialAttributes
+        XCTAssertEqual(geoAttrs.count, 9)
+        XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "collection", value: "")))
+        XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "viewType", value: "geoMap")))
+        XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx bx-map-alt")))
+        XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "subtreeHidden", value: "false")))
+        XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "relation", name: "template", value: "Geo Map")))
+        XCTAssertEqual(geoAttrs.filter { $0.name == "hidePromotedAttributes" }.count, 2)
+        let geoSchema = "promoted,alias=Geolocation,single,text"
+        XCTAssertEqual(geoAttrs.filter { $0.name == "label:geolocation" && !$0.isInheritable }.count, 1)
+        XCTAssertEqual(geoAttrs.filter { $0.name == "label:geolocation" && $0.isInheritable }.count, 1)
+        XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "label:geolocation", value: geoSchema)))
+        XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "label:geolocation", value: geoSchema, isInheritable: true)))
     }
 
     func testNoteTypeFromRawValue() {

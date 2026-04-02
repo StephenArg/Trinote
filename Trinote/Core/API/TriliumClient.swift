@@ -688,6 +688,7 @@ actor TriliumClient: TriliumClientProtocol {
             let isProtected: Bool?
             let noteId: String?
             let branchId: String?
+            let templateNoteId: String?
         }
         let body = Body(
             title: request.title,
@@ -698,10 +699,25 @@ actor TriliumClient: TriliumClientProtocol {
             prefix: request.prefix,
             isProtected: request.isProtected,
             noteId: request.noteId,
-            branchId: request.branchId
+            branchId: request.branchId,
+            templateNoteId: request.templateNoteId
         )
         let path = "/api/notes/\(request.parentNoteId)/children"
         let q = ["target": "into"]
+        let contentPreview: String
+        if request.content.count <= 800 {
+            contentPreview = request.content.replacingOccurrences(of: "\n", with: "\\n")
+        } else {
+            contentPreview = "<\(request.content.count) bytes, preview omitted>"
+        }
+        Log.noteDiag.info(
+            """
+            NoteDiag CREATE api POST /api/notes/\(request.parentNoteId)/children
+              title=\(request.title) type=\(request.type) mime=\(request.mime ?? "nil") templateNoteId=\(request.templateNoteId ?? "nil")
+              content.len=\(request.content.count) content.preview=\(contentPreview)
+              notePosition=\(request.notePosition.map(String.init) ?? "nil") branchId=\(request.branchId ?? "nil") clientNoteId=\(request.noteId ?? "nil") protected=\(request.isProtected.map(String.init) ?? "nil")
+            """
+        )
         let res: CreateNoteNativeResponse = try await postJSON(path, queryParams: q, body: body, csrf: true)
         let note = try await getNote(res.note.noteId)
         let br = res.branch
@@ -749,7 +765,8 @@ actor TriliumClient: TriliumClientProtocol {
             prefix: nil,
             isProtected: false,
             noteId: nil,
-            branchId: nil
+            branchId: nil,
+            templateNoteId: nil
         )
         var response = try await createNote(request)
         if needsBinaryUpload {
@@ -814,6 +831,12 @@ actor TriliumClient: TriliumClientProtocol {
             }
         }
         return SearchResponse(results: results, debugInfo: nil)
+    }
+
+    /// Returns template note IDs from Trilium's built-in endpoint used by desktop/web clients.
+    /// Useful when title-based lookup is unreliable across versions/locales.
+    func searchTemplateNoteIds() async throws -> [String] {
+        try await get("/api/search-templates", csrf: true)
     }
 
     // MARK: - Branches

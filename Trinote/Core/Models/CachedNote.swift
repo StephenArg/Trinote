@@ -202,6 +202,9 @@ final class PendingNoteCreation {
     var noteType: String
     var mime: String
     var initialContent: String
+    /// JSON array of attributes to create on the server after the note is created.
+    /// Format: `[{"type":"label","name":"geolocation","value":"lat,lng"}, ...]`; optional `"isInheritable": true`.
+    var initialAttributesJSON: String
     var queuedAt: Date
 
     init(
@@ -214,6 +217,7 @@ final class PendingNoteCreation {
         noteType: String,
         mime: String,
         initialContent: String,
+        initialAttributesJSON: String = "[]",
         queuedAt: Date = .now
     ) {
         self.id = id
@@ -225,6 +229,7 @@ final class PendingNoteCreation {
         self.noteType = noteType
         self.mime = mime
         self.initialContent = initialContent
+        self.initialAttributesJSON = initialAttributesJSON
         self.queuedAt = queuedAt
     }
 }
@@ -256,6 +261,50 @@ final class PendingNoteBodyUpload {
         self.mime = mime
         self.queuedAt = queuedAt
         self.baseUtcDateModified = baseUtcDateModified
+    }
+}
+
+/// Title change queued while offline; flushed via `updateNote` when online. One row per note (latest title wins).
+@Model
+final class PendingNotePatch {
+    @Attribute(.unique) var id: String
+    var serverProfileId: String
+    var noteId: String
+    var title: String
+    var queuedAt: Date
+
+    init(
+        serverProfileId: String,
+        noteId: String,
+        title: String,
+        queuedAt: Date = .now
+    ) {
+        self.id = "\(serverProfileId):\(noteId)"
+        self.serverProfileId = serverProfileId
+        self.noteId = noteId
+        self.title = title
+        self.queuedAt = queuedAt
+    }
+}
+
+/// Note deletion queued while offline; flushed via `deleteNote` when online.
+@Model
+final class PendingNoteDeletion {
+    @Attribute(.unique) var id: String
+    var serverProfileId: String
+    var noteId: String
+    var queuedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        serverProfileId: String,
+        noteId: String,
+        queuedAt: Date = .now
+    ) {
+        self.id = id
+        self.serverProfileId = serverProfileId
+        self.noteId = noteId
+        self.queuedAt = queuedAt
     }
 }
 

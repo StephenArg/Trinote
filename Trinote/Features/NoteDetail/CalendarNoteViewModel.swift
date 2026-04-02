@@ -24,8 +24,14 @@ final class CalendarNoteViewModel {
     var showYearPicker = false
     var pickerYear: Int = Calendar.current.component(.year, from: Date())
 
+    /// Coalesces concurrent `ensureDayNote` calls for the same ISO date (double-taps / racing tasks).
+    private var ensureDayNoteTasks: [String: Task<String?, Never>] = [:]
+
     private let appState: AppState
+    private let persistence = PersistenceManager.shared
     private var client: (any TriliumClientProtocol)? { appState.client }
+    private var serverProfileId: String? { appState.activeProfile?.id }
+    private var isOnline: Bool { appState.isOnline }
 
     private static let isoFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -102,7 +108,6 @@ final class CalendarNoteViewModel {
     // MARK: - Loading
 
     func loadVisibleDayNotes() async {
-        guard let client else { return }
         isLoading = true
         error = nil
         defer { isLoading = false }
@@ -129,6 +134,19 @@ final class CalendarNoteViewModel {
             monthRange = month...month
         }
 
+        guard isOnline, let apiClient = client else {
+            if let profileId = serverProfileId {
+                dayNoteMap = Self.buildDayNoteMapFromCache(
+                    calendarRootId: calendarRootId,
+                    yearRange: yearRange,
+                    monthRange: monthRange,
+                    profileId: profileId,
+                    persistence: persistence
+                )
+            }
+            return
+        }
+
         do {
             var map: [String: DayNoteInfo] = [:]
 
@@ -136,7 +154,7 @@ final class CalendarNoteViewModel {
                 for month in monthRange {
                     let prefix = String(format: "%04d-%02d", year, month)
                     let query = "#dateNote =* \(prefix) note.ancestors.noteId = \(calendarRootId)"
-                    let result = try await client.searchNotes(
+                    let result = try await apiClient.searchNotes(
                         query: query,
                         fastSearch: true,
                         includeArchived: false,
@@ -158,23 +176,58 @@ final class CalendarNoteViewModel {
         } catch {
             self.error = error.localizedDescription
             Log.api.error("Failed to load calendar day notes: \(error)")
+            if let profileId = serverProfileId {
+                dayNoteMap = Self.buildDayNoteMapFromCache(
+                    calendarRootId: calendarRootId,
+                    yearRange: yearRange,
+                    monthRange: monthRange,
+                    profileId: profileId,
+                    persistence: persistence
+                )
+            }
         }
     }
 
     // MARK: - Day note creation (year -> month -> day chain)
 
     func ensureDayNote(for date: Date) async -> String? {
-        guard let client else { return nil }
+        guard appState.isAuthenticated, serverProfileId != nil else { return nil }
+        let isoDate = Self.isoFormatter.string(from: date)
+        if let existing = dayNoteMap[isoDate] {
+            return existing.noteId
+        }
+        if let inFlight = ensureDayNoteTasks[isoDate] {
+            return await inFlight.value
+        }
+        let task = Task<String?, Never> { @MainActor in
+            await self.runEnsureDayNote(for: date, isoDate: isoDate)
+        }
+        ensureDayNoteTasks[isoDate] = task
+        let out = await task.value
+        ensureDayNoteTasks[isoDate] = nil
+        return out
+    }
+
+    private func runEnsureDayNote(for date: Date, isoDate: String) async -> String? {
+        if let existing = dayNoteMap[isoDate] {
+            return existing.noteId
+        }
+
+        if !isOnline, let profileId = serverProfileId {
+            return runEnsureDayNoteOffline(date: date, isoDate: isoDate, profileId: profileId)
+        }
+
+        guard let client else {
+            if let profileId = serverProfileId {
+                return runEnsureDayNoteOffline(date: date, isoDate: isoDate, profileId: profileId)
+            }
+            return nil
+        }
 
         let cal = Calendar.current
         let year = cal.component(.year, from: date)
         let month = cal.component(.month, from: date)
         let day = cal.component(.day, from: date)
-        let isoDate = Self.isoFormatter.string(from: date)
-
-        if let existing = dayNoteMap[isoDate] {
-            return existing.noteId
-        }
 
         isCreating = true
         defer { isCreating = false }
@@ -194,8 +247,202 @@ final class CalendarNoteViewModel {
         } catch {
             self.error = error.localizedDescription
             Log.api.error("Failed to create day note for \(isoDate): \(error)")
+            if let profileId = serverProfileId {
+                return runEnsureDayNoteOffline(date: date, isoDate: isoDate, profileId: profileId)
+            }
             return nil
         }
+    }
+
+    // MARK: - Offline day note (SwiftData + pending creation queue)
+
+    private func runEnsureDayNoteOffline(date: Date, isoDate: String, profileId: String) -> String? {
+        if let existing = dayNoteMap[isoDate] {
+            return existing.noteId
+        }
+
+        isCreating = true
+        defer { isCreating = false }
+
+        let cal = Calendar.current
+        let year = cal.component(.year, from: date)
+        let month = cal.component(.month, from: date)
+        let day = cal.component(.day, from: date)
+
+        do {
+            let yearId = try findOrCreateYearNoteOffline(year: year, profileId: profileId)
+            let monthId = try findOrCreateMonthNoteOffline(year: year, month: month, parentYearId: yearId, profileId: profileId)
+            let dayId = try findOrCreateDayNoteOffline(date: date, isoDate: isoDate, day: day, parentMonthId: monthId, profileId: profileId)
+
+            let f = DateFormatter()
+            f.dateFormat = "dd - EEEE"
+            f.locale = .current
+            let dayTitle = f.string(from: date)
+            dayNoteMap[isoDate] = DayNoteInfo(noteId: dayId, title: dayTitle)
+
+            appState.backgroundSyncPendingChanges()
+            NotificationCenter.default.post(
+                name: .trinoteTreeShouldRefresh,
+                object: nil,
+                userInfo: ["noteId": calendarRootId]
+            )
+            return dayId
+        } catch {
+            self.error = error.localizedDescription
+            Log.api.error("Failed to create offline calendar day note for \(isoDate): \(error)")
+            return nil
+        }
+    }
+
+    private func findOrCreateYearNoteOffline(year: Int, profileId: String) throws -> String {
+        let yearStr = String(year)
+        if let id = Self.findCachedYearNoteId(
+            calendarRootId: calendarRootId, year: year, profileId: profileId, persistence: persistence
+        ) {
+            return id
+        }
+        let (noteId, _) = try persistence.createOfflineChildNote(
+            parentNoteId: calendarRootId,
+            title: yearStr,
+            noteType: "text",
+            mime: "text/html",
+            initialContent: "",
+            serverProfileId: profileId,
+            initialAttributes: [
+                NoteCreationAttribute(type: "label", name: "yearNote", value: yearStr),
+                NoteCreationAttribute(type: "label", name: "sorted", value: ""),
+            ]
+        )
+        return noteId
+    }
+
+    private func findOrCreateMonthNoteOffline(year: Int, month: Int, parentYearId: String, profileId: String) throws -> String {
+        let monthStr = String(format: "%04d-%02d", year, month)
+        if let id = Self.findCachedMonthNoteId(
+            parentYearId: parentYearId, year: year, month: month, monthStr: monthStr, profileId: profileId, persistence: persistence
+        ) {
+            return id
+        }
+        let monthPrefix = String(format: "%02d", month)
+        var df = DateFormatter()
+        df.locale = .current
+        let monthName = df.monthSymbols[month - 1]
+        let title = String(format: "%02d - %@", month, monthName)
+
+        let (noteId, _) = try persistence.createOfflineChildNote(
+            parentNoteId: parentYearId,
+            title: title,
+            noteType: "text",
+            mime: "text/html",
+            initialContent: "",
+            serverProfileId: profileId,
+            initialAttributes: [
+                NoteCreationAttribute(type: "label", name: "monthNote", value: monthStr),
+                NoteCreationAttribute(type: "label", name: "sorted", value: ""),
+            ]
+        )
+        return noteId
+    }
+
+    private func findOrCreateDayNoteOffline(date: Date, isoDate: String, day: Int, parentMonthId: String, profileId: String) throws -> String {
+        let dayPrefix = String(format: "%02d", day)
+        if let id = Self.findCachedDayNoteId(
+            parentMonthId: parentMonthId, isoDate: isoDate, dayPrefix: dayPrefix, profileId: profileId, persistence: persistence
+        ) {
+            return id
+        }
+        var f = DateFormatter()
+        f.dateFormat = "dd - EEEE"
+        f.locale = .current
+        let title = f.string(from: date)
+
+        let (noteId, _) = try persistence.createOfflineChildNote(
+            parentNoteId: parentMonthId,
+            title: title,
+            noteType: "text",
+            mime: "text/html",
+            initialContent: "",
+            serverProfileId: profileId,
+            initialAttributes: [
+                NoteCreationAttribute(type: "label", name: "dateNote", value: isoDate),
+            ]
+        )
+        return noteId
+    }
+
+    private static func findCachedYearNoteId(
+        calendarRootId: String, year: Int, profileId: String, persistence: PersistenceManager
+    ) -> String? {
+        let yearStr = String(year)
+        guard let pairs = try? persistence.fetchCachedChildren(parentNoteId: calendarRootId, serverProfileId: profileId) else { return nil }
+        for (_, note) in pairs {
+            if note.title == yearStr { return note.noteId }
+            let attrs = (try? persistence.fetchCachedAttributes(noteId: note.noteId, serverProfileId: profileId)) ?? []
+            if attrs.contains(where: { $0.type == "label" && $0.name == "yearNote" && $0.value == yearStr }) {
+                return note.noteId
+            }
+        }
+        return nil
+    }
+
+    private static func findCachedMonthNoteId(
+        parentYearId: String, year: Int, month: Int, monthStr: String, profileId: String, persistence: PersistenceManager
+    ) -> String? {
+        let monthPrefix = String(format: "%02d", month)
+        guard let pairs = try? persistence.fetchCachedChildren(parentNoteId: parentYearId, serverProfileId: profileId) else { return nil }
+        for (_, note) in pairs {
+            if note.title == monthPrefix || note.title.hasPrefix(monthPrefix + " - ") { return note.noteId }
+            let attrs = (try? persistence.fetchCachedAttributes(noteId: note.noteId, serverProfileId: profileId)) ?? []
+            if attrs.contains(where: { $0.type == "label" && $0.name == "monthNote" && $0.value == monthStr }) {
+                return note.noteId
+            }
+        }
+        return nil
+    }
+
+    private static func findCachedDayNoteId(
+        parentMonthId: String, isoDate: String, dayPrefix: String, profileId: String, persistence: PersistenceManager
+    ) -> String? {
+        guard let pairs = try? persistence.fetchCachedChildren(parentNoteId: parentMonthId, serverProfileId: profileId) else { return nil }
+        for (_, note) in pairs {
+            let attrs = (try? persistence.fetchCachedAttributes(noteId: note.noteId, serverProfileId: profileId)) ?? []
+            if attrs.contains(where: { $0.type == "label" && $0.name == "dateNote" && $0.value == isoDate }) {
+                return note.noteId
+            }
+            if note.title == dayPrefix || note.title.hasPrefix(dayPrefix + " - ") {
+                return note.noteId
+            }
+        }
+        return nil
+    }
+
+    private static func buildDayNoteMapFromCache(
+        calendarRootId: String,
+        yearRange: ClosedRange<Int>,
+        monthRange: ClosedRange<Int>,
+        profileId: String,
+        persistence: PersistenceManager
+    ) -> [String: DayNoteInfo] {
+        var map: [String: DayNoteInfo] = [:]
+        for year in yearRange {
+            guard let yearId = findCachedYearNoteId(calendarRootId: calendarRootId, year: year, profileId: profileId, persistence: persistence)
+            else { continue }
+            for month in monthRange {
+                let monthStr = String(format: "%04d-%02d", year, month)
+                guard let monthId = findCachedMonthNoteId(
+                    parentYearId: yearId, year: year, month: month, monthStr: monthStr, profileId: profileId, persistence: persistence
+                ) else { continue }
+                guard let dayPairs = try? persistence.fetchCachedChildren(parentNoteId: monthId, serverProfileId: profileId) else { continue }
+                for (_, note) in dayPairs {
+                    let attrs = (try? persistence.fetchCachedAttributes(noteId: note.noteId, serverProfileId: profileId)) ?? []
+                    guard let dateVal = attrs.first(where: { $0.type == "label" && $0.name == "dateNote" })?.value,
+                          dateVal.count == 10
+                    else { continue }
+                    map[dateVal] = DayNoteInfo(noteId: note.noteId, title: note.title)
+                }
+            }
+        }
+        return map
     }
 
     private func findOrCreateYearNote(year: Int, client: any TriliumClientProtocol) async throws -> String {
@@ -220,7 +467,8 @@ final class CalendarNoteViewModel {
             prefix: nil,
             isProtected: nil,
             noteId: nil,
-            branchId: nil
+            branchId: nil,
+            templateNoteId: nil
         )
         let response = try await client.createNote(request)
         let noteId = response.note.noteId
@@ -265,7 +513,8 @@ final class CalendarNoteViewModel {
             prefix: nil,
             isProtected: nil,
             noteId: nil,
-            branchId: nil
+            branchId: nil,
+            templateNoteId: nil
         )
         let response = try await client.createNote(request)
         let noteId = response.note.noteId
@@ -310,7 +559,8 @@ final class CalendarNoteViewModel {
             prefix: nil,
             isProtected: nil,
             noteId: nil,
-            branchId: nil
+            branchId: nil,
+            templateNoteId: nil
         )
         let response = try await client.createNote(request)
         try await client.createAttribute(CreateAttributeRequest(

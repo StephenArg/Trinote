@@ -57,6 +57,8 @@ final class NoteDetailViewModel {
     // Child notes
     var childNotes: [ChildNoteSummary] = []
     var isLoadingChildren = false
+    /// Bumped when `childNotes` reloads so SwiftUI re-evaluates geo-map routing (uses cached child attributes).
+    private(set) var geoMapDetectionTick = 0
 
     let noteId: String
     private let appState: AppState
@@ -171,6 +173,21 @@ final class NoteDetailViewModel {
         // stays nil until `loadContent()` runs (after this method returns).
         loadContentFromCache()
 
+        if let n = self.note {
+            Log.noteDiag.info("\(NoteDiagnostics.describeNoteItem(n, phase: "load.afterCacheMeta"))")
+        } else {
+            Log.noteDiag.info("NoteDiag READ phase=load.afterCacheMeta noteId=\(nid) cachedMeta=nil")
+        }
+        let trimmedAfterCache = (self.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let afterCacheContentLog = NoteDiagnostics.describeContentState(
+            phase: "load.afterCacheContent",
+            noteId: nid,
+            contentBytes: self.content?.count,
+            trimmedBodyEmpty: trimmedAfterCache.isEmpty,
+            previewSource: self.rawContentString
+        )
+        Log.noteDiag.info("\(afterCacheContentLog)")
+
         if let note, let profileId = self.serverProfileId {
             try? self.persistence.recordRecentNote(
                 noteId: nid, title: note.title,
@@ -182,6 +199,7 @@ final class NoteDetailViewModel {
 
         // Do not await getNote while offline — same long URLSession stall as bootstrap “Connecting…”.
         if !appState.isOnline {
+            Log.noteDiag.info("NoteDiag READ phase=load.skipServer noteId=\(nid) reason=offline")
             return
         }
 
@@ -193,6 +211,7 @@ final class NoteDetailViewModel {
 
         do {
             let response = try await client.getNote(nid)
+            Log.noteDiag.info("\(NoteDiagnostics.describeNoteResponse(response, phase: "load.getNote.success"))")
             let fresh = NoteItem(from: response)
             self.note = fresh
             self.serverUtcDateModified = response.utcDateModified
@@ -214,6 +233,7 @@ final class NoteDetailViewModel {
                 return
             }
             Log.api.error("Failed to load note: \(error)")
+            Log.noteDiag.error("NoteDiag READ phase=load.getNote.failed noteId=\(nid) error=\(String(describing: apiError))")
             if !hadCachedNote {
                 self.error = apiError.localizedDescription
             }
@@ -236,7 +256,10 @@ final class NoteDetailViewModel {
             }
         }
 
-        guard let note = self.note else { return }
+        guard let note = self.note else {
+            Log.noteDiag.info("NoteDiag CONTENT phase=loadContent.noNote noteId=\(self.noteId)")
+            return
+        }
 
         if !note.isProtected {
             self.needsProtectedSession = false
@@ -249,12 +272,34 @@ final class NoteDetailViewModel {
 
         // When offline, rely on SwiftData only; avoid getNoteContent timeouts and a stuck loading state.
         if !appState.isOnline {
+            let trimmed = (self.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let offlineContentLog = NoteDiagnostics.describeContentState(
+                phase: "loadContent.skipServer.offline",
+                noteId: nid,
+                contentBytes: self.content?.count,
+                trimmedBodyEmpty: trimmed.isEmpty,
+                previewSource: self.rawContentString
+            )
+            Log.noteDiag.info("\(offlineContentLog)")
             return
         }
 
-        guard let client else { return }
+        guard let client else {
+            Log.noteDiag.info("NoteDiag CONTENT phase=loadContent.noClient noteId=\(nid)")
+            return
+        }
         let profileId = self.serverProfileId ?? ""
         let cachedDate = (try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId))?.utcDateModified
+
+        let trimmedBody = (self.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasUsableBody = !trimmedBody.isEmpty
+        let childIdsForBlobPolicy = resolvedChildNoteIdsForDetail()
+        // Trilium often has no/empty blob for `book`; geo maps mis-typed as `book` still store viewport JSON.
+        // If we skip `getNoteContent` because metadata looks fresh, we never load that JSON.
+        let shouldFetchBlobDespiteFreshMeta = !hasUsableBody && (
+            note.isSemanticGeoMap
+            || (note.type == .book && !childIdsForBlobPolicy.isEmpty)
+        )
 
         let forceFetchProtected = note.isProtected && !appState.protectedSessionActive
         if let serverDate = self.serverUtcDateModified, let cachedDate, serverDate <= cachedDate, !forceFetchProtected {
@@ -265,7 +310,49 @@ final class NoteDetailViewModel {
                     await resyncNoteTitlesWithProtectedSession()
                 }
             }
-            return
+            if !shouldFetchBlobDespiteFreshMeta {
+                let blobPolicyLog = NoteDiagnostics.describeBlobFetchDecision(
+                    noteId: nid,
+                    isSemanticGeoMap: note.isSemanticGeoMap,
+                    noteTypeBook: note.type == .book,
+                    childCountForPolicy: childIdsForBlobPolicy.count,
+                    hasUsableBody: hasUsableBody,
+                    shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
+                    serverUtc: serverDate,
+                    cachedUtc: cachedDate,
+                    forceFetchProtected: forceFetchProtected,
+                    earlyExitReason: "skip_getNoteContent_meta_not_newer"
+                )
+                Log.noteDiag.info("\(blobPolicyLog)")
+                return
+            }
+            let blobOverrideLog = NoteDiagnostics.describeBlobFetchDecision(
+                noteId: nid,
+                isSemanticGeoMap: note.isSemanticGeoMap,
+                noteTypeBook: note.type == .book,
+                childCountForPolicy: childIdsForBlobPolicy.count,
+                hasUsableBody: hasUsableBody,
+                shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
+                serverUtc: serverDate,
+                cachedUtc: cachedDate,
+                forceFetchProtected: forceFetchProtected,
+                earlyExitReason: "override_fetch_empty_body_geo_or_book_children"
+            )
+            Log.noteDiag.info("\(blobOverrideLog)")
+        } else {
+            let blobFetchLog = NoteDiagnostics.describeBlobFetchDecision(
+                noteId: nid,
+                isSemanticGeoMap: note.isSemanticGeoMap,
+                noteTypeBook: note.type == .book,
+                childCountForPolicy: childIdsForBlobPolicy.count,
+                hasUsableBody: hasUsableBody,
+                shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
+                serverUtc: self.serverUtcDateModified,
+                cachedUtc: cachedDate,
+                forceFetchProtected: forceFetchProtected,
+                earlyExitReason: "will_fetch_meta_newer_or_uncached_or_protected_gate"
+            )
+            Log.noteDiag.info("\(blobFetchLog)")
         }
 
         let hadCachedContent = self.contentString != nil
@@ -273,8 +360,17 @@ final class NoteDetailViewModel {
         defer { if !hadCachedContent { isLoadingContent = false } }
 
         do {
+            Log.noteDiag.info("NoteDiag CONTENT phase=loadContent.beginGetNoteContent noteId=\(nid) hadCachedContentString=\(hadCachedContent)")
             let data = try await client.getNoteContent(nid)
             let htmlString = String(data: data, encoding: .utf8)
+            let blobOkLog = NoteDiagnostics.describeContentState(
+                phase: "loadContent.getNoteContent.success",
+                noteId: nid,
+                contentBytes: data.count,
+                trimmedBodyEmpty: (htmlString ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                previewSource: htmlString
+            )
+            Log.noteDiag.info("\(blobOkLog)")
 
             self.content = data
             self.serverContentHash = htmlString?.hashValue
@@ -314,6 +410,7 @@ final class NoteDetailViewModel {
                 return
             }
             Log.api.error("Failed to load note content")
+            Log.noteDiag.error("NoteDiag CONTENT phase=loadContent.getNoteContent.failed noteId=\(nid) error=\(String(describing: apiError))")
 
             if note.isProtected {
                 if Self.protectedSessionLikelyEnded(error) {
@@ -431,12 +528,14 @@ final class NoteDetailViewModel {
             let response = try await client.getNote(nid)
             metaResponse = response
             serverDate = response.utcDateModified
+            Log.noteDiag.info("\(NoteDiagnostics.describeNoteResponse(response, phase: "refresh.getNote.success"))")
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError {
                 return
             }
             Log.api.error("Note detail refresh: getNote failed — leaving UI unchanged")
+            Log.noteDiag.error("NoteDiag READ phase=refresh.getNote.failed noteId=\(nid) error=\(String(describing: apiError))")
         }
 
         // 2) Compare timestamps
@@ -459,15 +558,25 @@ final class NoteDetailViewModel {
         var fetchedHTML: String?
         var skipApplyingStaleMetaNote = false
         do {
+            Log.noteDiag.info("NoteDiag CONTENT phase=refresh.beginGetNoteContent noteId=\(nid)")
             let data = try await client.getNoteContent(nid)
             fetchedData = data
             fetchedHTML = String(data: data, encoding: .utf8)
+            let refreshBlobLog = NoteDiagnostics.describeContentState(
+                phase: "refresh.getNoteContent.success",
+                noteId: nid,
+                contentBytes: data.count,
+                trimmedBodyEmpty: (fetchedHTML ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                previewSource: fetchedHTML
+            )
+            Log.noteDiag.info("\(refreshBlobLog)")
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError {
                 return
             }
             Log.api.error("Note detail refresh: getNoteContent failed — will apply meta only; content may stay stale or empty")
+            Log.noteDiag.error("NoteDiag CONTENT phase=refresh.getNoteContent.failed noteId=\(nid) error=\(String(describing: apiError))")
             if let meta = metaResponse, meta.isProtected, Self.protectedSessionLikelyEnded(error) {
                 self.appState.protectedSessionActive = false
                 self.needsProtectedSession = true
@@ -863,18 +972,50 @@ final class NoteDetailViewModel {
 
     func renameNote() async {
         let nid = self.noteId
-        guard let client, !self.editedTitle.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        let trimmed = self.editedTitle.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
         self.isSaving = true
         defer { self.isSaving = false }
 
-        do {
-            let updated = try await client.updateNote(nid, request: UpdateNoteRequest(title: self.editedTitle, type: nil, mime: nil))
-            self.note = NoteItem(from: updated)
-            self.editingTitle = false
-        } catch {
-            self.saveError = APIError.from(error).localizedDescription
-            self.showSaveError = true
+        if let client, isOnline {
+            do {
+                let updated = try await client.updateNote(nid, request: UpdateNoteRequest(title: trimmed, type: nil, mime: nil))
+                self.note = NoteItem(from: updated)
+                self.editingTitle = false
+                if let profileId = serverProfileId {
+                    Self.persistNoteResponse(updated, profileId: profileId, persistence: persistence)
+                    try? persistence.commitBatch()
+                }
+                NotificationCenter.default.post(
+                    name: .trinoteTreeShouldRefresh,
+                    object: nil,
+                    userInfo: ["noteId": nid]
+                )
+                return
+            } catch {
+                self.saveError = APIError.from(error).localizedDescription
+                self.showSaveError = true
+                return
+            }
         }
+
+        guard let profileId = serverProfileId else { return }
+        if let cached = try? persistence.fetchCachedNote(id: nid, serverProfileId: profileId) {
+            cached.title = trimmed
+            try? persistence.commitBatch()
+        }
+        if var n = self.note {
+            n.title = trimmed
+            self.note = n
+        }
+        self.editingTitle = false
+        try? persistence.upsertPendingNotePatch(noteId: nid, title: trimmed, serverProfileId: profileId)
+        appState.backgroundSyncPendingChanges()
+        NotificationCenter.default.post(
+            name: .trinoteTreeShouldRefresh,
+            object: nil,
+            userInfo: ["noteId": nid]
+        )
     }
 
     /// Duplicate this note as a sibling under the same parent (first parent if cloned). Opens via navigation from the view.
@@ -1007,15 +1148,18 @@ final class NoteDetailViewModel {
 
         let mime = self.newNoteType.creationMime
         let initial = self.newNoteType.creationInitialContent
+        let storageType = self.newNoteType.triliumStorageType
+        let attrs = self.newNoteType.creationInitialAttributes
 
         do {
             let (newId, _) = try persistence.createOfflineChildNote(
                 parentNoteId: nid,
                 title: trimmed,
-                noteType: self.newNoteType.rawValue,
+                noteType: storageType,
                 mime: mime,
                 initialContent: initial,
-                serverProfileId: profileId
+                serverProfileId: profileId,
+                initialAttributes: attrs
             )
             self.showCreateChild = false
             self.newNoteTitle = ""
@@ -1032,27 +1176,94 @@ final class NoteDetailViewModel {
 
     func deleteNote() async -> Bool {
         let nid = self.noteId
-        guard let client else {
-            self.saveError = "Cannot delete while offline."
-            self.showSaveError = true
-            return false
-        }
         self.isSaving = true
         defer { self.isSaving = false }
 
-        do {
-            try await client.deleteNote(nid)
-            if let profileId = serverProfileId {
-                GhostNoteTracker.shared.add(nid, serverProfileId: profileId)
-                persistence.removeFavoritesForCachedSubtree(rootNoteId: nid, serverProfileId: profileId)
-                try? persistence.deleteCachedNotes(noteIds: [nid], serverProfileId: profileId)
+        if let client, isOnline {
+            do {
+                try await client.deleteNote(nid)
+                if let profileId = serverProfileId {
+                    GhostNoteTracker.shared.add(nid, serverProfileId: profileId)
+                    persistence.removeFavoritesForCachedSubtree(rootNoteId: nid, serverProfileId: profileId)
+                    try? persistence.deleteCachedNotes(noteIds: [nid], serverProfileId: profileId)
+                }
+                NotificationCenter.default.post(name: .noteDeleted, object: nil)
+                return true
+            } catch {
+                Log.api.error("Failed to delete note: \(error)")
+                self.saveError = APIError.from(error).localizedDescription
+                self.showSaveError = true
+                return false
             }
+        }
+
+        guard let profileId = serverProfileId else { return false }
+        do {
+            try persistence.enqueueOfflineNoteDeletion(noteId: nid, serverProfileId: profileId)
+            appState.backgroundSyncPendingChanges()
             NotificationCenter.default.post(name: .noteDeleted, object: nil)
             return true
         } catch {
-            Log.api.error("Failed to delete note: \(error)")
+            Log.api.error("Failed to enqueue offline deletion: \(error)")
             self.saveError = APIError.from(error).localizedDescription
             self.showSaveError = true
+            return false
+        }
+    }
+
+    /// Permanently deletes a direct child (e.g. geo map location note). Same cache cleanup as `deleteNote()` but keeps this detail screen open.
+    func deleteChildNote(noteId childNoteId: String) async -> Bool {
+        guard childNoteId != noteId else { return false }
+        guard resolvedChildNoteIdsForDetail().contains(childNoteId) else {
+            saveError = String(
+                localized: "That note is not a sub-note of this one.",
+                comment: "Geo map delete pin: child not under current parent"
+            )
+            showSaveError = true
+            return false
+        }
+        isSaving = true
+        defer { isSaving = false }
+
+        if let client, isOnline {
+            do {
+                try await client.deleteNote(childNoteId)
+                if let profileId = serverProfileId {
+                    GhostNoteTracker.shared.add(childNoteId, serverProfileId: profileId)
+                    persistence.removeFavoritesForCachedSubtree(rootNoteId: childNoteId, serverProfileId: profileId)
+                    try? persistence.deleteCachedNotes(noteIds: [childNoteId], serverProfileId: profileId)
+                    try? persistence.commitBatch()
+                }
+                NotificationCenter.default.post(name: .noteDeleted, object: nil)
+                NotificationCenter.default.post(
+                    name: .trinoteTreeShouldRefresh,
+                    object: nil,
+                    userInfo: ["noteId": childNoteId]
+                )
+                return true
+            } catch {
+                Log.geoMap.error("deleteChildNote failed: \(error.localizedDescription)")
+                saveError = APIError.from(error).localizedDescription
+                showSaveError = true
+                return false
+            }
+        }
+
+        guard let profileId = serverProfileId else { return false }
+        do {
+            try persistence.enqueueOfflineNoteDeletion(noteId: childNoteId, serverProfileId: profileId)
+            appState.backgroundSyncPendingChanges()
+            NotificationCenter.default.post(name: .noteDeleted, object: nil)
+            NotificationCenter.default.post(
+                name: .trinoteTreeShouldRefresh,
+                object: nil,
+                userInfo: ["noteId": childNoteId]
+            )
+            return true
+        } catch {
+            Log.geoMap.error("Offline deleteChildNote failed: \(error.localizedDescription)")
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
             return false
         }
     }
@@ -1134,6 +1345,31 @@ final class NoteDetailViewModel {
         return ordered
     }
 
+    /// Fetches the parent and each direct child from the server, updates the local cache, then reloads `childNotes`.
+    /// Use after geo-map pin changes or when child titles may have changed on the server.
+    func refreshDirectChildrenMetadataFromServer() async {
+        guard let client, let profileId = serverProfileId else {
+            await loadChildNotes()
+            return
+        }
+        do {
+            let parentResp = try await client.getNote(noteId)
+            Self.persistNoteResponse(parentResp, profileId: profileId, persistence: persistence)
+            self.note = NoteItem(from: parentResp)
+        } catch {
+        }
+        let childIds = resolvedChildNoteIdsForDetail()
+        for childId in childIds {
+            do {
+                let response = try await client.getNote(childId)
+                Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+            } catch {
+            }
+        }
+        try? persistence.commitBatch()
+        await loadChildNotes()
+    }
+
     /// Loads child notes purely from cache. The sync keeps the cache fresh.
     func loadChildNotes() async {
         let childIds = resolvedChildNoteIdsForDetail()
@@ -1143,6 +1379,7 @@ final class NoteDetailViewModel {
             } else {
                 childNotes = []
             }
+            geoMapDetectionTick &+= 1
             return
         }
         loadChildNotesFromCache(childNoteIds: childIds)
@@ -1202,6 +1439,110 @@ final class NoteDetailViewModel {
             }
         }
         self.childNotes = results
+        geoMapDetectionTick &+= 1
+    }
+
+    /// True if any direct child has a `#geolocation` label in SwiftData (map pins). Used when the server reports
+    /// `type=book` with an empty body but the note is a geographic map in Trilium desktop.
+    func cachedAnyChildHasGeolocationLabel() -> Bool {
+        guard let profileId = serverProfileId else { return false }
+        for childId in resolvedChildNoteIdsForDetail() {
+            guard let attrs = try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId) else { continue }
+            if attrs.contains(where: { $0.type == "label" && $0.name == "geolocation" }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Geo map pins from SwiftData (`#geolocation` on direct children). Used offline or when the API is unavailable.
+    func geoMapPinsFromCache() -> [GeoMapPin] {
+        guard let profileId = serverProfileId else { return [] }
+        var pins: [GeoMapPin] = []
+        for childId in resolvedChildNoteIdsForDetail() {
+            guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
+            let attrs = (try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
+            guard let geoVal = attrs.first(where: { $0.type == "label" && $0.name == "geolocation" })?.value else { continue }
+            let parts = geoVal.split(separator: ",")
+            guard parts.count == 2,
+                  let lat = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+                  let lng = Double(parts[1].trimmingCharacters(in: .whitespaces)) else { continue }
+            let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = trimmedTitle.isEmpty ? childId : trimmedTitle
+            pins.append(GeoMapPin(noteId: childId, title: title, lat: lat, lng: lng))
+        }
+        return pins
+    }
+
+    /// Fetches pin positions from the server (when online). Returns empty if there is no client or the app is offline.
+    func fetchGeoMapPinsFromServer(note: NoteItem) async -> [GeoMapPin] {
+        guard let client, isOnline else { return [] }
+        var pins: [GeoMapPin] = []
+        let parentNote = try? await client.getNote(note.noteId)
+        let childIds = parentNote?.childNoteIds ?? note.childNoteIds
+        for childId in childIds {
+            do {
+                let childResp = try await client.getNote(childId)
+                let childItem = NoteItem(from: childResp)
+                if let geoAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == "geolocation" }) {
+                    let parts = geoAttr.value.split(separator: ",")
+                    if parts.count == 2,
+                       let lat = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+                       let lng = Double(parts[1].trimmingCharacters(in: .whitespaces)) {
+                        pins.append(GeoMapPin(noteId: childId, title: childItem.title, lat: lat, lng: lng))
+                    }
+                }
+            } catch {
+            }
+        }
+        return pins
+    }
+
+    /// When the parent is a semantic geo map (`geoMap` or `book` + `#viewType=geoMap`) with an empty body, child `#geolocation` may not be in SwiftData yet. Fetches a limited set of children so routing can recognize pins.
+    /// Skips calendar roots — those are handled by CalendarNoteView.
+    func prefetchChildNotesForGeoMapBookIfNeeded() async {
+        guard let note, note.isSemanticGeoMap, !note.isCalendarRoot else {
+            Log.noteDiag.debug(
+                "NoteDiag GEO_PREFETCH skip noteId=\(self.noteId) hasNote=\(self.note != nil) semanticGeo=\(self.note?.isSemanticGeoMap ?? false) calendarRoot=\(self.note?.isCalendarRoot ?? false)"
+            )
+            return
+        }
+        guard let client, isOnline, let profileId = serverProfileId else {
+            Log.noteDiag.debug(
+                "NoteDiag GEO_PREFETCH skip noteId=\(note.noteId) client=\(self.client != nil) online=\(self.isOnline) profile=\(self.serverProfileId != nil)"
+            )
+            return
+        }
+        let body = (contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard body.isEmpty else {
+            Log.noteDiag.debug("NoteDiag GEO_PREFETCH skip noteId=\(note.noteId) reason=bodyNonEmpty len=\(body.count)")
+            return
+        }
+        let childIds = resolvedChildNoteIdsForDetail()
+        let hasGeoChild = cachedAnyChildHasGeolocationLabel()
+        guard !childIds.isEmpty, !hasGeoChild else {
+            Log.noteDiag.info(
+                "NoteDiag GEO_PREFETCH skip noteId=\(note.noteId) childIds.empty=\(childIds.isEmpty) cachedAnyChildHasGeolocation=\(hasGeoChild)"
+            )
+            return
+        }
+
+        Log.noteDiag.info(
+            "NoteDiag GEO_PREFETCH begin noteId=\(note.noteId) childCount=\(childIds.count) firstIds=\(childIds.prefix(8).joined(separator: ","))"
+        )
+        for childId in childIds.prefix(16) {
+            do {
+                let response = try await client.getNote(childId)
+                Log.noteDiag.info(
+                    "NoteDiag GEO_PREFETCH child noteId=\(childId) api.type=\(response.type) title=\(String(response.title.prefix(80))) attrCount=\(response.attributes.count)"
+                )
+                Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+            } catch {
+                Log.noteDiag.warning("NoteDiag GEO_PREFETCH child failed noteId=\(childId) \(error.localizedDescription)")
+            }
+        }
+        try? persistence.commitBatch()
+        geoMapDetectionTick &+= 1
     }
 
     // MARK: - Cache Fallback
@@ -1336,11 +1677,15 @@ final class NoteDetailViewModel {
     }
 
     private func loadContentFromCache() {
-        guard let profileId = self.serverProfileId else { return }
+        guard let profileId = self.serverProfileId else {
+            Log.noteDiag.debug("NoteDiag CONTENT phase=cache.skip noteId=\(self.noteId) reason=noServerProfileId")
+            return
+        }
         let nid = self.noteId
         if let cached = try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId),
            let data = cached.content {
             if cached.isProtected, !appState.protectedSessionActive {
+                Log.noteDiag.info("NoteDiag CONTENT phase=cache.skipProtected noteId=\(nid) bytes=\(data.count)")
                 return
             }
             content = data
@@ -1348,6 +1693,17 @@ final class NoteDetailViewModel {
             rawContentString = html
             contentString = html
             checkForDraft()
+            let trimmed = (html ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let cacheHitLog = NoteDiagnostics.describeContentState(
+                phase: "cache.hit",
+                noteId: nid,
+                contentBytes: data.count,
+                trimmedBodyEmpty: trimmed.isEmpty,
+                previewSource: html
+            )
+            Log.noteDiag.info("\(cacheHitLog)")
+        } else {
+            Log.noteDiag.info("NoteDiag CONTENT phase=cache.miss noteId=\(nid) (no cached row or empty content)")
         }
     }
 }

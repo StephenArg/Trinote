@@ -150,7 +150,8 @@ actor MockTriliumClient: TriliumClientProtocol {
             prefix: nil,
             isProtected: false,
             noteId: nil,
-            branchId: nil
+            branchId: nil,
+            templateNoteId: nil
         )
         return try await createNote(req)
     }
