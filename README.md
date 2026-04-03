@@ -120,7 +120,7 @@ Tests cover:
 
 ---
 
-<a href="buymeacoffee.com/vero.fide">Buy me a coffee</a> ☕️ 
+<a href="https://buymeacoffee.com/vero.fide">Buy me a coffee</a> ☕️ 
 
 <img width="100" height="100" alt="qr-code" src="https://github.com/user-attachments/assets/2ebab2dd-4bf6-4d86-a29c-4cf75fcf834e" />
 
