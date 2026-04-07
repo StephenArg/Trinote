@@ -788,12 +788,12 @@ final class AppState {
         }
     }
 
-    func loginWithPassword(_ password: String, rememberMe: Bool, profile: ServerProfile) async throws {
+    func loginWithPassword(_ password: String, rememberMe: Bool, totpToken: String? = nil, profile: ServerProfile) async throws {
         guard let url = profile.url else { throw APIError.invalidURL }
 
         try await keychain.clearServerAuthArtifacts(forServer: profile.id)
         let newClient = TriliumClient(baseURL: url)
-        try await newClient.login(password: password, rememberMe: rememberMe)
+        try await newClient.login(password: password, rememberMe: rememberMe, totpToken: totpToken)
 
         let exportedLogin = await newClient.exportSessionCookieData()
         try? await keychain.saveSessionCookies(exportedLogin, forServer: profile.id)

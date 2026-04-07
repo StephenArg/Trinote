@@ -11,7 +11,11 @@ enum APIError: LocalizedError, Sendable {
     case certificateError
     case decodingFailed(String)
     case encodingFailed(String)
-    /// No valid Trilium session (replaces legacy ETAPI “no token”).
+    /// Server requires a TOTP code to complete login.
+    case totpRequired
+    /// The submitted TOTP code was incorrect.
+    case totpInvalid
+    /// No valid Trilium session (replaces legacy ETAPI "no token").
     case noToken
     case connectionRefused
     case cancelled
@@ -24,7 +28,7 @@ enum APIError: LocalizedError, Sendable {
         case .invalidResponse:
             return "Received an invalid response from the server."
         case .unauthorized:
-            return "Authentication failed. Check your password or sign in again in the browser if you use SSO/TOTP."
+            return "Authentication failed. Check your password or sign in again in the browser if you use SSO."
         case .notFound(let resource):
             return "Not found: \(resource)"
         case .serverError(let code, let message):
@@ -40,6 +44,10 @@ enum APIError: LocalizedError, Sendable {
             return "Failed to parse server response: \(detail)"
         case .encodingFailed(let detail):
             return "Failed to encode request: \(detail)"
+        case .totpRequired:
+            return "This server requires a TOTP code. Please enter your authenticator code."
+        case .totpInvalid:
+            return "TOTP code is incorrect. Please try again."
         case .noToken:
             return "Not signed in. Please log in with your Trilium password."
         case .connectionRefused:

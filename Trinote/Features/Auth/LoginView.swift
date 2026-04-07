@@ -32,6 +32,9 @@ struct LoginView: View {
             } message: {
                 Text(viewModel.errorMessage ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
             }
+            .sheet(isPresented: $viewModel.showTotpEntry) {
+                TotpEntrySheet(viewModel: viewModel, appState: appState)
+            }
             .onAppear { viewModel.loadProfiles() }
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
@@ -128,7 +131,7 @@ struct LoginView: View {
             Toggle(String(localized: "Stay signed in (Remember me)", comment: "Login toggle"), isOn: $viewModel.rememberMe)
                 .font(.subheadline)
 
-            Text(String(localized: "TOTP / SSO must be completed in the browser for now.", comment: "Login hint"))
+            Text(String(localized: "TOTP is supported. SSO must be completed in the browser.", comment: "Login hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -182,6 +185,95 @@ struct LoginView: View {
         }
     }
 }
+
+// MARK: - TOTP Entry Sheet
+
+private struct TotpEntrySheet: View {
+    @Bindable var viewModel: AuthViewModel
+    let appState: AppState
+    @FocusState private var isTotpFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                VStack(spacing: 8) {
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                    Text(String(localized: "Two-Factor Authentication", comment: "TOTP sheet title"))
+                        .font(.title2.bold())
+                    Text(String(localized: "Enter the code from your authenticator app.", comment: "TOTP sheet subtitle"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 20)
+
+                TextField(String(localized: "6-digit code", comment: "TOTP field"), text: $viewModel.totpCode)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .multilineTextAlignment(.center)
+                    .font(.title2.monospaced())
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 200)
+                    .focused($isTotpFocused)
+                    .accessibilityLabel(String(localized: "TOTP code", comment: "VoiceOver"))
+                    .onSubmit { submit() }
+
+                Button {
+                    submit()
+                } label: {
+                    Group {
+                        if viewModel.isLoading {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Text(String(localized: "Verify", comment: "TOTP submit button"))
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(viewModel.totpCode.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isLoading)
+                .accessibilityLabel(String(localized: "Verify TOTP code", comment: "VoiceOver"))
+
+                Text(String(localized: "You can also enter a recovery code.", comment: "TOTP recovery hint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+            .padding()
+            .navigationTitle(String(localized: "Verify Identity", comment: "TOTP nav title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(String(localized: "Cancel", comment: "TOTP cancel")) {
+                        viewModel.cancelTotp()
+                    }
+                }
+            }
+            .alert(String(localized: "Error", comment: "TOTP error"), isPresented: $viewModel.showError) {
+                Button(String(localized: "OK", comment: "Dismiss alert")) { viewModel.showError = false }
+            } message: {
+                Text(viewModel.errorMessage ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
+            }
+            .onAppear { isTotpFocused = true }
+        }
+        .interactiveDismissDisabled(viewModel.isLoading)
+        .presentationDetents([.medium])
+    }
+
+    private func submit() {
+        Task { await viewModel.submitTotp(appState: appState) }
+    }
+}
+
+// MARK: - Saved Profile Row
 
 private struct SavedProfileRow: View {
     let profile: ServerProfile

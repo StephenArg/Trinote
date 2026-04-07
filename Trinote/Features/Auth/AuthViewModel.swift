@@ -8,12 +8,18 @@ final class AuthViewModel {
     var serverName = ""
     var serverURL = ""
     var password = ""
-    /// Matches Trilium “Remember me” session cookie behavior.
+    /// Matches Trilium "Remember me" session cookie behavior.
     var rememberMe = true
     var isLoading = false
     var errorMessage: String?
     var showError = false
     var profiles: [ServerProfile] = []
+
+    /// TOTP / MFA state
+    var totpCode = ""
+    var showTotpEntry = false
+    /// Stashed profile used when retrying login with a TOTP code.
+    private var pendingTotpProfile: ServerProfile?
 
     private let persistence = PersistenceManager.shared
 
@@ -75,11 +81,49 @@ final class AuthViewModel {
             try await appState.loginWithPassword(password, rememberMe: rememberMe, profile: profile)
             password = ""
             loadProfiles()
+        } catch let error as APIError where error == .totpRequired {
+            pendingTotpProfile = profile
+            totpCode = ""
+            showTotpEntry = true
         } catch {
             errorMessage = APIError.from(error).localizedDescription
             showError = true
             Log.auth.error("Login failed: \(error)")
         }
+    }
+
+    /// Completes login after the user enters a TOTP code.
+    func submitTotp(appState: AppState) async {
+        guard let profile = pendingTotpProfile else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            try await appState.loginWithPassword(password, rememberMe: rememberMe, totpToken: totpCode, profile: profile)
+            password = ""
+            totpCode = ""
+            pendingTotpProfile = nil
+            showTotpEntry = false
+            loadProfiles()
+        } catch let error as APIError where error == .totpInvalid {
+            errorMessage = error.localizedDescription
+            showError = true
+            totpCode = ""
+        } catch {
+            showTotpEntry = false
+            pendingTotpProfile = nil
+            totpCode = ""
+            errorMessage = APIError.from(error).localizedDescription
+            showError = true
+            Log.auth.error("TOTP login failed: \(error)")
+        }
+    }
+
+    func cancelTotp() {
+        showTotpEntry = false
+        pendingTotpProfile = nil
+        totpCode = ""
     }
 
     func connectToProfile(_ profile: ServerProfile, appState: AppState) async {
@@ -107,5 +151,15 @@ final class AuthViewModel {
             return existing
         }
         return ServerProfile(name: name, baseURL: url)
+    }
+}
+
+private extension APIError {
+    static func == (lhs: APIError, rhs: APIError) -> Bool {
+        switch (lhs, rhs) {
+        case (.totpRequired, .totpRequired): return true
+        case (.totpInvalid, .totpInvalid): return true
+        default: return false
+        }
     }
 }

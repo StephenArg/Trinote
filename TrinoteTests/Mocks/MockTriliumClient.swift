@@ -47,10 +47,11 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func exportSessionCookieData() -> Data? { nil }
 
-    func login(password: String, rememberMe: Bool) async throws {
+    func login(password: String, rememberMe: Bool, totpToken: String? = nil) async throws {
         loginCalled = true
         _ = password
         _ = rememberMe
+        _ = totpToken
         isSessionValid = true
     }
 

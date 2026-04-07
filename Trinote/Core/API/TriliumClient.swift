@@ -8,7 +8,7 @@ protocol TriliumClientProtocol: Actor, Sendable {
     /// Whether the client has established a Trilium session (validated or just logged in).
     var isSessionValid: Bool { get }
 
-    func login(password: String, rememberMe: Bool) async throws
+    func login(password: String, rememberMe: Bool, totpToken: String?) async throws
     /// Validates cookies against `/api/app-info` and acquires CSRF token.
     func restoreSession() async throws
     func logout() async throws
@@ -221,13 +221,16 @@ actor TriliumClient: TriliumClientProtocol {
 
     // MARK: - Auth
 
-    func login(password: String, rememberMe: Bool) async throws {
+    func login(password: String, rememberMe: Bool, totpToken: String? = nil) async throws {
         csrfToken = nil
         isSessionValid = false
 
         var body = "password=\(Self.applicationFormEncode(password))"
         if rememberMe {
             body += "&rememberMe=1"
+        }
+        if let totpToken, !totpToken.isEmpty {
+            body += "&totpToken=\(Self.applicationFormEncode(totpToken))"
         }
 
         let loginURL = baseURL.appendingPathComponent("login")
@@ -244,7 +247,13 @@ actor TriliumClient: TriliumClientProtocol {
         stripSameSiteFromCookies()
 
         if redirectStopHTTP.statusCode == 401 {
-            throw APIError.unauthorized
+            let html = String(data: redirectStopData, encoding: .utf8) ?? ""
+            let totpError = Self.detectTotpFromLoginResponse(html: html)
+            switch totpError {
+            case .required: throw APIError.totpRequired
+            case .invalid:  throw APIError.totpInvalid
+            case .none:     throw APIError.unauthorized
+            }
         }
 
         var shellData = redirectStopData
@@ -327,7 +336,30 @@ actor TriliumClient: TriliumClientProtocol {
         return (data, http, loginSession)
     }
 
-    /// `application/x-www-form-urlencoded` (RFC 3986) — stricter than `.urlQueryAllowed` so `&`, `+`, `=`, etc. in passwords don’t break the body.
+    // MARK: - TOTP detection from login 401 response
+
+    enum TotpDetectionResult { case required, invalid, none }
+
+    /// Inspects the 401 HTML returned by POST /login for TOTP indicators.
+    /// Trilium renders wrongTotp and totpEnabled variables into the login template.
+    private nonisolated static func detectTotpFromLoginResponse(html: String) -> TotpDetectionResult {
+        let lower = html.lowercased()
+        let totpEnabled = lower.contains("totpenabled")
+            || lower.contains("totp-enabled")
+            || lower.contains("name=\"totptoken\"")
+            || lower.contains("name='totptoken'")
+            || lower.contains("totptoken")
+
+        guard totpEnabled else { return .none }
+
+        let wrongTotp = lower.contains("wrongtotp")
+            || lower.contains("wrong-totp")
+            || lower.contains("totp verification failed")
+            || lower.contains("wrong totp")
+
+        return wrongTotp ? .invalid : .required
+    }
+
     private nonisolated static func applicationFormEncode(_ s: String) -> String {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
