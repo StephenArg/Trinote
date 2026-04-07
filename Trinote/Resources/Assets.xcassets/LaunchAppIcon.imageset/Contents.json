@@ -43,17 +43,6 @@
       ],
       "idiom" : "universal",
       "scale" : "3x"
-    },
-    {
-      "appearances" : [
-        {
-          "appearance" : "luminosity",
-          "value" : "tinted"
-        }
-      ],
-      "filename" : "launch-1024-tinted.png",
-      "idiom" : "universal",
-      "scale" : "1x"
     }
   ],
   "info" : {

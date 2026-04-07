@@ -2,6 +2,7 @@ import Combine
 import SwiftUI
 import PhotosUI
 import UIKit
+import WebKit
 
 /// Which ⋯ menu command to mirror on the trailing toolbar; stored in `UserDefaults` via `@AppStorage`.
 
@@ -90,6 +91,10 @@ struct NoteDetailView: View {
     @State private var showEditorSaveCancelChip = true
     @State private var lastEditorScrollOffsetY: CGFloat = 0
     @State private var editorSaveCancelScrollBaselineReady = false
+    /// True while the table context toolbar is visible in the editor.
+    @State private var editorTableToolsVisible = false
+    /// Reference to the rich-text editor WKWebView so the save button can call JS `getContent()`.
+    @State private var editorWebView: WKWebView?
 
     /// Bridge to communicate with the canvas editor WKWebView (call getSceneData on save).
     @StateObject private var canvasEditorBridge = CanvasEditorBridge()
@@ -230,11 +235,26 @@ struct NoteDetailView: View {
         .accessibilityLabel(String(localized: "Edit note", comment: "Floating scroll edit button"))
     }
 
+    /// Fetches the latest HTML from the rich-text editor (including non-ProseMirror state like
+    /// table captions) and then saves. Falls back to the debounce-cached content when the
+    /// WKWebView is unavailable (e.g. non-rich-text note types).
+    private func saveRichTextContent(vm: NoteDetailViewModel) {
+        if let wv = editorWebView {
+            wv.evaluateJavaScript("window.editorBridge.getContent()") { result, _ in
+                DispatchQueue.main.async {
+                    vm.saveContent(freshHTML: result as? String)
+                }
+            }
+        } else {
+            vm.saveContent()
+        }
+    }
+
     /// Save-only floating chip (cancel is in the note toolbar menu / quick action while editing).
     @ViewBuilder
     private func editorSaveChip(vm: NoteDetailViewModel) -> some View {
         Button {
-            vm.saveContent()
+            saveRichTextContent(vm: vm)
         } label: {
             ZStack {
                 if vm.isSaving {
@@ -992,14 +1012,24 @@ struct NoteDetailView: View {
                 onEditorScroll: { y, verticallyScrollable in
                     updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
                 },
+                onTableToolsVisibilityChanged: { visible in
+                    editorTableToolsVisible = visible
+                    if !visible {
+                        withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
+                            showEditorSaveCancelChip = true
+                        }
+                    }
+                },
+                onRequestSave: { html in vm.saveContent(freshHTML: html) },
                 imageToInsert: $imageToInsert,
+                webViewBinding: $editorWebView,
                 initialScrollFraction: readOnlyScrollFraction
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
             // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).
             .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
 
-            if showEditorSaveCancelChip {
+            if showEditorSaveCancelChip && !editorTableToolsVisible {
                 editorSaveChip(vm: vm)
                     .padding(.trailing, 16)
                     .padding(.bottom, 62)
@@ -1009,6 +1039,7 @@ struct NoteDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+        .animation(.easeInOut(duration: 0.15), value: editorTableToolsVisible)
         .onAppear {
             editorSaveCancelScrollBaselineReady = false
             lastEditorScrollOffsetY = 0
@@ -1648,7 +1679,7 @@ struct NoteDetailView: View {
                             if note.type == .canvas {
                                 saveCanvasContent(vm: vm)
                             } else {
-                                vm.saveContent()
+                                saveRichTextContent(vm: vm)
                             }
                         } else {
                             vm.startEditing()

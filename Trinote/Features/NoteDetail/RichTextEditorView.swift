@@ -8,7 +8,14 @@ struct RichTextEditorView: UIViewRepresentable {
     var onPickImage: (() -> Void)?
     /// `#editor-container` scroll metrics: `scrollTop` increases when scrolling down; `verticallyScrollable` is false when the body fits without scrolling.
     var onEditorScroll: ((CGFloat, Bool) -> Void)?
+    /// Called when the table context toolbar shows or hides.
+    var onTableToolsVisibilityChanged: ((Bool) -> Void)?
+    /// Called when the in-editor save button (e.g. on the table toolbar) is tapped, with fresh HTML.
+    var onRequestSave: ((String) -> Void)?
     @Binding var imageToInsert: String?
+    /// Optional binding so the parent view can hold a reference to the underlying WKWebView
+    /// (e.g. to call `evaluateJavaScript` for fetching fresh editor content before save).
+    var webViewBinding: Binding<WKWebView?>?
     /// Fraction (0–1) the read-only view was scrolled; the editor scrolls to this position after loading.
     var initialScrollFraction: CGFloat = 0
 
@@ -18,6 +25,7 @@ struct RichTextEditorView: UIViewRepresentable {
             onContentChanged: onContentChanged,
             onPickImage: onPickImage,
             onEditorScroll: onEditorScroll,
+            onTableToolsVisibilityChanged: onTableToolsVisibilityChanged,
             initialScrollFraction: initialScrollFraction
         )
     }
@@ -29,6 +37,9 @@ struct RichTextEditorView: UIViewRepresentable {
         contentController.add(coordinator, name: "contentChanged")
         contentController.add(coordinator, name: "pickImage")
         contentController.add(coordinator, name: "editorScroll")
+        contentController.add(coordinator, name: "tableToolsVisible")
+        contentController.add(coordinator, name: "requestSave")
+        contentController.add(coordinator, name: "debugLog")
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
@@ -59,6 +70,10 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.startKeyboardToolbarGapTracking()
         Self.removeInputAccessoryView(from: webView)
 
+        if let binding = webViewBinding {
+            DispatchQueue.main.async { binding.wrappedValue = webView }
+        }
+
         if let fileURL = Bundle.main.url(forResource: "editor", withExtension: "html") {
             webView.loadFileURL(fileURL, allowingReadAccessTo: Bundle.main.bundleURL)
         }
@@ -71,6 +86,8 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.onContentChanged = onContentChanged
         coordinator.onPickImage = onPickImage
         coordinator.onEditorScroll = onEditorScroll
+        coordinator.onTableToolsVisibilityChanged = onTableToolsVisibilityChanged
+        coordinator.onRequestSave = onRequestSave
         Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
@@ -106,6 +123,9 @@ struct RichTextEditorView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "contentChanged")
         uc.removeScriptMessageHandler(forName: "pickImage")
         uc.removeScriptMessageHandler(forName: "editorScroll")
+        uc.removeScriptMessageHandler(forName: "tableToolsVisible")
+        uc.removeScriptMessageHandler(forName: "requestSave")
+        uc.removeScriptMessageHandler(forName: "debugLog")
     }
 
     // MARK: - Remove iOS form navigation bar (up/down/done)
@@ -142,6 +162,8 @@ struct RichTextEditorView: UIViewRepresentable {
         var onContentChanged: ((String) -> Void)?
         var onPickImage: (() -> Void)?
         var onEditorScroll: ((CGFloat, Bool) -> Void)?
+        var onTableToolsVisibilityChanged: ((Bool) -> Void)?
+        var onRequestSave: ((String) -> Void)?
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
@@ -159,12 +181,14 @@ struct RichTextEditorView: UIViewRepresentable {
             onContentChanged: ((String) -> Void)?,
             onPickImage: (() -> Void)?,
             onEditorScroll: ((CGFloat, Bool) -> Void)?,
+            onTableToolsVisibilityChanged: ((Bool) -> Void)? = nil,
             initialScrollFraction: CGFloat = 0
         ) {
             self.initialHTML = initialHTML
             self.onContentChanged = onContentChanged
             self.onPickImage = onPickImage
             self.onEditorScroll = onEditorScroll
+            self.onTableToolsVisibilityChanged = onTableToolsVisibilityChanged
             self.initialScrollFraction = initialScrollFraction
         }
 
@@ -211,6 +235,24 @@ struct RichTextEditorView: UIViewRepresentable {
                     DispatchQueue.main.async {
                         callback?(y, verticallyScrollable)
                     }
+                }
+
+            case "tableToolsVisible":
+                let visible = (message.body as? Bool) == true
+                let callback = onTableToolsVisibilityChanged
+                DispatchQueue.main.async {
+                    callback?(visible)
+                }
+
+            case "requestSave":
+                if let html = message.body as? String {
+                    let callback = onRequestSave
+                    DispatchQueue.main.async { callback?(html) }
+                }
+
+            case "debugLog":
+                if let msg = message.body as? String {
+                    print("[TABLEDBG] \(msg)")
                 }
 
             default:

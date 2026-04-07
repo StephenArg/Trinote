@@ -173,8 +173,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 14px; }
         code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14px; }
         pre code { background: none; padding: 0; }
-        table { border-collapse: collapse; width: 100%; margin: 8px 0; }
-        th, td { border: 1px solid var(--border); padding: 8px; text-align: left; }
+        .table-scroll-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 8px 0; }
+        table caption { caption-side: top; text-align: center; font-size: 0.85em; color: var(--text-color); opacity: 0.6; background: rgba(128,128,128,0.06); padding: 6px 10px; border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0; }
+        figure.table { margin: 8px 0; display: flex; flex-direction: column; width: 100%; }
+        figure.table > figcaption { order: -1; text-align: center; font-size: 0.85em; color: var(--text-color); opacity: 0.6; background: rgba(128,128,128,0.06); padding: 6px 10px; border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0; }
+        table { border-collapse: separate; border-spacing: 0; width: 100%; }
+        th, td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 8px; text-align: left; min-width: 30px; word-wrap: break-word; overflow-wrap: break-word; }
+        tr:first-child > th, tr:first-child > td { border-top: 1px solid var(--border); }
+        th:first-child, td:first-child { border-left: 1px solid var(--border); }
         th { background: var(--code-bg); font-weight: 600; }
         blockquote { border-left: 4px solid var(--border); margin: 8px 0; padding: 4px 16px; opacity: 0.85; }
         /* TriliumNext: <aside class="admonition note">; legacy Trinote: div[data-callout-type] */
@@ -393,6 +399,23 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     });
                 });
             });
+        })();
+
+        // Wrap tables in a horizontally-scrollable container.
+        // If a table is inside <figure class="table">, wrap the whole figure.
+        (function() {
+            document.querySelectorAll('table').forEach(function(tbl) {
+                var target = tbl;
+                if (tbl.parentElement && tbl.parentElement.tagName === 'FIGURE' && tbl.parentElement.classList.contains('table')) {
+                    target = tbl.parentElement;
+                }
+                if (target.parentElement && target.parentElement.classList.contains('table-scroll-wrapper')) return;
+                var wrapper = document.createElement('div');
+                wrapper.className = 'table-scroll-wrapper';
+                target.parentNode.insertBefore(wrapper, target);
+                wrapper.appendChild(target);
+            });
+            reportHeight();
         })();
         </script>
         </body>

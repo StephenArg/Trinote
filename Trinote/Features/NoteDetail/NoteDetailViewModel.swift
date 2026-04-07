@@ -957,8 +957,16 @@ final class NoteDetailViewModel {
         }
     }
 
-    func saveContent() {
-        flushPendingEditorContent()
+    /// - Parameter freshHTML: When provided (e.g. from a JS `getContent()` call), this value
+    ///   is used directly instead of the debounce-cached `_pendingEditorHTML`. This ensures
+    ///   non-ProseMirror state like table captions is always included in the save.
+    func saveContent(freshHTML: String? = nil) {
+        if let html = freshHTML {
+            editableContent = html
+            _pendingEditorHTML = nil
+        } else {
+            flushPendingEditorContent()
+        }
         guard let note else {
             self.saveError = String(localized: "Could not load this note.", comment: "Save without cached note")
             self.showSaveError = true

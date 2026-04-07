@@ -364,10 +364,143 @@ body { display: flex; flex-direction: column; }
   border-radius: 2px;
   padding: 0.05em 0;
 }
-.tiptap table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
-.tiptap th, .tiptap td { border: 1px solid var(--table-border); padding: 6px 10px; min-width: 60px; vertical-align: top; }
+.tiptap .tableWrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0.5em 0; position: relative; }
+.tiptap table { border-collapse: separate; border-spacing: 0; width: 100%; }
+.tiptap th, .tiptap td { border-right: 1px solid var(--table-border); border-bottom: 1px solid var(--table-border); padding: 6px 10px; min-width: 30px; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; }
+.tiptap tr:first-child > th, .tiptap tr:first-child > td { border-top: 1px solid var(--table-border); }
+.tiptap th:first-child, .tiptap td:first-child { border-left: 1px solid var(--table-border); }
 .tiptap th { background: rgba(128,128,128,0.08); font-weight: 600; }
-.tiptap .selectedCell { background: var(--btn-active-bg); }
+.tiptap td.selectedCell, .tiptap th.selectedCell,
+.tiptap td[data-user-selected-cell], .tiptap th[data-user-selected-cell] {
+  background-color: rgba(0,122,255,0.3) !important;
+  box-shadow: inset 0 0 0 2px rgba(0,122,255,0.5) !important;
+}
+@media (prefers-color-scheme: dark) {
+  .tiptap td.selectedCell, .tiptap th.selectedCell,
+  .tiptap td[data-user-selected-cell], .tiptap th[data-user-selected-cell] {
+    background-color: rgba(10,132,255,0.35) !important;
+    box-shadow: inset 0 0 0 2px rgba(10,132,255,0.6) !important;
+  }
+}
+.tiptap table.cell-select-active { outline: 2px dashed var(--btn-active); outline-offset: 2px; }
+.tiptap table.cell-select-active td, .tiptap table.cell-select-active th { cursor: pointer; }
+/* Table caption: a styled div inside .tableWrapper, above the <table> */
+.tiptap .tableWrapper .table-caption-box {
+  text-align: center; font-size: 0.85em; line-height: 1.4; color: var(--placeholder);
+  background: rgba(128,128,128,0.06); padding: 6px 10px; border-radius: 6px 6px 0 0;
+  border: 1px solid var(--border); border-bottom: none; margin: 0; outline: none;
+  min-height: 1.4em; word-break: break-word;
+}
+.tiptap .tableWrapper .table-caption-box:empty::before {
+  content: 'Caption'; opacity: 0.5; pointer-events: none;
+}
+.tiptap .tableWrapper .table-caption-box + table { border-top-left-radius: 0; border-top-right-radius: 0; }
+.table-grid-popup {
+  display: none; position: fixed; left: 0; top: 0; z-index: 10000;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px; box-shadow: 0 4px 20px var(--popup-shadow);
+}
+.table-grid-popup.visible { display: block; }
+.table-grid-container { display: grid; grid-template-columns: repeat(10, 24px); gap: 3px; touch-action: none; }
+.table-grid-cell {
+  width: 24px; height: 24px; border-radius: 3px;
+  border: 1px solid var(--border); background: transparent; transition: background 0.06s;
+}
+.table-grid-cell.highlighted { background: var(--btn-active-bg); border-color: var(--btn-active); }
+.table-grid-label { font-size: 13px; font-weight: 600; color: var(--placeholder); min-height: 18px; flex: 1; }
+.table-grid-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
+.table-grid-ok {
+  display: none; padding: 6px 18px; border-radius: 8px; border: none;
+  background: var(--btn-active); color: #fff; font-size: 14px; font-weight: 600;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.table-grid-ok.visible { display: block; }
+.table-grid-ok:active { opacity: 0.7; }
+.table-context-bar {
+  display: none; flex-wrap: nowrap; align-items: center; gap: 2px;
+  padding: 3px 6px; min-height: 34px;
+  border-bottom: 1px solid var(--toolbar-border); background: var(--editor-bg);
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  -webkit-user-select: none; user-select: none;
+}
+.table-context-bar::-webkit-scrollbar { display: none; }
+.table-context-bar.visible { display: flex; }
+.table-ctx-btn {
+  flex-shrink: 0; border: none; background: transparent;
+  color: var(--fg); width: 30px; height: 28px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  font-size: 13px; font-weight: 600;
+}
+.table-ctx-btn:active { opacity: 0.6; }
+.table-ctx-btn.active { color: var(--btn-active); background: var(--btn-active-bg); }
+.table-ctx-btn.danger { color: #ff3b30; }
+.table-ctx-btn svg { width: 17px; height: 17px; fill: currentColor; }
+.table-ctx-save-btn { color: var(--btn-active); width: 34px; }
+.table-ctx-save-btn:active { opacity: 0.5; }
+.table-ctx-divider { width: 1px; height: 20px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+.table-ctx-dropdown {
+  display: none; position: fixed; left: 0; top: 0; z-index: 10001;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 6px; box-shadow: 0 4px 20px var(--popup-shadow);
+  min-width: 180px; max-width: min(92vw, 260px);
+}
+.table-ctx-dropdown.visible { display: block; }
+.table-ctx-dropdown-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 8px; cursor: pointer;
+  font-size: 14px; font-weight: 500; color: var(--fg);
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.table-ctx-dropdown-row:active { opacity: 0.7; }
+.table-ctx-dropdown-row.disabled { opacity: 0.35; pointer-events: none; }
+.table-ctx-dropdown-row svg { width: 16px; height: 16px; flex-shrink: 0; fill: currentColor; }
+.table-ctx-dropdown-row.danger { color: #ff3b30; }
+.cell-props-popup {
+  display: none; position: fixed; left: 0; top: 0; z-index: 10001;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px; box-shadow: 0 4px 20px var(--popup-shadow);
+  min-width: min(88vw, 300px); max-width: min(92vw, 340px);
+  max-height: min(70vh, 500px); overflow-y: auto; -webkit-overflow-scrolling: touch;
+}
+.cell-props-popup.visible { display: block; }
+.props-section-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--placeholder); padding: 8px 4px 4px; margin-top: 2px;
+}
+.props-section-label:first-child { padding-top: 2px; margin-top: 0; }
+.props-btn-row { display: flex; gap: 4px; padding: 4px 0; }
+.props-btn {
+  flex: 1; border: 1px solid var(--border); background: transparent; color: var(--fg);
+  padding: 7px 4px; border-radius: 8px; font-size: 13px; font-weight: 600; text-align: center;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.props-btn:active { opacity: 0.7; }
+.props-btn.active { background: var(--btn-active-bg); color: var(--btn-active); border-color: var(--btn-active); }
+.props-input-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+.props-input {
+  flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--fg); font-size: 14px;
+  -webkit-appearance: none; appearance: none;
+}
+.props-color-grid { display: grid; grid-template-columns: repeat(7, 28px); gap: 3px; padding: 4px 0; }
+.props-color-swatch {
+  width: 28px; height: 28px; border-radius: 6px; border: 2px solid transparent;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.props-color-swatch:active { opacity: 0.7; }
+.props-color-swatch.active { border-color: var(--btn-active); }
+.props-color-swatch.clear-swatch { border: 2px solid var(--border); position: relative; }
+.props-color-swatch.clear-swatch::after {
+  content: ''; position: absolute; top: 50%; left: 0; width: 100%; height: 2px;
+  background: red; transform: rotate(-45deg);
+}
+.props-clear-btn {
+  display: block; width: 100%; border: none; background: var(--border); color: var(--fg);
+  padding: 9px; border-radius: 8px; font-size: 14px; font-weight: 600; text-align: center;
+  cursor: pointer; margin-top: 8px; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.props-clear-btn:active { opacity: 0.7; }
 .tiptap p.is-editor-empty:first-child::before {
   content: attr(data-placeholder); color: var(--placeholder); float: left; height: 0; pointer-events: none;
 }
@@ -409,6 +542,23 @@ const ListStylesMod = (typeof TipTapListStyles !== 'undefined' && TipTapListStyl
 const TriliumBulletListExt = ListStylesMod && ListStylesMod.TriliumBulletList ? ListStylesMod.TriliumBulletList : null;
 const TriliumOrderedListExt = ListStylesMod && ListStylesMod.TriliumOrderedList ? ListStylesMod.TriliumOrderedList : null;
 const useTriliumListStyles = !!(TriliumBulletListExt && TriliumOrderedListExt);
+
+// Runtime debug logging for table/caption issues.
+// Logs are routed to native Xcode console via webkit.messageHandlers.debugLog.
+let _tableDebugEnabled = true;
+function tableDbg(tag, data) {
+  if (!_tableDebugEnabled) return;
+  try {
+    const ts = new Date().toISOString().slice(11, 23);
+    const payload = typeof data === 'undefined' ? '' : ' ' + JSON.stringify(data);
+    const msg = ts + ' ' + tag + payload;
+    window.webkit.messageHandlers.debugLog.postMessage(msg);
+  } catch(e) {}
+}
+window._setTableDebug = function(enabled) {
+  _tableDebugEnabled = !!enabled;
+  tableDbg('setEnabled', { enabled: _tableDebugEnabled });
+};
 
 const COLORS = [
   '#000000','#434343','#666666','#999999','#b7b7b7','#cccccc','#ffffff',
@@ -514,6 +664,103 @@ const FigureImage = Image.extend({
   },
 });
 
+const cellStyleAttrs = {
+  backgroundColor: {
+    default: null,
+    parseHTML: el => el.style.backgroundColor || null,
+    renderHTML: a => a.backgroundColor ? { style: `background-color: ${a.backgroundColor}` } : {},
+  },
+  textAlign: {
+    default: null,
+    parseHTML: el => el.style.textAlign || null,
+    renderHTML: a => a.textAlign ? { style: `text-align: ${a.textAlign}` } : {},
+  },
+  verticalAlign: {
+    default: null,
+    parseHTML: el => el.style.verticalAlign || null,
+    renderHTML: a => a.verticalAlign ? { style: `vertical-align: ${a.verticalAlign}` } : {},
+  },
+  borderWidth: {
+    default: null,
+    parseHTML: el => el.style.borderWidth || null,
+    renderHTML: a => {
+      if (!a.borderWidth) return {};
+      const w = a.borderWidth, c = a.borderColor || 'var(--table-border)', s = a.borderStyle || 'solid';
+      return { style: `border-width: ${w}; border-style: ${s}; border-color: ${c}` };
+    },
+  },
+  borderColor: {
+    default: null,
+    parseHTML: el => el.style.borderColor || null,
+    renderHTML: a => {
+      if (!a.borderColor || a.borderWidth) return {};
+      return { style: `border-color: ${a.borderColor}` };
+    },
+  },
+  borderStyle: {
+    default: null,
+    parseHTML: el => el.style.borderStyle || null,
+    renderHTML: a => {
+      if (!a.borderStyle || a.borderWidth) return {};
+      return { style: `border-style: ${a.borderStyle}` };
+    },
+  },
+  cellPadding: {
+    default: null,
+    parseHTML: el => { const p = el.style.padding; return p || null; },
+    renderHTML: a => a.cellPadding ? { style: `padding: ${a.cellPadding}` } : {},
+  },
+  cellWidth: {
+    default: null,
+    parseHTML: el => el.getAttribute('width') || el.style.width || null,
+    renderHTML: a => a.cellWidth ? { style: `width: ${a.cellWidth}` } : {},
+  },
+  cellHeight: {
+    default: null,
+    parseHTML: el => el.style.height || null,
+    renderHTML: a => a.cellHeight ? { style: `height: ${a.cellHeight}` } : {},
+  },
+};
+const CustomTableCell = TableCell.extend({
+  addAttributes() { return { ...this.parent?.(), ...cellStyleAttrs }; },
+});
+const CustomTableHeader = TableHeader.extend({
+  addAttributes() { return { ...this.parent?.(), ...cellStyleAttrs }; },
+});
+const CustomTable = Table.extend({
+  addNodeView() {
+    return ({ HTMLAttributes }) => {
+      const wrapper = document.createElement('div');
+      wrapper.classList.add('tableWrapper');
+      const table = document.createElement('table');
+      Object.entries(HTMLAttributes).forEach(([key, value]) => {
+        if (value != null && value !== false) table.setAttribute(key, String(value));
+      });
+      wrapper.appendChild(table);
+      return {
+        dom: wrapper,
+        contentDOM: table,
+        update(updatedNode) {
+          // Accept in-place updates for table nodes — prevents wrapper recreation
+          return updatedNode.type.name === 'table';
+        },
+        ignoreMutation(mutation) {
+          // Ignore any mutation outside the <table> (e.g. caption div)
+          // so ProseMirror doesn't re-sync and wipe it
+          if (mutation.target === wrapper) return true;
+          if (!table.contains(mutation.target)) return true;
+          return false;
+        },
+        stopEvent(event) {
+          // Stop ProseMirror from handling events on the caption div
+          if (!table.contains(event.target)) return true;
+          return false;
+        },
+      };
+    };
+  },
+}).configure({ resizable: false });
+
 const editorExtensions = [
   StarterKit.configure({
     heading: { levels: [1,2,3,4,5,6] },
@@ -524,10 +771,10 @@ const editorExtensions = [
   Color,
   Highlight.configure({ multicolor: true }),
   TextAlign.configure({ types: ['heading','paragraph'] }),
-  Table.configure({ resizable: false }),
+  CustomTable,
   TableRow,
-  TableCell,
-  TableHeader,
+  CustomTableCell,
+  CustomTableHeader,
   Link.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
   TaskList,
   TaskItem.configure({ nested: true }),
@@ -550,12 +797,14 @@ const editor = new Editor({
   onUpdate({ editor }) {
     clearTimeout(_contentTimer);
     _contentTimer = setTimeout(() => {
-      try { window.webkit.messageHandlers.contentChanged.postMessage(tiptapToCk(editor.getHTML())); } catch(e) {}
+      try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch(e) {}
     }, 300);
   },
   onSelectionUpdate() { scheduleToolbarUpdate(); },
   onTransaction() { scheduleToolbarUpdate(); },
 });
+
+tableDbg('editorReady', { extensionCount: editorExtensions.length });
 
 // WKWebView / iOS: tapping the toolbar blurs the editor and collapses the DOM selection.
 // Keep the last ProseMirror ranged selection so color / highlight pickers can still apply.
@@ -569,11 +818,12 @@ editor.on('selectionUpdate', ({ editor }) => {
 // IMPORTANT: Do not refocus on a timer/hold — that runs when tapping the color *button* (before the
 // panel is visible) and steals the tap so the synthetic click never opens the picker.
 function refocusEditorIfNeeded() {
-  if (!document.querySelector('.color-popup.visible') && !document.querySelector('.callout-popup.visible') && !document.querySelector('.font-size-popup.visible') && !document.querySelector('.list-style-popup.visible') && !document.querySelector('.heading-popup.visible') && !document.querySelector('.image-popup.visible')) return;
-  // Don't steal focus from the caption input
-  if (document.activeElement && document.activeElement.id === 'image-popup-caption-input') return;
+  if (window._cellSelectMode) return;
+  if (!document.querySelector('.color-popup.visible') && !document.querySelector('.callout-popup.visible') && !document.querySelector('.font-size-popup.visible') && !document.querySelector('.list-style-popup.visible') && !document.querySelector('.heading-popup.visible') && !document.querySelector('.image-popup.visible') && !document.querySelector('.table-grid-popup.visible') && !document.querySelector('.table-ctx-dropdown.visible') && !document.querySelector('.cell-props-popup.visible')) return;
+  if (document.activeElement && (document.activeElement.id === 'image-popup-caption-input' || document.activeElement.classList.contains('table-caption-box'))) return;
   requestAnimationFrame(() => {
-    if (document.activeElement && document.activeElement.id === 'image-popup-caption-input') return;
+    if (window._cellSelectMode) return;
+    if (document.activeElement && (document.activeElement.id === 'image-popup-caption-input' || document.activeElement.classList.contains('table-caption-box'))) return;
     try {
       if (editor.view && editor.view.dom) {
         editor.view.dom.focus({ preventScroll: true });
@@ -589,11 +839,13 @@ toolbar.addEventListener('mousedown', function(e) {
   e.preventDefault();
 });
 document.addEventListener('mousedown', function(e) {
-  // Allow caption input to receive focus normally
   if (e.target.id === 'image-popup-caption-input') return;
+  if (e.target.closest('.table-caption-box')) return;
   if (e.target.closest('.color-popup') || e.target.closest('.callout-popup') ||
       e.target.closest('.font-size-popup') || e.target.closest('.list-style-popup') ||
-      e.target.closest('.heading-popup') || e.target.closest('.image-popup')) {
+      e.target.closest('.heading-popup') || e.target.closest('.image-popup') ||
+      e.target.closest('.table-grid-popup') || e.target.closest('.table-context-bar') ||
+      e.target.closest('.table-ctx-dropdown') || e.target.closest('.cell-props-popup')) {
     e.preventDefault();
   }
 }, true);
@@ -1424,6 +1676,16 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
       hideHeadingPopup(popup);
     });
+    document.querySelectorAll('.table-grid-popup.visible').forEach(popup => {
+      if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
+      hideTableGridPopup(popup);
+    });
+    document.querySelectorAll('.table-ctx-dropdown.visible').forEach(popup => {
+      hideTableCtxDropdown(popup);
+    });
+    document.querySelectorAll('.cell-props-popup.visible').forEach(popup => {
+      hideCellPropsPopup(popup);
+    });
     relayoutImagePopup();
     reportEditorScrollMetrics();
   }, { passive: true });
@@ -2052,7 +2314,7 @@ btn('Image', ic('foundation--photo.svg'), () => {
   try { window.webkit.messageHandlers.pickImage.postMessage('pick'); } catch(e) {}
 }, () => false);
 makeLinkToolbar();
-btn('Table', ic('grid-1524-svgrepo-com.svg'), () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(), () => false);
+makeTableGridPicker();
 btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () => false);
 btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
 makeCalloutToolbar();
@@ -2240,6 +2502,13 @@ function ckToTiptap(html) {
     });
   });
 
+  // Unwrap <figure class="table"> wrappers (CKEditor 5 format) so TipTap sees bare <table>
+  doc.querySelectorAll('figure.table').forEach(fig => {
+    const tbl = fig.querySelector('table');
+    if (tbl) fig.parentNode.insertBefore(tbl, fig);
+    fig.remove();
+  });
+
   migrateTriliumAdmonitionsForTiptap(doc);
   migrateCkColorMarkupForTiptap(doc);
   return doc.body.innerHTML;
@@ -2261,23 +2530,19 @@ function tiptapToCk(html) {
       li.removeAttribute('data-type');
       li.removeAttribute('data-checked');
 
-      // Extract only the real text, stripping TipTap's own <label> and <div><p> wrappers
       const tiptapLabel = li.querySelector(':scope > label');
       if (tiptapLabel) tiptapLabel.remove();
 
-      // Unwrap <div><p>text</p></div> → just "text"
       let textHTML = '';
       const contentDiv = li.querySelector(':scope > div');
       if (contentDiv) {
         const p = contentDiv.querySelector('p');
         textHTML = p ? p.innerHTML : contentDiv.innerHTML;
       } else {
-        // Fallback: strip any remaining <p> wrappers
         const p = li.querySelector(':scope > p');
         textHTML = p ? p.innerHTML : li.innerHTML;
       }
 
-      // Rebuild in CKEditor format
       const label = doc.createElement('label');
       label.className = 'todo-list__label';
 
@@ -2297,16 +2562,105 @@ function tiptapToCk(html) {
     });
   });
 
+  // CKEditor 5 / Trilium wraps ALL tables in <figure class="table">
+  doc.querySelectorAll('table').forEach(tbl => {
+    if (tbl.parentElement && tbl.parentElement.tagName === 'FIGURE' && tbl.parentElement.classList.contains('table')) return;
+    const figure = doc.createElement('figure');
+    figure.className = 'table';
+    tbl.parentNode.insertBefore(figure, tbl);
+    figure.appendChild(tbl);
+  });
+
   return doc.body.innerHTML;
 }
 
 // --- Bridge ---
 window.editorBridge = {
   setKeyboardToolbarGap(px) {},
-  setContent(html) { editor.commands.setContent(ckToTiptap(html) || '', false); },
+  setContent(html) {
+    // Extract captions before ProseMirror parsing (PM would discard them).
+    // Supports CKEditor 5 format (<figure class="table">...<figcaption>) and standard <caption>.
+    const captionTexts = [];
+    if (html) {
+      const tempDoc = new DOMParser().parseFromString(html, 'text/html');
+
+      // CKEditor 5 format: mark tables that have figcaptions, then unwrap figures
+      tempDoc.querySelectorAll('figure.table').forEach(fig => {
+        const figcap = fig.querySelector('figcaption');
+        const tbl = fig.querySelector('table');
+        if (figcap && tbl) {
+          tbl.setAttribute('data-trinote-caption', figcap.textContent || '');
+          figcap.remove();
+        }
+        if (tbl) fig.parentNode.insertBefore(tbl, fig);
+        fig.remove();
+      });
+
+      // Standard HTML <caption> fallback
+      tempDoc.querySelectorAll('table > caption').forEach(cap => {
+        const tbl = cap.parentElement;
+        if (tbl && !tbl.hasAttribute('data-trinote-caption')) {
+          tbl.setAttribute('data-trinote-caption', cap.textContent || '');
+        }
+        cap.remove();
+      });
+
+      // Collect captions using correct global table indices, then clean up the marker
+      tempDoc.querySelectorAll('table').forEach((tbl, idx) => {
+        if (tbl.hasAttribute('data-trinote-caption')) {
+          captionTexts.push({ idx, text: tbl.getAttribute('data-trinote-caption') });
+          tbl.removeAttribute('data-trinote-caption');
+        }
+      });
+
+      html = tempDoc.body.innerHTML;
+    }
+    tableDbg('bridge.setContent', { captionsFound: captionTexts.length, htmlLen: (html || '').length });
+    editor.commands.setContent(ckToTiptap(html) || '', false);
+    if (captionTexts.length > 0) {
+      requestAnimationFrame(() => {
+        const wrappers = document.querySelectorAll('.tiptap .tableWrapper');
+        captionTexts.forEach(({ idx, text }) => {
+          const wrapper = wrappers[idx];
+          if (!wrapper) return;
+          const tableEl = wrapper.querySelector('table');
+          if (!tableEl) return;
+          if (Array.from(wrapper.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'))) return;
+          const capDiv = document.createElement('div');
+          capDiv.className = 'table-caption-box';
+          capDiv.contentEditable = 'true';
+          capDiv.textContent = text;
+          wrapper.insertBefore(capDiv, tableEl);
+          _setupCaptionInput(capDiv);
+          _captionStore.set(wrapper, text);
+        });
+      });
+    }
+  },
   getContent() {
     clearTimeout(_contentTimer);
-    return tiptapToCk(editor.getHTML());
+    let html = tiptapToCk(editor.getHTML());
+    // tiptapToCk() already wraps all tables in <figure class="table">.
+    // Now inject <figcaption> for tables that have a caption in the DOM.
+    const wrappers = document.querySelectorAll('.tiptap .tableWrapper');
+    const caps = [];
+    wrappers.forEach((w, i) => {
+      const cd = Array.from(w.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'));
+      if (cd) caps.push({ idx: i, text: cd.textContent || '' });
+    });
+    if (caps.length > 0) {
+      const doc = new DOMParser().parseFromString(html || '<p></p>', 'text/html');
+      const figures = doc.querySelectorAll('figure.table');
+      caps.forEach(({ idx, text }) => {
+        const fig = figures[idx];
+        if (!fig) return;
+        const figcap = doc.createElement('figcaption');
+        figcap.textContent = text;
+        fig.appendChild(figcap);
+      });
+      html = doc.body.innerHTML;
+    }
+    return html;
   },
   focus() {
     editor.commands.focus('end');
@@ -2345,6 +2699,7 @@ function editorDocumentHasFocus() {
 document.getElementById('editor-container').addEventListener('click', function(e) {
   if (e.target.closest('a[href]')) return;
   if (e.target.closest('.tiptap img')) return;
+  if (e.target.closest('.table-caption-box')) return;
   var lineCount = 1;
   try { lineCount = editor.state.doc.childCount; } catch (err) {}
   var ecRect = this.getBoundingClientRect();
@@ -2358,6 +2713,1357 @@ document.getElementById('editor-container').addEventListener('click', function(e
   }
   if (!editorDocumentHasFocus()) return;
 }, true);
+
+// ═══════════════════════════════════════════════════════════════
+// TABLE FEATURES
+// ═══════════════════════════════════════════════════════════════
+
+// --- Shared table utilities ---
+function findTableAroundPos(pos) {
+  try {
+    const $pos = editor.state.doc.resolve(pos);
+    for (let d = $pos.depth; d > 0; d--) {
+      if ($pos.node(d).type.name === 'table') {
+        tableDbg('findTableAroundPos.hit', { pos, depth: d, start: $pos.before(d), end: $pos.after(d) });
+        return { start: $pos.before(d), end: $pos.after(d), depth: d, node: $pos.node(d) };
+      }
+    }
+  } catch (e) {}
+  tableDbg('findTableAroundPos.miss', { pos });
+  return null;
+}
+function findCellAtPos(pos) {
+  try {
+    const $pos = editor.state.doc.resolve(pos);
+    for (let d = $pos.depth; d > 0; d--) {
+      const n = $pos.node(d);
+      if (n.type.name === 'tableCell' || n.type.name === 'tableHeader') {
+        return { pos: $pos.before(d), node: n, depth: d };
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+function getTableDOMWrapper() {
+  const table = findTableAroundPos(editor.state.selection.from);
+  if (!table) {
+    tableDbg('getTableDOMWrapper.noTable', { from: editor.state.selection.from });
+    return null;
+  }
+  try {
+    const dom = editor.view.nodeDOM(table.start);
+    if (dom) {
+      const domTag = dom.tagName || 'text';
+      const domClass = dom.className || '';
+      const isWrapper = dom.classList && dom.classList.contains('tableWrapper');
+      const wrapper = isWrapper ? dom : (dom.closest('.tableWrapper') || dom.parentElement);
+      tableDbg('getTableDOMWrapper.hit', {
+        from: editor.state.selection.from,
+        tableStart: table.start,
+        domTag, domClass, isWrapper,
+        wrapperTag: wrapper ? wrapper.tagName : null,
+        wrapperClass: wrapper && wrapper.className ? wrapper.className : null,
+      });
+      return wrapper;
+    }
+  } catch (e) {
+    tableDbg('getTableDOMWrapper.error', { msg: e.message });
+  }
+  tableDbg('getTableDOMWrapper.fail', { from: editor.state.selection.from, tableStart: table.start });
+  return null;
+}
+
+// --- Hide helpers for new popups ---
+function hideTableGridPopup(popup) {
+  popup.classList.remove('visible');
+  popup.style.left = ''; popup.style.top = ''; popup.style.visibility = '';
+  popup._ignoreOutsideUntil = 0; popup._ignoreScrollUntil = 0;
+}
+function hideTableCtxDropdown(popup) {
+  popup.classList.remove('visible');
+  popup.style.left = ''; popup.style.top = ''; popup.style.visibility = '';
+}
+function hideCellPropsPopup(popup) {
+  popup.classList.remove('visible');
+  popup.style.left = ''; popup.style.top = ''; popup.style.visibility = '';
+}
+function hideAllTablePopups() {
+  document.querySelectorAll('.table-ctx-dropdown.visible').forEach(hideTableCtxDropdown);
+  document.querySelectorAll('.cell-props-popup.visible').forEach(hideCellPropsPopup);
+  document.querySelectorAll('.table-grid-popup.visible').forEach(hideTableGridPopup);
+}
+
+// --- 1. Fix cell focus jumping on iOS ---
+// Uses 'click' event which fires AFTER ProseMirror processes the synthesized
+// mousedown/mouseup from iOS touch events, avoiding the race condition.
+(function fixTableCellFocusOnIOS() {
+  const ec = document.getElementById('editor-container');
+  window._cellSelectMode = false;
+
+  ec.addEventListener('click', function(e) {
+    if (window._cellSelectMode) return;
+    const cell = e.target.closest('.tiptap td, .tiptap th');
+    if (!cell) return;
+    setTimeout(() => {
+      try {
+        const clickedPos = editor.view.posAtDOM(cell, 0);
+        const clickedCell = findCellAtPos(clickedPos);
+        const currentCell = findCellAtPos(editor.state.selection.from);
+        if (clickedCell && currentCell && clickedCell.pos !== currentCell.pos) {
+          editor.commands.setTextSelection(clickedCell.pos + 1);
+        }
+      } catch (err) {}
+    }, 50);
+  });
+})();
+
+// --- 2. Paragraph insertion handles above/below table ---
+// Paragraph handles removed - "new line" is now a button on the table context bar
+
+// --- 3. 10x10 Grid picker for table insertion ---
+function makeTableGridPicker() {
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'inline-flex'; wrapper.style.alignItems = 'center';
+  const b = document.createElement('button');
+  b.type = 'button'; b.title = 'Insert table';
+  b.classList.add('toolbar-btn-with-chevron');
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;min-width:40px;height:34px;padding:0 5px;border-radius:6px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
+  b.innerHTML = ic('grid-1524-svgrepo-com.svg') + TOOLBAR_CHEVRON_SVG;
+  b._isActive = () => false;
+  const popup = document.createElement('div');
+  popup.className = 'table-grid-popup';
+  popup._anchorButton = b;
+  const gridContainer = document.createElement('div');
+  gridContainer.className = 'table-grid-container';
+  const cells = [];
+  for (let r = 0; r < 10; r++) {
+    for (let c = 0; c < 10; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'table-grid-cell';
+      cell.dataset.row = r; cell.dataset.col = c;
+      cells.push(cell);
+      gridContainer.appendChild(cell);
+    }
+  }
+  const label = document.createElement('div');
+  label.className = 'table-grid-label';
+  const footer = document.createElement('div');
+  footer.className = 'table-grid-footer';
+  const okBtn = document.createElement('button');
+  okBtn.type = 'button'; okBtn.className = 'table-grid-ok'; okBtn.textContent = 'OK';
+  footer.appendChild(label);
+  footer.appendChild(okBtn);
+  popup.appendChild(gridContainer);
+  popup.appendChild(footer);
+  document.body.appendChild(popup);
+
+  let selRow = -1, selCol = -1, dragging = false;
+  function updateHighlight(row, col) {
+    selRow = row; selCol = col;
+    cells.forEach(c => {
+      const r = parseInt(c.dataset.row), cc = parseInt(c.dataset.col);
+      c.classList.toggle('highlighted', r <= row && cc <= col);
+    });
+    label.textContent = row >= 0 ? `${row + 1} × ${col + 1}` : '';
+    okBtn.classList.toggle('visible', row >= 0);
+  }
+  function cellFromEvent(e) {
+    const t = (e.touches ? e.touches[0] : e) || e;
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    if (el && el.classList.contains('table-grid-cell')) return el;
+    return null;
+  }
+  gridContainer.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const c = cellFromEvent(e);
+    if (c) { updateHighlight(parseInt(c.dataset.row), parseInt(c.dataset.col)); dragging = true; }
+  });
+  gridContainer.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const c = cellFromEvent(e);
+    if (c) updateHighlight(parseInt(c.dataset.row), parseInt(c.dataset.col));
+  });
+  gridContainer.addEventListener('pointerup', () => { dragging = false; });
+  gridContainer.addEventListener('pointercancel', () => { dragging = false; });
+  okBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); });
+  okBtn.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (selRow >= 0 && selCol >= 0) {
+      const rows = selRow + 1, cols = selCol + 1;
+      hideTableGridPopup(popup);
+      editor.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
+    }
+  });
+
+  b.addEventListener('pointerdown', () => {
+    if (!popup.classList.contains('visible')) {
+      const t = performance.now();
+      popup._ignoreOutsideUntil = t + 450;
+      popup._ignoreScrollUntil = t + 500;
+    }
+  }, true);
+  b.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    document.querySelectorAll('.color-popup.visible').forEach(hideColorPopup);
+    document.querySelectorAll('.callout-popup.visible').forEach(hideCalloutPopup);
+    document.querySelectorAll('.link-popup.visible').forEach(hideLinkPopup);
+    document.querySelectorAll('.font-size-popup.visible').forEach(hideFontSizePopup);
+    document.querySelectorAll('.list-style-popup.visible').forEach(hideListStylePopup);
+    document.querySelectorAll('.heading-popup.visible').forEach(hideHeadingPopup);
+    hideImagePopup();
+    if (opening) {
+      updateHighlight(-1, -1);
+      dragging = false;
+      popup.classList.add('visible');
+      requestAnimationFrame(() => {
+        const ar = b.getBoundingClientRect();
+        const pr = popup.getBoundingClientRect();
+        const margin = 8;
+        const vv = window.visualViewport;
+        const viewBottom = vv ? (vv.offsetTop + vv.height) : window.innerHeight;
+        const ph = Math.max(pr.height, 1);
+        let top = ar.top - ph - 4;
+        if (top < margin) {
+          top = ar.bottom + 4;
+          if (top + ph > viewBottom - margin) top = Math.max(margin, viewBottom - ph - margin);
+        }
+        popup.style.left = margin + 'px';
+        popup.style.top = Math.round(top) + 'px';
+        popup.style.visibility = '';
+      });
+    } else {
+      hideTableGridPopup(popup);
+    }
+  });
+  wrapper.appendChild(b);
+  toolbar.appendChild(wrapper);
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideTableGridPopup(popup);
+  });
+}
+
+// --- 4. Table Context Bar (sits above main toolbar) ---
+const _tableCtxBar = document.createElement('div');
+_tableCtxBar.className = 'table-context-bar';
+const _toolbarWrap = document.getElementById('toolbar-wrap');
+_toolbarWrap.insertBefore(_tableCtxBar, _toolbarWrap.firstChild);
+
+function _tctx(svgPath, title) {
+  return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="' + svgPath + '"/></svg>';
+}
+const TABLE_ICONS = {
+  colBefore: _tctx('M11 2v20h2V2h-2zM3 8h6v8H3V8zm1 1v6h4V9H4z'),
+  colAfter: _tctx('M11 2v20h2V2h-2zm4 6h6v8h-6V8zm1 1v6h4V9h-4z'),
+  colDel: _tctx('M8 2v20h8V2H8zm1 1h6v18H9V3zm-5 8h3v2H4v-2zm13 0h3v2h-3v-2z'),
+  colHeader: _tctx('M4 4v16h16V4H4zm7 1h2v14h-2V5z'),
+  rowBefore: _tctx('M2 11v2h20v-2H2zM8 3v6h8V3H8zm1 1h6v4H9V4z'),
+  rowAfter: _tctx('M2 11v2h20v-2H2zm6 4v6h8v-6H8zm1 1h6v4H9v-4z'),
+  rowDel: _tctx('M2 8v8h20V8H2zm1 1h18v6H3V9zm8-5v3h2V4h-2zm0 13h2v3h-2v-3z'),
+  rowHeader: _tctx('M4 4v16h16V4H4zm1 7h14v2H5v-2z'),
+  merge: _tctx('M3 3v18h18V3H3zm7 1h4v4h-4V4zM4 4h5v5H4V4zm0 6h16v4H4v-4zm0 5h5v5H4v-5zm6 0h4v5h-4v-5zm5 0h5v5h-5v-5zm5-5V4h-5v5h5z'),
+  split: _tctx('M3 3v18h18V3H3zm1 1h7v7H4V4zm8 0h8v7h-8V4zM4 12h7v8H4v-8zm8 0h8v8h-8v-8z'),
+  cellProps: _tctx('M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zm-7-2h2v-4h4v-2h-4V7h-2v4H8v2h4v4z'),
+  selectMode: _tctx('M3 3v4h2V5h2V3H3zm14 0v2h2v2h2V3h-4zM3 17v4h4v-2H5v-2H3zm16 0v2h-2v2h4v-4h-2zM7 7v10h10V7H7zm1 1h8v8H8V8z'),
+  caption: _tctx('M4 4v16h16V4H4zm1 1h14v3H5V5zm0 4h14v10H5V9z'),
+  trash: _tctx('M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM8 9h8v10H8V9zm7.5-5l-1-1h-5l-1 1H5v2h14V4h-3.5z'),
+};
+
+function makeTableCtxBtn(iconHtml, title, action) {
+  const b = document.createElement('div');
+  b.className = 'table-ctx-btn'; b.title = title; b.innerHTML = iconHtml;
+  b.addEventListener('pointerdown', (e) => {
+    tableDbg('ctxBtn.pointerdown', { title, pointerType: e.pointerType });
+    e.preventDefault(); e.stopPropagation(); action(b);
+  });
+  b.addEventListener('touchstart', (e) => {
+    tableDbg('ctxBtn.touchstart', { title });
+  });
+  b.addEventListener('click', (e) => {
+    tableDbg('ctxBtn.click', { title });
+  });
+  return b;
+}
+
+function makeTableCtxDropdownMenu(anchorBtn, rows) {
+  const dd = document.createElement('div');
+  dd.className = 'table-ctx-dropdown';
+  rows.forEach(r => {
+    const row = document.createElement('div');
+    row.className = 'table-ctx-dropdown-row' + (r.danger ? ' danger' : '');
+    if (r.icon) { const span = document.createElement('span'); span.innerHTML = r.icon; row.appendChild(span); }
+    const lab = document.createElement('span');
+    lab.textContent = r.label;
+    row.appendChild(lab);
+    row.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      hideTableCtxDropdown(dd);
+      r.action();
+    });
+    dd.appendChild(row);
+  });
+  document.body.appendChild(dd);
+  document.addEventListener('click', (e) => {
+    if (!dd.classList.contains('visible')) return;
+    if (!dd.contains(e.target) && !anchorBtn.contains(e.target)) hideTableCtxDropdown(dd);
+  });
+  return dd;
+}
+
+function showTableCtxDropdown(anchorBtn, dd) {
+  document.querySelectorAll('.table-ctx-dropdown.visible').forEach(hideTableCtxDropdown);
+  document.querySelectorAll('.cell-props-popup.visible').forEach(hideCellPropsPopup);
+  dd.classList.add('visible');
+  requestAnimationFrame(() => layoutColorPopup(anchorBtn, dd));
+}
+
+// Build column dropdown
+const _colDropdownBtn = makeTableCtxBtn(TABLE_ICONS.colBefore + '<span style="font-size:11px;margin-left:2px">Col</span>', 'Column', (b) => showTableCtxDropdown(b, _colDropdown));
+_colDropdownBtn.style.width = 'auto'; _colDropdownBtn.style.padding = '0 6px';
+const _colDropdown = makeTableCtxDropdownMenu(_colDropdownBtn, [
+  { label: 'Insert column before', action: () => editor.chain().focus().addColumnBefore().run() },
+  { label: 'Insert column after', action: () => editor.chain().focus().addColumnAfter().run() },
+  { label: 'Delete column', action: () => editor.chain().focus().deleteColumn().run(), danger: true },
+  { label: 'Toggle header column', action: () => editor.chain().focus().toggleHeaderColumn().run() },
+]);
+// Build row dropdown
+const _rowDropdownBtn = makeTableCtxBtn(TABLE_ICONS.rowBefore + '<span style="font-size:11px;margin-left:2px">Row</span>', 'Row', (b) => showTableCtxDropdown(b, _rowDropdown));
+_rowDropdownBtn.style.width = 'auto'; _rowDropdownBtn.style.padding = '0 6px';
+const _rowDropdown = makeTableCtxDropdownMenu(_rowDropdownBtn, [
+  { label: 'Insert row above', action: () => editor.chain().focus().addRowBefore().run() },
+  { label: 'Insert row below', action: () => editor.chain().focus().addRowAfter().run() },
+  { label: 'Delete row', action: () => editor.chain().focus().deleteRow().run(), danger: true },
+  { label: 'Toggle header row', action: () => editor.chain().focus().toggleHeaderRow().run() },
+]);
+// Helper: create a real ProseMirror CellSelection from visual selection
+function applyRealCellSelection() {
+  const positions = window._getSelectedPositions ? window._getSelectedPositions() : new Set();
+  tableDbg('applyRealCellSelection.start', { positionsSize: positions.size });
+  if (positions.size < 2) {
+    tableDbg('applyRealCellSelection.skip', { reason: 'need_at_least_2' });
+    return false;
+  }
+  const posArr = Array.from(positions);
+  try {
+    const firstPos = posArr[0];
+    const lastPos = posArr[posArr.length - 1];
+    const SelectionClass = Object.getPrototypeOf(editor.state.selection.constructor);
+    const cellSel = SelectionClass.fromJSON(editor.state.doc, {
+      type: 'cell', anchor: firstPos, head: lastPos
+    });
+    editor.view.dispatch(editor.state.tr.setSelection(cellSel));
+    tableDbg('applyRealCellSelection.ok', { firstPos, lastPos, arrLen: posArr.length });
+    return true;
+  } catch(e) {
+    tableDbg('applyRealCellSelection.error', { error: String(e) });
+    return false;
+  }
+}
+// Build a visual table map accounting for colspan and rowspan.
+// Returns array of { pos, node, row, col, colspan, rowspan } for every cell.
+function _buildTableMap(table) {
+  const numRows = table.node.childCount;
+  const occupied = Array.from({ length: numRows }, () => ({}));
+  const cells = [];
+
+  let rowIdx = 0;
+  table.node.forEach((rowNode, rowOffset) => {
+    const rowStart = table.start + 1 + rowOffset;
+    let visualCol = 0;
+
+    rowNode.forEach((cellNode, cellOffset) => {
+      while (occupied[rowIdx][visualCol]) visualCol++;
+
+      const absPos = rowStart + 1 + cellOffset;
+      const colspan = cellNode.attrs.colspan || 1;
+      const rowspan = cellNode.attrs.rowspan || 1;
+
+      cells.push({ pos: absPos, node: cellNode, row: rowIdx, col: visualCol, colspan, rowspan });
+
+      for (let r = 0; r < rowspan; r++) {
+        for (let c = 0; c < colspan; c++) {
+          if (rowIdx + r < numRows) occupied[rowIdx + r][visualCol + c] = true;
+        }
+      }
+      visualCol += colspan;
+    });
+    rowIdx++;
+  });
+  return cells;
+}
+
+// CKEditor 5-style split: on a 1×1 cell, inserts a new empty cell beside it
+// and increases the colspan/rowspan of every OTHER cell that spans the same
+// column/row so the visual grid stays aligned.
+function _splitCellVertically() {
+  const cell = findCellAtPos(editor.state.selection.from);
+  if (!cell) return false;
+  const table = findTableAroundPos(editor.state.selection.from);
+  if (!table) return false;
+  const { colspan } = cell.node.attrs;
+
+  // Merged cell (colspan > 1): reduce colspan by 1, insert new cell to the right
+  if (colspan > 1) {
+    try {
+      const cellType = cell.node.type;
+      const defaults = {};
+      for (const k of Object.keys(cellType.attrs)) defaults[k] = cellType.attrs[k].default;
+      const newCell = cellType.createAndFill({ ...defaults, rowspan: cell.node.attrs.rowspan, colspan: 1 });
+      if (!newCell) return false;
+      const tr = editor.state.tr;
+      tr.insert(cell.pos + cell.node.nodeSize, newCell);
+      tr.setNodeMarkup(tr.mapping.map(cell.pos), null, { ...cell.node.attrs, colspan: colspan - 1 });
+      editor.view.dispatch(tr);
+      return true;
+    } catch(e) { return false; }
+  }
+
+  // Unmerged cell (colspan = 1): CKEditor 5-style vertical split
+  const cellMap = _buildTableMap(table);
+  const targetEntry = cellMap.find(e => e.pos === cell.pos);
+  if (!targetEntry) return false;
+  const targetCol = targetEntry.col;
+
+  // Every unique cell spanning targetCol (except the target) needs colspan+1
+  const toExpand = [];
+  const seen = new Set();
+  for (const entry of cellMap) {
+    if (entry.pos === cell.pos || seen.has(entry.pos)) continue;
+    if (entry.col <= targetCol && entry.col + entry.colspan - 1 >= targetCol) {
+      toExpand.push(entry);
+      seen.add(entry.pos);
+    }
+  }
+
+  try {
+    const tr = editor.state.tr;
+    const cellType = cell.node.type;
+    const defaults = {};
+    for (const k of Object.keys(cellType.attrs)) defaults[k] = cellType.attrs[k].default;
+    const newCell = cellType.createAndFill({ ...defaults, rowspan: cell.node.attrs.rowspan || 1 });
+    if (!newCell) return false;
+
+    tr.insert(cell.pos + cell.node.nodeSize, newCell);
+    for (const entry of toExpand) {
+      const mp = tr.mapping.map(entry.pos);
+      tr.setNodeMarkup(mp, null, { ...entry.node.attrs, colspan: entry.colspan + 1 });
+    }
+    editor.view.dispatch(tr);
+    return true;
+  } catch(e) {
+    tableDbg('splitCellVertically error', e.message);
+    return false;
+  }
+}
+
+function _splitCellHorizontally() {
+  const cell = findCellAtPos(editor.state.selection.from);
+  if (!cell) return false;
+  const table = findTableAroundPos(editor.state.selection.from);
+  if (!table) return false;
+  const { rowspan } = cell.node.attrs;
+
+  // Merged cell (rowspan > 1): reduce rowspan by 1, insert new cell below
+  if (rowspan > 1) {
+    const cellMap = _buildTableMap(table);
+    const targetEntry = cellMap.find(e => e.pos === cell.pos);
+    if (!targetEntry) return false;
+
+    // Find the last row this cell spans into and insert the new cell there
+    const lastSpanRow = targetEntry.row + rowspan - 1;
+    let rowEndPos = null;
+    let ri = 0;
+    table.node.forEach((rowNode, rowOffset) => {
+      if (ri === lastSpanRow) rowEndPos = table.start + 1 + rowOffset;
+      ri++;
+    });
+    if (rowEndPos === null) return false;
+
+    try {
+      const targetRow = table.node.child(lastSpanRow);
+      let insertPos = rowEndPos + 1;
+      let col = 0;
+      targetRow.forEach((cn, cellOffset) => {
+        if (col + (cn.attrs.colspan || 1) <= targetEntry.col) {
+          insertPos = rowEndPos + 1 + cellOffset + cn.nodeSize;
+          col += cn.attrs.colspan || 1;
+        }
+      });
+
+      const cellType = cell.node.type;
+      const defaults = {};
+      for (const k of Object.keys(cellType.attrs)) defaults[k] = cellType.attrs[k].default;
+      const newCell = cellType.createAndFill({ ...defaults, colspan: cell.node.attrs.colspan, rowspan: 1 });
+      if (!newCell) return false;
+
+      const tr = editor.state.tr;
+      tr.insert(insertPos, newCell);
+      tr.setNodeMarkup(tr.mapping.map(cell.pos), null, { ...cell.node.attrs, rowspan: rowspan - 1 });
+      editor.view.dispatch(tr);
+      return true;
+    } catch(e) { return false; }
+  }
+
+  // Unmerged cell (rowspan = 1): CKEditor 5-style horizontal split
+  const cellMap = _buildTableMap(table);
+  const targetEntry = cellMap.find(e => e.pos === cell.pos);
+  if (!targetEntry) return false;
+  const targetRow = targetEntry.row;
+
+  // Every unique cell spanning targetRow (except the target) needs rowspan+1
+  const toExpand = [];
+  const seen = new Set();
+  for (const entry of cellMap) {
+    if (entry.pos === cell.pos || seen.has(entry.pos)) continue;
+    if (entry.row <= targetRow && entry.row + entry.rowspan - 1 >= targetRow) {
+      toExpand.push(entry);
+      seen.add(entry.pos);
+    }
+  }
+
+  // Find position right after the current row to insert the new row
+  let rowEndPos = null;
+  let ri2 = 0;
+  table.node.forEach((rowNode, rowOffset) => {
+    if (ri2 === targetRow) rowEndPos = table.start + 1 + rowOffset + rowNode.nodeSize;
+    ri2++;
+  });
+  if (rowEndPos === null) return false;
+
+  try {
+    const tr = editor.state.tr;
+    const schema = editor.state.schema;
+    const cellType = cell.node.type;
+    const defaults = {};
+    for (const k of Object.keys(cellType.attrs)) defaults[k] = cellType.attrs[k].default;
+    const newCell = cellType.createAndFill({ ...defaults, colspan: cell.node.attrs.colspan || 1 });
+    if (!newCell) return false;
+
+    const newRow = schema.nodes.tableRow.create(null, [newCell]);
+    tr.insert(rowEndPos, newRow);
+
+    for (const entry of toExpand) {
+      const mp = tr.mapping.map(entry.pos);
+      tr.setNodeMarkup(mp, null, { ...entry.node.attrs, rowspan: entry.rowspan + 1 });
+    }
+    editor.view.dispatch(tr);
+    return true;
+  } catch(e) {
+    tableDbg('splitCellHorizontally error', e.message);
+    return false;
+  }
+}
+
+// Build merge dropdown
+const _mergeDropdownBtn = makeTableCtxBtn(TABLE_ICONS.merge, 'Merge', (b) => showTableCtxDropdown(b, _mergeDropdown));
+const _mergeDropdown = makeTableCtxDropdownMenu(_mergeDropdownBtn, [
+  { label: 'Merge cells', action: () => {
+    applyRealCellSelection();
+    editor.chain().focus().mergeCells().run();
+  }},
+  { label: 'Split cell vertically', action: () => { _splitCellVertically(); }},
+  { label: 'Split cell horizontally', action: () => { _splitCellHorizontally(); }},
+]);
+
+// Build cell props button
+const _cellPropsBtn = makeTableCtxBtn(TABLE_ICONS.cellProps, 'Cell properties', (b) => {
+  document.querySelectorAll('.table-ctx-dropdown.visible').forEach(hideTableCtxDropdown);
+  const pp = document.querySelector('.cell-props-popup');
+  if (pp && pp.classList.contains('visible')) { hideCellPropsPopup(pp); return; }
+  if (pp) {
+    updateCellPropsPopupState();
+    pp.classList.add('visible');
+    requestAnimationFrame(() => layoutColorPopup(b, pp));
+  }
+});
+// Build select mode toggle with dropdown
+const _selectModeBtn = makeTableCtxBtn(TABLE_ICONS.selectMode, 'Select', (b) => showTableCtxDropdown(b, _selectDropdown));
+const _selectDropdown = makeTableCtxDropdownMenu(_selectModeBtn, [
+  { label: 'Toggle select mode', action: () => {
+    if (window._cellSelectMode) {
+      window._exitCellSelectMode();
+      _selectModeBtn.classList.remove('active');
+    } else {
+      window._enterCellSelectMode();
+      _selectModeBtn.classList.add('active');
+    }
+  }},
+  { label: 'Select all cells', action: () => {
+    const table = findTableAroundPos(editor.state.selection.from);
+    if (!table) return;
+    if (!window._cellSelectMode) {
+      window._enterCellSelectMode();
+      _selectModeBtn.classList.add('active');
+    }
+    if (window._clearCellSelection) window._clearCellSelection();
+    table.node.descendants((node, relPos) => {
+      if (node.type.name === 'tableCell' || node.type.name === 'tableHeader') {
+        const absPos = table.start + 1 + relPos;
+        if (window._addCellByPos) window._addCellByPos(absPos);
+        return false;
+      }
+    });
+  }},
+  { label: 'Clear selection', action: () => {
+    window._exitCellSelectMode();
+    _selectModeBtn.classList.remove('active');
+  }},
+]);
+// Caption toggle — pure DOM: inserts/removes a .table-caption-box div inside .tableWrapper
+const _captionBtn = makeTableCtxBtn(TABLE_ICONS.caption, 'Toggle caption', () => {
+  const wrapper = _activeTableWrapper || getTableDOMWrapper();
+  if (!wrapper) return;
+  const existing = Array.from(wrapper.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'));
+  if (existing) {
+    _captionStore.delete(wrapper);
+    existing.remove();
+  } else {
+    const tableEl = wrapper.querySelector('table');
+    if (!tableEl) return;
+    const capDiv = document.createElement('div');
+    capDiv.className = 'table-caption-box';
+    capDiv.contentEditable = 'true';
+    wrapper.insertBefore(capDiv, tableEl);
+    _setupCaptionInput(capDiv);
+    capDiv.focus();
+  }
+  // Trigger auto-save so the caption add/remove persists
+  clearTimeout(_contentTimer);
+  _contentTimer = setTimeout(() => {
+    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch(e) {}
+  }, 300);
+});
+// "New line below" button (↵ symbol)
+const _newLineIcon = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 7v4H5.83l3.58-3.59L8 6l-6 6 6 6 1.41-1.41L5.83 13H21V7h-2z"/></svg>';
+const _insertParaBelow = makeTableCtxBtn(_newLineIcon, 'Insert line below', () => {
+  const table = findTableAroundPos(editor.state.selection.from);
+  if (!table) return;
+  const endPos = table.end;
+  editor.chain().focus().insertContentAt(endPos, { type: 'paragraph' }).setTextSelection(endPos + 1).run();
+});
+const _insertParaAbove = makeTableCtxBtn('<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 17v-4H5.83l3.58 3.59L8 18l-6-6 6-6 1.41 1.41L5.83 11H21v6h-2z"/></svg>', 'Insert line above', () => {
+  const table = findTableAroundPos(editor.state.selection.from);
+  if (!table) return;
+  editor.chain().focus().insertContentAt(table.start, { type: 'paragraph' }).run();
+});
+// Delete table
+const _deleteTableBtn = makeTableCtxBtn(TABLE_ICONS.trash, 'Delete table', () => {
+  editor.chain().focus().deleteTable().run();
+});
+_deleteTableBtn.classList.add('danger');
+
+function _ctxDiv() { const d = document.createElement('div'); d.className = 'table-ctx-divider'; return d; }
+
+_tableCtxBar.appendChild(_colDropdownBtn);
+_tableCtxBar.appendChild(_rowDropdownBtn);
+_tableCtxBar.appendChild(_ctxDiv());
+_tableCtxBar.appendChild(_mergeDropdownBtn);
+_tableCtxBar.appendChild(_cellPropsBtn);
+_tableCtxBar.appendChild(_ctxDiv());
+_tableCtxBar.appendChild(_selectModeBtn);
+_tableCtxBar.appendChild(_captionBtn);
+_tableCtxBar.appendChild(_ctxDiv());
+_tableCtxBar.appendChild(_insertParaAbove);
+_tableCtxBar.appendChild(_insertParaBelow);
+_tableCtxBar.appendChild(_ctxDiv());
+_tableCtxBar.appendChild(_deleteTableBtn);
+
+// Save button at far right — pushes to the end with margin-left:auto
+const _ctxSaveBtn = document.createElement('div');
+_ctxSaveBtn.className = 'table-ctx-btn table-ctx-save-btn';
+_ctxSaveBtn.title = 'Save';
+_ctxSaveBtn.style.marginLeft = 'auto';
+_ctxSaveBtn.innerHTML = _tctx('M17 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z');
+_ctxSaveBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  try { window.webkit.messageHandlers.requestSave.postMessage(window.editorBridge.getContent()); } catch(err) {}
+});
+_tableCtxBar.appendChild(_ctxSaveBtn);
+
+let _tableCtxBarVisible = false;
+let _activeTableWrapper = null;
+editor.on('selectionUpdate', () => {
+  const inTable = editor.isActive('table');
+  tableDbg('tableCtx.selectionUpdate', {
+    inTable,
+    barVisible: _tableCtxBarVisible,
+    from: editor.state.selection.from,
+    to: editor.state.selection.to,
+  });
+  if (inTable) {
+    _activeTableWrapper = getTableDOMWrapper();
+    tableDbg('tableCtx.activeWrapper.update', { hasWrapper: !!_activeTableWrapper });
+    if (!_tableCtxBarVisible) {
+      _tableCtxBar.classList.add('visible');
+      _tableCtxBarVisible = true;
+      try { window.webkit.messageHandlers.tableToolsVisible.postMessage(true); } catch(e) {}
+      tableDbg('tableCtx.show');
+    }
+  } else if (_tableCtxBarVisible) {
+    _activeTableWrapper = null;
+    _tableCtxBar.classList.remove('visible');
+    _tableCtxBarVisible = false;
+    try { window.webkit.messageHandlers.tableToolsVisible.postMessage(false); } catch(e) {}
+    tableDbg('tableCtx.hide');
+    hideAllTablePopups();
+    if (window._cellSelectMode) {
+      window._exitCellSelectMode();
+      _selectModeBtn.classList.remove('active');
+    }
+  }
+});
+
+// --- Caption DOM support ---
+// Pure DOM approach: caption state lives in the DOM, not ProseMirror attributes.
+// Captions are serialized via getContent() and restored via setContent().
+
+// Map to store caption text when ProseMirror re-renders a table wrapper
+const _captionStore = new WeakMap();
+
+function _setupCaptionInput(capDiv) {
+  capDiv.addEventListener('input', () => {
+    const wrapper = capDiv.closest('.tableWrapper');
+    if (wrapper) _captionStore.set(wrapper, capDiv.textContent || '');
+    clearTimeout(_contentTimer);
+    _contentTimer = setTimeout(() => {
+      try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch(e) {}
+    }, 300);
+  });
+  capDiv.addEventListener('mousedown', e => e.stopPropagation());
+  capDiv.addEventListener('touchstart', e => e.stopPropagation());
+  capDiv.addEventListener('keydown', e => e.stopPropagation());
+  capDiv.addEventListener('focus', () => {
+    tableDbg('captionInput.focus');
+    editor.view.dom.removeEventListener('blur', refocusEditorIfNeeded);
+  });
+  capDiv.addEventListener('blur', () => {
+    tableDbg('captionInput.blur', { textLen: (capDiv.textContent || '').length });
+    editor.view.dom.addEventListener('blur', refocusEditorIfNeeded);
+  });
+}
+
+function _restoreCaptionsAfterRender() {
+  let restored = 0;
+  document.querySelectorAll('.tiptap .tableWrapper').forEach(wrapper => {
+    const saved = _captionStore.get(wrapper);
+    if (saved !== undefined && !Array.from(wrapper.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'))) {
+      const tableEl = wrapper.querySelector('table');
+      if (!tableEl) return;
+      const capDiv = document.createElement('div');
+      capDiv.className = 'table-caption-box';
+      capDiv.contentEditable = 'true';
+      capDiv.textContent = saved;
+      wrapper.insertBefore(capDiv, tableEl);
+      _setupCaptionInput(capDiv);
+      restored++;
+    }
+  });
+  if (restored > 0) tableDbg('caption.restoreAfterRender', { restored });
+}
+
+// Track caption text in WeakMap so it survives ProseMirror re-renders
+function _trackCaptions() {
+  let tracked = 0;
+  document.querySelectorAll('.tiptap .tableWrapper').forEach(wrapper => {
+    const capDiv = Array.from(wrapper.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'));
+    if (capDiv) {
+      _captionStore.set(wrapper, capDiv.textContent || '');
+      tracked++;
+    }
+  });
+  if (tracked > 0) tableDbg('caption.track', { tracked });
+}
+
+editor.on('transaction', () => {
+  _trackCaptions();
+  requestAnimationFrame(_restoreCaptionsAfterRender);
+});
+
+// --- 5. Cell Selection Mode for Touch ---
+// Stores ProseMirror positions AND applies highlight directly to DOM.
+// After ProseMirror re-renders, refreshes by scanning all cells in the table.
+// While active: editor is blurred, cells highlight on tap, no typing allowed.
+(function setupCellSelectMode() {
+  const ec = document.getElementById('editor-container');
+  let anchorCellDOM = null;
+  const selectedPositions = new Set();
+  let _cellLogCounter = 0;
+  function cellDbg(tag, data) {
+    _cellLogCounter++;
+    tableDbg('cell.' + tag, { n: _cellLogCounter, ...(data || {}) });
+  }
+
+  function cellPosFromDOM(cellDOM) {
+    try {
+      const innerPos = editor.view.posAtDOM(cellDOM, 0);
+      const info = findCellAtPos(innerPos);
+      if (!info) cellDbg('cellPosFromDOM.noInfo', { innerPos, tag: cellDOM.tagName });
+      return info ? info.pos : null;
+    } catch(e) {
+      cellDbg('cellPosFromDOM.error', { error: String(e) });
+      return null;
+    }
+  }
+
+  const _hlBg = 'rgba(0,122,255,0.3)';
+  const _hlBgDark = 'rgba(10,132,255,0.35)';
+  const _hlShadow = 'inset 0 0 0 2px rgba(0,122,255,0.5)';
+  const _hlShadowDark = 'inset 0 0 0 2px rgba(10,132,255,0.6)';
+  const _isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+  // Pause ProseMirror's DOM observer so it doesn't see (and revert) our visual changes.
+  // Re-entrant: nested pause/resume pairs are safe.
+  let _pmObsPauseDepth = 0;
+  function _pmDomObsPause() {
+    _pmObsPauseDepth++;
+    if (_pmObsPauseDepth > 1) return true;
+    try {
+      const obs = editor.view.domObserver;
+      if (obs && obs.stop) {
+        obs.stop();
+        if (obs.queue) obs.queue.length = 0;
+        return true;
+      }
+    } catch(e) {}
+    return false;
+  }
+  function _pmDomObsResume() {
+    _pmObsPauseDepth = Math.max(0, _pmObsPauseDepth - 1);
+    if (_pmObsPauseDepth > 0) return;
+    try {
+      const obs = editor.view.domObserver;
+      if (obs && obs.start) obs.start();
+    } catch(e) {}
+  }
+
+  function _applyHlStyle(cellDOM) {
+    const bg = _isDark() ? _hlBgDark : _hlBg;
+    const shadow = _isDark() ? _hlShadowDark : _hlShadow;
+    const base = cellDOM.getAttribute('data-saved-style') || '';
+    const extra = 'background-color: ' + bg + ' !important; box-shadow: ' + shadow + ' !important;';
+    cellDOM.setAttribute('style', base + '; ' + extra);
+  }
+
+  function highlightCell(cellDOM) {
+    const paused = _pmDomObsPause();
+
+    cellDOM.setAttribute('data-user-selected-cell', '1');
+    cellDOM.classList.add('selectedCell');
+    if (!cellDOM.hasAttribute('data-saved-style')) {
+      cellDOM.setAttribute('data-saved-style', cellDOM.getAttribute('style') || '');
+    }
+    _applyHlStyle(cellDOM);
+
+    if (paused) _pmDomObsResume();
+
+    cellDbg('highlightCell', {
+      tag: cellDOM.tagName,
+      cls: cellDOM.className,
+      paused,
+      styleAttr: (cellDOM.getAttribute('style') || '').slice(0, 100),
+      inDoc: document.contains(cellDOM),
+    });
+  }
+  function unhighlightCell(cellDOM) {
+    const paused = _pmDomObsPause();
+
+    cellDOM.classList.remove('selectedCell');
+    cellDOM.removeAttribute('data-user-selected-cell');
+    const saved = cellDOM.getAttribute('data-saved-style');
+    if (saved !== null) {
+      if (saved) cellDOM.setAttribute('style', saved);
+      else cellDOM.removeAttribute('style');
+      cellDOM.removeAttribute('data-saved-style');
+    } else {
+      cellDOM.removeAttribute('style');
+    }
+    const node = (() => { try {
+      const p = editor.view.posAtDOM(cellDOM, 0);
+      const info = findCellAtPos(p);
+      return info ? info.node : null;
+    } catch(e) { return null; } })();
+    if (node && node.attrs.backgroundColor) {
+      cellDOM.style.backgroundColor = node.attrs.backgroundColor;
+    }
+
+    if (paused) _pmDomObsResume();
+
+    cellDbg('unhighlightCell', { tag: cellDOM.tagName, hadNode: !!node });
+  }
+
+  function refreshVisual() {
+    const currentlyHighlighted = Array.from(document.querySelectorAll('.tiptap td[data-user-selected-cell], .tiptap th[data-user-selected-cell]'));
+    if (selectedPositions.size === 0) {
+      cellDbg('refreshVisual.clear', { currentlyHighlighted: currentlyHighlighted.length });
+      _pmDomObsPause();
+      currentlyHighlighted.forEach(unhighlightCell);
+      _pmDomObsResume();
+      return;
+    }
+
+    const toHighlight = [];
+    document.querySelectorAll('.tiptap td, .tiptap th').forEach(cellDOM => {
+      const pos = cellPosFromDOM(cellDOM);
+      if (pos !== null && selectedPositions.has(pos)) toHighlight.push(cellDOM);
+    });
+    cellDbg('refreshVisual.map', {
+      selectedSize: selectedPositions.size,
+      currentlyHighlighted: currentlyHighlighted.length,
+      toHighlight: toHighlight.length,
+      domCellCount: document.querySelectorAll('.tiptap td, .tiptap th').length,
+    });
+
+    if (toHighlight.length === 0 && currentlyHighlighted.length > 0) {
+      cellDbg('refreshVisual.keepExisting', { currentlyHighlighted: currentlyHighlighted.length });
+      return;
+    }
+
+    _pmDomObsPause();
+    currentlyHighlighted.forEach(unhighlightCell);
+    toHighlight.forEach(highlightCell);
+    _pmDomObsResume();
+  }
+
+  function clearSelection() {
+    _pmDomObsPause();
+    document.querySelectorAll('.tiptap td[data-user-selected-cell], .tiptap th[data-user-selected-cell]').forEach(unhighlightCell);
+    _pmDomObsResume();
+    selectedPositions.clear();
+    _selectTable = null;
+  }
+
+  let _selectTable = null; // the <table> element selection is bound to
+
+  function addCell(cellDOM) {
+    const tbl = cellDOM.closest('table');
+    if (tbl && _selectTable && tbl !== _selectTable) {
+      clearSelection();
+    }
+    _selectTable = tbl;
+    const pos = cellPosFromDOM(cellDOM);
+    if (pos !== null) selectedPositions.add(pos);
+    cellDbg('addCell', { pos, selectedSize: selectedPositions.size });
+    highlightCell(cellDOM);
+  }
+
+  function addByPos(cellPos) {
+    selectedPositions.add(cellPos);
+    refreshVisual();
+  }
+
+  function toggleCell(cellDOM) {
+    const pos = cellPosFromDOM(cellDOM);
+    if (pos !== null && selectedPositions.has(pos)) {
+      selectedPositions.delete(pos);
+      cellDbg('toggleCell.remove', { pos, selectedSize: selectedPositions.size });
+      unhighlightCell(cellDOM);
+    } else {
+      cellDbg('toggleCell.add', { pos, selectedSize: selectedPositions.size });
+      addCell(cellDOM);
+    }
+  }
+
+  // Drag state for additive / subtractive rectangle selection
+  let _dragMode = null;       // 'select' | 'deselect'
+  let _isDragging = false;
+  let _preRectSelection = null; // Set<pos> snapshot before the current drag
+
+  function _cellsInRect(anchorDOM, headDOM) {
+    const tbl = anchorDOM.closest('table');
+    if (!tbl || !tbl.contains(headDOM)) return [];
+    const rows = Array.from(tbl.querySelectorAll('tr'));
+    const aRow = anchorDOM.closest('tr'), hRow = headDOM.closest('tr');
+    if (!aRow || !hRow) return [];
+    const aRI = rows.indexOf(aRow), hRI = rows.indexOf(hRow);
+    const aCI = Array.from(aRow.children).indexOf(anchorDOM);
+    const hCI = Array.from(hRow.children).indexOf(headDOM);
+    const r0 = Math.min(aRI, hRI), r1 = Math.max(aRI, hRI);
+    const c0 = Math.min(aCI, hCI), c1 = Math.max(aCI, hCI);
+    const out = [];
+    for (let r = r0; r <= r1; r++) {
+      const cells = rows[r] ? rows[r].children : [];
+      for (let c = c0; c <= c1 && c < cells.length; c++) out.push(cells[c]);
+    }
+    return out;
+  }
+
+  function selectRectMode(anchorDOM, headDOM) {
+    const tbl = anchorDOM.closest('table');
+    if (!tbl || !tbl.contains(headDOM)) return;
+    // Enforce single-grid: if dragging into a different table, clear everything first
+    if (_selectTable && _selectTable !== tbl) {
+      clearSelection();
+      _preRectSelection = new Set();
+    }
+    _selectTable = tbl;
+    const rectCells = _cellsInRect(anchorDOM, headDOM);
+    const rectPositions = new Set();
+    rectCells.forEach(c => { const p = cellPosFromDOM(c); if (p !== null) rectPositions.add(p); });
+
+    // Restore pre-drag baseline, then apply additive or subtractive rect
+    selectedPositions.clear();
+    if (_preRectSelection) for (const p of _preRectSelection) selectedPositions.add(p);
+    if (_dragMode === 'select') {
+      for (const p of rectPositions) selectedPositions.add(p);
+    } else {
+      for (const p of rectPositions) selectedPositions.delete(p);
+    }
+    refreshVisual();
+  }
+
+  // Legacy wrapper used by toolbar actions (select column/row/all)
+  function selectRect(anchorDOM, headDOM) {
+    clearSelection();
+    _cellsInRect(anchorDOM, headDOM).forEach(c => addCell(c));
+  }
+
+  editor.on('transaction', () => {
+    if (selectedPositions.size > 0) {
+      cellDbg('transaction.refreshScheduled', { selectedSize: selectedPositions.size });
+      requestAnimationFrame(refreshVisual);
+    }
+  });
+
+  // Block events that would let ProseMirror focus a cell while in select mode.
+  function blockIfSelectMode(e) {
+    if (!window._cellSelectMode) return;
+    const cell = e.target.closest('.tiptap td, .tiptap th');
+    if (!cell) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+  }
+  ec.addEventListener('mousedown', blockIfSelectMode, { capture: true });
+  ec.addEventListener('click', blockIfSelectMode, { capture: true });
+  ec.addEventListener('touchstart', blockIfSelectMode, { capture: true });
+  ec.addEventListener('touchend', blockIfSelectMode, { capture: true });
+
+  // --- Edge-scroll: auto-scroll when dragging near edges ---
+  // Vertical: scrolls #editor-container. Horizontal: scrolls the .tableWrapper.
+  const _edgeScrollZone = 48; // px from edge to start scrolling
+  const _edgeScrollSpeed = 6; // px per frame
+  let _edgeScrollRAF = null;
+  let _lastPointerX = 0;
+  let _lastPointerY = 0;
+
+  function _startEdgeScroll() {
+    if (_edgeScrollRAF) return;
+    const ecEl = document.getElementById('editor-container');
+    if (!ecEl) return;
+    const wrapper = anchorCellDOM ? anchorCellDOM.closest('.tableWrapper') : null;
+    function tick() {
+      _edgeScrollRAF = null;
+      if (!window._cellSelectMode || !anchorCellDOM) return;
+      let scrolled = false;
+
+      // Vertical edge-scroll on #editor-container
+      const ecRect = ecEl.getBoundingClientRect();
+      if (_lastPointerY < ecRect.top + _edgeScrollZone && ecEl.scrollTop > 0) {
+        const intensity = 1 - Math.max(0, _lastPointerY - ecRect.top) / _edgeScrollZone;
+        ecEl.scrollTop -= Math.ceil(_edgeScrollSpeed * intensity);
+        scrolled = true;
+      } else if (_lastPointerY > ecRect.bottom - _edgeScrollZone && ecEl.scrollTop < ecEl.scrollHeight - ecEl.clientHeight) {
+        const intensity = 1 - Math.max(0, ecRect.bottom - _lastPointerY) / _edgeScrollZone;
+        ecEl.scrollTop += Math.ceil(_edgeScrollSpeed * intensity);
+        scrolled = true;
+      }
+
+      // Horizontal edge-scroll on .tableWrapper
+      if (wrapper) {
+        const wRect = wrapper.getBoundingClientRect();
+        if (_lastPointerX < wRect.left + _edgeScrollZone && wrapper.scrollLeft > 0) {
+          const intensity = 1 - Math.max(0, _lastPointerX - wRect.left) / _edgeScrollZone;
+          wrapper.scrollLeft -= Math.ceil(_edgeScrollSpeed * intensity);
+          scrolled = true;
+        } else if (_lastPointerX > wRect.right - _edgeScrollZone && wrapper.scrollLeft < wrapper.scrollWidth - wrapper.clientWidth) {
+          const intensity = 1 - Math.max(0, wRect.right - _lastPointerX) / _edgeScrollZone;
+          wrapper.scrollLeft += Math.ceil(_edgeScrollSpeed * intensity);
+          scrolled = true;
+        }
+      }
+
+      if (scrolled) {
+        const el = document.elementFromPoint(_lastPointerX, _lastPointerY);
+        if (el) {
+          const cell = el.closest('.tiptap td, .tiptap th');
+          if (cell && anchorCellDOM) selectRectMode(anchorCellDOM, cell);
+        }
+        _edgeScrollRAF = requestAnimationFrame(tick);
+      }
+    }
+    _edgeScrollRAF = requestAnimationFrame(tick);
+  }
+
+  function _stopEdgeScroll() {
+    if (_edgeScrollRAF) { cancelAnimationFrame(_edgeScrollRAF); _edgeScrollRAF = null; }
+  }
+
+  ec.addEventListener('pointerdown', (e) => {
+    if (!window._cellSelectMode) return;
+    const cell = e.target.closest('.tiptap td, .tiptap th');
+    if (!cell) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+
+    // Enforce single-grid: if tapping a cell in a different table, clear first
+    const tbl = cell.closest('table');
+    if (tbl && _selectTable && tbl !== _selectTable) {
+      clearSelection();
+    }
+
+    anchorCellDOM = cell;
+    _isDragging = false;
+    const anchorPos = cellPosFromDOM(cell);
+    const anchorWasSelected = anchorPos !== null && selectedPositions.has(anchorPos);
+    _dragMode = anchorWasSelected ? 'deselect' : 'select';
+    _preRectSelection = new Set(selectedPositions);
+
+    editor.view.dom.blur();
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+    }
+  }, { capture: true });
+
+  ec.addEventListener('pointermove', (e) => {
+    if (!window._cellSelectMode || !anchorCellDOM) return;
+    _lastPointerX = e.clientX;
+    _lastPointerY = e.clientY;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    if (el) {
+      const cell = el.closest('.tiptap td, .tiptap th');
+      if (cell) {
+        _isDragging = true;
+        selectRectMode(anchorCellDOM, cell);
+      }
+    }
+    e.preventDefault();
+    _startEdgeScroll();
+  }, { capture: true });
+
+  ec.addEventListener('pointerup', () => {
+    if (!window._cellSelectMode) return;
+    _stopEdgeScroll();
+    if (anchorCellDOM && !_isDragging) {
+      toggleCell(anchorCellDOM);
+    }
+    anchorCellDOM = null;
+    _isDragging = false;
+    _dragMode = null;
+    _preRectSelection = null;
+  }, { capture: true });
+
+  ec.addEventListener('pointercancel', () => {
+    _stopEdgeScroll();
+    anchorCellDOM = null;
+    _isDragging = false;
+    _dragMode = null;
+    _preRectSelection = null;
+  }, { capture: true });
+
+  window._enterCellSelectMode = function() {
+    window._cellSelectMode = true;
+    cellDbg('enterSelectMode');
+    // Dismiss keyboard: blur every focusable element and clear selection
+    editor.view.dom.blur();
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+    }
+    const sel = window.getSelection();
+    if (sel) sel.removeAllRanges();
+    const wrapper = getTableDOMWrapper();
+    if (wrapper) {
+      const tbl = wrapper.querySelector('table');
+      if (tbl) tbl.classList.add('cell-select-active');
+    }
+  };
+  window._exitCellSelectMode = function() {
+    cellDbg('exitSelectMode', { selectedSize: selectedPositions.size });
+    clearSelection();
+    window._cellSelectMode = false;
+    document.querySelectorAll('.tiptap table.cell-select-active').forEach(t => t.classList.remove('cell-select-active'));
+    editor.commands.focus();
+  };
+
+  window._getSelectedPositions = () => selectedPositions;
+  window._clearCellSelection = clearSelection;
+  window._addCellByPos = addByPos;
+})();
+
+// --- 6. Cell Properties Popup ---
+const _cellPropsPopup = document.createElement('div');
+_cellPropsPopup.className = 'cell-props-popup';
+document.body.appendChild(_cellPropsPopup);
+
+(function buildCellPropsPopup() {
+  const popup = _cellPropsPopup;
+
+  function secLabel(text) {
+    const l = document.createElement('div');
+    l.className = 'props-section-label'; l.textContent = text;
+    popup.appendChild(l);
+  }
+
+  function applyCellAttr(attr, value) {
+    const selPositions = window._getSelectedPositions ? window._getSelectedPositions() : new Set();
+    if (selPositions.size > 1) {
+      // Build a single transaction so all changes are one undo step
+      const tr = editor.state.tr;
+      selPositions.forEach(cellPos => {
+        try {
+          const mappedPos = tr.mapping.map(cellPos);
+          const node = tr.doc.nodeAt(mappedPos);
+          if (node && (node.type.name === 'tableCell' || node.type.name === 'tableHeader')) {
+            tr.setNodeMarkup(mappedPos, null, { ...node.attrs, [attr]: value });
+          }
+        } catch(e) {}
+      });
+      editor.view.dispatch(tr);
+    } else {
+      editor.chain().focus().setCellAttribute(attr, value).run();
+    }
+    updateCellPropsPopupState();
+  }
+
+  // Background color
+  secLabel('Background Color');
+  const bgGrid = document.createElement('div');
+  bgGrid.className = 'props-color-grid';
+  const bgClear = document.createElement('div');
+  bgClear.className = 'props-color-swatch clear-swatch';
+  bgClear.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); applyCellAttr('backgroundColor', null); });
+  bgGrid.appendChild(bgClear);
+  COLORS.forEach(c => {
+    const sw = document.createElement('div');
+    sw.className = 'props-color-swatch';
+    sw.style.background = c; sw.dataset.color = c;
+    sw.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); applyCellAttr('backgroundColor', c); });
+    bgGrid.appendChild(sw);
+  });
+  popup.appendChild(bgGrid);
+
+  // Horizontal alignment
+  secLabel('Horizontal Alignment');
+  const hAlignRow = document.createElement('div');
+  hAlignRow.className = 'props-btn-row';
+  ['left', 'center', 'right', 'justify'].forEach(val => {
+    const b = document.createElement('div');
+    b.className = 'props-btn'; b.textContent = val.charAt(0).toUpperCase() + val.slice(1);
+    b.dataset.align = val;
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); applyCellAttr('textAlign', val); });
+    hAlignRow.appendChild(b);
+  });
+  popup.appendChild(hAlignRow);
+
+  // Vertical alignment
+  secLabel('Vertical Alignment');
+  const vAlignRow = document.createElement('div');
+  vAlignRow.className = 'props-btn-row';
+  ['top', 'middle', 'bottom'].forEach(val => {
+    const b = document.createElement('div');
+    b.className = 'props-btn'; b.textContent = val.charAt(0).toUpperCase() + val.slice(1);
+    b.dataset.valign = val;
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); applyCellAttr('verticalAlign', val); });
+    vAlignRow.appendChild(b);
+  });
+  popup.appendChild(vAlignRow);
+
+  // Cell padding
+  secLabel('Padding');
+  const padRow = document.createElement('div');
+  padRow.className = 'props-btn-row';
+  [{ label: 'None', val: '2px' }, { label: 'Small', val: '4px 8px' }, { label: 'Normal', val: '6px 10px' }, { label: 'Large', val: '12px 16px' }].forEach(opt => {
+    const b = document.createElement('div');
+    b.className = 'props-btn'; b.textContent = opt.label; b.dataset.pad = opt.val;
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); applyCellAttr('cellPadding', opt.val); });
+    padRow.appendChild(b);
+  });
+  popup.appendChild(padRow);
+
+  // Border style (also sets borderWidth so all 4 sides render)
+  secLabel('Border');
+  const borderRow = document.createElement('div');
+  borderRow.className = 'props-btn-row';
+  [{ label: '1px solid', w: '1px', s: 'solid' },
+   { label: '2px solid', w: '2px', s: 'solid' },
+   { label: '2px dashed', w: '2px', s: 'dashed' },
+   { label: '2px dotted', w: '2px', s: 'dotted' },
+   { label: 'None', w: null, s: 'none' }].forEach(opt => {
+    const b = document.createElement('div');
+    b.className = 'props-btn'; b.textContent = opt.label;
+    b.dataset.bwidth = opt.w || '';
+    b.dataset.bstyle = opt.s;
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      applyCellAttr('borderWidth', opt.w);
+      applyCellAttr('borderStyle', opt.s);
+    });
+    borderRow.appendChild(b);
+  });
+  popup.appendChild(borderRow);
+
+  // Border color
+  secLabel('Border Color');
+  const bdGrid = document.createElement('div');
+  bdGrid.className = 'props-color-grid';
+  const bdClear = document.createElement('div');
+  bdClear.className = 'props-color-swatch clear-swatch';
+  bdClear.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); applyCellAttr('borderColor', null); });
+  bdGrid.appendChild(bdClear);
+  COLORS.forEach(c => {
+    const sw = document.createElement('div');
+    sw.className = 'props-color-swatch';
+    sw.style.background = c; sw.dataset.bcolor = c;
+    sw.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); applyCellAttr('borderColor', c); });
+    bdGrid.appendChild(sw);
+  });
+  popup.appendChild(bdGrid);
+
+  // Clear all
+  const clearBtn = document.createElement('div');
+  clearBtn.className = 'props-clear-btn'; clearBtn.textContent = 'Reset Cell Formatting';
+  clearBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    ['backgroundColor', 'textAlign', 'verticalAlign', 'borderWidth', 'borderColor', 'borderStyle', 'cellPadding'].forEach(a => {
+      applyCellAttr(a, null);
+    });
+  });
+  popup.appendChild(clearBtn);
+})();
+
+function updateCellPropsPopupState() {
+  try {
+    const cell = findCellAtPos(editor.state.selection.from);
+    if (!cell) return;
+    const attrs = cell.node.attrs;
+    _cellPropsPopup.querySelectorAll('.props-color-grid').forEach((grid, idx) => {
+      const attrName = idx === 0 ? 'backgroundColor' : 'borderColor';
+      const val = attrs[attrName] || null;
+      grid.querySelectorAll('.props-color-swatch').forEach(sw => {
+        sw.classList.toggle('active', sw.dataset.color === val || sw.dataset.bcolor === val);
+      });
+    });
+    _cellPropsPopup.querySelectorAll('[data-align]').forEach(b => b.classList.toggle('active', b.dataset.align === (attrs.textAlign || '')));
+    _cellPropsPopup.querySelectorAll('[data-valign]').forEach(b => b.classList.toggle('active', b.dataset.valign === (attrs.verticalAlign || '')));
+    _cellPropsPopup.querySelectorAll('[data-pad]').forEach(b => b.classList.toggle('active', b.dataset.pad === (attrs.cellPadding || '')));
+    _cellPropsPopup.querySelectorAll('[data-bstyle]').forEach(b => {
+      const matchW = b.dataset.bwidth === (attrs.borderWidth || '');
+      const matchS = b.dataset.bstyle === (attrs.borderStyle || '');
+      b.classList.toggle('active', matchW && matchS);
+    });
+  } catch (e) {}
+}
+
+document.addEventListener('click', (e) => {
+  const pp = _cellPropsPopup;
+  if (!pp.classList.contains('visible')) return;
+  if (!pp.contains(e.target) && !_cellPropsBtn.contains(e.target) && !_tableCtxBar.contains(e.target)) hideCellPropsPopup(pp);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// END TABLE FEATURES
+// ═══════════════════════════════════════════════════════════════
 
 try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch(e) {}
 try {
