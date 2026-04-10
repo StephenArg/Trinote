@@ -120,6 +120,10 @@ Tests cover:
 
 ---
 
+If you want to discuss future work on Trinote (new features, bug fixes, style changes, feedback in general) you can join the [discord](https://discord.com/invite/ghjJG56EUS).
+
+---
+
 <a href="https://buymeacoffee.com/vero.fide">Buy me a coffee</a> ☕️ 
 
 <img width="100" height="100" alt="qr-code" src="https://github.com/user-attachments/assets/2ebab2dd-4bf6-4d86-a29c-4cf75fcf834e" />
