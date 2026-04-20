@@ -10,8 +10,8 @@ struct RichTextEditorView: UIViewRepresentable {
     var onEditorScroll: ((CGFloat, Bool) -> Void)?
     /// Called when the table context toolbar shows or hides.
     var onTableToolsVisibilityChanged: ((Bool) -> Void)?
-    /// Called when the in-editor save button (e.g. on the table toolbar) is tapped, with fresh HTML.
-    var onRequestSave: ((String) -> Void)?
+    /// Called when the in-editor save button (e.g. on the table toolbar) is tapped, with fresh HTML and editor scroll fraction (0–1).
+    var onRequestSave: ((String, CGFloat) -> Void)?
     @Binding var imageToInsert: String?
     /// Optional binding so the parent view can hold a reference to the underlying WKWebView
     /// (e.g. to call `evaluateJavaScript` for fetching fresh editor content before save).
@@ -163,7 +163,7 @@ struct RichTextEditorView: UIViewRepresentable {
         var onPickImage: (() -> Void)?
         var onEditorScroll: ((CGFloat, Bool) -> Void)?
         var onTableToolsVisibilityChanged: ((Bool) -> Void)?
-        var onRequestSave: ((String) -> Void)?
+        var onRequestSave: ((String, CGFloat) -> Void)?
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
@@ -245,9 +245,27 @@ struct RichTextEditorView: UIViewRepresentable {
                 }
 
             case "requestSave":
-                if let html = message.body as? String {
+                let html: String?
+                let scrollFraction: CGFloat
+                if let dict = message.body as? [String: Any] {
+                    html = dict["html"] as? String
+                    if let n = dict["scrollFraction"] as? NSNumber {
+                        scrollFraction = CGFloat(truncating: n)
+                    } else if let d = dict["scrollFraction"] as? Double {
+                        scrollFraction = CGFloat(d)
+                    } else {
+                        scrollFraction = 0
+                    }
+                } else if let s = message.body as? String {
+                    html = s
+                    scrollFraction = 0
+                } else {
+                    html = nil
+                    scrollFraction = 0
+                }
+                if let html {
                     let callback = onRequestSave
-                    DispatchQueue.main.async { callback?(html) }
+                    DispatchQueue.main.async { callback?(html, scrollFraction) }
                 }
 
             case "debugLog":

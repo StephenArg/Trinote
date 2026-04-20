@@ -86,6 +86,8 @@ struct NoteDetailView: View {
     @State private var floatingEditScrollBaselineReady = false
     /// Scroll fraction (0–1) of the read-only ScrollView, used to restore position in the editor.
     @State private var readOnlyScrollFraction: CGFloat = 0
+    /// After save leaves the rich-text editor, applied once to the read-only `ScrollView` (same fraction as the web editor).
+    @State private var readOnlyScrollFractionPendingRestore: CGFloat?
 
     /// Save/cancel chip while editing: hide on scroll up, show on scroll down (same rules as read-mode edit FAB).
     @State private var showEditorSaveCancelChip = true
@@ -235,14 +237,60 @@ struct NoteDetailView: View {
         .accessibilityLabel(String(localized: "Edit note", comment: "Floating scroll edit button"))
     }
 
+    /// Fetches HTML + scroll fraction from `editor.html` in one round-trip (see `getScrollFraction` / `scrollToFraction`).
+    private static let richTextEditorSavePayloadScript = """
+    (function(){
+      try {
+        var html = window.editorBridge.getContent();
+        var f = window.editorBridge.getScrollFraction();
+        return JSON.stringify({ html: html, f: f });
+      } catch (e) {
+        return JSON.stringify({ html: '', f: 0 });
+      }
+    })();
+    """
+
+    private static func parseRichTextEditorSavePayload(_ result: Any?) -> (html: String?, scrollFraction: CGFloat?) {
+        guard let s = result as? String, !s.isEmpty else { return (nil, nil) }
+        if s.first == "{",
+           let data = s.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let html = obj["html"] as? String {
+            let f: CGFloat?
+            if let n = obj["f"] as? NSNumber {
+                f = CGFloat(truncating: n)
+            } else if let d = obj["f"] as? Double {
+                f = CGFloat(d)
+            } else {
+                f = nil
+            }
+            return (html, f)
+        }
+        return (s, nil)
+    }
+
+    private func queueReadOnlyScrollRestoreAfterRichTextSave(fraction: CGFloat) {
+        let f = min(max(fraction, 0), 1)
+        readOnlyScrollFraction = f
+        readOnlyScrollFractionPendingRestore = f
+    }
+
     /// Fetches the latest HTML from the rich-text editor (including non-ProseMirror state like
     /// table captions) and then saves. Falls back to the debounce-cached content when the
     /// WKWebView is unavailable (e.g. non-rich-text note types).
     private func saveRichTextContent(vm: NoteDetailViewModel) {
         if let wv = editorWebView {
-            wv.evaluateJavaScript("window.editorBridge.getContent()") { result, _ in
+            wv.evaluateJavaScript(Self.richTextEditorSavePayloadScript) { result, _ in
                 DispatchQueue.main.async {
-                    vm.saveContent(freshHTML: result as? String)
+                    let (html, frac) = Self.parseRichTextEditorSavePayload(result)
+                    if let frac {
+                        queueReadOnlyScrollRestoreAfterRichTextSave(fraction: frac)
+                    }
+                    if let html {
+                        vm.saveContent(freshHTML: html)
+                    } else {
+                        vm.saveContent()
+                    }
                 }
             }
         } else {
@@ -489,13 +537,18 @@ struct NoteDetailView: View {
                                 }
                             }
                             .background(
-                                NoteDetailScrollOffsetReader { y, _, fraction in
-                                    readOnlyScrollFraction = fraction
-                                    updateFloatingEditVisibility(
-                                        contentOffsetY: y,
-                                        vm: vm,
-                                        note: note
-                                    )
+                                ZStack {
+                                    NoteDetailScrollOffsetReader { y, _, fraction in
+                                        readOnlyScrollFraction = fraction
+                                        updateFloatingEditVisibility(
+                                            contentOffsetY: y,
+                                            vm: vm,
+                                            note: note
+                                        )
+                                    }
+                                    NoteDetailReadOnlyScrollRestoration(fraction: readOnlyScrollFractionPendingRestore) {
+                                        readOnlyScrollFractionPendingRestore = nil
+                                    }
                                 }
                                 .frame(width: 0, height: 0)
                             )
@@ -530,6 +583,7 @@ struct NoteDetailView: View {
                     }
                     .onChange(of: vm.isEditing) { _, editing in
                         if editing {
+                            readOnlyScrollFractionPendingRestore = nil
                             findControl.close()
                             floatingEditScrollBaselineReady = false
                             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
@@ -1020,7 +1074,10 @@ struct NoteDetailView: View {
                         }
                     }
                 },
-                onRequestSave: { html in vm.saveContent(freshHTML: html) },
+                onRequestSave: { html, scrollFraction in
+                    queueReadOnlyScrollRestoreAfterRichTextSave(fraction: scrollFraction)
+                    vm.saveContent(freshHTML: html)
+                },
                 imageToInsert: $imageToInsert,
                 webViewBinding: $editorWebView,
                 initialScrollFraction: readOnlyScrollFraction
