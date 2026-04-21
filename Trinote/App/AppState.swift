@@ -8,7 +8,7 @@ final class AppState {
     var activeProfile: ServerProfile?
     var client: (any TriliumClientProtocol)?
     var isAuthenticated = false
-    var isLoading = false
+    var isLoading = true
     var connectionError: String?
     var lastRefreshed: Date?
     /// In-memory: whether the user has unlocked protected notes this foreground session. Server session is cleared on background and after restoring the main login (see `endServerProtectedSessionAndPersistCookies()`).

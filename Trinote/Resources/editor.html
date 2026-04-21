@@ -790,11 +790,21 @@ if (useTriliumListStyles) {
   editorExtensions.push(TriliumOrderedListExt);
 }
 
+let _typingActivityRaf = null;
+function scheduleEditorTypingActivity() {
+  if (_typingActivityRaf != null) return;
+  _typingActivityRaf = requestAnimationFrame(() => {
+    _typingActivityRaf = null;
+    try { window.webkit.messageHandlers.editorTypingActivity.postMessage(''); } catch (e) {}
+  });
+}
+
 const editor = new Editor({
   element: document.getElementById('editor'),
   extensions: editorExtensions,
   content: '',
   onUpdate({ editor }) {
+    scheduleEditorTypingActivity();
     clearTimeout(_contentTimer);
     _contentTimer = setTimeout(() => {
       try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch(e) {}

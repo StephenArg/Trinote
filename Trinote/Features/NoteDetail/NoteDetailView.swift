@@ -95,6 +95,13 @@ struct NoteDetailView: View {
     @State private var editorSaveCancelScrollBaselineReady = false
     /// True while the table context toolbar is visible in the editor.
     @State private var editorTableToolsVisible = false
+    /// After typing activity, show the save chip again after this delay (unless scroll/table logic overrides).
+    @State private var editorSaveChipIdleWorkItem: DispatchWorkItem?
+    /// Ignore `editorTypingActivity` until this time (avoids hiding the chip from ProseMirror init updates).
+    @State private var editorSaveChipIgnoreTypingUntil: Date = .distantPast
+    /// Latest editor scroll `y` / `scrollTop` (for gating typing-hide vs. “at top, always show”).
+    @State private var lastSaveChipEditorScrollY: CGFloat = 0
+    @State private var lastSaveChipEditorVerticallyScrollable: Bool = true
     /// Reference to the rich-text editor WKWebView so the save button can call JS `getContent()`.
     @State private var editorWebView: WKWebView?
 
@@ -133,6 +140,9 @@ struct NoteDetailView: View {
         return String(localized: "Last changed \(formatted)", comment: "Subtitle under note title; formatted is date/time")
     }
 
+    /// `contentOffset` / `scrollTop` at or below this (including small negative bounce) counts as “at top of content” — always show the floating edit (read mode) and save (editing) chips; typing does not hide the save chip in this range.
+    private static let noteDetailFloatingChipsAtTopY: CGFloat = 8
+
     /// Uses `UIScrollView.contentOffset.y` (via `NoteDetailScrollOffsetReader`): increases when scrolling **down**, decreases when scrolling **up**.
     private func updateFloatingEditVisibility(contentOffsetY: CGFloat, vm: NoteDetailViewModel, note: NoteItem) {
         guard note.type.isEditable, !vm.needsProtectedSession, !vm.isEditing else {
@@ -143,6 +153,19 @@ struct NoteDetailView: View {
             }
             lastScrollContentOffsetY = contentOffsetY
             floatingEditScrollBaselineReady = false
+            return
+        }
+
+        if contentOffsetY <= Self.noteDetailFloatingChipsAtTopY {
+            if !floatingEditScrollBaselineReady {
+                floatingEditScrollBaselineReady = true
+            }
+            lastScrollContentOffsetY = contentOffsetY
+            if !showFloatingEditButton {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = true
+                }
+            }
             return
         }
 
@@ -177,7 +200,20 @@ struct NoteDetailView: View {
     /// Save pill: show on scroll-down sooner than hide on scroll-up (asymmetric thresholds).
     /// When `verticallyScrollable` is false, the pill always stays visible (no scroll means no scroll events to recover from a hidden state).
     private func updateEditorSaveCancelChipVisibility(contentOffsetY: CGFloat, verticallyScrollable: Bool = true) {
+        lastSaveChipEditorScrollY = contentOffsetY
+        lastSaveChipEditorVerticallyScrollable = verticallyScrollable
         if !verticallyScrollable {
+            lastEditorScrollOffsetY = contentOffsetY
+            editorSaveCancelScrollBaselineReady = true
+            if !showEditorSaveCancelChip {
+                withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
+                    showEditorSaveCancelChip = true
+                }
+            }
+            return
+        }
+
+        if contentOffsetY <= Self.noteDetailFloatingChipsAtTopY {
             lastEditorScrollOffsetY = contentOffsetY
             editorSaveCancelScrollBaselineReady = true
             if !showEditorSaveCancelChip {
@@ -216,6 +252,35 @@ struct NoteDetailView: View {
                 showEditorSaveCancelChip = nextVisible
             }
         }
+    }
+
+    private static let editorSaveChipIdleDelay: TimeInterval = 1.5
+    private static let editorSaveChipIgnoreTypingAfterAppear: TimeInterval = 0.5
+
+    private func cancelEditorSaveChipIdleShowTask() {
+        editorSaveChipIdleWorkItem?.cancel()
+        editorSaveChipIdleWorkItem = nil
+    }
+
+    private func handleEditorSaveChipTypingActivity() {
+        guard Date() >= editorSaveChipIgnoreTypingUntil else { return }
+        if !lastSaveChipEditorVerticallyScrollable { return }
+        if lastSaveChipEditorScrollY <= Self.noteDetailFloatingChipsAtTopY { return }
+        cancelEditorSaveChipIdleShowTask()
+
+        if showEditorSaveCancelChip {
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
+                showEditorSaveCancelChip = false
+            }
+        }
+
+        let work = DispatchWorkItem {
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
+                showEditorSaveCancelChip = true
+            }
+        }
+        editorSaveChipIdleWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.editorSaveChipIdleDelay, execute: work)
     }
 
     @ViewBuilder
@@ -1066,9 +1131,14 @@ struct NoteDetailView: View {
                 onEditorScroll: { y, verticallyScrollable in
                     updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
                 },
+                onTypingActivity: {
+                    handleEditorSaveChipTypingActivity()
+                },
                 onTableToolsVisibilityChanged: { visible in
                     editorTableToolsVisible = visible
-                    if !visible {
+                    if visible {
+                        cancelEditorSaveChipIdleShowTask()
+                    } else {
                         withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
                             showEditorSaveCancelChip = true
                         }
@@ -1100,9 +1170,14 @@ struct NoteDetailView: View {
         .onAppear {
             editorSaveCancelScrollBaselineReady = false
             lastEditorScrollOffsetY = 0
+            cancelEditorSaveChipIdleShowTask()
+            editorSaveChipIgnoreTypingUntil = Date().addingTimeInterval(Self.editorSaveChipIgnoreTypingAfterAppear)
             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                 showEditorSaveCancelChip = true
             }
+        }
+        .onDisappear {
+            cancelEditorSaveChipIdleShowTask()
         }
         .confirmationDialog(String(localized: "Add Image", comment: "Editor image dialog title"), isPresented: $showEditorImageSourceDialog) {
             Button(String(localized: "Photo Library", comment: "Image source")) { showEditorImagePicker = true }
@@ -1647,9 +1722,17 @@ struct NoteDetailView: View {
         .onAppear {
             editorSaveCancelScrollBaselineReady = false
             lastEditorScrollOffsetY = 0
+            cancelEditorSaveChipIdleShowTask()
+            editorSaveChipIgnoreTypingUntil = Date().addingTimeInterval(Self.editorSaveChipIgnoreTypingAfterAppear)
             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                 showEditorSaveCancelChip = true
             }
+        }
+        .onDisappear {
+            cancelEditorSaveChipIdleShowTask()
+        }
+        .onChange(of: vm.editableContent) { _, _ in
+            handleEditorSaveChipTypingActivity()
         }
     }
 

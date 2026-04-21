@@ -8,6 +8,8 @@ struct RichTextEditorView: UIViewRepresentable {
     var onPickImage: (() -> Void)?
     /// `#editor-container` scroll metrics: `scrollTop` increases when scrolling down; `verticallyScrollable` is false when the body fits without scrolling.
     var onEditorScroll: ((CGFloat, Bool) -> Void)?
+    /// Fires on user edits (throttled in JS to ~1/frame) so native UI can react before debounced `contentChanged`.
+    var onTypingActivity: (() -> Void)?
     /// Called when the table context toolbar shows or hides.
     var onTableToolsVisibilityChanged: ((Bool) -> Void)?
     /// Called when the in-editor save button (e.g. on the table toolbar) is tapped, with fresh HTML and editor scroll fraction (0–1).
@@ -25,6 +27,7 @@ struct RichTextEditorView: UIViewRepresentable {
             onContentChanged: onContentChanged,
             onPickImage: onPickImage,
             onEditorScroll: onEditorScroll,
+            onTypingActivity: onTypingActivity,
             onTableToolsVisibilityChanged: onTableToolsVisibilityChanged,
             initialScrollFraction: initialScrollFraction
         )
@@ -37,6 +40,7 @@ struct RichTextEditorView: UIViewRepresentable {
         contentController.add(coordinator, name: "contentChanged")
         contentController.add(coordinator, name: "pickImage")
         contentController.add(coordinator, name: "editorScroll")
+        contentController.add(coordinator, name: "editorTypingActivity")
         contentController.add(coordinator, name: "tableToolsVisible")
         contentController.add(coordinator, name: "requestSave")
         contentController.add(coordinator, name: "debugLog")
@@ -86,6 +90,7 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.onContentChanged = onContentChanged
         coordinator.onPickImage = onPickImage
         coordinator.onEditorScroll = onEditorScroll
+        coordinator.onTypingActivity = onTypingActivity
         coordinator.onTableToolsVisibilityChanged = onTableToolsVisibilityChanged
         coordinator.onRequestSave = onRequestSave
         Self.applyEditorSurfaceColors(to: webView)
@@ -123,6 +128,7 @@ struct RichTextEditorView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "contentChanged")
         uc.removeScriptMessageHandler(forName: "pickImage")
         uc.removeScriptMessageHandler(forName: "editorScroll")
+        uc.removeScriptMessageHandler(forName: "editorTypingActivity")
         uc.removeScriptMessageHandler(forName: "tableToolsVisible")
         uc.removeScriptMessageHandler(forName: "requestSave")
         uc.removeScriptMessageHandler(forName: "debugLog")
@@ -162,6 +168,7 @@ struct RichTextEditorView: UIViewRepresentable {
         var onContentChanged: ((String) -> Void)?
         var onPickImage: (() -> Void)?
         var onEditorScroll: ((CGFloat, Bool) -> Void)?
+        var onTypingActivity: (() -> Void)?
         var onTableToolsVisibilityChanged: ((Bool) -> Void)?
         var onRequestSave: ((String, CGFloat) -> Void)?
         private let initialHTML: String
@@ -181,6 +188,7 @@ struct RichTextEditorView: UIViewRepresentable {
             onContentChanged: ((String) -> Void)?,
             onPickImage: (() -> Void)?,
             onEditorScroll: ((CGFloat, Bool) -> Void)?,
+            onTypingActivity: (() -> Void)? = nil,
             onTableToolsVisibilityChanged: ((Bool) -> Void)? = nil,
             initialScrollFraction: CGFloat = 0
         ) {
@@ -188,6 +196,7 @@ struct RichTextEditorView: UIViewRepresentable {
             self.onContentChanged = onContentChanged
             self.onPickImage = onPickImage
             self.onEditorScroll = onEditorScroll
+            self.onTypingActivity = onTypingActivity
             self.onTableToolsVisibilityChanged = onTableToolsVisibilityChanged
             self.initialScrollFraction = initialScrollFraction
         }
@@ -212,6 +221,12 @@ struct RichTextEditorView: UIViewRepresentable {
 
             case "pickImage":
                 onPickImage?()
+
+            case "editorTypingActivity":
+                let callback = onTypingActivity
+                DispatchQueue.main.async {
+                    callback?()
+                }
 
             case "editorScroll":
                 var y: CGFloat?
