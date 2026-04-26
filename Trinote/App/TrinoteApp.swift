@@ -92,7 +92,16 @@ struct TrinoteApp: App {
                         RootView()
                             .environment(appState)
                             .modelContainer(PersistenceManager.shared.container)
+                            .background {
+                                MermaidRendererHost()
+                                    .frame(width: 0, height: 0)
+                                    .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
+                            }
                             .task { await appState.bootstrap() }
+                            .onChange(of: appearanceMode) { _, _ in
+                                MermaidRenderer.shared.onAppearanceModeChanged()
+                            }
                             .onChange(of: scenePhase) { _, newPhase in
                                 if newPhase == .active {
                                     Task { await appState.onForegroundResume() }

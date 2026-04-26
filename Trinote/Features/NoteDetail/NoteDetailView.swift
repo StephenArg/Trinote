@@ -104,6 +104,7 @@ struct NoteDetailView: View {
     @State private var lastSaveChipEditorVerticallyScrollable: Bool = true
     /// Reference to the rich-text editor WKWebView so the save button can call JS `getContent()`.
     @State private var editorWebView: WKWebView?
+    @State private var showIncludeNotePicker = false
 
     /// Bridge to communicate with the canvas editor WKWebView (call getSceneData on save).
     @StateObject private var canvasEditorBridge = CanvasEditorBridge()
@@ -310,34 +311,79 @@ struct NoteDetailView: View {
         var f = window.editorBridge.getScrollFraction();
         return JSON.stringify({ html: html, f: f });
       } catch (e) {
-        return JSON.stringify({ html: '', f: 0 });
+        try {
+          var msg = (e && (e.stack || e.message || String(e))) || 'unknown';
+          window.webkit.messageHandlers.debugLog.postMessage('[EDITOR-SAVE] getContent threw: ' + msg);
+        } catch (_) {}
+        return JSON.stringify({ html: null, f: 0 });
       }
     })();
     """
 
     private static func parseRichTextEditorSavePayload(_ result: Any?) -> (html: String?, scrollFraction: CGFloat?) {
         guard let s = result as? String, !s.isEmpty else { return (nil, nil) }
-        if s.first == "{",
-           let data = s.data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let html = obj["html"] as? String {
-            let f: CGFloat?
-            if let n = obj["f"] as? NSNumber {
-                f = CGFloat(truncating: n)
-            } else if let d = obj["f"] as? Double {
-                f = CGFloat(d)
-            } else {
-                f = nil
-            }
-            return (html, f)
+        guard s.first == "{",
+              let data = s.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return (s, nil)
         }
-        return (s, nil)
+        let html: String?
+        switch obj["html"] {
+        case is NSNull, nil:
+            html = nil
+        case let str as String:
+            html = str
+        default:
+            html = nil
+        }
+        let f: CGFloat?
+        if let n = obj["f"] as? NSNumber {
+            f = CGFloat(truncating: n)
+        } else if let d = obj["f"] as? Double {
+            f = CGFloat(d)
+        } else {
+            f = nil
+        }
+        return (html, f)
     }
 
     private func queueReadOnlyScrollRestoreAfterRichTextSave(fraction: CGFloat) {
         let f = min(max(fraction, 0), 1)
         readOnlyScrollFraction = f
         readOnlyScrollFractionPendingRestore = f
+    }
+
+    /// Escape for use inside a JS template literal (same pattern as `RichTextEditorView.setContent`).
+    private static func javaScriptTemplateLiteralContent(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "`", with: "\\`")
+            .replacingOccurrences(of: "${", with: "\\${")
+    }
+
+    private static func insertIncludeNoteInEditor(webView: WKWebView?, noteId: String, title: String, boxSize: String) {
+        guard let webView else { return }
+        let idEsc = javaScriptTemplateLiteralContent(noteId)
+        let titleEsc = javaScriptTemplateLiteralContent(title)
+        let boxEsc = javaScriptTemplateLiteralContent(boxSize)
+        let script = "window.editorBridge.insertIncludeNote(`\(idEsc)`, `\(boxEsc)`, `\(titleEsc)`);"
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    private static func pushIncludeNoteTitleToEditor(webView: WKWebView?, noteId: String, title: String) {
+        guard let webView else { return }
+        let idEsc = javaScriptTemplateLiteralContent(noteId)
+        let titleEsc = javaScriptTemplateLiteralContent(title)
+        webView.evaluateJavaScript("window.editorBridge.setIncludeNoteTitle(`\(idEsc)`, `\(titleEsc)`);", completionHandler: nil)
+    }
+
+    private static func pushIncludeNotePreviewToEditor(webView: WKWebView?, previewId: String, html: String) {
+        guard let webView else { return }
+        let payload: [String: String] = ["previewId": previewId, "html": html]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        let escaped = javaScriptTemplateLiteralContent(json)
+        webView.evaluateJavaScript("window.editorBridge.applyIncludeNotePreviewJSON(`\(escaped)`);", completionHandler: nil)
     }
 
     /// Fetches the latest HTML from the rich-text editor (including non-ProseMirror state like
@@ -396,7 +442,7 @@ struct NoteDetailView: View {
             .background(NavigationPopGestureBlocker(blocked: viewModel?.isEditing == true || isGeoMapNote(viewModel?.note, contentString: viewModel?.contentString, vm: viewModel)).frame(width: 0, height: 0))
             .task(id: activeNoteId) { await initialLoad() }
             .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
-                NoteDetailView(noteId: linkedNoteId, title: "")
+                NoteDetailView(noteId: linkedNoteId, title: "", startInEditMode: false)
             }
             .toolbar(viewModel?.isEditing == true ? .hidden : .visible, for: .tabBar)
             .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing)
@@ -1123,9 +1169,31 @@ struct NoteDetailView: View {
 
     @ViewBuilder
     private func richTextEditingView(_ vm: NoteDetailViewModel) -> some View {
+        // `editorDisplayContent` is the decorated copy of `editableContent` (canvas/mermaid/imageLink → inlined data
+        // URIs), populated asynchronously by `prepareEditorDisplayContent`. While that's in flight we show a brief
+        // spinner so the editor never mounts with broken `<img src="api/images/…">` references — the previous behavior
+        // was to render the editor immediately, which left linked canvas/mermaid notes as broken-image placeholders.
+        if let displayHTML = vm.editorDisplayContent {
+            richTextEditingViewBody(vm, displayHTML: displayHTML)
+        } else {
+            ZStack {
+                Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal])
+                ProgressView()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .task {
+                // Defensive: `startEditing` already kicks this off; this `.task` only ever fires if the view appeared
+                // before the model could schedule the prep (e.g. state restoration paths).
+                await vm.prepareEditorDisplayContent()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func richTextEditingViewBody(_ vm: NoteDetailViewModel, displayHTML: String) -> some View {
         ZStack(alignment: .bottomTrailing) {
             RichTextEditorView(
-                initialHTML: vm.editableContent,
+                initialHTML: displayHTML,
                 onContentChanged: { html in vm.receiveEditorUpdate(html) },
                 onPickImage: { showEditorImageSourceDialog = true },
                 onEditorScroll: { y, verticallyScrollable in
@@ -1146,7 +1214,29 @@ struct NoteDetailView: View {
                 },
                 onRequestSave: { html, scrollFraction in
                     queueReadOnlyScrollRestoreAfterRichTextSave(fraction: scrollFraction)
-                    vm.saveContent(freshHTML: html)
+                    if let html {
+                        vm.saveContent(freshHTML: html)
+                    } else {
+                        vm.saveContent()
+                    }
+                },
+                onEditorBridgeRequest: { req in
+                    switch req {
+                    case .pickIncludeNote:
+                        showIncludeNotePicker = true
+                    case .resolveNoteTitle(let nid):
+                        Task { @MainActor in
+                            let t = await vm.resolveDisplayTitle(forReferencedNoteId: nid)
+                            Self.pushIncludeNoteTitleToEditor(webView: editorWebView, noteId: nid, title: t)
+                        }
+                    case .openNote(let nid):
+                        navigateToNoteId = nid
+                    case .includePreview(let previewId, let nid, let box):
+                        Task { @MainActor in
+                            let html = await vm.resolvedIncludePreviewHTML(noteId: nid, boxSize: box)
+                            Self.pushIncludeNotePreviewToEditor(webView: editorWebView, previewId: previewId, html: html)
+                        }
+                    }
                 },
                 imageToInsert: $imageToInsert,
                 webViewBinding: $editorWebView,
@@ -1195,6 +1285,12 @@ struct NoteDetailView: View {
         }
         .fullScreenCover(isPresented: $showEditorCamera) {
             CameraPickerView(imageToInsert: $imageToInsert) { showEditorCamera = false }
+        }
+        .sheet(isPresented: $showIncludeNotePicker) {
+            NotePickerSheet(excludeNoteId: activeNoteId) { pickedId, pickedTitle in
+                Self.insertIncludeNoteInEditor(webView: editorWebView, noteId: pickedId, title: pickedTitle, boxSize: "medium")
+            }
+            .environment(appState)
         }
     }
 

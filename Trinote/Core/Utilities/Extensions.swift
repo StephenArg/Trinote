@@ -232,6 +232,27 @@ extension Data {
         return "image/png"
     }
 
+    /// Use before emitting `<img src="data:…">`. `detectImageMIME()` falls back to `image/png`, which would
+    /// produce a broken image for JSON, plain text, or other non-image note bodies (e.g. mis-typed notes).
+    var isPlausibleInlineImagePayload: Bool {
+        if isEmpty { return false }
+        if isSVG { return true }
+        guard count >= 2 else { return false }
+        var header = [UInt8](repeating: 0, count: Swift.min(12, count))
+        copyBytes(to: &header, count: header.count)
+        if header[0] == 0xFF && header[1] == 0xD8 { return true }
+        if header.count >= 8 && header[0...3] == [0x89, 0x50, 0x4E, 0x47] { return true }
+        if header.count >= 4 && header[0...3] == [0x47, 0x49, 0x46, 0x38] { return true }
+        if header.count >= 12 && header[0...3] == [0x52, 0x49, 0x46, 0x46] && header[8...11] == [0x57, 0x45, 0x42, 0x50] { return true }
+        // Obvious non-binary payloads (canvas JSON, mermaid text, HTML)
+        if let prefix = String(data: prefix(Swift.min(64, count)), encoding: .utf8) {
+            let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") { return false }
+            if trimmed.hasPrefix("<!DOCTYPE") || trimmed.hasPrefix("<html") { return false }
+        }
+        return false
+    }
+
     /// Checks whether the data looks like an SVG (text starting with `<svg` or `<?xml` containing `<svg`).
     var isSVG: Bool {
         guard let str = String(data: prefix(512), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) else {

@@ -266,6 +266,111 @@ body { display: flex; flex-direction: column; }
 /* TipTap puts copy in div > p; dropping first-p top margin avoids text sitting low vs checkbox */
 .tiptap ul[data-type="taskList"] > li > div > p:first-child { margin-top: 0; }
 .tiptap ul[data-type="taskList"] > li > p:first-child { margin-top: 0; }
+/* Include-note embed: read-only card (matches read-only .trinote-include feel; not the linked note’s editor). */
+.tiptap .tn-include-readonly {
+  display: block; margin: 12px 0; border-radius: 10px; border: 1px solid var(--border);
+  background: rgba(128,128,128,0.08); overflow: hidden; user-select: none;
+  cursor: default; -webkit-tap-highlight-color: transparent;
+}
+.tiptap .ProseMirror-selectednode.tn-include-readonly {
+  outline: 2px solid var(--btn-active); outline-offset: 1px;
+}
+.tiptap .tn-include-readonly__header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 0.92em; font-weight: 600;
+}
+.tiptap .tn-include-readonly__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tiptap .tn-include-readonly__subtitle {
+  font-weight: 500; opacity: 0.55; font-size: 0.82em; margin-left: 6px; flex-shrink: 0;
+}
+.tiptap .tn-include-readonly__scroll {
+  padding: 10px 12px;
+  font-size: 0.88em;
+  line-height: 1.45;
+  max-height: 14rem;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  opacity: 0.92;
+  text-align: start;
+}
+.tiptap .tn-include-readonly__scroll a[href],
+.tiptap .tn-include-readonly__scroll area[href] {
+  pointer-events: none;
+  cursor: default;
+  color: inherit;
+}
+.tiptap .tn-include-readonly__scroll input[type="checkbox"] {
+  pointer-events: none;
+  opacity: 0.55;
+}
+.tiptap .tn-include-readonly__scroll .trinote-include__inner--text p:first-child { margin-top: 0; }
+.tiptap .tn-include-readonly__scroll .trinote-include__inner--text p:last-child { margin-bottom: 0; }
+.tiptap .tn-include-readonly__scroll .trinote-include__img {
+  max-width: 100%; border-radius: 6px; height: auto;
+  border: 1px solid var(--border); background: rgba(255,255,255,0.02);
+  display: block; margin: 0 auto;
+  pointer-events: none;
+}
+.tiptap .tn-include-readonly__scroll img, .tiptap .tn-include-readonly__scroll svg { pointer-events: none; }
+.tiptap .tn-include-readonly__scroll .trinote-include {
+  margin: 0; border: none; background: transparent; border-radius: 0;
+}
+.tiptap .tn-include-readonly__scroll .trinote-include__header { display: none; }
+.tiptap .tn-include-readonly__scroll .trinote-include__body {
+  padding: 0; max-height: none; overflow: visible;
+}
+/* Linked mermaid previews: render at natural (viewBox) width and scroll horizontally so wide diagrams
+   stay legible inside the editor's include-note card instead of being squashed to its column width. */
+.tiptap .tn-include-readonly__scroll .mermaid,
+.tiptap .tn-include-readonly__scroll .trinote-include__inner--mermaid {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.tiptap .tn-include-readonly__scroll .mermaid svg,
+.tiptap .tn-include-readonly__scroll .trinote-include__inner--mermaid svg {
+  width: auto;
+  max-width: none;
+  height: auto;
+  display: block;
+}
+/* Linked canvas preview: matches the read-only HTMLNoteView look. The exported canvas SVG is always white
+   "paper" with dark strokes, so in dark mode we pad the wrapper with a system-style dark background and
+   invert the image so the strokes appear light. The read-only view applies the same rules via
+   `section.trinote-include[data-note-type="canvas"]`, but the editor's IncludeNote NodeView wraps the
+   payload in `.tn-include-readonly` instead, so it needs its own selector. (Linked mermaid already renders
+   with a dark theme via MermaidRenderer, so we don't invert `--mermaid` here.) */
+.tiptap .tn-include-readonly__scroll .trinote-include__inner--image {
+  padding: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+@media (prefers-color-scheme: dark) {
+  .tiptap .tn-include-readonly__scroll .trinote-include__inner--image {
+    background: rgb(28, 28, 30);
+    border-radius: 8px;
+  }
+  .tiptap .tn-include-readonly__scroll .trinote-include__inner--image img,
+  .tiptap .tn-include-readonly__scroll .trinote-include__inner--image svg {
+    filter: invert(0.88) hue-rotate(180deg);
+    background: transparent;
+  }
+}
+.tiptap .tn-include-readonly__scroll .trinote-include__children { margin: 0; padding-left: 1.2em; }
+.tiptap .tn-include-readonly__scroll pre { overflow: auto; max-width: 100%; }
+.tiptap .tn-include-readonly__scroll .trinote-include__mindmap-root {
+  font-weight: 600; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: rgba(128,128,128,0.08); display: inline-block; max-width: 100%;
+  word-wrap: break-word; overflow-wrap: break-word;
+}
+.tiptap .tn-include-readonly__scroll .trinote-include__mindmap-children { margin: 8px 0 0 0; padding-left: 1.2em; }
+.tiptap .tn-include-readonly__scroll .trinote-include__mindmap-children li { margin: 2px 0; }
+.tiptap .tn-include-readonly-remove {
+  flex-shrink: 0; border: none; background: transparent; color: var(--fg);
+  opacity: 0.45; font-size: 22px; line-height: 1; padding: 2px 6px; cursor: pointer;
+  font-weight: 400; border-radius: 6px;
+}
+.tiptap .tn-include-readonly-remove:active { opacity: 0.9; }
 .tiptap blockquote { border-left: 4px solid var(--border); margin: 0.5em 0; padding: 4px 16px; opacity: 0.85; }
 /* TriliumNext CKEditor admonitions: <aside class="admonition note">… — plus legacy div[data-callout-type] */
 .tiptap aside.admonition { margin: 0.65em 0; border-radius: 10px; padding: 10px 12px 10px 14px; border: 1px solid; background: rgba(128,128,128,0.06); display: block; }
@@ -528,6 +633,7 @@ body { display: flex; flex-direction: column; }
 <script src="callout-extension.js"></script>
 <script src="font-size-extension.js"></script>
 <script src="list-styles-extension.js"></script>
+<script src="vendor/mermaid.min.js"></script>
 <script>
 if (typeof TipTap === 'undefined') {
   const le = document.getElementById('loading');
@@ -545,7 +651,7 @@ const useTriliumListStyles = !!(TriliumBulletListExt && TriliumOrderedListExt);
 
 // Runtime debug logging for table/caption issues.
 // Logs are routed to native Xcode console via webkit.messageHandlers.debugLog.
-let _tableDebugEnabled = true;
+let _tableDebugEnabled = false;
 function tableDbg(tag, data) {
   if (!_tableDebugEnabled) return;
   try {
@@ -608,6 +714,11 @@ const FigureImage = Image.extend({
       width:          { default: null },
       hasCaption:     { default: false },
       captionText:    { default: '' },
+      // Preserved across TipTap parse/render so the native side can restore the original
+      // server-relative URL (e.g. api/images/{noteId}/...) on save. The displayed `src` is
+      // a native-inlined data URI for canvas/mermaid/imageLink targets that the editor's
+      // bundle-loaded WKWebView cannot otherwise resolve.
+      originalSrc:    { default: null },
     };
   },
   parseHTML() {
@@ -633,6 +744,7 @@ const FigureImage = Image.extend({
             width,
             hasCaption: !!cap,
             captionText: cap ? cap.textContent : '',
+            originalSrc: img.getAttribute('data-trinote-original-src'),
           };
         },
       },
@@ -643,6 +755,7 @@ const FigureImage = Image.extend({
             src: dom.getAttribute('src'),
             alt: dom.getAttribute('alt'),
             title: dom.getAttribute('title'),
+            originalSrc: dom.getAttribute('data-trinote-original-src'),
           };
         },
       },
@@ -657,10 +770,161 @@ const FigureImage = Image.extend({
     const imgAttrs = { src: HTMLAttributes.src };
     if (HTMLAttributes.alt) imgAttrs.alt = HTMLAttributes.alt;
     if (HTMLAttributes.title) imgAttrs.title = HTMLAttributes.title;
+    if (HTMLAttributes.originalSrc) imgAttrs['data-trinote-original-src'] = HTMLAttributes.originalSrc;
     if (HTMLAttributes.hasCaption) {
       return ['figure', figAttrs, ['img', imgAttrs], ['figcaption', {}, HTMLAttributes.captionText || '']];
     }
     return ['figure', figAttrs, ['img', imgAttrs]];
+  },
+});
+
+/* Trilium “include note” — stored as <section class="include-note" data-note-id> (separate schema node from images). */
+const IncludeNote = Image.extend({
+  name: 'includeNote',
+  group: 'block',
+  atom: true,
+  draggable: false,
+  selectable: true,
+  isolating: true,
+  inline: false,
+  addAttributes() {
+    return {
+      noteId: { default: '' },
+      boxSize: { default: 'medium' },
+      noteTitle: { default: '' },
+      // Marker for `~imageLink` → include-note display swaps. When non-null this section is a Trinote-only
+      // wrapper around a Trilium imageLink (canvas/mermaid) and the native `undecorateLinkedImagesFromEditor`
+      // converts it back to `<img src="<imageLinkOriginalSrc>">` on save, preserving Trilium's imageLink schema.
+      imageLinkOriginalSrc: { default: null },
+    };
+  },
+  parseHTML() {
+    return [{
+      tag: 'section',
+      getAttrs: (el) => {
+        if (!el.classList || !el.classList.contains('include-note')) return false;
+        const noteId = el.getAttribute('data-note-id');
+        if (!noteId) return false;
+        return {
+          noteId,
+          boxSize: el.getAttribute('data-box-size') || 'medium',
+          noteTitle: '',
+          imageLinkOriginalSrc: el.getAttribute('data-trinote-imagelink-original-src') || null,
+        };
+      },
+    }];
+  },
+  renderHTML({ node }) {
+    const attrs = {
+      class: 'include-note',
+      'data-note-id': node.attrs.noteId,
+      'data-box-size': node.attrs.boxSize || 'medium',
+    };
+    if (node.attrs.imageLinkOriginalSrc) {
+      attrs['data-trinote-imagelink-original-src'] = node.attrs.imageLinkOriginalSrc;
+    }
+    // No content hole (`0`): `atom: true` means ProseMirror would throw
+    // "Content hole not allowed in a leaf node spec" during `editor.getHTML()` serialization.
+    return ['section', attrs];
+  },
+  addNodeView() {
+    return ({ node, editor, getPos }) => {
+      const root = document.createElement('div');
+      root.className = 'tn-include-readonly';
+      root.contentEditable = 'false';
+      const previewId = 'tnp_' + Math.random().toString(36).slice(2, 11);
+      root.setAttribute('data-tn-include-preview-id', previewId);
+      const hdr = document.createElement('div');
+      hdr.className = 'tn-include-readonly__header';
+      const titleWrap = document.createElement('div');
+      titleWrap.style.display = 'flex';
+      titleWrap.style.alignItems = 'center';
+      titleWrap.style.minWidth = '0';
+      titleWrap.style.flex = '1';
+      const titleEl = document.createElement('span');
+      titleEl.className = 'tn-include-readonly__title';
+      titleEl.textContent = (node.attrs.noteTitle && node.attrs.noteTitle.trim()) ? node.attrs.noteTitle : (node.attrs.noteId || '…');
+      const sub = document.createElement('span');
+      sub.className = 'tn-include-readonly__subtitle';
+      sub.textContent = 'Included';
+      titleWrap.appendChild(titleEl);
+      titleWrap.appendChild(sub);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'tn-include-readonly-remove';
+      del.setAttribute('aria-label', 'Remove included note');
+      del.textContent = '\u00D7';
+      del.title = 'Remove';
+      del.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); });
+      del.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const pos = typeof getPos === 'function' ? getPos() : null;
+        if (pos == null) return;
+        editor.chain().focus().deleteRange({ from: pos, to: pos + node.nodeSize }).run();
+      });
+      const scroll = document.createElement('div');
+      scroll.className = 'tn-include-readonly__scroll';
+      scroll.setAttribute('role', 'presentation');
+      let lastPreviewKey = '';
+      let lastResolvedTitleId = '';
+      function maybeResolveTitle(nid) {
+        const n = (nid || '').trim();
+        if (!n || n === lastResolvedTitleId) return;
+        lastResolvedTitleId = n;
+        try {
+          window.webkit.messageHandlers.editorRequest.postMessage({ action: 'resolveNoteTitle', noteId: n });
+        } catch (e0) {}
+      }
+      function requestIncludePreview(noteId, boxSize) {
+        const nid = (noteId || '').trim();
+        if (!nid) return;
+        const bs = boxSize || 'medium';
+        const key = nid + '\u0000' + bs;
+        if (key === lastPreviewKey) return;
+        lastPreviewKey = key;
+        scroll.innerHTML = '';
+        // Defer the postMessage until the NodeView root is attached to the document so the eventual
+        // `applyIncludeNotePreviewJSON` lookup by `data-tn-include-preview-id` can find this host.
+        requestAnimationFrame(() => {
+          try {
+            window.webkit.messageHandlers.editorRequest.postMessage({
+              action: 'includePreview',
+              previewId,
+              noteId: nid,
+              boxSize: bs,
+            });
+          } catch (e) {
+            try { window.webkit.messageHandlers.debugLog.postMessage('[INCLUDE] NodeView.request.postMessage failed: ' + e); } catch (_) {}
+          }
+        });
+      }
+      hdr.appendChild(titleWrap);
+      hdr.appendChild(del);
+      root.appendChild(hdr);
+      root.appendChild(scroll);
+      root.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.tn-include-readonly-remove')) return;
+        if (e.target.closest('.tn-include-readonly__scroll')) return;
+        const pos = typeof getPos === 'function' ? getPos() : null;
+        if (pos == null) return;
+        e.preventDefault();
+        editor.chain().focus().setNodeSelection(pos).run();
+      });
+      maybeResolveTitle(node.attrs.noteId);
+      requestIncludePreview(node.attrs.noteId, node.attrs.boxSize);
+      return {
+        dom: root,
+        update: (updated) => {
+          if (updated.type.name !== 'includeNote') return false;
+          const t = (updated.attrs.noteTitle && updated.attrs.noteTitle.trim()) ? updated.attrs.noteTitle : (updated.attrs.noteId || '…');
+          titleEl.textContent = t;
+          maybeResolveTitle(updated.attrs.noteId);
+          requestIncludePreview(updated.attrs.noteId, updated.attrs.boxSize);
+          return true;
+        },
+      };
+    };
   },
 });
 
@@ -776,6 +1040,7 @@ const editorExtensions = [
   CustomTableCell,
   CustomTableHeader,
   Link.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
+  IncludeNote,
   TaskList,
   TaskItem.configure({ nested: true }),
   Placeholder.configure({ placeholder: 'Start writing…' }),
@@ -813,8 +1078,6 @@ const editor = new Editor({
   onSelectionUpdate() { scheduleToolbarUpdate(); },
   onTransaction() { scheduleToolbarUpdate(); },
 });
-
-tableDbg('editorReady', { extensionCount: editorExtensions.length });
 
 // WKWebView / iOS: tapping the toolbar blurs the editor and collapses the DOM selection.
 // Keep the last ProseMirror ranged selection so color / highlight pickers can still apply.
@@ -1360,6 +1623,7 @@ function findImageNodePos(img) {
   return pos;
 }
 document.getElementById('editor-container').addEventListener('click', function(e) {
+  if (e.target.closest('.tn-include-readonly')) return;
   const img = e.target.closest('.tiptap img');
   if (!img) {
     if (!e.target.closest('.image-popup')) hideImagePopup();
@@ -1367,7 +1631,12 @@ document.getElementById('editor-container').addEventListener('click', function(e
   }
   e.preventDefault();
   e.stopPropagation();
-  const pos = findImageNodePos(img);
+  let pos;
+  try {
+    pos = findImageNodePos(img);
+  } catch (err) {
+    return;
+  }
   if (imagePopup.classList.contains('visible') && imagePopup._targetPos === pos) {
     hideImagePopup();
     editor.commands.setTextSelection(pos);
@@ -1381,13 +1650,19 @@ document.getElementById('editor-container').addEventListener('click', function(e
 // may handle the click on the selected node wrapper instead of the img itself)
 document.addEventListener('click', function(e) {
   if (e.target.closest('.image-popup')) return;
+  if (e.target.closest('.tn-include-readonly')) return;
   const figure = e.target.closest('.tiptap figure.image');
   if (!figure) return;
   const img = figure.querySelector('img');
   if (!img) return;
   e.preventDefault();
   e.stopPropagation();
-  const pos = findImageNodePos(img);
+  let pos;
+  try {
+    pos = findImageNodePos(img);
+  } catch (err) {
+    return;
+  }
   if (imagePopup.classList.contains('visible') && imagePopup._targetPos === pos) {
     hideImagePopup();
     editor.commands.setTextSelection(pos);
@@ -2324,6 +2599,9 @@ btn('Image', ic('foundation--photo.svg'), () => {
   try { window.webkit.messageHandlers.pickImage.postMessage('pick'); } catch(e) {}
 }, () => false);
 makeLinkToolbar();
+btn('Include', '<span style="font-weight:800;font-size:14px;line-height:1">⊕</span>', () => {
+  try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'pickIncludeNote' }); } catch(e) {}
+}, () => editor.isActive('includeNote'));
 makeTableGridPicker();
 btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () => false);
 btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
@@ -2584,6 +2862,25 @@ function tiptapToCk(html) {
   return doc.body.innerHTML;
 }
 
+/** Renders `.mermaid` blocks inside an include-note preview slot (read-only HTML uses the same Mermaid bundle). */
+function trinoteRunMermaidInSlot(slot) {
+  if (!slot || typeof window.mermaid === 'undefined' || !window.mermaid.run) return;
+  const nodes = slot.querySelectorAll('.mermaid');
+  if (!nodes.length) return;
+  try {
+    if (!window.__trinoteEditorMermaidInited) {
+      window.__trinoteEditorMermaidInited = true;
+      window.mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'loose',
+        theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
+      });
+    }
+    const runOut = window.mermaid.run({ nodes: Array.from(nodes) });
+    if (runOut && typeof runOut.then === 'function') runOut.catch(function () {});
+  } catch (e) {}
+}
+
 // --- Bridge ---
 window.editorBridge = {
   setKeyboardToolbarGap(px) {},
@@ -2625,7 +2922,6 @@ window.editorBridge = {
 
       html = tempDoc.body.innerHTML;
     }
-    tableDbg('bridge.setContent', { captionsFound: captionTexts.length, htmlLen: (html || '').length });
     editor.commands.setContent(ckToTiptap(html) || '', false);
     if (captionTexts.length > 0) {
       requestAnimationFrame(() => {
@@ -2697,6 +2993,78 @@ window.editorBridge = {
     if (maxScroll <= 0) return 0;
     return Math.min(Math.max(ec.scrollTop / maxScroll, 0), 1);
   },
+  insertIncludeNote(noteId, boxSize, title) {
+    const nid = (noteId || '').trim();
+    if (!nid) return;
+    const bs = boxSize || 'medium';
+    const t = (title != null && String(title).trim()) ? String(title).trim() : nid;
+    editor.chain().focus().insertContent({ type: 'includeNote', attrs: { noteId: nid, boxSize: bs, noteTitle: t } }).run();
+    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch(e) {}
+  },
+  setIncludeNoteTitle(noteId, title) {
+    const nid = (noteId || '').trim();
+    if (!nid) return;
+    const label = (title != null && String(title).trim()) ? String(title).trim() : nid;
+    const hits = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'includeNote' && node.attrs.noteId === nid) hits.push(pos);
+    });
+    if (!hits.length) return;
+    hits.sort((a, b) => b - a);
+    let tr = editor.state.tr;
+    for (const pos of hits) {
+      const node = tr.doc.nodeAt(pos);
+      if (node && node.type.name === 'includeNote') {
+        tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, noteTitle: label });
+      }
+    }
+    if (tr.docChanged) editor.view.dispatch(tr);
+  },
+  applyIncludeNotePreviewJSON(jsonStr) {
+    let o;
+    try {
+      o = JSON.parse(jsonStr);
+    } catch (e) {
+      try { window.webkit.messageHandlers.debugLog.postMessage('[INCLUDE] applyIncludeNotePreviewJSON: JSON.parse failed ' + e); } catch (_) {}
+      return;
+    }
+    const previewId = String(o.previewId || '').trim();
+    const rawHtml = o.html != null ? String(o.html) : '';
+    const rawLen = rawHtml.length;
+    if (!previewId) {
+      try { window.webkit.messageHandlers.debugLog.postMessage('[INCLUDE] applyIncludeNotePreviewJSON: missing previewId (htmlLen=' + rawLen + ')'); } catch (_) {}
+      return;
+    }
+    let host = document.querySelector('.tn-include-readonly[data-tn-include-preview-id="' + previewId + '"]');
+    if (!host) {
+      // Retry once on the next frame to tolerate ProseMirror/NodeView attach races.
+      requestAnimationFrame(() => {
+        const retryHost = document.querySelector('.tn-include-readonly[data-tn-include-preview-id="' + previewId + '"]');
+        if (!retryHost) {
+          try {
+            const count = document.querySelectorAll('.tn-include-readonly').length;
+            window.webkit.messageHandlers.debugLog.postMessage('[INCLUDE] applyIncludeNotePreviewJSON: host NOT FOUND after retry previewId=' + previewId + ' totalIncludeNodes=' + count + ' htmlLen=' + rawLen);
+          } catch (_) {}
+          return;
+        }
+        const retrySlot = retryHost.querySelector('.tn-include-readonly__scroll');
+        if (!retrySlot) {
+          try { window.webkit.messageHandlers.debugLog.postMessage('[INCLUDE] applyIncludeNotePreviewJSON: slot missing after retry previewId=' + previewId); } catch (_) {}
+          return;
+        }
+        retrySlot.innerHTML = rawHtml;
+        requestAnimationFrame(() => trinoteRunMermaidInSlot(retrySlot));
+      });
+      return;
+    }
+    const slot = host.querySelector('.tn-include-readonly__scroll');
+    if (!slot) {
+      try { window.webkit.messageHandlers.debugLog.postMessage('[INCLUDE] applyIncludeNotePreviewJSON: slot missing previewId=' + previewId); } catch (_) {}
+      return;
+    }
+    slot.innerHTML = rawHtml;
+    requestAnimationFrame(() => trinoteRunMermaidInSlot(slot));
+  },
 };
 
 // Show editor, hide loading
@@ -2715,6 +3083,7 @@ function editorDocumentHasFocus() {
 }
 document.getElementById('editor-container').addEventListener('click', function(e) {
   if (e.target.closest('a[href]')) return;
+  if (e.target.closest('.tn-include-readonly')) return;
   if (e.target.closest('.tiptap img')) return;
   if (e.target.closest('.table-caption-box')) return;
   var lineCount = 1;
@@ -3401,7 +3770,15 @@ _ctxSaveBtn.addEventListener('pointerdown', (e) => {
       html: window.editorBridge.getContent(),
       scrollFraction: window.editorBridge.getScrollFraction()
     });
-  } catch(err) {}
+  } catch (err) {
+    try {
+      var msg = (err && (err.stack || err.message || String(err))) || 'unknown';
+      window.webkit.messageHandlers.debugLog.postMessage('[EDITOR-SAVE] requestSave threw: ' + msg);
+    } catch (_) {}
+    try {
+      window.webkit.messageHandlers.requestSave.postMessage({ html: null, scrollFraction: 0 });
+    } catch (_) {}
+  }
 });
 _tableCtxBar.appendChild(_ctxSaveBtn);
 

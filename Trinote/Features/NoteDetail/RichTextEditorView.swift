@@ -2,6 +2,14 @@ import SwiftUI
 import WebKit
 import ObjectiveC
 
+enum RichTextEditorBridgeRequest: Equatable {
+    case pickIncludeNote
+    case resolveNoteTitle(noteId: String)
+    case openNote(noteId: String)
+    /// Stable id from the TipTap NodeView; native resolves HTML and calls `applyIncludeNotePreviewJSON` for that host only.
+    case includePreview(previewId: String, noteId: String, boxSize: String)
+}
+
 struct RichTextEditorView: UIViewRepresentable {
     let initialHTML: String
     var onContentChanged: ((String) -> Void)?
@@ -13,7 +21,10 @@ struct RichTextEditorView: UIViewRepresentable {
     /// Called when the table context toolbar shows or hides.
     var onTableToolsVisibilityChanged: ((Bool) -> Void)?
     /// Called when the in-editor save button (e.g. on the table toolbar) is tapped, with fresh HTML and editor scroll fraction (0–1).
-    var onRequestSave: ((String, CGFloat) -> Void)?
+    /// `html` is nil when JS serialization failed (`html: null` in the bridge payload).
+    var onRequestSave: ((String?, CGFloat) -> Void)?
+    /// Include-note toolbar / node view → native (picker, title resolution, open linked note).
+    var onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)?
     @Binding var imageToInsert: String?
     /// Optional binding so the parent view can hold a reference to the underlying WKWebView
     /// (e.g. to call `evaluateJavaScript` for fetching fresh editor content before save).
@@ -29,6 +40,8 @@ struct RichTextEditorView: UIViewRepresentable {
             onEditorScroll: onEditorScroll,
             onTypingActivity: onTypingActivity,
             onTableToolsVisibilityChanged: onTableToolsVisibilityChanged,
+            onRequestSave: onRequestSave,
+            onEditorBridgeRequest: onEditorBridgeRequest,
             initialScrollFraction: initialScrollFraction
         )
     }
@@ -43,6 +56,7 @@ struct RichTextEditorView: UIViewRepresentable {
         contentController.add(coordinator, name: "editorTypingActivity")
         contentController.add(coordinator, name: "tableToolsVisible")
         contentController.add(coordinator, name: "requestSave")
+        contentController.add(coordinator, name: "editorRequest")
         contentController.add(coordinator, name: "debugLog")
 
         let config = WKWebViewConfiguration()
@@ -93,6 +107,7 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.onTypingActivity = onTypingActivity
         coordinator.onTableToolsVisibilityChanged = onTableToolsVisibilityChanged
         coordinator.onRequestSave = onRequestSave
+        coordinator.onEditorBridgeRequest = onEditorBridgeRequest
         Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
@@ -131,6 +146,7 @@ struct RichTextEditorView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "editorTypingActivity")
         uc.removeScriptMessageHandler(forName: "tableToolsVisible")
         uc.removeScriptMessageHandler(forName: "requestSave")
+        uc.removeScriptMessageHandler(forName: "editorRequest")
         uc.removeScriptMessageHandler(forName: "debugLog")
     }
 
@@ -170,7 +186,8 @@ struct RichTextEditorView: UIViewRepresentable {
         var onEditorScroll: ((CGFloat, Bool) -> Void)?
         var onTypingActivity: (() -> Void)?
         var onTableToolsVisibilityChanged: ((Bool) -> Void)?
-        var onRequestSave: ((String, CGFloat) -> Void)?
+        var onRequestSave: ((String?, CGFloat) -> Void)?
+        var onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)?
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
@@ -190,6 +207,8 @@ struct RichTextEditorView: UIViewRepresentable {
             onEditorScroll: ((CGFloat, Bool) -> Void)?,
             onTypingActivity: (() -> Void)? = nil,
             onTableToolsVisibilityChanged: ((Bool) -> Void)? = nil,
+            onRequestSave: ((String?, CGFloat) -> Void)? = nil,
+            onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)? = nil,
             initialScrollFraction: CGFloat = 0
         ) {
             self.initialHTML = initialHTML
@@ -198,6 +217,8 @@ struct RichTextEditorView: UIViewRepresentable {
             self.onEditorScroll = onEditorScroll
             self.onTypingActivity = onTypingActivity
             self.onTableToolsVisibilityChanged = onTableToolsVisibilityChanged
+            self.onRequestSave = onRequestSave
+            self.onEditorBridgeRequest = onEditorBridgeRequest
             self.initialScrollFraction = initialScrollFraction
         }
 
@@ -263,7 +284,14 @@ struct RichTextEditorView: UIViewRepresentable {
                 let html: String?
                 let scrollFraction: CGFloat
                 if let dict = message.body as? [String: Any] {
-                    html = dict["html"] as? String
+                    switch dict["html"] {
+                    case is NSNull, nil:
+                        html = nil
+                    case let s as String:
+                        html = s
+                    default:
+                        html = nil
+                    }
                     if let n = dict["scrollFraction"] as? NSNumber {
                         scrollFraction = CGFloat(truncating: n)
                     } else if let d = dict["scrollFraction"] as? Double {
@@ -278,19 +306,57 @@ struct RichTextEditorView: UIViewRepresentable {
                     html = nil
                     scrollFraction = 0
                 }
-                if let html {
-                    let callback = onRequestSave
-                    DispatchQueue.main.async { callback?(html, scrollFraction) }
+                if let callback = onRequestSave {
+                    DispatchQueue.main.async { callback(html, scrollFraction) }
                 }
 
             case "debugLog":
                 if let msg = message.body as? String {
-                    print("[TABLEDBG] \(msg)")
+                    Log.ui.debug("[EDITOR-JS] \(msg, privacy: .public)")
+                }
+
+            case "editorRequest":
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                      let action = dict["action"] as? String else { break }
+                let callback = onEditorBridgeRequest
+                switch action {
+                case "pickIncludeNote":
+                    DispatchQueue.main.async { callback?(.pickIncludeNote) }
+                case "resolveNoteTitle":
+                    if let nid = dict["noteId"] as? String, !nid.isEmpty {
+                        DispatchQueue.main.async { callback?(.resolveNoteTitle(noteId: nid)) }
+                    }
+                case "openNote":
+                    if let nid = dict["noteId"] as? String, !nid.isEmpty {
+                        DispatchQueue.main.async { callback?(.openNote(noteId: nid)) }
+                    }
+                case "includePreview":
+                    if let previewId = dict["previewId"] as? String, !previewId.isEmpty,
+                       let nid = dict["noteId"] as? String, !nid.isEmpty {
+                        let rawBox = (dict["boxSize"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        let boxSize = rawBox.isEmpty ? "medium" : rawBox
+                        DispatchQueue.main.async {
+                            callback?(.includePreview(previewId: previewId, noteId: nid, boxSize: boxSize))
+                        }
+                    }
+                default:
+                    break
                 }
 
             default:
                 break
             }
+        }
+
+        private static func dictionaryFromScriptMessageBody(_ body: Any) -> [String: Any]? {
+            if let d = body as? [String: Any] { return d }
+            guard let ns = body as? [AnyHashable: Any] else { return nil }
+            var out: [String: Any] = [:]
+            for (k, v) in ns {
+                if let s = k as? String { out[s] = v }
+                else if let s = k as? NSString { out[s as String] = v }
+            }
+            return out
         }
 
         func setContent(_ html: String) {
@@ -375,11 +441,42 @@ struct RichTextEditorView: UIViewRepresentable {
             }
         }
 
+        /// Same rule as read-only `HTMLNoteView`: `#/<id>` or `#root/…/<id>` → last path segment.
+        private static func noteIdFromTriliumHashLink(url: URL) -> String? {
+            guard var frag = url.fragment, !frag.isEmpty else { return nil }
+            frag = frag.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let parts = frag.split(separator: "/").map(String.init).filter { !$0.isEmpty }
+            guard let last = parts.last else { return nil }
+            if last == "root" { return nil }
+            return last
+        }
+
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-            if navigationAction.navigationType == .linkActivated {
-                if let url = navigationAction.request.url {
-                    await UIApplication.shared.open(url)
+            guard navigationAction.navigationType == .linkActivated,
+                  let url = navigationAction.request.url
+            else { return .allow }
+
+            if url.scheme?.lowercased() == "triliuminclude", url.host?.lowercased() == "file" {
+                let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                let segs = path.split(separator: "/").map(String.init).filter { !$0.isEmpty }
+                if let nid = segs.first, !nid.isEmpty {
+                    let callback = onEditorBridgeRequest
+                    DispatchQueue.main.async { callback?(.openNote(noteId: nid)) }
+                    return .cancel
                 }
+            }
+
+            let urlString = url.absoluteString
+            if urlString.contains("#/") || urlString.localizedCaseInsensitiveContains("#root/") {
+                if let noteId = Self.noteIdFromTriliumHashLink(url: url), !noteId.isEmpty {
+                    let callback = onEditorBridgeRequest
+                    DispatchQueue.main.async { callback?(.openNote(noteId: noteId)) }
+                    return .cancel
+                }
+            }
+
+            if url.scheme == "http" || url.scheme == "https" {
+                await UIApplication.shared.open(url)
                 return .cancel
             }
             return .allow

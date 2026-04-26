@@ -7,8 +7,10 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; background: transparent; }
     body { padding: 16px; }
-    #diagram { width: 100%; }
-    #diagram svg { max-width: 100%; height: auto; display: block; }
+    /* Wide diagrams should render at their natural width (mermaid's `viewBox`) and scroll horizontally
+       inside the card instead of being squashed into the viewport width and losing legibility. */
+    #diagram { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    #diagram svg { width: auto; max-width: none; height: auto; display: block; }
     #error { color: #e55; font-family: -apple-system, system-ui; font-size: 14px;
              padding: 16px; white-space: pre-wrap; display: none; }
     #loading { font-family: -apple-system, system-ui; color: #888; font-size: 15px;
@@ -22,13 +24,76 @@
 
 <script src="vendor/mermaid.min.js"></script>
 <script>
+// Post diagnostic strings to the native `MermaidRenderer.userContentController` (when that handler is
+// registered — MermaidRenderer adds a `debugLog` handler; MermaidNoteView does not, so `try/catch` is fine).
+function trinoteMermaidLog(msg) {
+    try { window.webkit.messageHandlers.debugLog.postMessage(String(msg)); } catch (e) {}
+}
+
 const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-mermaid.initialize({
-    startOnLoad: false,
-    theme: isDark ? 'dark' : 'default',
-    securityLevel: 'strict',
-    fontFamily: '-apple-system, system-ui, sans-serif'
-});
+const chosenTheme = isDark ? 'dark' : 'default';
+
+if (typeof window.mermaid !== 'undefined') {
+    mermaid.initialize({
+        startOnLoad: false,
+        theme: chosenTheme,
+        securityLevel: 'strict',
+        fontFamily: '-apple-system, system-ui, sans-serif'
+    });
+} else {
+    trinoteMermaidLog('mermaid.initialize SKIPPED - window.mermaid undefined');
+}
+
+// Re-initialize on color scheme change so mermaid picks up the new theme without a page reload. Native
+// (`MermaidRenderer.onAppearanceModeChanged`) will still reload in response to user appearance changes;
+// this listener covers the `Device` mode case when iOS flips light/dark underneath us.
+try {
+    const mql = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = function(e) {
+        const newTheme = e.matches ? 'dark' : 'default';
+        try {
+            mermaid.initialize({
+                startOnLoad: false,
+                theme: newTheme,
+                securityLevel: 'strict',
+                fontFamily: '-apple-system, system-ui, sans-serif'
+            });
+        } catch (err) { trinoteMermaidLog('re-init error: ' + (err.message || err)); }
+    };
+    if (mql.addEventListener) mql.addEventListener('change', handler);
+    else if (mql.addListener) mql.addListener(handler);
+} catch (e) { trinoteMermaidLog('matchMedia listener error: ' + (e.message || e)); }
+
+// Mermaid emits `<svg width="100%" style="max-width:<natural>px" viewBox="...">`. WebKit treats the
+// `width="100%"` presentation attribute as authoritative (CSS `width: auto` does not reliably override
+// it), so wide diagrams shrink to the container width and become unreadable. Strip the `width`/`height`
+// presentation attributes and inline `max-width`/`min-width` from the SVG style so the diagram renders
+// at its viewBox-intrinsic size; the parent container's `overflow-x: auto` handles horizontal scroll.
+function trinoteFixMermaidSvgWidth(svg) {
+    if (typeof svg !== 'string' || svg.length === 0) return svg;
+    let out = svg;
+    out = out.replace(/(<svg\b[^>]*?)\swidth\s*=\s*(["'])[^"']*\2/i, '$1');
+    out = out.replace(/(<svg\b[^>]*?)\sheight\s*=\s*(["'])[^"']*\2/i, '$1');
+    out = out.replace(/(<svg\b[^>]*?\sstyle\s*=\s*)(["'])([^"']*)\2/i, function(_m, pre, q, css) {
+        const cleaned = css
+            .replace(/(?:^|;)\s*max-width\s*:[^;]*/gi, '')
+            .replace(/(?:^|;)\s*min-width\s*:[^;]*/gi, '')
+            .replace(/(?:^|;)\s*width\s*:[^;]*/gi, '')
+            .replace(/(?:^|;)\s*height\s*:[^;]*/gi, '')
+            .replace(/^\s*;+\s*/, '')
+            .replace(/\s*;+\s*$/, '')
+            .trim();
+        return pre + q + cleaned + q;
+    });
+    return out;
+}
+
+// Width used as a "render-time layout context" for diagrams whose layout depends on container width
+// (Gantt, sequence, timeline, etc.). Mermaid measures `document.body.clientWidth` while drawing — on a
+// phone the standalone viewer's body is ~400px wide, which squashes Gantt time axes; for the hidden
+// `MermaidRenderer` web view it is 1px wide, which collapses the viewBox to width 0. Temporarily
+// widen body during render, then restore so the standalone page does not get a horizontal scrollbar.
+const TRINOTE_MERMAID_RENDER_WIDTH_PX = 1200;
 
 window.mermaidViewer = {
     async render(source) {
@@ -36,16 +101,53 @@ window.mermaidViewer = {
         const diagEl = document.getElementById('diagram');
         const errEl = document.getElementById('error');
 
+        const bodyEl = document.body;
+        const prevBodyMinWidth = bodyEl.style.minWidth;
+        const prevBodyWidth = bodyEl.style.width;
+        const prevDiagWidth = diagEl ? diagEl.style.width : null;
+        bodyEl.style.minWidth = TRINOTE_MERMAID_RENDER_WIDTH_PX + 'px';
+        bodyEl.style.width = TRINOTE_MERMAID_RENDER_WIDTH_PX + 'px';
+        if (diagEl) diagEl.style.width = TRINOTE_MERMAID_RENDER_WIDTH_PX + 'px';
         try {
             const { svg } = await mermaid.render('mermaid-graph', source);
             loadEl.style.display = 'none';
-            diagEl.innerHTML = svg;
+            diagEl.innerHTML = trinoteFixMermaidSvgWidth(svg);
             reportHeight();
         } catch (e) {
             loadEl.style.display = 'none';
             errEl.style.display = 'block';
             errEl.textContent = 'Diagram error: ' + (e.message || e);
+            trinoteMermaidLog('render ERROR ' + (e.message || e));
             reportHeight();
+        } finally {
+            bodyEl.style.minWidth = prevBodyMinWidth;
+            bodyEl.style.width = prevBodyWidth;
+            if (diagEl && prevDiagWidth !== null) diagEl.style.width = prevDiagWidth;
+        }
+    },
+    /** Used by `MermaidRenderer` to pre-render linked-note includes without mutating `#diagram`. */
+    async renderToString(source) {
+        const id = 'mermaid-graph-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        const bodyEl = document.body;
+        const prevBodyMinWidth = bodyEl.style.minWidth;
+        const prevBodyWidth = bodyEl.style.width;
+        const prevDiagWidth = document.getElementById('diagram') ? document.getElementById('diagram').style.width : null;
+        bodyEl.style.minWidth = TRINOTE_MERMAID_RENDER_WIDTH_PX + 'px';
+        bodyEl.style.width = TRINOTE_MERMAID_RENDER_WIDTH_PX + 'px';
+        if (document.getElementById('diagram')) document.getElementById('diagram').style.width = TRINOTE_MERMAID_RENDER_WIDTH_PX + 'px';
+        try {
+            const result = await mermaid.render(id, source);
+            const rawSvg = (result && result.svg) ? result.svg : String(result);
+            return trinoteFixMermaidSvgWidth(rawSvg);
+        } catch (e) {
+            trinoteMermaidLog('renderToString ERROR id=' + id + ' ' + (e.message || e));
+            throw e;
+        } finally {
+            bodyEl.style.minWidth = prevBodyMinWidth;
+            bodyEl.style.width = prevBodyWidth;
+            if (document.getElementById('diagram') && prevDiagWidth !== null) {
+                document.getElementById('diagram').style.width = prevDiagWidth;
+            }
         }
     }
 };
@@ -59,8 +161,10 @@ function reportHeight() {
 new ResizeObserver(reportHeight).observe(document.body);
 
 try {
-    window.webkit.messageHandlers.mermaidReady.postMessage('ready');
-} catch(e) {}
+    window.webkit.messageHandlers.mermaidReady.postMessage('ready theme=' + chosenTheme);
+} catch(e) {
+    trinoteMermaidLog('mermaidReady post FAILED: ' + (e.message || e));
+}
 </script>
 </body>
 </html>

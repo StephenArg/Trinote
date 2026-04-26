@@ -74,10 +74,16 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         contentController.add(handler, name: "heightUpdate")
         contentController.add(handler, name: "noteLink")
         contentController.add(handler, name: "checkboxToggle")
+        contentController.add(handler, name: "debugLog")
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        // Linked mermaid cards embed `mermaid-viewer.html` via a file:// iframe. WKWebView keeps iframe
+        // loads and postMessage working between same-origin file:// documents without any KVC toggles,
+        // so we don't set `allowFileAccessFromFileURLs` / `allowUniversalAccessFromFileURLs` here —
+        // those are private WebKit preferences that can raise `NSUnknownKeyException` on some iOS
+        // versions and broke the entire webview creation (taking canvas/mermaid cards down with it).
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = handler
@@ -94,7 +100,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         handler.themeColors = themeColors
         handler.findControl = findControl
         let wrapped = Self.wrapHTML(html, theme: themeColors)
-        webView.loadHTMLString(wrapped, baseURL: baseURL)
+        webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(wrapped: wrapped, canonicalBase: baseURL))
         handler.loadedHTML = html
 
         return webView
@@ -113,7 +119,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.loadedHTML = html
         coordinator.themeColors = themeColors
         let wrapped = Self.wrapHTML(html, theme: themeColors)
-        webView.loadHTMLString(wrapped, baseURL: baseURL)
+        webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(wrapped: wrapped, canonicalBase: baseURL))
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -121,6 +127,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "heightUpdate")
         uc.removeScriptMessageHandler(forName: "noteLink")
         uc.removeScriptMessageHandler(forName: "checkboxToggle")
+        uc.removeScriptMessageHandler(forName: "debugLog")
     }
 
     static func wrapHTML(_ body: String, theme: HTMLThemeColors) -> String {
@@ -153,6 +160,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             a { color: \(theme.lightLink); }
         }
         img { max-width: 100%; height: auto; border-radius: 6px; }
+        img[data-trinote-image-note-id] {
+          cursor: pointer;
+          -webkit-tap-highlight-color: rgba(0, 122, 255, 0.12);
+          touch-action: manipulation;
+        }
         figure.image { display: block; clear: both; text-align: center; margin: 0.9em auto; max-width: 100%; overflow: hidden; }
         figure.image img { display: block; margin: 0 auto; max-width: 100%; height: auto; border-radius: 6px; }
         figure.image figcaption {
@@ -258,6 +270,112 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         .math-tex { overflow-x: auto; }
         mark.trinote-find-hit { background-color: rgba(255, 204, 0, 0.45); color: inherit; padding: 0; }
         mark.trinote-find-hit-active { background-color: rgba(255, 149, 0, 0.72); color: inherit; padding: 0; }
+        /* Resolved Trilium include-note previews */
+        .trinote-include {
+          display: block; margin: 12px 0; border-radius: 10px; border: 1px solid var(--border);
+          background: rgba(128,128,128,0.08); overflow: hidden;
+        }
+        .trinote-include * { -webkit-touch-callout: none; }
+        .trinote-include__header {
+          display: flex; align-items: center; justify-content: space-between; gap: 8px;
+          padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 0.92em; font-weight: 600;
+        }
+        .trinote-include__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        button.trinote-include__open {
+          flex-shrink: 0;
+          appearance: none;
+          -webkit-appearance: none;
+          font: inherit;
+          font-weight: 600;
+          font-size: 0.88em;
+          margin: 0;
+          padding: 6px 12px;
+          border-radius: 8px;
+          border: 1px solid var(--border);
+          background: rgba(128,128,128,0.18);
+          color: inherit;
+          cursor: pointer;
+          -webkit-tap-highlight-color: rgba(0, 122, 255, 0.12);
+          touch-action: manipulation;
+          user-select: none;
+          white-space: nowrap;
+        }
+        button.trinote-include__open:active { opacity: 0.72; }
+        @media (prefers-color-scheme: dark) {
+          button.trinote-include__open { background: rgba(255,255,255,0.08); }
+        }
+        .trinote-include__body { padding: 8px 10px 10px; font-size: 0.95em; }
+        .trinote-include__body[data-box-size="small"] { max-height: 10em; overflow: hidden; }
+        .trinote-include__body[data-box-size="medium"] { max-height: 20em; overflow: auto; -webkit-overflow-scrolling: touch; }
+        .trinote-include__inner--text { font-size: 0.95em; }
+        .trinote-include__inner--text p:first-child { margin-top: 0; }
+        .trinote-include__inner--text p:last-child { margin-bottom: 0; }
+        .trinote-include__img {
+          max-width: 100%; border-radius: 6px; border: 1px solid var(--border);
+          background: rgba(255,255,255,0.02);
+          display: block; margin: 0 auto;
+          pointer-events: none;
+        }
+        /* Linked canvas previews (raster/SVG served by Trilium as an <img>): match read-only CanvasNoteView
+           (CanvasSVGWebView). Light mode: white export on its own. Dark mode: rgb(28,28,30) pad + invert
+           filter so the white "paper" flips dark. Linked mermaid include cards are pre-rendered to inline
+           SVG via `MermaidRenderer` (same `mermaid-viewer.html` as `MermaidNoteView`), so no extra pad
+           or invert is applied here. */
+        section.trinote-include[data-note-type="canvas"] .trinote-include__inner--image,
+        section.trinote-include[data-note-type="mermaid"] .trinote-include__inner--image {
+          padding: 0;
+          border-radius: 8px;
+          background: transparent;
+        }
+        section.trinote-include[data-note-type="mermaid"] .trinote-include__inner--mermaid {
+          padding: 0;
+          border-radius: 8px;
+          background: transparent;
+          /* Wide diagrams scroll horizontally instead of being squashed into the card width. */
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        /* mermaid emits `<svg width="100%" style="max-width:<natural>px" viewBox="…">`. Letting `width`
+           fall back to `auto` makes WebKit size the SVG to its viewBox-intrinsic width, so wide diagrams
+           render at full size and overflow the card horizontally instead of shrinking text/edges. */
+        section.trinote-include[data-note-type="mermaid"] .trinote-include__inner--mermaid svg {
+          width: auto;
+          max-width: none;
+          height: auto;
+          display: block;
+        }
+        @media (prefers-color-scheme: dark) {
+          section.trinote-include[data-note-type="canvas"] .trinote-include__inner--image,
+          section.trinote-include[data-note-type="mermaid"] .trinote-include__inner--image {
+            background: rgb(28, 28, 30);
+            border-radius: 8px;
+          }
+          section.trinote-include[data-note-type="canvas"] .trinote-include__inner--image img,
+          section.trinote-include[data-note-type="canvas"] .trinote-include__inner--image svg,
+          section.trinote-include[data-note-type="mermaid"] .trinote-include__inner--image img,
+          section.trinote-include[data-note-type="mermaid"] .trinote-include__inner--image svg {
+            filter: invert(0.88) hue-rotate(180deg);
+            background: transparent;
+          }
+        }
+        .trinote-include img, .trinote-include svg { pointer-events: none; }
+        .trinote-include__children { margin: 0; padding-left: 1.2em; }
+        .trinote-include__mindmap-root {
+          font-weight: 600; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+          background: rgba(128,128,128,0.08); display: inline-block; max-width: 100%;
+          word-wrap: break-word; overflow-wrap: break-word;
+        }
+        .trinote-include__mindmap-children {
+          margin: 8px 0 0 0; padding-left: 1.2em;
+        }
+        .trinote-include__mindmap-children li { margin: 2px 0; }
+        .trinote-include__filelink { font-weight: 600; }
+        .trinote-include__filemeta { font-size: 0.82em; opacity: 0.7; margin-top: 4px; }
+        .trinote-include .todo-list__label input[type="checkbox"] { pointer-events: none; opacity: 0.55; }
+        /* Inline `<div class="mermaid">` blocks: same horizontal-scroll behavior as linked mermaid cards
+           so wide diagrams stay readable instead of being scaled down to the column width. */
+        .mermaid { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .mermaid svg { width: auto; max-width: none; height: auto; display: block; }
         </style>
         </head>
         <body>
@@ -367,16 +485,142 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         window.addEventListener('load', reportHeight);
         new ResizeObserver(reportHeight).observe(document.body);
 
-        document.addEventListener('click', function(e) {
-            const a = e.target.closest('a');
-            if (!a) return;
-            const href = a.getAttribute('href') || '';
-            if (href.startsWith('#/') || href.startsWith('#root/')) {
-                e.preventDefault();
-                const noteId = href.replace(/^#\\/?/, '').split('/')[0];
-                if (noteId) window.webkit.messageHandlers.noteLink.postMessage(noteId);
+        function trinoteSendDebug(msg) {
+            try { window.webkit.messageHandlers.debugLog.postMessage(String(msg)); } catch (e) {}
+        }
+        function trinoteOpenNoteFromLink(href) {
+            var raw = href.replace(/^#\\/?/, '');
+            var segs = raw.split('/').filter(function(s) { return s.length > 0; });
+            var noteId = segs.length ? segs[segs.length - 1] : '';
+            if (noteId && noteId !== 'root') window.webkit.messageHandlers.noteLink.postMessage(noteId);
+        }
+        var trinoteLastIncludeNavMs = 0;
+        var trinoteLastIncludeNavId = '';
+        function trinoteNavigateInclude(inc, reason) {
+            var id = inc.getAttribute('data-note-id') || '';
+            var now = Date.now();
+            if (id && id === trinoteLastIncludeNavId && (now - trinoteLastIncludeNavMs) < 400) return;
+            trinoteLastIncludeNavMs = now;
+            trinoteLastIncludeNavId = id;
+            if (id) window.webkit.messageHandlers.noteLink.postMessage(id);
+        }
+
+        function trinoteFindImageNoteTarget(el) {
+            // Walk up from the tap target — CKEditor wraps <img> in <figure class="image">, so the
+            // actual <img> might be a sibling rather than the ancestor.
+            if (!el) return null;
+            var cur = el;
+            while (cur && cur !== document) {
+                if (cur.getAttribute) {
+                    var id = cur.getAttribute('data-trinote-image-note-id');
+                    if (id) return id;
+                }
+                if (cur.querySelector) {
+                    var inner = cur.querySelector('img[data-trinote-image-note-id]');
+                    if (inner) {
+                        var innerId = inner.getAttribute('data-trinote-image-note-id');
+                        if (innerId) return innerId;
+                    }
+                }
+                cur = cur.parentNode;
             }
-        });
+            return null;
+        }
+
+        document.addEventListener('click', function(e) {
+            var inc = e.target.closest('.trinote-include');
+            if (inc) {
+                // Internal `#/noteId` links anywhere in the card take precedence.
+                var a = e.target.closest('a');
+                if (a && inc.contains(a)) {
+                    var href = a.getAttribute('href') || '';
+                    if (href.startsWith('#/') || href.startsWith('#root/')) {
+                        e.preventDefault();
+                        trinoteOpenNoteFromLink(href);
+                        return;
+                    }
+                }
+                // Only the explicit "Open" button opens the linked note (not the title row).
+                var openBtn = e.target.closest('button.trinote-include__open');
+                if (openBtn && inc.contains(openBtn)) {
+                    e.preventDefault();
+                    trinoteNavigateInclude(inc, 'open-click');
+                    return;
+                }
+                return;
+            }
+            var imgTarget = trinoteFindImageNoteTarget(e.target);
+            if (imgTarget) {
+                e.preventDefault();
+                window.webkit.messageHandlers.noteLink.postMessage(imgTarget);
+                return;
+            }
+            var anchor = e.target.closest('a');
+            if (anchor) {
+                var h = anchor.getAttribute('href') || '';
+                if (h.startsWith('#/') || h.startsWith('#root/')) {
+                    e.preventDefault();
+                    trinoteOpenNoteFromLink(h);
+                }
+                return;
+            }
+        }, true);
+
+        // Direct image listener: some iOS WKWebView tap gestures on <img> don't bubble through
+        // figure/anchor wrappers via a synthetic click (only pointer/touch events), so dispatch
+        // imageLink navigation on pointerup/touchend too — scoped strictly to images with
+        // the data-trinote-image-note-id attribute so we don't hijack other taps.
+        (function() {
+            var imgs = document.querySelectorAll('img[data-trinote-image-note-id]');
+            imgs.forEach(function(img) {
+                var startedInside = false;
+                img.addEventListener('pointerdown', function() { startedInside = true; }, true);
+                img.addEventListener('pointerup', function(e) {
+                    if (!startedInside) return;
+                    startedInside = false;
+                    var id = img.getAttribute('data-trinote-image-note-id') || '';
+                    if (!id) return;
+                    e.preventDefault();
+                    window.webkit.messageHandlers.noteLink.postMessage(id);
+                }, true);
+                img.addEventListener('click', function(e) {
+                    var id = img.getAttribute('data-trinote-image-note-id') || '';
+                    if (!id) return;
+                    e.preventDefault();
+                    window.webkit.messageHandlers.noteLink.postMessage(id);
+                }, true);
+                img.addEventListener('touchend', function(e) {
+                    var id = img.getAttribute('data-trinote-image-note-id') || '';
+                    if (!id) return;
+                    e.preventDefault();
+                    window.webkit.messageHandlers.noteLink.postMessage(id);
+                }, { passive: false });
+            });
+        })();
+
+        // Per–Open-button listeners (pointerup + touchend) for iOS WKWebView when no synthetic click fires.
+        (function() {
+            var openBtns = document.querySelectorAll('button.trinote-include__open');
+            openBtns.forEach(function(btn) {
+                var card = btn.closest('.trinote-include');
+                var tapStartedInside = false;
+                btn.addEventListener('pointerdown', function() {
+                    tapStartedInside = true;
+                }, true);
+                btn.addEventListener('pointerup', function(e) {
+                    if (!tapStartedInside) return;
+                    tapStartedInside = false;
+                    if (!card) return;
+                    e.preventDefault();
+                    trinoteNavigateInclude(card, 'pointerup');
+                }, true);
+                btn.addEventListener('touchend', function(e) {
+                    if (!card) return;
+                    e.preventDefault();
+                    trinoteNavigateInclude(card, 'touchend');
+                }, { passive: false });
+            });
+        })();
 
         // Enable todo checkboxes for interactive toggling
         (function() {
@@ -387,14 +631,21 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 else label.classList.remove('todo-list__label--checked');
             }
             const boxes = document.querySelectorAll('input[type="checkbox"]');
-            boxes.forEach(function(cb, idx) {
+            var idx = 0;
+            boxes.forEach(function(cb) {
+                if (cb.closest('.trinote-include')) {
+                    cb.setAttribute('disabled', 'disabled');
+                    cb.disabled = true;
+                    return;
+                }
                 cb.removeAttribute('disabled');
-                cb.dataset.cbIndex = idx;
+                cb.dataset.cbIndex = String(idx);
+                idx += 1;
                 updateStrikethrough(cb);
                 cb.addEventListener('change', function() {
                     updateStrikethrough(this);
                     window.webkit.messageHandlers.checkboxToggle.postMessage({
-                        index: parseInt(this.dataset.cbIndex),
+                        index: parseInt(this.dataset.cbIndex, 10),
                         checked: this.checked
                     });
                 });
@@ -418,9 +669,119 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             reportHeight();
         })();
         </script>
+        \(Self.mermaidSnippetIfNeeded(for: body))
         </body>
         </html>
         """
+    }
+
+    /// True when the note HTML contains a Trilium/CKEditor mermaid block (`class="mermaid"` / `class='mermaid'`).
+    /// Linked mermaid include cards use pre-rendered inline SVG (`trinote-include__inner--mermaid`) and do
+    /// **not** match this — they must not force the bundle `baseURL` or load `vendor/mermaid.min.js`.
+    private static func htmlContainsInlineMermaidBlocks(_ html: String) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: #"(?i)class\s*=\s*["']mermaid["']"#, options: []) else {
+            return false
+        }
+        let range = NSRange(location: 0, length: (html as NSString).length)
+        return regex.firstMatch(in: html, options: [], range: range) != nil
+    }
+
+    /// Loads bundled `vendor/mermaid.min.js` when the body has inline `<div class="mermaid">` blocks only.
+    /// Linked mermaid notes are pre-rendered in `MermaidRenderer` / `mermaid-viewer.html` before load.
+    private static func mermaidSnippetIfNeeded(for body: String) -> String {
+        guard htmlContainsInlineMermaidBlocks(body) else { return "" }
+        return #"""
+        <script src="vendor/mermaid.min.js"></script>
+        <script>
+        (function() {
+          function trinoteSendDebug(msg) {
+            try { window.webkit.messageHandlers.debugLog.postMessage(String(msg)); } catch (e) {}
+          }
+          // Strip `width="100%"` / inline `max-width` from mermaid SVG output so wide diagrams render at
+          // viewBox-intrinsic width and the `.mermaid` container's `overflow-x: auto` provides horizontal
+          // scroll. WebKit treats the `width` presentation attribute as authoritative over CSS `width: auto`.
+          function trinoteFixMermaidSvgWidth(svg) {
+            if (typeof svg !== 'string' || svg.length === 0) return svg;
+            var out = svg;
+            out = out.replace(/(<svg\b[^>]*?)\swidth\s*=\s*(["'])[^"']*\2/i, '$1');
+            out = out.replace(/(<svg\b[^>]*?)\sheight\s*=\s*(["'])[^"']*\2/i, '$1');
+            out = out.replace(/(<svg\b[^>]*?\sstyle\s*=\s*)(["'])([^"']*)\2/i, function(_m, pre, q, css) {
+              var cleaned = css
+                .replace(/(?:^|;)\s*max-width\s*:[^;]*/gi, '')
+                .replace(/(?:^|;)\s*min-width\s*:[^;]*/gi, '')
+                .replace(/(?:^|;)\s*width\s*:[^;]*/gi, '')
+                .replace(/(?:^|;)\s*height\s*:[^;]*/gi, '')
+                .replace(/^\s*;+\s*/, '')
+                .replace(/\s*;+\s*$/, '')
+                .trim();
+              return pre + q + cleaned + q;
+            });
+            return out;
+          }
+          function renderAllMermaid() {
+            try {
+              if (!window.mermaid) return;
+              var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+              mermaid.initialize({
+                startOnLoad: false,
+                securityLevel: 'strict',
+                theme: isDark ? 'dark' : 'default',
+                fontFamily: '-apple-system, system-ui, sans-serif'
+              });
+              var nodes = document.querySelectorAll('.mermaid:not([data-trinote-mermaid-rendered])');
+              nodes.forEach(function(node, idx) {
+                node.setAttribute('data-trinote-mermaid-rendered', '1');
+                var source = node.textContent || '';
+                var id = 'trinote-mmd-' + idx + '-' + Math.random().toString(36).slice(2, 8);
+                function applyResult(svgString) {
+                  node.innerHTML = trinoteFixMermaidSvgWidth(svgString);
+                }
+                try {
+                  var out = mermaid.render(id, source);
+                  if (out && typeof out.then === 'function') {
+                    out.then(function(r) { applyResult((r && r.svg) ? r.svg : String(r)); })
+                       .catch(function(err) {
+                         trinoteSendDebug('[MMD-INLINE] render reject #' + idx + ' err=' + (err && err.message || err));
+                       });
+                  } else if (out && out.svg) {
+                    applyResult(out.svg);
+                  } else if (typeof out === 'string') {
+                    applyResult(out);
+                  }
+                } catch (e) {
+                  trinoteSendDebug('[MMD-INLINE] render throw #' + idx + ' err=' + (e && e.message || e));
+                }
+              });
+            } catch (e) {
+              trinoteSendDebug('[MMD-INLINE] renderAllMermaid throw err=' + (e && e.message || e));
+            }
+          }
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', renderAllMermaid);
+          else renderAllMermaid();
+        })();
+        </script>
+        """#
+    }
+
+    /// Use the app bundle as the document base when Mermaid is present so `vendor/mermaid.min.js` loads from the
+    /// app bundle (same layout as `mermaid-viewer.html`), avoiding CDN `DownloadFailed` / network dependency.
+    /// Inlined images use `data:` URLs, so Trilium `api/…` paths should not remain for normal notes.
+    private static func effectiveReadOnlyHTMLBaseURL(wrapped: String, canonicalBase: URL?) -> URL? {
+        guard htmlContainsInlineMermaidBlocks(wrapped) else { return canonicalBase }
+        guard Bundle.main.url(forResource: "mermaid.min", withExtension: "js", subdirectory: "vendor") != nil else {
+            return canonicalBase
+        }
+        return Bundle.main.bundleURL
+    }
+
+    /// Trilium internal links use `#/<id>` or `#root/…/<id>`; the note id is always the last path segment.
+    private static func noteIdFromTriliumHashLink(url: URL) -> String? {
+        guard var frag = url.fragment, !frag.isEmpty else { return nil }
+        frag = frag.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let parts = frag.split(separator: "/").map(String.init).filter { !$0.isEmpty }
+        guard let last = parts.last else { return nil }
+        if last == "root" { return nil }
+        return last
     }
 
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -447,6 +808,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             case "noteLink":
                 if let noteId = message.body as? String {
                     onNoteLinkTapped?(noteId)
+                }
+            case "debugLog":
+                if let s = message.body as? String {
+                    Log.ui.debug("[INCLUDE] HTMLNoteView JS: \(s, privacy: .public)")
                 }
             case "checkboxToggle":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
@@ -507,11 +872,18 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             guard let url = navigationAction.request.url else { return .allow }
 
             if navigationAction.navigationType == .linkActivated {
-                let urlString = url.absoluteString
+                if url.scheme?.lowercased() == "triliuminclude", url.host?.lowercased() == "file" {
+                    let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    let segs = path.split(separator: "/").map(String.init).filter { !$0.isEmpty }
+                    if let nid = segs.first, !nid.isEmpty {
+                        onNoteLinkTapped?(nid)
+                        return .cancel
+                    }
+                }
 
-                if urlString.contains("#/") {
-                    let parts = urlString.components(separatedBy: "#/")
-                    if let noteId = parts.last?.components(separatedBy: "/").first, !noteId.isEmpty {
+                let urlString = url.absoluteString
+                if urlString.contains("#/") || urlString.localizedCaseInsensitiveContains("#root/") {
+                    if let noteId = HTMLNoteWebView.noteIdFromTriliumHashLink(url: url), !noteId.isEmpty {
                         onNoteLinkTapped?(noteId)
                         return .cancel
                     }

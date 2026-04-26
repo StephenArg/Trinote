@@ -20,7 +20,7 @@ struct CalendarNoteView: View {
             vm = CalendarNoteViewModel(calendarRootId: calendarRootNote.noteId, appState: appState)
         }
         .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
-            NoteDetailView(noteId: linkedNoteId, title: "")
+            NoteDetailView(noteId: linkedNoteId, title: "", startInEditMode: false)
         }
     }
 

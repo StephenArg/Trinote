@@ -22,7 +22,16 @@ final class NoteDetailViewModel {
     // Editing
     var isEditing = false
     var editableContent = ""
+    /// Decorated copy of `editableContent` for the rich text editor's WKWebView. Linked-note `<img src="api/images/{noteId}/...">`
+    /// references are inlined as data URIs (canvas-export.svg, MermaidRenderer SVG, or attachment bytes) because the
+    /// editor.html is loaded from the bundle and can't resolve relative `api/...` URLs. The original src is preserved on
+    /// each rewritten `<img>` via `data-trinote-original-src` so `undecorateLinkedImagesFromEditor` can restore it on save.
+    /// `nil` while preparation is in flight; the editor view shows a spinner during that brief window.
+    var editorDisplayContent: String?
     @ObservationIgnored private var _pendingEditorHTML: String?
+    /// Monotonic counter incremented every time we kick off `prepareEditorDisplayContent`. Late-arriving decorations
+    /// (e.g. user toggled editing off and back on) are dropped if their generation no longer matches `_editorPrepGeneration`.
+    @ObservationIgnored private var _editorPrepGeneration: Int = 0
     var isSaving = false
     var saveError: String?
     var showSaveError = false
@@ -130,6 +139,40 @@ final class NoteDetailViewModel {
 
         rebuildBreadcrumbsFromCache()
         await loadChildNotes()
+    }
+
+    /// Display title for another note (include-note chip); uses current note, children, SwiftData cache, then `getNote`.
+    func resolveDisplayTitle(forReferencedNoteId refId: String) async -> String {
+        let sessionActive = appState.protectedSessionActive
+        if refId == noteId, let n = note {
+            let t = NoteItem.maskedStoredTitle(n.title, isProtected: n.isProtected, protectedSessionActive: sessionActive)
+            let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? refId : trimmed
+        }
+        if let child = childNotes.first(where: { $0.noteId == refId }) {
+            let t = NoteItem.maskedStoredTitle(child.title, isProtected: child.isProtected, protectedSessionActive: sessionActive)
+            let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? refId : trimmed
+        }
+        guard let profileId = serverProfileId else { return refId }
+        if let cached = try? persistence.fetchCachedNote(id: refId, serverProfileId: profileId) {
+            if !sessionActive, cached.isProtected {
+                return NoteItem.protectedTitlePlaceholder
+            }
+            let raw = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return raw.isEmpty ? refId : raw
+        }
+        guard let client else { return refId }
+        do {
+            let r = try await client.getNote(refId)
+            Self.persistNoteResponse(r, profileId: profileId, persistence: persistence)
+            try? persistence.commitBatch()
+            let t = NoteItem.maskedStoredTitle(r.title, isProtected: r.isProtected, protectedSessionActive: sessionActive)
+            let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? refId : trimmed
+        } catch {
+            return refId
+        }
     }
 
     private func rebuildBreadcrumbsFromCache() {
@@ -255,6 +298,7 @@ final class NoteDetailViewModel {
                 self.contentString = inlined
             }
         }
+        await applyIncludeNoteResolutionIfNeeded()
 
         guard let note = self.note else {
             Log.noteDiag.info("NoteDiag CONTENT phase=loadContent.noNote noteId=\(self.noteId)")
@@ -281,6 +325,7 @@ final class NoteDetailViewModel {
                 previewSource: self.rawContentString
             )
             Log.noteDiag.info("\(offlineContentLog)")
+            await applyIncludeNoteResolutionIfNeeded()
             return
         }
 
@@ -324,6 +369,7 @@ final class NoteDetailViewModel {
                     earlyExitReason: "skip_getNoteContent_meta_not_newer"
                 )
                 Log.noteDiag.info("\(blobPolicyLog)")
+                await applyIncludeNoteResolutionIfNeeded()
                 return
             }
             let blobOverrideLog = NoteDiagnostics.describeBlobFetchDecision(
@@ -383,6 +429,7 @@ final class NoteDetailViewModel {
             }
 
             self.contentString = displayHTML
+            await applyIncludeNoteResolutionIfNeeded()
             self.serverVerified = true
 
             if note.isProtected {
@@ -437,30 +484,29 @@ final class NoteDetailViewModel {
         }
     }
 
-    /// Finds Trilium image `src` URLs in HTML and replaces them with
-    /// base64 data URIs. Checks local image cache first; falls back to
-    /// network (and caches the result) only on cache miss.
+    /// Finds Trilium image URLs in HTML (`src`, CKEditor `data-src` / `data-cke-saved-src`) and replaces them with
+    /// base64 data URIs. Matches `api/images|attachments` with any prefix (relative, `/api/…`, or `https://host/…/api/…`).
+    /// Applies replacements from the end of the string so ranges stay valid when lengths change.
     private func inlineAttachmentImages(in html: String) async -> String {
-        var result = html
-
         let pattern = try! NSRegularExpression(
-            pattern: #"src=["'](?:/?api/(attachments|images)/([a-zA-Z0-9_]+)/[^"']*)["']"#,
+            pattern: #"(?i)(src|data-src|data-cke-saved-src)=(["'])([^"']*?)api/(attachments|images)/([a-zA-Z0-9_-]+)/[^"']*\2"#,
             options: []
         )
-        let nsHTML = html as NSString
-        let matches = pattern.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
+        let htmlNS = html as NSString
+        let fullRange = NSRange(location: 0, length: htmlNS.length)
+        let matches = pattern.matches(in: html, options: [], range: fullRange)
+        guard !matches.isEmpty else { return html }
 
         let profileId = self.serverProfileId ?? ""
-
-        for match in matches.reversed() {
-            guard match.numberOfRanges >= 3 else { continue }
-            let routeType = nsHTML.substring(with: match.range(at: 1))
-            let entityId = nsHTML.substring(with: match.range(at: 2))
-            let fullMatch = nsHTML.substring(with: match.range)
+        let ms = NSMutableString(string: html)
+        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
+            guard match.numberOfRanges >= 6 else { continue }
+            let attr = htmlNS.substring(with: match.range(at: 1))
+            let quote = htmlNS.substring(with: match.range(at: 2))
+            let routeType = htmlNS.substring(with: match.range(at: 4))
+            let entityId = htmlNS.substring(with: match.range(at: 5))
 
             var imageData: Data?
-
-            // Check local image cache first
             do {
                 if let cached = try self.persistence.fetchCachedImage(
                     entityId: entityId, entityType: routeType, serverProfileId: profileId
@@ -472,7 +518,6 @@ final class NoteDetailViewModel {
                 Log.api.warning("Image cache lookup failed: \(error)")
             }
 
-            // Network fallback on cache miss
             if imageData == nil, let client {
                 do {
                     if routeType == "attachments" {
@@ -497,19 +542,699 @@ final class NoteDetailViewModel {
                 }
             }
 
-            if let data = imageData {
-                let mime = data.detectImageMIME()
-                let b64 = data.base64EncodedString()
-                let dataURI = "data:\(mime);base64,\(b64)"
-                let replacement = "src=\"\(dataURI)\""
-                result = (result as NSString).replacingCharacters(
-                    in: (result as NSString).range(of: fullMatch),
-                    with: replacement
-                )
+            guard let data = imageData, data.isPlausibleInlineImagePayload else { continue }
+            let mime = data.detectImageMIME()
+            let b64 = data.base64EncodedString()
+            let dataURI = "data:\(mime);base64,\(b64)"
+            // For `api/images/{noteId}` (Trilium `~imageLink`), preserve the linked note id on every
+            // inlined attribute (`src`, `data-src`, `data-cke-saved-src`). CKEditor often keeps the
+            // real URL on `data-src` only — previously we only annotated `src`, so canvas/mermaid
+            // imageLinks never got `data-trinote-image-note-id` and couldn't be wrapped in cards.
+            let replacement: String
+            if routeType.lowercased() == "images" {
+                let escId = entityId.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;")
+                replacement = "\(attr)=\(quote)\(dataURI)\(quote) data-trinote-image-note-id=\(quote)\(escId)\(quote)"
+            } else {
+                replacement = "\(attr)=\(quote)\(dataURI)\(quote)"
             }
+            ms.replaceCharacters(in: match.range, with: replacement)
         }
 
-        return result
+        return Self.dedupeTrinoteImageNoteIdAttributesInHTML(ms as String)
+    }
+
+    /// `~imageLink` to mermaid/canvas notes still uses `api/images/{noteId}/…`, but `getNoteContent` returns diagram
+    /// source/JSON — not inlinable image bytes — so `inlineAttachmentImages` skips those matches. This pass adds
+    /// `data-trinote-image-note-id` so card wrap + tap-to-open can work while the `<img>` keeps loading from the server URL.
+    private static func annotateImageLinkApiImageTagsMissingNoteId(in html: String) -> String {
+        guard html.localizedCaseInsensitiveContains("api/images") else { return html }
+        let tagPattern = try! NSRegularExpression(pattern: #"(?i)(<img\b)([^>]+)(>)"#, options: [])
+        let idInUrl = try! NSRegularExpression(pattern: #"(?i)api/images/([a-zA-Z0-9_-]+)/"#, options: [])
+        let htmlNS = html as NSString
+        let full = NSRange(location: 0, length: htmlNS.length)
+        let matches = tagPattern.matches(in: html, options: [], range: full)
+        guard !matches.isEmpty else { return html }
+
+        var replacements: [(range: NSRange, tag: String)] = []
+        replacements.reserveCapacity(matches.count)
+        for m in matches {
+            guard m.numberOfRanges >= 4 else { continue }
+            let inner = htmlNS.substring(with: m.range(at: 2))
+            if inner.localizedCaseInsensitiveContains("data-trinote-image-note-id") { continue }
+            let innerNS = inner as NSString
+            guard let idMatch = idInUrl.firstMatch(in: inner, range: NSRange(location: 0, length: innerNS.length)),
+                  idMatch.numberOfRanges >= 2 else { continue }
+            let noteId = innerNS.substring(with: idMatch.range(at: 1))
+            guard !noteId.isEmpty else { continue }
+            let esc = noteId.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;")
+            let newTag = "\(htmlNS.substring(with: m.range(at: 1)))\(inner) data-trinote-image-note-id=\"\(esc)\"\(htmlNS.substring(with: m.range(at: 3)))"
+            replacements.append((m.range, newTag))
+        }
+        guard !replacements.isEmpty else { return html }
+
+        let ms = NSMutableString(string: html)
+        for item in replacements.sorted(by: { $0.range.location > $1.range.location }) {
+            ms.replaceCharacters(in: item.range, with: item.tag)
+        }
+        return Self.dedupeTrinoteImageNoteIdAttributesInHTML(ms as String)
+    }
+
+    /// If both `src` and `data-src` pointed at `api/images/…`, inlining can add duplicate `data-trinote-image-note-id`; keep one.
+    private static func dedupeTrinoteImageNoteIdAttributesInHTML(_ html: String) -> String {
+        let p = try! NSRegularExpression(
+            pattern: #"(?i)(\sdata-trinote-image-note-id\s*=\s*["'][^"']*["'])(\s+data-trinote-image-note-id\s*=\s*["'][^"']*["'])+"#, options: []
+        )
+        var s = html
+        var safety = 0
+        let maxDedupeIterations = 8
+        while safety < maxDedupeIterations {
+            safety += 1
+            let r = NSRange(location: 0, length: (s as NSString).length)
+            let next = p.stringByReplacingMatches(in: s, options: [], range: r, withTemplate: "$1")
+            if next == s { break }
+            s = next
+        }
+        return s
+    }
+
+    // MARK: - Include note (Trilium `<section class="include-note">`)
+
+    private func applyIncludeNoteResolutionIfNeeded() async {
+        guard let note, note.type == .text else { return }
+        guard let profileId = serverProfileId, !profileId.isEmpty else { return }
+        guard var html = contentString else { return }
+
+        if html.contains("include-note") {
+            let resolved = await resolveIncludeNotesInHTML(html, rootNoteId: noteId)
+            if resolved != html {
+                contentString = resolved
+                html = resolved
+            }
+        }
+        // Include resolution can embed nested HTML with new api/images URLs — inline again.
+        guard var after = contentString else { return }
+        if after.contains("api/images") || after.contains("api/attachments") {
+            let inlined = await inlineAttachmentImages(in: after)
+            if inlined != after {
+                contentString = inlined
+                after = inlined
+            }
+        }
+        let annotated = Self.annotateImageLinkApiImageTagsMissingNoteId(in: after)
+        if annotated != after {
+            contentString = annotated
+            after = annotated
+        }
+        // Wrap `~imageLink` targets that are canvas/mermaid notes (same card chrome as include-note).
+        if after.contains("data-trinote-image-note-id") {
+            let wrapped = await wrapImageLinkCanvasMermaidCards(in: after)
+            if wrapped != after {
+                contentString = wrapped
+            }
+        }
+    }
+
+    /// When `~imageLink` points at a canvas or mermaid note, wrap the figure (or bare `<img>`) in the same
+    /// `.trinote-include` card used for include-note previews. Skips images nested inside an already-resolved include card.
+    private func wrapImageLinkCanvasMermaidCards(in html: String) async -> String {
+        let pattern = try! NSRegularExpression(
+            pattern: #"<img\b[^>]*\bdata-trinote-image-note-id\s*=\s*["']([^"']+)["'][^>]*/?>"#,
+            options: [.caseInsensitive]
+        )
+        let htmlNS = html as NSString
+        let full = NSRange(location: 0, length: htmlNS.length)
+        let matches = pattern.matches(in: html, options: [], range: full)
+        guard !matches.isEmpty else { return html }
+
+        let ms = NSMutableString(string: html)
+        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
+            guard match.numberOfRanges >= 2 else { continue }
+            let imgRange = match.range(at: 0)
+            let idRange = match.range(at: 1)
+            guard idRange.location != NSNotFound else { continue }
+            let noteId = htmlNS.substring(with: idRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !noteId.isEmpty else { continue }
+
+            if Self.isImageLinkInsideOpenTrinoteInclude(html: html, imgUTF16Location: imgRange.location) {
+                continue
+            }
+
+            guard let meta = await resolvedNoteTypeAndTitleForImageLinkWrap(noteId: noteId) else {
+                continue
+            }
+            guard meta.type == .canvas || meta.type == .mermaid else {
+                continue
+            }
+
+            let replaceRange = Self.expandImageLinkFigureNSRange(html: htmlNS, imgRange: imgRange)
+            let imgTag = htmlNS.substring(with: imgRange)
+            let cleaned = Self.stripTrinoteImageNoteIdAttribute(from: imgTag)
+
+            let bodyHTML: String
+            if meta.type == .mermaid {
+                let source = await Self.loadRawMermaidSourceForImageLinkWrap(
+                    noteId: noteId, client: client, persistence: persistence, profileId: serverProfileId, isOnline: isOnline
+                )
+                if let source, let svg = await MermaidRenderer.shared.render(source: source) {
+                    bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--mermaid\">\(svg)</div>"
+                } else {
+                    Log.noteDiag.error(
+                        "NoteDiag IMG-LINK-CARD phase=wrap.applyMermaidFallback noteId=\(noteId, privacy: .public)"
+                    )
+                    bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--image\">\(cleaned)</div>"
+                }
+            } else if meta.type == .canvas {
+                // `api/images/{noteId}` does not reliably return image bytes for canvas notes (Trilium often
+                // serves the Excalidraw JSON), which renders as a broken image in the reader. Mirror the
+                // include-canvas path and inline `canvas-export.svg` directly as a data URI. Falls back to
+                // the original `<img>` (kept inside an `__inner--image` wrapper) when offline / no attachment.
+                if let svg = await canvasExportSVGForEditor(noteId: noteId) {
+                    let dataURI = Self.svgDataURI(svg)
+                    let escSrc = dataURI
+                        .replacingOccurrences(of: "&", with: "&amp;")
+                        .replacingOccurrences(of: "\"", with: "&quot;")
+                    let imgTag = "<img class=\"trinote-include__img\" src=\"\(escSrc)\" alt=\"\" />"
+                    bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--image\">\(imgTag)</div>"
+                } else {
+                    Log.noteDiag.error(
+                        "NoteDiag IMG-LINK-CARD phase=wrap.applyCanvasFallback noteId=\(noteId, privacy: .public) — canvas-export.svg unavailable; using original <img> (likely broken)."
+                    )
+                    bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--image\">\(cleaned)</div>"
+                }
+            } else {
+                // Unreachable after `guard meta.type == .canvas || meta.type == .mermaid` — satisfies exhaustive `let bodyHTML`.
+                bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--image\">\(cleaned)</div>"
+            }
+
+            let card = IncludeNoteResolver.wrapCard(
+                noteId: noteId,
+                boxSize: "medium",
+                noteType: meta.type.rawValue,
+                title: meta.title,
+                bodyHTML: bodyHTML
+            )
+            ms.replaceCharacters(in: replaceRange, with: card)
+        }
+        return ms as String
+    }
+
+    /// Loads the raw mermaid source (UTF-8 string) for `noteId` from SwiftData cache, falling back to
+    /// `getNoteContent` when online. Mirrors `IncludeNoteResolver.loadRawBodyString` but is reachable
+    /// from `wrapImageLinkCanvasMermaidCards`. Static so it can be called without capturing `self`.
+    private static func loadRawMermaidSourceForImageLinkWrap(
+        noteId: String,
+        client: (any TriliumClientProtocol)?,
+        persistence: PersistenceManager,
+        profileId: String?,
+        isOnline: Bool
+    ) async -> String? {
+        guard let profileId, !profileId.isEmpty else {
+            Log.noteDiag.error("NoteDiag IMG-LINK-CARD mermaid.loadSource noteId=\(noteId, privacy: .public) result=nil reason=noProfileId")
+            return nil
+        }
+        if let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId),
+           let data = cached.content, !data.isEmpty,
+           let str = String(data: data, encoding: .utf8) {
+            return IncludeNoteResolver.normalizedMermaidSource(str)
+        }
+        guard isOnline, let client else {
+            Log.noteDiag.error("NoteDiag IMG-LINK-CARD mermaid.loadSource noteId=\(noteId, privacy: .public) result=nil reason=offlineOrNoClient online=\(isOnline, privacy: .public) clientNil=\(client == nil, privacy: .public)")
+            return nil
+        }
+        do {
+            let data = try await client.getNoteContent(noteId)
+            try? persistence.cacheNoteContent(noteId, content: data, serverProfileId: profileId, utcDateModified: nil)
+            if let str = String(data: data, encoding: .utf8) {
+                return IncludeNoteResolver.normalizedMermaidSource(str)
+            }
+            Log.noteDiag.error("NoteDiag IMG-LINK-CARD mermaid.loadSource noteId=\(noteId, privacy: .public) result=nil reason=utf8DecodeFailed bytes=\(data.count, privacy: .public)")
+            return nil
+        } catch {
+            Log.noteDiag.error("NoteDiag IMG-LINK-CARD mermaid.loadSource noteId=\(noteId, privacy: .public) result=nil reason=netError error=\(String(describing: error), privacy: .public)")
+            return nil
+        }
+    }
+
+    private func resolvedNoteTypeAndTitleForImageLinkWrap(noteId: String) async -> (type: NoteType, title: String)? {
+        guard let profileId = serverProfileId, !profileId.isEmpty else { return nil }
+        if let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId) {
+            let type = NoteType(rawValue: cached.noteType) ?? .text
+            let trimmed = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = trimmed.isEmpty ? noteId : trimmed
+            return (type, title)
+        }
+        guard isOnline, let client else { return nil }
+        do {
+            let response = try await client.getNote(noteId)
+            Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+            try? persistence.commitBatch()
+            let item = NoteItem(from: response)
+            let trimmed = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = trimmed.isEmpty ? noteId : trimmed
+            return (item.type, title)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func stripTrinoteImageNoteIdAttribute(from imgTag: String) -> String {
+        let p = try! NSRegularExpression(
+            pattern: #"\sdata-trinote-image-note-id\s*=\s*["'][^"']*["']"#,
+            options: [.caseInsensitive]
+        )
+        let ns = imgTag as NSString
+        return p.stringByReplacingMatches(in: imgTag, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+    }
+
+    /// True when the UTF-16 `imgUTF16Location` in `html` lies inside an unclosed `<section class="trinote-include" …>`.
+    private static func isImageLinkInsideOpenTrinoteInclude(html: String, imgUTF16Location: Int) -> Bool {
+        let htmlNS = html as NSString
+        guard imgUTF16Location > 0, imgUTF16Location <= htmlNS.length else { return false }
+        let prefix = htmlNS.substring(with: NSRange(location: 0, length: imgUTF16Location))
+        let prefixNS = prefix as NSString
+        let openPattern = try! NSRegularExpression(
+            pattern: #"(?i)<section\b[^>]*\bclass=["'][^"']*\btrinote-include\b[^"']*["'][^>]*>"#,
+            options: []
+        )
+        let closePattern = try! NSRegularExpression(pattern: #"(?i)</section>"#, options: [])
+        var depth = 0
+        var pos = 0
+        let len = prefixNS.length
+        while pos < len {
+            let rest = NSRange(location: pos, length: len - pos)
+            let o = openPattern.firstMatch(in: prefix, options: [], range: rest)
+            let c = closePattern.firstMatch(in: prefix, options: [], range: rest)
+            let oLoc = o?.range.location ?? Int.max
+            let cLoc = c?.range.location ?? Int.max
+            if oLoc == Int.max && cLoc == Int.max { break }
+            if cLoc < oLoc {
+                guard let cMatch = c else { break }
+                depth = max(0, depth - 1)
+                pos = NSMaxRange(cMatch.range)
+            } else {
+                guard let oMatch = o else { break }
+                depth += 1
+                pos = NSMaxRange(oMatch.range)
+            }
+        }
+        return depth > 0
+    }
+
+    /// If the `<img>` sits in `<figure class="…image…">`, return the full figure range; otherwise the `img` range.
+    private static func expandImageLinkFigureNSRange(html: NSString, imgRange: NSRange) -> NSRange {
+        guard NSMaxRange(imgRange) <= html.length else { return imgRange }
+        guard imgRange.location > 0 else { return imgRange }
+        let before = html.substring(with: NSRange(location: 0, length: imgRange.location))
+        let beforeNS = before as NSString
+        var lastFig = NSNotFound
+        var search = NSRange(location: 0, length: beforeNS.length)
+        while true {
+            let found = beforeNS.range(of: "<figure", options: [.caseInsensitive], range: search)
+            if found.location == NSNotFound { break }
+            lastFig = found.location
+            let next = found.location + 1
+            if next >= beforeNS.length { break }
+            search = NSRange(location: next, length: beforeNS.length - next)
+        }
+        if lastFig == NSNotFound { return imgRange }
+
+        let openScanEnd = min(lastFig + 500, html.length)
+        let tagClose = html.range(of: ">", options: [], range: NSRange(location: lastFig, length: openScanEnd - lastFig))
+        if tagClose.location == NSNotFound { return imgRange }
+        let openTag = html.substring(with: NSRange(location: lastFig, length: tagClose.location - lastFig + 1))
+        let openLower = openTag.lowercased()
+        guard openLower.contains("class="), openLower.contains("image") else { return imgRange }
+
+        // Require immediate enclosure: the first `</figure>` after this `<figure…>` must come *after*
+        // the `<img>`; otherwise an unwrapped `<img>` between two figures would pair with the wrong
+        // opener and swallow unrelated HTML.
+        let afterOpenTag = tagClose.location + 1
+        guard afterOpenTag <= html.length else { return imgRange }
+        let firstClose = html.range(
+            of: "</figure>",
+            options: [.caseInsensitive],
+            range: NSRange(location: afterOpenTag, length: html.length - afterOpenTag)
+        )
+        if firstClose.location == NSNotFound { return imgRange }
+        if firstClose.location < imgRange.location { return imgRange }
+        return NSRange(location: lastFig, length: NSMaxRange(firstClose) - lastFig)
+    }
+
+    // MARK: - Editor display decoration (linked canvas/mermaid/imageLink → inlined data URIs)
+
+    /// Replaces every `<img src="…api/(images|attachments)/{id}/…">` with an inlined `data:` URI so the rich text
+    /// editor's bundle-loaded `WKWebView` (which has no access to the Trilium server's relative paths) can
+    /// actually render the picture. Canvas notes get their `canvas-export.svg` attachment, mermaid notes get a
+    /// freshly rendered SVG via `MermaidRenderer`, and other targets reuse the same image cache / `getNoteContent` /
+    /// `getAttachmentContent` paths as `inlineAttachmentImages`.
+    ///
+    /// The original `src` is preserved in `data-trinote-original-src` (round-tripped through TipTap by way of the
+    /// `originalSrc` attribute added in `editor.html`), so `undecorateLinkedImagesFromEditor` can restore the
+    /// canonical Trilium HTML before saving or storing drafts.
+    private func decorateLinkedImagesForEditor(in html: String) async -> String {
+        guard html.localizedCaseInsensitiveContains("api/images")
+                || html.localizedCaseInsensitiveContains("api/attachments") else { return html }
+
+        // `(?i)` would put NSRegularExpression into a slow path on long strings; we use `.caseInsensitive` instead.
+        let pattern = try! NSRegularExpression(
+            pattern: #"<img\b([^>]*?)\bsrc\s*=\s*(["'])([^"']*?api/(attachments|images)/([a-zA-Z0-9_-]+)/[^"']*)\2([^>]*?)>"#,
+            options: [.caseInsensitive]
+        )
+        let htmlNS = html as NSString
+        let full = NSRange(location: 0, length: htmlNS.length)
+        let matches = pattern.matches(in: html, options: [], range: full)
+        guard !matches.isEmpty else { return html }
+
+        let ms = NSMutableString(string: html)
+        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
+            guard match.numberOfRanges >= 7 else { continue }
+            let preAttrs = htmlNS.substring(with: match.range(at: 1))
+            let quote = htmlNS.substring(with: match.range(at: 2))
+            let originalSrc = htmlNS.substring(with: match.range(at: 3))
+            let routeType = htmlNS.substring(with: match.range(at: 4)).lowercased()
+            let entityId = htmlNS.substring(with: match.range(at: 5))
+            let postAttrs = htmlNS.substring(with: match.range(at: 6))
+
+            // Skip if this <img> already carries `data-trinote-original-src` — likely a re-decoration pass
+            // (e.g. the user just toggled edit mode without fully exiting and the editor still holds decorated HTML).
+            if preAttrs.localizedCaseInsensitiveContains("data-trinote-original-src")
+                || postAttrs.localizedCaseInsensitiveContains("data-trinote-original-src") {
+                continue
+            }
+
+            // Canvas/mermaid `~imageLink` references render as broken images in the editor (they are not real
+            // image bytes), so we swap the whole `<figure>…<img>…</figure>` block for a `<section class="include-note">`.
+            // The TipTap `IncludeNote` extension preserves `data-trinote-imagelink-original-src`, and
+            // `undecorateLinkedImagesFromEditor` flips the section back into the canonical figure-wrapped imageLink HTML
+            // tag on save so we never poison Trilium's `~imageLink` schema with an `~includeNote` reference.
+            if routeType == "images",
+               let meta = await resolvedNoteTypeAndTitleForImageLinkWrap(noteId: entityId),
+               meta.type == .canvas || meta.type == .mermaid {
+                let escId = entityId
+                    .replacingOccurrences(of: "&", with: "&amp;")
+                    .replacingOccurrences(of: "\"", with: "&quot;")
+                let escSrc = originalSrc
+                    .replacingOccurrences(of: "&", with: "&amp;")
+                    .replacingOccurrences(of: "\"", with: "&quot;")
+                let section = "<section class=\"include-note\" data-note-id=\"\(escId)\" data-box-size=\"medium\" data-trinote-imagelink-original-src=\"\(escSrc)\"></section>"
+                let replaceRange = Self.expandImageLinkFigureNSRange(html: htmlNS, imgRange: match.range)
+                ms.replaceCharacters(in: replaceRange, with: section)
+                continue
+            }
+
+            let dataURI = await editorInlinedDataURI(routeType: routeType, entityId: entityId)
+            guard let dataURI else {
+                continue
+            }
+
+            let escOrig = originalSrc
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+            let newTag = "<img\(preAttrs) src=\(quote)\(dataURI)\(quote) data-trinote-original-src=\"\(escOrig)\"\(postAttrs)>"
+            ms.replaceCharacters(in: match.range, with: newTag)
+        }
+        return ms as String
+    }
+
+    /// Resolves the appropriate inlined `data:` URI for a single decorated `<img>`. Canvas → `canvas-export.svg`
+    /// attachment, mermaid → freshly rendered SVG via `MermaidRenderer`, everything else → the same byte-fetch
+    /// path as `inlineAttachmentImages` (image cache → server). Returns `nil` if no usable bytes are available.
+    private func editorInlinedDataURI(routeType: String, entityId: String) async -> String? {
+        if routeType == "images" {
+            if let meta = await resolvedNoteTypeAndTitleForImageLinkWrap(noteId: entityId) {
+                switch meta.type {
+                case .mermaid:
+                    let source = await Self.loadRawMermaidSourceForImageLinkWrap(
+                        noteId: entityId, client: client, persistence: persistence,
+                        profileId: serverProfileId, isOnline: isOnline
+                    )
+                    guard let source, !source.isEmpty else { return nil }
+                    guard let svg = await MermaidRenderer.shared.render(source: source) else { return nil }
+                    return Self.svgDataURI(svg)
+                case .canvas:
+                    guard let svg = await canvasExportSVGForEditor(noteId: entityId) else { return nil }
+                    return Self.svgDataURI(svg)
+                default:
+                    break
+                }
+            }
+            // Fall through to the byte-fetch path for image-typed notes (and unknown/text targets that
+            // happen to have inlinable content — same heuristic as `inlineAttachmentImages`).
+            return await fetchInlinableDataURI(routeType: "images", entityId: entityId)
+        } else {
+            return await fetchInlinableDataURI(routeType: "attachments", entityId: entityId)
+        }
+    }
+
+    /// Mirrors the byte-fetch + plausibility check from `inlineAttachmentImages`, but returns the data URI as a
+    /// string instead of mutating an HTML buffer. Caches successful downloads in the same image cache, so a
+    /// subsequent read-only render hits the cache.
+    private func fetchInlinableDataURI(routeType: String, entityId: String) async -> String? {
+        let profileId = self.serverProfileId ?? ""
+        var imageData: Data?
+        if let cached = try? persistence.fetchCachedImage(
+            entityId: entityId, entityType: routeType, serverProfileId: profileId
+        ) {
+            imageData = cached.data
+        }
+        if imageData == nil, isOnline, let client {
+            do {
+                if routeType == "attachments" {
+                    imageData = try await client.getAttachmentContent(entityId)
+                } else {
+                    imageData = try await client.getNoteContent(entityId)
+                }
+                if let data = imageData, data.isPlausibleInlineImagePayload {
+                    let mime = data.detectImageMIME()
+                    try? persistence.cacheImage(
+                        entityId: entityId, entityType: routeType,
+                        data: data, mime: mime, serverProfileId: profileId
+                    )
+                }
+            } catch {
+                Log.api.error("Editor decorate: failed to download \(routeType)/\(entityId): \(String(describing: error))")
+                return nil
+            }
+        }
+        guard let data = imageData, data.isPlausibleInlineImagePayload else { return nil }
+        let mime = data.detectImageMIME()
+        return "data:\(mime);base64,\(data.base64EncodedString())"
+    }
+
+    /// Loads the canvas-export.svg for `noteId`, mirroring `IncludeNoteResolver.canvasExportSVGPreviewTag` but
+    /// returning the raw SVG bytes (as a UTF-8 string) so we can build a `data:image/svg+xml;…` URI.
+    private func canvasExportSVGForEditor(noteId: String) async -> String? {
+        guard let profileId = serverProfileId, !profileId.isEmpty else { return nil }
+        guard let attachmentId = await canvasExportSVGAttachmentIdForEditor(noteId: noteId) else { return nil }
+        var data: Data?
+        if let cached = try? persistence.fetchCachedImage(
+            entityId: attachmentId, entityType: "attachments", serverProfileId: profileId
+        ) {
+            data = cached.data
+        }
+        if data == nil, isOnline, let client {
+            do {
+                let fetched = try await client.getAttachmentContent(attachmentId)
+                data = fetched
+                if fetched.isPlausibleInlineImagePayload {
+                    let mime = fetched.detectImageMIME()
+                    try? persistence.cacheImage(
+                        entityId: attachmentId, entityType: "attachments",
+                        data: fetched, mime: mime, serverProfileId: profileId
+                    )
+                }
+            } catch {
+                Log.api.error("Editor decorate: canvas SVG attachment failed for \(noteId): \(String(describing: error))")
+            }
+        }
+        guard let d = data, !d.isEmpty else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+
+    private func canvasExportSVGAttachmentIdForEditor(noteId: String) async -> String? {
+        guard isOnline, let client else { return nil }
+        do {
+            let list = try await client.getNoteAttachments(noteId)
+            if let hit = list.first(where: { $0.title == "canvas-export.svg" && $0.mime == "image/svg+xml" }) {
+                return hit.attachmentId
+            }
+            return list.first { $0.title == "canvas-export.svg" }?.attachmentId
+        } catch {
+            return nil
+        }
+    }
+
+    private static func svgDataURI(_ svg: String) -> String {
+        let b64 = Data(svg.utf8).base64EncodedString()
+        return "data:image/svg+xml;base64,\(b64)"
+    }
+
+    /// Replaces every `<section class="include-note" data-trinote-imagelink-original-src="…">…</section>` (the
+    /// Trinote-only display swap for canvas/mermaid `~imageLink` references — see `decorateLinkedImagesForEditor`)
+    /// with the canonical `<figure class="image"><img src="…"></figure>` so the saved HTML keeps the imageLink
+    /// schema. Real `~includeNote` sections (which never have the marker attribute) are left untouched.
+    private static func unwrapImageLinkIncludeSections(in html: String) -> String {
+        // Ordering of attributes inside the `<section …>` opening tag is not stable (TipTap may rewrite them), so
+        // we capture everything before/after `data-trinote-imagelink-original-src` and verify the `class` attribute
+        // mentions `include-note` after extraction. `[\s\S]*?` lets us cross newlines for the body without enabling
+        // global multiline mode.
+        let pattern = try! NSRegularExpression(
+            pattern: #"<section\b([^>]*?)\bdata-trinote-imagelink-original-src\s*=\s*(["'])([^"']*)\2([^>]*)>([\s\S]*?)</section>"#,
+            options: [.caseInsensitive]
+        )
+        let htmlNS = html as NSString
+        let full = NSRange(location: 0, length: htmlNS.length)
+        let matches = pattern.matches(in: html, options: [], range: full)
+        guard !matches.isEmpty else { return html }
+
+        let ms = NSMutableString(string: html)
+        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
+            guard match.numberOfRanges >= 5 else { continue }
+            let pre = htmlNS.substring(with: match.range(at: 1))
+            let post = htmlNS.substring(with: match.range(at: 4))
+            let combined = pre + " " + post
+            // Real include-note sections without the marker should never reach this regex (the marker is required
+            // by the pattern), but double-check the class so a stray attribute on some other section doesn't get
+            // rewritten as an `<img>`.
+            let lower = combined.lowercased()
+            guard lower.contains("class=") && lower.contains("include-note") else { continue }
+            let storedSrc = htmlNS.substring(with: match.range(at: 3))
+            let originalSrc = storedSrc
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&amp;", with: "&")
+            let escSrc = originalSrc
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+            let img = "<figure class=\"image\"><img src=\"\(escSrc)\"></figure>"
+            ms.replaceCharacters(in: match.range, with: img)
+        }
+        return ms as String
+    }
+
+    /// Reverses `decorateLinkedImagesForEditor`: for every `<img>` carrying `data-trinote-original-src`, restore
+    /// the original server-relative URL onto `src` (and `data-cke-saved-src` if Trilium had been writing both),
+    /// then strip `data-trinote-original-src`. Also unwraps any `<section class="include-note">` that carries
+    /// `data-trinote-imagelink-original-src` — those are Trinote-only display swaps for canvas/mermaid `~imageLink`
+    /// references and must round-trip back to Trilium's figure-wrapped imageLink HTML so we never silently rewrite the
+    /// canonical Trilium HTML into an `~includeNote` reference. Pure string surgery — safe to call from any actor.
+    static func undecorateLinkedImagesFromEditor(in html: String) -> String {
+        let needsImgUndecorate = html.localizedCaseInsensitiveContains("data-trinote-original-src")
+        let needsSectionUndecorate = html.localizedCaseInsensitiveContains("data-trinote-imagelink-original-src")
+        guard needsImgUndecorate || needsSectionUndecorate else { return html }
+        var working = html
+        if needsSectionUndecorate {
+            working = unwrapImageLinkIncludeSections(in: working)
+            if !working.localizedCaseInsensitiveContains("data-trinote-original-src") {
+                return working
+            }
+        }
+        let tagPattern = try! NSRegularExpression(pattern: #"<img\b([^>]*)>"#, options: [.caseInsensitive])
+        let htmlNS = working as NSString
+        let full = NSRange(location: 0, length: htmlNS.length)
+        let matches = tagPattern.matches(in: working, options: [], range: full)
+        guard !matches.isEmpty else { return working }
+
+        let origSrcPattern = try! NSRegularExpression(
+            pattern: #"\sdata-trinote-original-src\s*=\s*(["'])([^"']*)\1"#,
+            options: [.caseInsensitive]
+        )
+        let stripPattern = try! NSRegularExpression(
+            pattern: #"\sdata-trinote-original-src\s*=\s*(["'])[^"']*\1"#,
+            options: [.caseInsensitive]
+        )
+        let srcReplacePattern = try! NSRegularExpression(
+            pattern: #"(\s)src(\s*=\s*)(["'])[^"']*\3"#,
+            options: [.caseInsensitive]
+        )
+        let ckeSavedSrcPattern = try! NSRegularExpression(
+            pattern: #"(\s)data-cke-saved-src(\s*=\s*)(["'])[^"']*\3"#,
+            options: [.caseInsensitive]
+        )
+
+        let ms = NSMutableString(string: working)
+        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
+            let inner = htmlNS.substring(with: match.range(at: 1))
+            let innerNS = inner as NSString
+            let innerFull = NSRange(location: 0, length: innerNS.length)
+            guard let origMatch = origSrcPattern.firstMatch(in: inner, options: [], range: innerFull),
+                  origMatch.numberOfRanges >= 3 else { continue }
+            let storedOrig = innerNS.substring(with: origMatch.range(at: 2))
+            let originalSrc = storedOrig
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&amp;", with: "&")
+            // `escapedTemplate(for:)` keeps `$`/`\` in the URL from being interpreted as backreferences.
+            let templateOrig = NSRegularExpression.escapedTemplate(for: originalSrc)
+
+            var newInner = srcReplacePattern.stringByReplacingMatches(
+                in: inner, options: [], range: innerFull,
+                withTemplate: "$1src$2$3\(templateOrig)$3"
+            )
+            // CKEditor's older saved HTML used both `src` and `data-cke-saved-src`. Keep them aligned.
+            let afterSrcNS = newInner as NSString
+            let afterSrcRange = NSRange(location: 0, length: afterSrcNS.length)
+            if ckeSavedSrcPattern.firstMatch(in: newInner, options: [], range: afterSrcRange) != nil {
+                newInner = ckeSavedSrcPattern.stringByReplacingMatches(
+                    in: newInner, options: [], range: afterSrcRange,
+                    withTemplate: "$1data-cke-saved-src$2$3\(templateOrig)$3"
+                )
+            }
+            let strippedNS = newInner as NSString
+            let strippedRange = NSRange(location: 0, length: strippedNS.length)
+            newInner = stripPattern.stringByReplacingMatches(
+                in: newInner, options: [], range: strippedRange, withTemplate: ""
+            )
+
+            ms.replaceCharacters(in: match.range, with: "<img\(newInner)>")
+        }
+        return ms as String
+    }
+
+    /// Re-expand includes for read-only display after saving canonical editor HTML (`raw` + `contentString` already match saved body).
+    private func refreshResolvedTextNoteDisplayAfterSave() async {
+        guard note?.type == .text else { return }
+        guard var s = contentString, !s.isEmpty else { return }
+        if s.contains("api/images") || s.contains("api/attachments") {
+            let inlined = await inlineAttachmentImages(in: s)
+            if inlined != s {
+                contentString = inlined
+                s = inlined
+            }
+        }
+        await applyIncludeNoteResolutionIfNeeded()
+    }
+
+    /// HTML for one `<section class="include-note">` placeholder (used by the rich-text editor NodeView preview).
+    func resolvedIncludePreviewHTML(noteId: String, boxSize: String) async -> String {
+        let includedId = noteId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !includedId.isEmpty else { return "" }
+        let box = Self.normalizedIncludeBoxSize(boxSize)
+        let esc = includedId.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;")
+        let fragment = "<section class=\"include-note\" data-note-id=\"\(esc)\" data-box-size=\"\(box)\"></section>"
+        return await resolveIncludeNotesInHTML(fragment, rootNoteId: self.noteId)
+    }
+
+    private static func normalizedIncludeBoxSize(_ raw: String) -> String {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch s {
+        case "small", "medium", "full": return s
+        default: return "medium"
+        }
+    }
+
+    private func resolveIncludeNotesInHTML(_ html: String, rootNoteId: String) async -> String {
+        let profileId = serverProfileId ?? ""
+        let resolver = IncludeNoteResolver(
+            client: client,
+            persistence: persistence,
+            profileId: profileId,
+            protectedSessionActive: appState.protectedSessionActive,
+            isOnline: appState.isOnline,
+            inlineAttachmentImages: { [weak self] h in
+                guard let self else { return h }
+                return await self.inlineAttachmentImages(in: h)
+            }
+        )
+        return await resolver.resolve(html: html, seenNoteIds: [rootNoteId], nestingLevel: 0, maxNesting: 3)
     }
 
     /// Pull-to-refresh: fetches metadata + content into local vars first,
@@ -616,6 +1341,7 @@ final class NoteDetailViewModel {
             displayHTML = await self.inlineAttachmentImages(in: html)
         }
         self.contentString = displayHTML
+        await applyIncludeNoteResolutionIfNeeded()
 
         if let pid = self.serverProfileId {
             try? self.persistence.cacheNoteContent(
@@ -735,8 +1461,9 @@ final class NoteDetailViewModel {
     private func checkForDraft() {
         guard let profileId = self.serverProfileId else { return }
         let nid = self.noteId
+        let canonicalForDraft = self.rawContentString ?? self.contentString
         if let draft = try? self.persistence.loadDraft(noteId: nid, serverProfileId: profileId) {
-            if draft.content != self.contentString {
+            if draft.content != canonicalForDraft {
                 self.hasDraft = true
                 self.editableContent = draft.content
             } else {
@@ -754,13 +1481,18 @@ final class NoteDetailViewModel {
         guard let profileId = self.serverProfileId else { return }
         try? self.persistence.deleteDraft(noteId: self.noteId, serverProfileId: profileId)
         self.hasDraft = false
-        self.editableContent = self.contentString ?? ""
+        self.editableContent = self.richTextEditorSeedHTML
     }
 
     /// Called from the rich text editor's JS bridge on every debounced keystroke.
     /// Updates a non-observable backing store to avoid SwiftUI re-evaluation.
+    /// The editor emits decorated HTML (data URIs + `data-trinote-original-src` markers); we store the
+    /// **undecorated** form so drafts and saves always reflect the canonical Trilium HTML.
     func receiveEditorUpdate(_ html: String) {
-        _pendingEditorHTML = html
+        if html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+        let undecorated = Self.undecorateLinkedImagesFromEditor(in: html)
+        if undecorated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+        _pendingEditorHTML = undecorated
     }
 
     /// Flushes any pending editor HTML into the observable `editableContent`.
@@ -774,20 +1506,51 @@ final class NoteDetailViewModel {
     func startEditing() {
         _pendingEditorHTML = nil
         if !hasDraft {
-            editableContent = contentString ?? ""
+            editableContent = richTextEditorSeedHTML
         }
+        // Reset the decorated copy so the editor view falls back to its loading state until
+        // `prepareEditorDisplayContent` finishes. Without this, switching between notes could
+        // briefly show another note's decorated HTML.
+        editorDisplayContent = nil
         isEditing = true
         startDraftAutoSave()
+        Task { [weak self] in
+            await self?.prepareEditorDisplayContent()
+        }
+    }
+
+    /// Decorates `editableContent` (canvas/mermaid/attachment imageLinks → inlined data URIs) and publishes the
+    /// result to `editorDisplayContent` so the rich text editor can render it. Fetches happen via async helpers
+    /// (Trilium API + MermaidRenderer); a generation token guards against late completions.
+    func prepareEditorDisplayContent() async {
+        _editorPrepGeneration &+= 1
+        let generation = _editorPrepGeneration
+        let source = editableContent
+        let decorated = await decorateLinkedImagesForEditor(in: source)
+        guard isEditing, generation == _editorPrepGeneration else { return }
+        editorDisplayContent = decorated
+    }
+
+    /// Canonical stored HTML for TipTap (placeholders), not the read-only `.trinote-include` expansion.
+    private var richTextEditorSeedHTML: String {
+        if let raw = rawContentString {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return raw }
+        }
+        return contentString ?? ""
     }
 
     func cancelEditing() {
         draftAutoSaveTask?.cancel()
         flushPendingEditorContent()
-        if editableContent != contentString {
+        let canonical = rawContentString ?? contentString
+        if editableContent != canonical {
             saveDraftLocally()
             hasDraft = true
         }
         isEditing = false
+        editorDisplayContent = nil
+        _editorPrepGeneration &+= 1
     }
 
     private func startDraftAutoSave() {
@@ -846,6 +1609,11 @@ final class NoteDetailViewModel {
             isEditing = false
             hasDraft = false
             draftAutoSaveTask?.cancel()
+            if note.type == .text {
+                Task { [weak self] in
+                    await self?.refreshResolvedTextNoteDisplayAfterSave()
+                }
+            }
             Log.api.info("Saved note body locally (queued for sync): \(nid)")
         } catch {
             saveError = error.localizedDescription
@@ -962,8 +1730,26 @@ final class NoteDetailViewModel {
     ///   non-ProseMirror state like table captions is always included in the save.
     func saveContent(freshHTML: String? = nil) {
         if let html = freshHTML {
-            editableContent = html
-            _pendingEditorHTML = nil
+            let trimmed = html.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                let pendingOK = !(_pendingEditorHTML ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let seedOK = !editableContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                Log.ui.warning("[EDITOR-SAVE] dropping empty freshHTML; falling back. pendingOK=\(pendingOK, privacy: .public) seedOK=\(seedOK, privacy: .public)")
+                if pendingOK, let p = _pendingEditorHTML {
+                    editableContent = p
+                } else if seedOK {
+                    // Keep canonical `editableContent` — JS returned empty but we never got a debounced update.
+                } else {
+                    editableContent = Self.undecorateLinkedImagesFromEditor(in: html)
+                }
+                _pendingEditorHTML = nil
+            } else {
+                // `freshHTML` comes straight from the editor and may still carry decoration markers
+                // (data URIs + `data-trinote-original-src`). Undecorate before storing/saving so the
+                // canonical Trilium HTML — with its server-relative `api/images/...` references — is preserved.
+                editableContent = Self.undecorateLinkedImagesFromEditor(in: html)
+                _pendingEditorHTML = nil
+            }
         } else {
             flushPendingEditorContent()
         }
@@ -976,6 +1762,10 @@ final class NoteDetailViewModel {
 
         saveNoteBodyLocally(note: note)
         appState.backgroundSyncPendingChanges()
+        // Editing has ended; clear any decorated copy so re-entering edit mode rebuilds it from
+        // the just-saved canonical content.
+        editorDisplayContent = nil
+        _editorPrepGeneration &+= 1
     }
 
     func renameNote() async {
