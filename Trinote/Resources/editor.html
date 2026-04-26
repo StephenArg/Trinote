@@ -206,6 +206,70 @@ body { display: flex; flex-direction: column; }
 .link-popup .link-popup-remove {
   background: var(--border); color: var(--fg);
 }
+/* Math (LaTeX) — same anchor model as .link-popup */
+.math-popup {
+  display: none; position: fixed; left: 0; top: 0; z-index: 10000;
+  background: var(--popup-bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px; box-shadow: 0 4px 20px var(--popup-shadow);
+  min-width: min(92vw, 280px); max-width: min(92vw, 360px);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.math-popup--scrollable {
+  overflow-y: auto !important; -webkit-overflow-scrolling: touch;
+}
+.math-popup.visible {
+  display: flex; flex-direction: column; gap: 0;
+  max-height: min(85dvh, 520px);
+}
+.math-popup label.math-popup-label {
+  display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; opacity: 0.75; color: var(--fg);
+}
+.math-popup textarea.math-popup-tex {
+  display: block; width: 100%; box-sizing: border-box; min-height: 72px; max-height: min(28vh, 200px);
+  padding: 10px 12px; font-size: 15px; line-height: 1.35; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+  -webkit-appearance: none; appearance: none; resize: vertical;
+}
+.math-popup .math-popup-preview {
+  min-height: 2.5em; margin-top: 8px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--fg); font-size: 16px; line-height: 1.4;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  word-break: break-word;
+}
+.math-popup .math-popup-preview--err {
+  font-size: 13px; color: #c00; font-family: system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  .math-popup .math-popup-preview--err { color: #f87171; }
+}
+.math-popup .math-popup-display {
+  display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 14px; font-weight: 600; color: var(--fg);
+  cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
+}
+.math-popup .math-popup-display input { width: 18px; height: 18px; }
+.math-popup .math-popup-actions {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
+}
+.math-popup .math-popup-actions button {
+  flex: 1; min-width: 72px; border: none; border-radius: 8px; padding: 10px 12px; font-size: 15px; font-weight: 600;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.math-popup .math-popup-apply { background: var(--btn-active); color: #fff; }
+.math-popup .math-popup-remove { background: var(--border); color: var(--fg); }
+.math-popup .math-popup-cancel { background: var(--btn-bg); color: var(--fg); border: 1px solid var(--border); }
+.math-popup .math-popup-presets-label {
+  display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--placeholder);
+  margin: 4px 0 6px;
+}
+.math-popup .math-popup-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.math-popup .math-popup-preset {
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+  font-size: 12px; font-weight: 600; padding: 5px 8px; border-radius: 8px; max-width: 100%;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  line-height: 1.2; text-align: left;
+}
+.math-popup .math-popup-preset:active { opacity: 0.7; }
 .callout-row {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; margin: 3px 0; border-radius: 10px;
@@ -618,8 +682,9 @@ body { display: flex; flex-direction: column; }
 /* Loading state */
 #loading { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--placeholder); font-size: 15px; }
 /* Trilium math (KaTeX) in the editor surface */
-.tiptap .trinote-math-nodeview { display: inline-block; max-width: 100%; vertical-align: middle; }
+.tiptap .trinote-math-nodeview { display: inline-block; max-width: 100%; vertical-align: middle; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .tiptap .trinote-math-nodeview--display { display: block; margin: 0.75em 0; text-align: center; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tiptap .trinote-math-nodeview:hover { outline: 1px solid var(--btn-active); outline-offset: 2px; border-radius: 3px; }
 </style>
 <link rel="stylesheet" href="vendor/katex/katex.min.css">
 <script src="vendor/katex/katex.min.js"></script>
@@ -960,9 +1025,8 @@ const TriliumMath = Image.extend({
     return {
       tex: { default: '' },
       display: { default: false },
-      // 'script' (default — ckeditor5-math `outputType: 'script'`) or 'span' (CKEditor 4 / span.math-tex).
-      // Tracked per-equation so save round-trips back to whichever form Trilium stored.
-      format: { default: 'script' },
+      // 'span' = CKEditor 4 / <span class="math-tex"> (what many Trilium instances render). 'script' = ckeditor5-math <script type="math/tex">.
+      format: { default: 'span' },
     };
   },
   parseHTML() {
@@ -976,7 +1040,7 @@ const TriliumMath = Image.extend({
         return {
           tex: t,
           display: el.getAttribute('data-trinote-math-display') === '1',
-          format: rawFormat === 'span' ? 'span' : 'script',
+          format: rawFormat === 'script' ? 'script' : 'span',
         };
       },
     }];
@@ -990,10 +1054,13 @@ const TriliumMath = Image.extend({
     }];
   },
   addNodeView() {
-    return ({ node }) => {
+    return ({ node, getPos }) => {
       const wrap = document.createElement('span');
       wrap.className = node.attrs.display ? 'trinote-math-nodeview trinote-math-nodeview--display' : 'trinote-math-nodeview';
       wrap.contentEditable = 'false';
+      wrap.setAttribute('role', 'button');
+      wrap.setAttribute('tabindex', '0');
+      wrap.setAttribute('aria-label', 'Edit LaTeX formula');
       function paint(n) {
         wrap.replaceChildren();
         if (typeof window.katex === 'undefined') {
@@ -1012,6 +1079,34 @@ const TriliumMath = Image.extend({
         }
       }
       paint(node);
+      function posAndOpen() {
+        const pos = typeof getPos === 'function' ? getPos() : null;
+        if (pos == null) return;
+        const from = pos;
+        const to = from + node.nodeSize;
+        if (typeof window.trinoteOpenMathForRange === 'function') {
+          window.trinoteOpenMathForRange({
+            from, to, attrs: {
+              tex: node.attrs.tex || '',
+              display: !!node.attrs.display,
+              format: node.attrs.format === 'script' ? 'script' : 'span',
+            }
+          });
+        }
+      }
+      wrap.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
+      wrap.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        posAndOpen();
+      });
+      wrap.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          posAndOpen();
+        }
+      });
       return {
         dom: wrap,
         update(updated) {
@@ -1230,6 +1325,21 @@ const TOOLBAR_CHEVRON_SVG = '<svg class="toolbar-btn-chevron" width="10" height=
 const TASK_LIST_TOOLBAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" aria-hidden="true"><g fill="none"><path d="M20 24h24z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M20 24h24"/><path d="M20 38h24z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M20 38h24"/><path d="M20 10h24z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M20 10h24"/><path stroke="currentColor" stroke-linejoin="round" stroke-width="4" d="M4 34h8v8H4zm0-14h8v8H4zM4 6h8v8H4z"/></g></svg>';
 /* Trilium font-size toolbar icon (viewBox 15×15; sized via .toolbar-font-size-icon) */
 const FONT_SIZE_TOOLBAR_SVG = '<svg class="toolbar-font-size-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 15 15" fill="currentColor" aria-hidden="true"><path d="M2.5 2.1a.4.4 0 0 1 .283.117l2 2l.05.064a.4.4 0 0 1-.05.503a.4.4 0 0 1-.503.05l-.063-.05L2.9 3.467v8.067l1.317-1.317a.4.4 0 0 1 .566.566l-2 2a.4.4 0 0 1-.566 0l-2-2l-.051-.063a.4.4 0 0 1 .554-.554l.063.051l1.316 1.316V3.467L.783 4.784a.401.401 0 0 1-.566-.567l2-2l.061-.05A.4.4 0 0 1 2.5 2.1m5.47 9.64a.501.501 0 0 1-.94-.34zm2.53-8.99a.5.5 0 0 1 .47.33l3 8.32a.5.5 0 0 1-.94.34l-.983-2.724H8.953l-.982 2.724l-.471-.17l-.47-.17l3-8.32l.031-.07a.5.5 0 0 1 .439-.26M9.259 8.166h2.482L10.5 4.725z"/></svg>';
+/* Summation-style glyph (no image asset) */
+const MATH_TOOLBAR_SVG = '<span class="math-toolbar-glyph" aria-hidden="true" style="font-size:20px;font-weight:700;line-height:1">∑</span>';
+/** Placeholder-focused templates (CKE / Trilium-style quick picks). */
+const MATH_FORMULA_PRESETS = [
+  { label: 'a² + b² = c²', tex: 'a^2 + b^2 = c^2' },
+  { label: 'x²', tex: 'x^2' },
+  { label: 'Fraction a/b', tex: '\\frac{a}{b}' },
+  { label: '√x', tex: '\\sqrt{x}' },
+  { label: 'xₙ', tex: 'x_1' },
+  { label: '∫₀¹ f', tex: '\\int_0^1 f(x)\\,dx' },
+  { label: 'lim', tex: '\\lim_{x \\to 0} f(x)' },
+  { label: '∑ (display)', tex: '\\sum_{i=1}^{n} i^2', display: true },
+  { label: 'Greek', tex: '\\alpha + \\beta' },
+  { label: 'Matrix (display)', tex: '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}', display: true },
+];
 function codeInlineGlyph() {
   return '<span class="toolbar-code-glyph" aria-hidden="true">&lt;/&gt;</span>';
 }
@@ -1319,7 +1429,7 @@ function makeHeadingToolbar() {
     document.querySelectorAll('.heading-popup.visible').forEach((p) => { if (p !== popup) hideHeadingPopup(p); });
     document.querySelectorAll('.color-popup.visible').forEach((p) => hideColorPopup(p));
     document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
-    document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach((p) => hideListStylePopup(p));
     hideImagePopup();
@@ -1658,7 +1768,7 @@ function showImagePopup(imgEl, pos) {
   hideImagePopup();
   document.querySelectorAll('.color-popup.visible').forEach(p => hideColorPopup(p));
   document.querySelectorAll('.callout-popup.visible').forEach(p => hideCalloutPopup(p));
-  document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
+  document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach(p => hideLinkPopup(p));
   document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
   document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
   document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
@@ -1849,6 +1959,10 @@ function markLinkPopupJustOpened(popup) {
 }
 
 function hideLinkPopup(popup) {
+  if (popup && popup.classList && popup.classList.contains('math-popup')) {
+    popup.classList.remove('math-popup--scrollable');
+    popup.style.maxHeight = '';
+  }
   popup.classList.remove('visible');
   popup.style.left = '';
   popup.style.top = '';
@@ -1934,6 +2048,48 @@ function layoutColorPopup(anchor, popup) {
   popup.style.visibility = '';
 }
 
+/**
+ * Math dialog: position inside `visualViewport` (the area not covered by the iOS keyboard).
+ * Centered in that band; tall content gets max-height + internal scroll. `anchor` is kept for future tweaks.
+ */
+function layoutMathPopup(anchor, popup) {
+  if (!popup || !popup.classList.contains('visible')) return;
+  const margin = 10;
+  const vv = window.visualViewport;
+  const vTop = (vv ? vv.offsetTop : 0) + margin;
+  const vLeft = (vv ? vv.offsetLeft : 0) + margin;
+  const vW = (vv ? vv.width : window.innerWidth) - 2 * margin;
+  const vH = (vv ? vv.height : window.innerHeight) - 2 * margin;
+  const vBottom = vTop + vH;
+
+  popup.style.visibility = 'hidden';
+  popup.style.left = '0px';
+  popup.style.top = '0px';
+  popup.style.maxHeight = '';
+  popup.classList.remove('math-popup--scrollable');
+  const pr0 = popup.getBoundingClientRect();
+  let ph = Math.max(pr0.height, 1);
+  const fitH = Math.max(120, vH);
+  if (ph > fitH) {
+    popup.style.maxHeight = fitH + 'px';
+    popup.classList.add('math-popup--scrollable');
+  }
+  const pr = popup.getBoundingClientRect();
+  ph = Math.max(pr.height, 1);
+  const pw = Math.max(pr.width, 1);
+
+  let top = (vTop + vBottom - ph) / 2;
+  if (top < vTop) top = vTop;
+  if (top + ph > vBottom) top = Math.max(vTop, vBottom - ph);
+  let left = vLeft + (vW - pw) / 2;
+  if (left < vLeft) left = vLeft;
+  if (left + pw > vLeft + vW) left = vLeft + vW - pw;
+
+  popup.style.left = Math.round(left) + 'px';
+  popup.style.top = Math.round(top) + 'px';
+  popup.style.visibility = '';
+}
+
 function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
   const wrapper = document.createElement('div');
   wrapper.style.display = 'inline-flex';
@@ -1993,7 +2149,7 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
     e.stopPropagation();
     const willOpen = !popup.classList.contains('visible');
     document.querySelectorAll('.color-popup.visible').forEach(p => { if (p !== popup) hideColorPopup(p); });
-    document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach(p => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
@@ -2051,6 +2207,11 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
       hideLinkPopup(popup);
     });
+    document.querySelectorAll('.math-popup.visible').forEach(p => {
+      if (performance.now() < (p._ignoreScrollUntil || 0)) return;
+      const a = p._anchorButton;
+      if (a && typeof layoutMathPopup === 'function') layoutMathPopup(a, p);
+    });
     document.querySelectorAll('.font-size-popup.visible').forEach(popup => {
       if (performance.now() < (popup._ignoreScrollUntil || 0)) return;
       hideFontSizePopup(popup);
@@ -2088,6 +2249,10 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
     document.querySelectorAll('.link-popup.visible').forEach(popup => {
       const anchor = popup._anchorButton;
       if (anchor) layoutColorPopup(anchor, popup);
+    });
+    document.querySelectorAll('.math-popup.visible').forEach(p => {
+      const a = p._anchorButton;
+      if (a && typeof layoutMathPopup === 'function') layoutMathPopup(a, p);
     });
     document.querySelectorAll('.font-size-popup.visible').forEach(popup => {
       const anchor = popup._anchorButton;
@@ -2217,7 +2382,7 @@ function makeCalloutToolbar() {
       if (p !== popup) hideCalloutPopup(p);
     });
     document.querySelectorAll('.color-popup.visible').forEach(p => hideColorPopup(p));
-    document.querySelectorAll('.link-popup.visible').forEach(p => hideLinkPopup(p));
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach(p => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach(p => hideFontSizePopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
@@ -2327,7 +2492,7 @@ function makeBulletListToolbar() {
     document.querySelectorAll('.list-style-popup.visible').forEach((p) => { if (p !== popup) hideListStylePopup(p); });
     document.querySelectorAll('.color-popup.visible').forEach((p) => hideColorPopup(p));
     document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
-    document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach((p) => hideHeadingPopup(p));
     hideImagePopup();
@@ -2406,7 +2571,7 @@ function makeOrderedListToolbar() {
     document.querySelectorAll('.list-style-popup.visible').forEach((p) => { if (p !== popup) hideListStylePopup(p); });
     document.querySelectorAll('.color-popup.visible').forEach((p) => hideColorPopup(p));
     document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
-    document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach((p) => hideHeadingPopup(p));
     hideImagePopup();
@@ -2488,7 +2653,7 @@ function makeFontSizeToolbar() {
     });
     document.querySelectorAll('.color-popup.visible').forEach((p) => hideColorPopup(p));
     document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
-    document.querySelectorAll('.link-popup.visible').forEach((p) => hideLinkPopup(p));
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach((p) => hideLinkPopup(p));
     document.querySelectorAll('.list-style-popup.visible').forEach((p) => hideListStylePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach((p) => hideHeadingPopup(p));
     hideImagePopup();
@@ -2628,7 +2793,7 @@ function makeLinkToolbar() {
     document.querySelectorAll('.list-style-popup.visible').forEach(p => hideListStylePopup(p));
     document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
     hideImagePopup();
-    document.querySelectorAll('.link-popup.visible').forEach(p => {
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach(p => {
       if (p !== popup) hideLinkPopup(p);
     });
     if (opening) {
@@ -2672,6 +2837,341 @@ function makeLinkToolbar() {
   });
 }
 
+function makeMathToolbar() {
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'inline-flex';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = 'Math (LaTeX)';
+  b.innerHTML = MATH_TOOLBAR_SVG;
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);font-size:15px;font-weight:600;min-width:36px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
+
+  const popup = document.createElement('div');
+  popup.className = 'math-popup';
+  popup._anchorButton = b;
+
+  const lab = document.createElement('label');
+  lab.className = 'math-popup-label';
+  lab.textContent = 'LaTeX';
+  lab.setAttribute('for', 'math-popup-tex-field');
+
+  const presetsLabel = document.createElement('span');
+  presetsLabel.className = 'math-popup-presets-label';
+  presetsLabel.textContent = 'Templates (tap to fill; edit placeholders)';
+
+  const presetsRow = document.createElement('div');
+  presetsRow.className = 'math-popup-presets';
+  MATH_FORMULA_PRESETS.forEach((p) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'math-popup-preset';
+    btn.textContent = p.label;
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      textarea.value = p.tex;
+      if (typeof p.display === 'boolean') displayCb.checked = p.display;
+      scheduleMathPreview();
+      try {
+        textarea.focus();
+        textarea.setSelectionRange(0, textarea.value.length);
+      } catch (eP) { textarea.focus(); }
+    });
+    presetsRow.appendChild(btn);
+  });
+
+  const textarea = document.createElement('textarea');
+  textarea.id = 'math-popup-tex-field';
+  textarea.className = 'math-popup-tex';
+  textarea.placeholder = 'e.g. x^2+1, \\int_0^1 x\\,dx';
+  textarea.setAttribute('autocapitalize', 'off');
+  textarea.setAttribute('autocomplete', 'off');
+  textarea.setAttribute('autocorrect', 'off');
+  textarea.setAttribute('spellcheck', 'false');
+
+  const plab = document.createElement('div');
+  plab.className = 'math-popup-label';
+  plab.style.marginTop = '8px';
+  plab.textContent = 'Preview';
+
+  const preview = document.createElement('div');
+  preview.className = 'math-popup-preview';
+
+  const displayWrap = document.createElement('label');
+  displayWrap.className = 'math-popup-display';
+  const displayCb = document.createElement('input');
+  displayCb.type = 'checkbox';
+  const displayLabel = document.createElement('span');
+  displayLabel.textContent = 'Display mode (block formula)';
+  displayWrap.appendChild(displayCb);
+  displayWrap.appendChild(displayLabel);
+
+  const actions = document.createElement('div');
+  actions.className = 'math-popup-actions';
+
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button';
+  applyBtn.className = 'math-popup-apply';
+  applyBtn.textContent = 'Insert';
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'math-popup-remove';
+  removeBtn.textContent = 'Remove';
+  removeBtn.style.display = 'none';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'math-popup-cancel';
+  cancelBtn.textContent = 'Cancel';
+
+  actions.appendChild(applyBtn);
+  actions.appendChild(removeBtn);
+  actions.appendChild(cancelBtn);
+
+  popup.appendChild(lab);
+  popup.appendChild(presetsLabel);
+  popup.appendChild(presetsRow);
+  popup.appendChild(textarea);
+  popup.appendChild(plab);
+  popup.appendChild(preview);
+  popup.appendChild(displayWrap);
+  popup.appendChild(actions);
+  document.body.appendChild(popup);
+
+  if (!window._trinoteMathVvRelayout) {
+    window._trinoteMathVvRelayout = function () {
+      document.querySelectorAll('.math-popup.visible').forEach(function (p) {
+        const a = p._anchorButton;
+        if (a && typeof layoutMathPopup === 'function') layoutMathPopup(a, p);
+      });
+    };
+    const vv0 = window.visualViewport;
+    if (vv0) {
+      vv0.addEventListener('resize', window._trinoteMathVvRelayout, { passive: true });
+      vv0.addEventListener('scroll', window._trinoteMathVvRelayout, { passive: true });
+    }
+  }
+
+  popup.addEventListener('pointerdown', function () { bumpMathPopupActivity(); }, true);
+  displayWrap.addEventListener('click', function (e) { e.stopPropagation(); });
+  displayCb.addEventListener('pointerdown', function (e) { e.stopPropagation(); bumpMathPopupActivity(); }, true);
+  function dismissSisterPopupsForMath() {
+    document.querySelectorAll('.color-popup.visible').forEach(p0 => hideColorPopup(p0));
+    document.querySelectorAll('.callout-popup.visible').forEach(p0 => hideCalloutPopup(p0));
+    document.querySelectorAll('.font-size-popup.visible').forEach(p0 => hideFontSizePopup(p0));
+    document.querySelectorAll('.list-style-popup.visible').forEach(p0 => hideListStylePopup(p0));
+    document.querySelectorAll('.heading-popup.visible').forEach(p0 => hideHeadingPopup(p0));
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach(p0 => {
+      if (p0 !== popup) hideLinkPopup(p0);
+    });
+    hideImagePopup();
+  }
+
+  function bumpMathPopupActivity() {
+    const t = performance.now();
+    popup._ignoreScrollUntil = t + 3000;
+    popup._ignoreOutsideUntil = t + 2500;
+  }
+
+  function layoutAndFocusMathPanel() {
+    scheduleMathPreview();
+    const t0 = performance.now();
+    popup._ignoreScrollUntil = t0 + 3000;
+    popup._ignoreOutsideUntil = t0 + 1000;
+    popup.classList.add('visible');
+    requestAnimationFrame(function () {
+      layoutMathPopup(b, popup);
+      requestAnimationFrame(function () {
+        layoutMathPopup(b, popup);
+        try {
+          textarea.focus();
+          if (textarea.value) textarea.setSelectionRange(0, textarea.value.length);
+          else textarea.setSelectionRange(0, 0);
+        } catch (e2) {
+          textarea.focus();
+        }
+      });
+    });
+  }
+
+  function getTriliumMathNodeAtSelection() {
+    const { $from } = editor.state.selection;
+    for (let d = $from.depth; d > 0; d--) {
+      const node = $from.node(d);
+      if (node.type.name === 'triliumMath') {
+        const from = $from.before(d);
+        return { from, to: from + node.nodeSize, attrs: { tex: node.attrs.tex || '', display: !!node.attrs.display, format: (node.attrs.format === 'script') ? 'script' : 'span' } };
+      }
+    }
+    return null;
+  }
+
+  let _previewRaf = null;
+  function scheduleMathPreview() {
+    if (_previewRaf) cancelAnimationFrame(_previewRaf);
+    _previewRaf = requestAnimationFrame(function () {
+      _previewRaf = null;
+      updateMathPreview();
+    });
+  }
+
+  function updateMathPreview() {
+    const tex = textarea.value || '';
+    const display = displayCb.checked;
+    preview.classList.remove('math-popup-preview--err');
+    if (!tex.trim()) {
+      preview.innerHTML = '<span style="opacity:0.45">Preview</span>';
+      return;
+    }
+    if (typeof window.katex === 'undefined') {
+      preview.textContent = tex;
+      return;
+    }
+    try {
+      preview.innerHTML = window.katex.renderToString(tex, { displayMode: display, throwOnError: false });
+    } catch (err) {
+      preview.classList.add('math-popup-preview--err');
+      preview.textContent = (err && err.message) ? String(err.message) : 'Error';
+    }
+  }
+
+  function applyMath(e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const raw = (textarea.value || '').trim();
+    if (!raw) { scheduleMathPreview(); return; }
+    const display = displayCb.checked;
+    const r = (wrapper._isEditing && wrapper._mathRange) ? wrapper._mathRange : colorPickerApplyRange(wrapper);
+    if (!r) { hideLinkPopup(popup); return; }
+    const fmt = wrapper._formatAtOpen || 'span';
+    hideLinkPopup(popup);
+    const attrs = { tex: raw, display, format: fmt };
+    if (wrapper._isEditing && r.from < r.to) {
+      editor.chain().focus().setTextSelection({ from: r.from, to: r.to })
+        .insertContent({ type: 'triliumMath', attrs })
+        .run();
+    } else {
+      editor.chain().focus()
+        .insertContent({ type: 'triliumMath', attrs })
+        .run();
+    }
+  }
+
+  function removeMath(e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (!wrapper._isEditing || !wrapper._mathRange) { hideLinkPopup(popup); return; }
+    const g = wrapper._mathRange;
+    hideLinkPopup(popup);
+    editor.chain().focus().setTextSelection({ from: g.from, to: g.to }).deleteSelection().run();
+  }
+
+  function cancelMath(e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    hideLinkPopup(popup);
+  }
+
+  applyBtn.addEventListener('pointerdown', applyMath, true);
+  applyBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+  removeBtn.addEventListener('pointerdown', removeMath, true);
+  removeBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+  cancelBtn.addEventListener('pointerdown', cancelMath, true);
+  cancelBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+
+  textarea.addEventListener('input', function () {
+    scheduleMathPreview();
+    requestAnimationFrame(function () {
+      if (popup.classList.contains('visible')) layoutMathPopup(b, popup);
+    });
+  });
+  displayCb.addEventListener('change', function () {
+    scheduleMathPreview();
+    bumpMathPopupActivity();
+    requestAnimationFrame(function () {
+      if (popup.classList.contains('visible')) layoutMathPopup(b, popup);
+    });
+  });
+
+  b.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    const { from, to } = editor.state.selection;
+    wrapper._rangeAtOpen = { from, to };
+    if (!popup.classList.contains('visible')) markLinkPopupJustOpened(popup);
+  }, true);
+
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    if (!opening) {
+      hideLinkPopup(popup);
+      return;
+    }
+    dismissSisterPopupsForMath();
+    markLinkPopupJustOpened(popup);
+    const m = getTriliumMathNodeAtSelection();
+    if (m) {
+      try { editor.chain().focus().setTextSelection({ from: m.from, to: m.to }).run(); } catch (e0) { /* ignore */ }
+      wrapper._isEditing = true;
+      wrapper._mathRange = { from: m.from, to: m.to };
+      wrapper._formatAtOpen = m.attrs.format;
+      textarea.value = m.attrs.tex || '';
+      displayCb.checked = !!m.attrs.display;
+      applyBtn.textContent = 'Update';
+      removeBtn.style.display = 'block';
+    } else {
+      wrapper._isEditing = false;
+      wrapper._mathRange = null;
+      wrapper._formatAtOpen = 'span';
+      textarea.value = '';
+      displayCb.checked = false;
+      applyBtn.textContent = 'Insert';
+      removeBtn.style.display = 'none';
+    }
+    layoutAndFocusMathPanel();
+  });
+
+  /**
+   * Called from the trilium Math NodeView when the user taps a rendered formula (in-editor edit).
+   */
+  window.trinoteOpenMathForRange = function (spec) {
+    if (!spec || spec.from == null || spec.to == null) return;
+    dismissSisterPopupsForMath();
+    markLinkPopupJustOpened(popup);
+    const a = spec.attrs || {};
+    try { editor.chain().focus().setTextSelection({ from: spec.from, to: spec.to }).run(); } catch (e0) { /* ignore */ }
+    wrapper._isEditing = true;
+    wrapper._mathRange = { from: spec.from, to: spec.to };
+    wrapper._formatAtOpen = a.format === 'script' ? 'script' : 'span';
+    textarea.value = (a.tex != null) ? a.tex : '';
+    displayCb.checked = !!a.display;
+    applyBtn.textContent = 'Update';
+    removeBtn.style.display = 'block';
+    layoutAndFocusMathPanel();
+  };
+
+  wrapper.appendChild(b);
+  toolbar.appendChild(wrapper);
+  b._isActive = () => getTriliumMathNodeAtSelection() !== null;
+
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (wrapper.contains(e.target) || popup.contains(e.target)) return;
+    const t = e.target;
+    if (!t || !t.closest || !t.closest('#editor')) return;
+    hideLinkPopup(popup);
+  });
+}
+
 makeColorPicker('Text color', ic('foundation--text-color.svg'),
   (from, to, c) => {
     withColorMarkEdit(() => {
@@ -2708,6 +3208,7 @@ makeTableGridPicker();
 btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () => false);
 btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
 makeCalloutToolbar();
+makeMathToolbar();
 btn('Code', codeInlineGlyph(), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
 
 btn('Code block', ic('brackets-curly-fill-svgrepo-com.svg'), () => editor.chain().focus().toggleCodeBlock().run(), () => editor.isActive('codeBlock'));
@@ -2897,7 +3398,7 @@ function triliumMathMarkupFromBridgeSpan(el) {
   const tex = el.getAttribute('data-trinote-math-tex') || '';
   if (!tex) return '';
   const display = el.getAttribute('data-trinote-math-display') === '1';
-  const fmt = (el.getAttribute('data-trinote-math-format') || 'script').toLowerCase();
+  const fmt = (el.getAttribute('data-trinote-math-format') || 'span').toLowerCase();
   return fmt === 'span' ? triliumMathSpanMarkup(tex, display) : triliumMathScriptMarkup(tex, display);
 }
 
@@ -3525,7 +4026,7 @@ function makeTableGridPicker() {
     const opening = !popup.classList.contains('visible');
     document.querySelectorAll('.color-popup.visible').forEach(hideColorPopup);
     document.querySelectorAll('.callout-popup.visible').forEach(hideCalloutPopup);
-    document.querySelectorAll('.link-popup.visible').forEach(hideLinkPopup);
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach(hideLinkPopup);
     document.querySelectorAll('.font-size-popup.visible').forEach(hideFontSizePopup);
     document.querySelectorAll('.list-style-popup.visible').forEach(hideListStylePopup);
     document.querySelectorAll('.heading-popup.visible').forEach(hideHeadingPopup);

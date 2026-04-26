@@ -6,12 +6,11 @@ import WebKit
 
 /// Which ⋯ menu command to mirror on the trailing toolbar; stored in `UserDefaults` via `@AppStorage`.
 
-/// Tracked ⋯ menu actions mirrored on the trailing toolbar (delete, edit, and cancel editing are never tracked).
+/// Tracked ⋯ menu actions mirrored on the trailing toolbar (delete, edit, rename, and cancel editing are never tracked).
 private enum NoteDetailToolbarQuickAction: String, CaseIterable {
     case cancelEditing
     case newChild
     case duplicate
-    case rename
     case noteDetails
     case favorite
     case findOnPage
@@ -75,7 +74,7 @@ struct NoteDetailView: View {
     @State private var showMoveParentPicker = false
     @State private var moveNoteDetailConfirm: MoveNoteDetailConfirm?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
-    @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.rename.rawValue
+    @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.noteDetails.rawValue
 
     /// Aligns “Copy share link” / “Share link…” with the Share/Sharing title (after `scale.3d` column).
     private static let sharingSubmenuTitleLeadingInset: CGFloat = 36
@@ -1998,7 +1997,6 @@ struct NoteDetailView: View {
                 }
 
                 Button {
-                    recordToolbarQuickAction(.rename)
                     vm.editedTitle = note.title
                     vm.editingTitle = true
                 } label: {
@@ -2121,8 +2119,8 @@ struct NoteDetailView: View {
     }
 
     private func firstAvailableToolbarQuickAction(vm: NoteDetailViewModel, note: NoteItem) -> NoteDetailToolbarQuickAction? {
-        // Legacy "edit" raw value no longer matches a case → falls back to .rename.
-        let preferred = NoteDetailToolbarQuickAction(rawValue: lastToolbarQuickActionRaw) ?? .rename
+        // Legacy "edit" / "rename" raw values no longer match a case → falls back to .noteDetails.
+        let preferred = NoteDetailToolbarQuickAction(rawValue: lastToolbarQuickActionRaw) ?? .noteDetails
         let candidates: [NoteDetailToolbarQuickAction]
         if vm.isEditing {
             // Same slot as “New Child” in the menu: prefer cancel while editing.
@@ -2140,7 +2138,7 @@ struct NoteDetailView: View {
         switch action {
         case .cancelEditing: return vm.isEditing
         case .newChild: return !vm.isEditing
-        case .rename, .noteDetails: return true
+        case .noteDetails: return true
         case .duplicate: return !note.isProtected || appState.protectedSessionActive
         case .findOnPage: return !vm.isEditing && note.type.supportsReadOnlyOnPageFind
         case .favorite: return appState.activeProfile != nil
@@ -2160,9 +2158,6 @@ struct NoteDetailView: View {
             vm.cancelEditing()
         case .newChild:
             vm.showCreateChild = true
-        case .rename:
-            vm.editedTitle = note.title
-            vm.editingTitle = true
         case .noteDetails:
             withAnimation { vm.showDetails.toggle() }
         case .duplicate:
@@ -2190,8 +2185,6 @@ struct NoteDetailView: View {
                 .font(.system(size: 16, weight: .semibold))
         case .newChild:
             Image(systemName: "plus")
-        case .rename:
-            Image(systemName: "pencil")
         case .noteDetails:
             Image(systemName: vm.showDetails ? "info.circle.fill" : "info.circle")
         case .duplicate:
@@ -2209,8 +2202,6 @@ struct NoteDetailView: View {
             return String(localized: "Cancel editing", comment: "Toolbar quick action while editing note")
         case .newChild:
             return String(localized: "New child note", comment: "Toolbar repeat last action")
-        case .rename:
-            return String(localized: "Rename note", comment: "Toolbar repeat last action")
         case .noteDetails:
             return vm.showDetails
                 ? String(localized: "Hide note details", comment: "Toolbar repeat last action")
