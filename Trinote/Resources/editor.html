@@ -1327,6 +1327,34 @@ const TASK_LIST_TOOLBAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="
 const FONT_SIZE_TOOLBAR_SVG = '<svg class="toolbar-font-size-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 15 15" fill="currentColor" aria-hidden="true"><path d="M2.5 2.1a.4.4 0 0 1 .283.117l2 2l.05.064a.4.4 0 0 1-.05.503a.4.4 0 0 1-.503.05l-.063-.05L2.9 3.467v8.067l1.317-1.317a.4.4 0 0 1 .566.566l-2 2a.4.4 0 0 1-.566 0l-2-2l-.051-.063a.4.4 0 0 1 .554-.554l.063.051l1.316 1.316V3.467L.783 4.784a.401.401 0 0 1-.566-.567l2-2l.061-.05A.4.4 0 0 1 2.5 2.1m5.47 9.64a.501.501 0 0 1-.94-.34zm2.53-8.99a.5.5 0 0 1 .47.33l3 8.32a.5.5 0 0 1-.94.34l-.983-2.724H8.953l-.982 2.724l-.471-.17l-.47-.17l3-8.32l.031-.07a.5.5 0 0 1 .439-.26M9.259 8.166h2.482L10.5 4.725z"/></svg>';
 /* Summation-style glyph (no image asset) */
 const MATH_TOOLBAR_SVG = '<span class="math-toolbar-glyph" aria-hidden="true" style="font-size:20px;font-weight:700;line-height:1">∑</span>';
+/* Calendar-with-clock glyph for the "insert date/time" button (Trilium Alt+T equivalent).
+ * The inner clock uses var(--toolbar-bg) as its fill so it punches a clean hole through
+ * the calendar body in both light and dark mode. */
+const DATETIME_TOOLBAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+  + '<rect x="3.25" y="5" width="17.5" height="15" rx="2.25" stroke="currentColor" stroke-width="1.6"/>'
+  + '<path d="M3.25 9.5h17.5" stroke="currentColor" stroke-width="1.6"/>'
+  + '<path d="M8 3.25v3.5M16 3.25v3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>'
+  + '<circle cx="16" cy="15.5" r="4" fill="var(--toolbar-bg)" stroke="currentColor" stroke-width="1.6"/>'
+  + '<path d="M16 13.5v2l1.4 1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>'
+  + '</svg>';
+
+/**
+ * Local-time stamp matching Trilium's Alt+T default: "YYYY-MM-DD HH:mm".
+ */
+function formatTrinoteDateTimeStamp(d) {
+  const pad = (n) => (n < 10 ? '0' + n : '' + n);
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  return yyyy + '-' + mm + '-' + dd + ' ' + hh + ':' + mi;
+}
+
+function insertTrinoteDateTimeStamp() {
+  const stamp = formatTrinoteDateTimeStamp(new Date());
+  editor.chain().focus().insertContent(stamp).run();
+}
 /** Placeholder-focused templates (CKE / Trilium-style quick picks). */
 const MATH_FORMULA_PRESETS = [
   { label: 'a² + b² = c²', tex: 'a^2 + b^2 = c^2' },
@@ -1487,20 +1515,150 @@ sep();
 
 // Color pickers — restore range before applying marks (see editorSavedRange above).
 // After applying a mark, scroll the selection into the area visible above the keyboard (visualViewport).
+
+/* When the user taps to start editing, iOS's WKWebView default behaviour scrolls the focused
+ * contenteditable position to the top of the scrollable container (#editor-container). That
+ * yanks the note vertically — the line you tapped jumps to the top, and even snapping it back
+ * after the fact produces a visible 'glitch out and into position' bounce because iOS still
+ * paints at least one frame at the wrong scroll position.
+ *
+ * To eliminate that glitch entirely we run a per-frame rAF "freeze" loop that holds
+ * `ec.scrollTop` at the captured baseline. Because rAF runs before the next paint, iOS's
+ * scrollTop assignments never survive into a painted frame — visually the note doesn't move
+ * at all while the keyboard slides up.
+ *
+ * When the keyboard has finished animating in (visualViewport.resize has been idle for ~120ms,
+ * or a 800ms hard cap fires) we thaw the freeze and, if the tapped line ended up obscured by
+ * the keyboard, smoothly animate `scrollTop` to a centered target with easeOutCubic. A touchmove
+ * (drag-scroll) cancels the freeze immediately so we never fight the user's own scrolling. */
+let _editorScrollFrozen = false;
+let _editorFrozenScrollTop = 0;
+let _editorFreezeRafId = 0;
+let _editorFreezeMaxTimer = null;
+let _editorFreezeKbSettleTimer = null;
+
+function _ecEl() { return document.getElementById('editor-container'); }
+
+function freezeEditorScroll(baseline) {
+  const ec = _ecEl();
+  if (!ec || _editorScrollFrozen) return;
+  _editorFrozenScrollTop = baseline != null ? baseline : ec.scrollTop;
+  _editorScrollFrozen = true;
+  function loop() {
+    if (!_editorScrollFrozen) { _editorFreezeRafId = 0; return; }
+    if (Math.abs(ec.scrollTop - _editorFrozenScrollTop) > 0.5) {
+      ec.scrollTop = _editorFrozenScrollTop;
+    }
+    _editorFreezeRafId = requestAnimationFrame(loop);
+  }
+  _editorFreezeRafId = requestAnimationFrame(loop);
+}
+
+function thawEditorScroll() {
+  if (!_editorScrollFrozen) return;
+  _editorScrollFrozen = false;
+  if (_editorFreezeRafId) { cancelAnimationFrame(_editorFreezeRafId); _editorFreezeRafId = 0; }
+}
+
+function smoothScrollEditorContainerTo(targetScrollTop, durationMs) {
+  const ec = _ecEl();
+  if (!ec) return;
+  const start = ec.scrollTop;
+  const delta = targetScrollTop - start;
+  if (Math.abs(delta) < 0.5) return;
+  const dur = durationMs || 280;
+  const startTime = performance.now();
+  function step(now) {
+    const t = Math.min(1, (now - startTime) / dur);
+    const eased = 1 - Math.pow(1 - t, 3);
+    ec.scrollTop = start + delta * eased;
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function _editorFreezeFinish() {
+  clearTimeout(_editorFreezeMaxTimer); _editorFreezeMaxTimer = null;
+  clearTimeout(_editorFreezeKbSettleTimer); _editorFreezeKbSettleTimer = null;
+  if (!_editorScrollFrozen) return;
+  const ec = _ecEl();
+  const view = editor && editor.view;
+  if (!ec || !view) { thawEditorScroll(); return; }
+  let rect = null;
+  try {
+    const sel = editor.state.selection;
+    const c1 = view.coordsAtPos(sel.from);
+    const c2 = view.coordsAtPos(sel.to);
+    rect = {
+      top: Math.min(c1.top, c2.top, c1.bottom, c2.bottom),
+      bottom: Math.max(c1.top, c2.top, c1.bottom, c2.bottom),
+    };
+  } catch (e) {}
+  const pad = 12;
+  const ecRect = ec.getBoundingClientRect();
+  let visibleTop = ecRect.top + pad;
+  let visibleBottom = ecRect.bottom - pad;
+  const vv = window.visualViewport;
+  if (vv) {
+    visibleTop = Math.max(visibleTop, vv.offsetTop + pad);
+    visibleBottom = Math.min(visibleBottom, vv.offsetTop + vv.height - pad);
+  }
+  let target = _editorFrozenScrollTop;
+  if (rect && visibleBottom > visibleTop && (rect.top < visibleTop || rect.bottom > visibleBottom)) {
+    const visMid = (visibleTop + visibleBottom) / 2;
+    const selMid = (rect.top + rect.bottom) / 2;
+    target = _editorFrozenScrollTop + (selMid - visMid);
+  }
+  thawEditorScroll();
+  if (Math.abs(target - ec.scrollTop) > 0.5) smoothScrollEditorContainerTo(target, 280);
+}
+
+(function installEditorTapBaseline() {
+  const ec = _ecEl();
+  if (!ec) return;
+  function captureBaseline(e) {
+    const t = e && e.target;
+    if (!t || !t.closest || !t.closest('#editor')) return;
+    freezeEditorScroll(ec.scrollTop);
+    clearTimeout(_editorFreezeMaxTimer);
+    _editorFreezeMaxTimer = setTimeout(_editorFreezeFinish, 800);
+  }
+  ec.addEventListener('pointerdown', captureBaseline, true);
+  ec.addEventListener('touchstart', captureBaseline, { capture: true, passive: true });
+  ec.addEventListener('touchmove', () => {
+    if (!_editorScrollFrozen) return;
+    thawEditorScroll();
+    clearTimeout(_editorFreezeMaxTimer); _editorFreezeMaxTimer = null;
+    clearTimeout(_editorFreezeKbSettleTimer); _editorFreezeKbSettleTimer = null;
+  }, { passive: true });
+  const vv = window.visualViewport;
+  if (vv) {
+    vv.addEventListener('resize', () => {
+      if (!_editorScrollFrozen) return;
+      clearTimeout(_editorFreezeKbSettleTimer);
+      _editorFreezeKbSettleTimer = setTimeout(_editorFreezeFinish, 120);
+    }, { passive: true });
+  }
+})();
+
 function scrollEditorRangeIntoView() {
   const ec = document.getElementById('editor-container');
   const view = editor.view;
   if (!ec || !view) return;
   const { from, to } = editor.state.selection;
-  let topDoc, bottomDoc;
-  try {
-    const c1 = view.coordsAtPos(from);
-    const c2 = view.coordsAtPos(to);
-    topDoc = Math.min(c1.top, c2.top, c1.bottom, c2.bottom);
-    bottomDoc = Math.max(c1.top, c2.top, c1.bottom, c2.bottom);
-  } catch (e) {
-    return;
+  function selectionRect() {
+    try {
+      const c1 = view.coordsAtPos(from);
+      const c2 = view.coordsAtPos(to);
+      return {
+        top: Math.min(c1.top, c2.top, c1.bottom, c2.bottom),
+        bottom: Math.max(c1.top, c2.top, c1.bottom, c2.bottom),
+      };
+    } catch (e) { return null; }
   }
+  let rect = selectionRect();
+  if (!rect) return;
+
   const pad = 12;
   const ecRect = ec.getBoundingClientRect();
   let visibleTop = ecRect.top + pad;
@@ -1514,27 +1672,24 @@ function scrollEditorRangeIntoView() {
   }
   if (visibleBottom <= visibleTop) return;
 
-  if (topDoc < visibleTop) {
-    ec.scrollTop += topDoc - visibleTop;
-  } else if (bottomDoc > visibleBottom) {
-    ec.scrollTop += bottomDoc - visibleBottom;
-  }
+  if (_editorScrollFrozen) return;
+
+  if (rect.top >= visibleTop && rect.bottom <= visibleBottom) return;
+
+  const visMid = (visibleTop + visibleBottom) / 2;
+  const selMid = (rect.top + rect.bottom) / 2;
+  ec.scrollTop += selMid - visMid;
 }
 
 // iOS: keyboard / visualViewport settle after focus — scroll so the caret stays above the keys.
 function scheduleScrollCaretIntoViewAfterKeyboard() {
   const bump = function () { scrollEditorRangeIntoView(); };
   bump();
-  requestAnimationFrame(function () {
-    bump();
-    requestAnimationFrame(bump);
-  });
-  setTimeout(bump, 80);
+  /* The synchronous scroll lock (see installEditorTapBaseline) holds scrollTop in place while
+   * iOS animates the keyboard, so we only need a couple of follow-ups to handle the
+   * "selection ended up below the keyboard" centering case once visualViewport has shrunk. */
   setTimeout(bump, 200);
-  setTimeout(bump, 400);
-  setTimeout(bump, 600);
-  setTimeout(bump, 850);
-  setTimeout(bump, 1100);
+  setTimeout(bump, 500);
 }
 
 (function attachCaretScrollOnVisualViewport() {
@@ -3209,6 +3364,7 @@ btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () =>
 btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
 makeCalloutToolbar();
 makeMathToolbar();
+btn('Date/time', DATETIME_TOOLBAR_SVG, () => insertTrinoteDateTimeStamp(), () => false);
 btn('Code', codeInlineGlyph(), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
 
 btn('Code block', ic('brackets-curly-fill-svgrepo-com.svg'), () => editor.chain().focus().toggleCodeBlock().run(), () => editor.isActive('codeBlock'));

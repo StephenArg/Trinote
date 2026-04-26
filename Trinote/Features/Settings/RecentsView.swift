@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RecentsView: View {
     @Environment(AppState.self) private var appState
+    @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
     @State private var recentNotes: [RecentNote] = []
     /// Cached breadcrumb path per note (from SwiftData); empty string if unavailable.
     @State private var pathByNoteId: [String: String] = [:]
@@ -9,6 +10,8 @@ struct RecentsView: View {
     @State private var displayTitleByNoteId: [String: String] = [:]
     /// SF Symbol for the top-level-under-root note (same visual grouping as tree).
     @State private var iconByNoteId: [String: String] = [:]
+    /// Raw value of the leaf note's `#color` label (Trilium tree color), per note id.
+    @State private var colorLabelByNoteId: [String: String] = [:]
     @State private var navigateToNote: (String, String)?
 
     var body: some View {
@@ -28,7 +31,7 @@ struct RecentsView: View {
                         } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: recentsRowIcon(for: recent))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(resolvedIconColor(for: recent))
                                     .frame(width: 24)
                                     .accessibilityHidden(true)
 
@@ -36,7 +39,7 @@ struct RecentsView: View {
                                     Text(displayTitleByNoteId[recent.noteId] ?? recent.title)
                                         .font(.body)
                                         .lineLimit(2)
-                                        .foregroundStyle(.primary)
+                                        .foregroundStyle(resolvedTitleColor(for: recent))
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .multilineTextAlignment(.leading)
                                     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -90,10 +93,12 @@ struct RecentsView: View {
             var paths: [String: String] = [:]
             var titlesOut: [String: String] = [:]
             var icons: [String: String] = [:]
+            var colors: [String: String] = [:]
             var visible: [RecentNote] = []
             visible.reserveCapacity(raw.count)
             paths.reserveCapacity(raw.count)
             icons.reserveCapacity(raw.count)
+            colors.reserveCapacity(raw.count)
 
             for recent in raw {
                 if GhostNoteTracker.shared.contains(recent.noteId, serverProfileId: profileId) {
@@ -131,18 +136,23 @@ struct RecentsView: View {
                     fallbackNoteType: recent.noteType,
                     serverProfileId: profileId
                 )
+                if let colorRaw = pm.cachedNoteColorLabel(noteId: recent.noteId, serverProfileId: profileId) {
+                    colors[recent.noteId] = colorRaw
+                }
             }
 
             recentNotes = visible
             pathByNoteId = paths
             displayTitleByNoteId = titlesOut
             iconByNoteId = icons
+            colorLabelByNoteId = colors
         } catch {
             Log.persistence.error("Failed to load recents: \(error)")
             recentNotes = []
             pathByNoteId = [:]
             displayTitleByNoteId = [:]
             iconByNoteId = [:]
+            colorLabelByNoteId = [:]
         }
     }
 
@@ -151,6 +161,27 @@ struct RecentsView: View {
         if let s = recent.listIconSystemName, !s.isEmpty { return s }
         if let s = iconByNoteId[recent.noteId], !s.isEmpty { return s }
         return (NoteType(rawValue: recent.noteType) ?? .text).iconName
+    }
+
+    /// Trilium `#color` label wins when the global setting is on and the value is recognized.
+    /// Suppressed for protected notes while the session is locked (so masked rows keep their muted look).
+    private func triliumColor(for recent: RecentNote) -> Color? {
+        guard useTriliumNoteColors else { return nil }
+        if let profileId = appState.activeProfile?.id,
+           let cached = try? PersistenceManager.shared.fetchCachedNote(id: recent.noteId, serverProfileId: profileId),
+           cached.isProtected,
+           !appState.protectedSessionActive {
+            return nil
+        }
+        return TriliumNoteColorMapper.swiftUIColor(for: colorLabelByNoteId[recent.noteId])
+    }
+
+    private func resolvedTitleColor(for recent: RecentNote) -> Color {
+        triliumColor(for: recent) ?? .primary
+    }
+
+    private func resolvedIconColor(for recent: RecentNote) -> Color {
+        triliumColor(for: recent) ?? .secondary
     }
 }
 

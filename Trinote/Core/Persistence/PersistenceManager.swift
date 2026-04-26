@@ -606,6 +606,17 @@ final class PersistenceManager {
         return NoteIconMapper.sfSymbol(for: iconClass) ?? type.iconName
     }
 
+    /// Raw value of a cached note's `#color` label (Trilium tree color), or `nil` when absent.
+    /// Mirrors `NoteItem.colorLabelValue` for callers that only have a `noteId`.
+    func cachedNoteColorLabel(noteId: String, serverProfileId: String) -> String? {
+        let attrs = (try? fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)) ?? []
+        guard let raw = attrs.first(where: {
+            $0.type == "label" && $0.name.caseInsensitiveCompare("color") == .orderedSame
+        })?.value else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     /// Top-level child of `root` on the path to `noteId` (the notebook / root segment used for tree grouping).
     func topLevelNotebookId(noteId: String, serverProfileId: String) -> String? {
         topLevelNoteIdUnderRoot(noteId: noteId, serverProfileId: serverProfileId)
