@@ -702,7 +702,19 @@ const ORDERED_LIST_STYLE_OPTIONS = [
 ];
 
 let _contentTimer = null;
+/** Tracks last serialized triliumMath count so undo (math reappearing) flushes `contentChanged` immediately — avoids stale `_pendingEditorHTML` on native for ~300ms after undo. */
+let _lastTriliumMathNodeCount = -1;
 let _toolbarScheduled = false;
+
+function trinoteCountTriliumMathNodes(editor) {
+  let n = 0;
+  try {
+    editor.state.doc.descendants(function (node) {
+      if (node.type.name === 'triliumMath') n += 1;
+    });
+  } catch (e) {}
+  return n;
+}
 
 /* ── CKEditor-compatible Figure Image node ── */
 const FigureImage = Image.extend({
@@ -948,6 +960,9 @@ const TriliumMath = Image.extend({
     return {
       tex: { default: '' },
       display: { default: false },
+      // 'script' (default — ckeditor5-math `outputType: 'script'`) or 'span' (CKEditor 4 / span.math-tex).
+      // Tracked per-equation so save round-trips back to whichever form Trilium stored.
+      format: { default: 'script' },
     };
   },
   parseHTML() {
@@ -957,9 +972,11 @@ const TriliumMath = Image.extend({
       getAttrs(el) {
         const t = el.getAttribute('data-trinote-math-tex');
         if (t == null || t === '') return false;
+        const rawFormat = (el.getAttribute('data-trinote-math-format') || '').trim().toLowerCase();
         return {
           tex: t,
           display: el.getAttribute('data-trinote-math-display') === '1',
+          format: rawFormat === 'span' ? 'span' : 'script',
         };
       },
     }];
@@ -968,6 +985,7 @@ const TriliumMath = Image.extend({
     return ['span', {
       'data-trinote-math-tex': node.attrs.tex,
       'data-trinote-math-display': node.attrs.display ? '1' : '0',
+      'data-trinote-math-format': node.attrs.format === 'span' ? 'span' : 'script',
       class: 'trinote-math-bridge',
     }];
   },
@@ -1149,10 +1167,15 @@ const editor = new Editor({
   content: '',
   onUpdate({ editor }) {
     scheduleEditorTypingActivity();
+    const mathNow = trinoteCountTriliumMathNodes(editor);
+    const mathIncreased = mathNow > _lastTriliumMathNodeCount;
+    _lastTriliumMathNodeCount = mathNow;
     clearTimeout(_contentTimer);
-    _contentTimer = setTimeout(() => {
-      try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch(e) {}
-    }, 300);
+    const delay = mathIncreased ? 0 : 300;
+    _contentTimer = setTimeout(function () {
+      _contentTimer = null;
+      try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+    }, delay);
   },
   onSelectionUpdate() { scheduleToolbarUpdate(); },
   onTransaction() { scheduleToolbarUpdate(); },
@@ -2796,6 +2819,8 @@ function normalizeCalloutsForTrilium(doc) {
 }
 
 // Trilium math: <script type="math/tex"> and span.math-tex → spans TipTap keeps (see TriliumMath extension).
+// Stamps `data-trinote-math-format` so save re-emits whichever form the source used (Trilium's sanitizer
+// often only allows the form its math plugin is configured for — emitting the other form silently drops it).
 function migrateTriliumMathForTiptap(doc) {
   doc.querySelectorAll('script[type^="math/tex"]').forEach(sc => {
     if (!sc.parentNode) return;
@@ -2809,6 +2834,7 @@ function migrateTriliumMathForTiptap(doc) {
     const span = doc.createElement('span');
     span.setAttribute('data-trinote-math-tex', tex);
     span.setAttribute('data-trinote-math-display', display ? '1' : '0');
+    span.setAttribute('data-trinote-math-format', 'script');
     span.className = 'trinote-math-bridge';
     sc.parentNode.replaceChild(span, sc);
   });
@@ -2835,23 +2861,87 @@ function migrateTriliumMathForTiptap(doc) {
     const span = doc.createElement('span');
     span.setAttribute('data-trinote-math-tex', tex);
     span.setAttribute('data-trinote-math-display', display ? '1' : '0');
+    span.setAttribute('data-trinote-math-format', 'span');
     span.className = 'trinote-math-bridge';
     sp.parentNode.replaceChild(span, sp);
   });
 }
 
-// TipTap bridge spans → Trilium <script type="math/tex"> for save / desktop compatibility.
-function migrateTriliumMathSpansToCkScripts(doc) {
-  doc.querySelectorAll('span[data-trinote-math-tex]').forEach(el => {
+// --- Trilium math serialization (WKWebView / WebKit strip <script> from Element#innerHTML) ---
+
+function escapeTriliumMathScriptBody(tex) {
+  return String(tex).replace(new RegExp('<\\/script', 'gi'), '<' + '\\/script');
+}
+
+function htmlEscapeDoubleQuotedAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function htmlEscapeText(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function triliumMathScriptMarkup(tex, display) {
+  const typeAttr = display ? 'math/tex; mode=display' : 'math/tex';
+  const closer = '<' + '/script>';
+  return '<script type="' + htmlEscapeDoubleQuotedAttr(typeAttr) + '">' + escapeTriliumMathScriptBody(tex) + closer;
+}
+
+function triliumMathSpanMarkup(tex, display) {
+  // CKEditor 4-style: <span class="math-tex">\( … \)</span> for inline, \[ … \] for display.
+  const inner = display ? '\\[' + tex + '\\]' : '\\(' + tex + '\\)';
+  return '<span class="math-tex">' + htmlEscapeText(inner) + '</span>';
+}
+
+function triliumMathMarkupFromBridgeSpan(el) {
+  const tex = el.getAttribute('data-trinote-math-tex') || '';
+  if (!tex) return '';
+  const display = el.getAttribute('data-trinote-math-display') === '1';
+  const fmt = (el.getAttribute('data-trinote-math-format') || 'script').toLowerCase();
+  return fmt === 'span' ? triliumMathSpanMarkup(tex, display) : triliumMathScriptMarkup(tex, display);
+}
+
+function triliumMathScriptMarkupFromDomScript(el) {
+  const typeAttr = (el.getAttribute('type') || 'math/tex');
+  const display = /mode\s*=\s*display/i.test(typeAttr);
+  return triliumMathScriptMarkup(el.textContent || '', display);
+}
+
+/**
+ * WebKit omits inert <script> nodes from innerHTML, which would drop Trilium equations on save.
+ * Swap math bridge spans and math/tex script nodes for unique text placeholders, read innerHTML, then splice markup.
+ */
+function serializeHtmlBodyPreservingTriliumMath(doc) {
+  const body = doc.body;
+  if (!body) return '';
+  const replacements = [];
+  let id = 0;
+  function makeToken() {
+    return '___TRINOTE_MATH_' + (id++) + '_' + Math.random().toString(36).slice(2, 11) + '___';
+  }
+
+  Array.from(body.querySelectorAll('script[type^="math/tex"]')).forEach(el => {
     if (!el.parentNode) return;
-    const tex = el.getAttribute('data-trinote-math-tex') || '';
-    if (!tex) return;
-    const display = el.getAttribute('data-trinote-math-display') === '1';
-    const sc = doc.createElement('script');
-    sc.setAttribute('type', display ? 'math/tex; mode=display' : 'math/tex');
-    sc.textContent = tex;
-    el.parentNode.replaceChild(sc, el);
+    const tkn = makeToken();
+    replacements.push({ tkn, html: triliumMathScriptMarkupFromDomScript(el) });
+    el.parentNode.replaceChild(doc.createTextNode(tkn), el);
   });
+
+  Array.from(body.querySelectorAll('span[data-trinote-math-tex]')).forEach(el => {
+    if (!el.parentNode) return;
+    const html = triliumMathMarkupFromBridgeSpan(el);
+    if (!html) return;
+    const tkn = makeToken();
+    replacements.push({ tkn, html });
+    el.parentNode.replaceChild(doc.createTextNode(tkn), el);
+  });
+
+  let out = body.innerHTML;
+  replacements.forEach(({ tkn, html }) => {
+    if (out.indexOf(tkn) === -1) return;
+    out = out.split(tkn).join(html);
+  });
+  return out;
 }
 
 // CKEditor / Trilium often use <span style="background-color:…">; TipTap Highlight expects <mark data-color>.
@@ -2998,9 +3088,7 @@ function tiptapToCk(html) {
     figure.appendChild(tbl);
   });
 
-  migrateTriliumMathSpansToCkScripts(doc);
-
-  return doc.body.innerHTML;
+  return serializeHtmlBodyPreservingTriliumMath(doc);
 }
 
 /** Renders `.mermaid` blocks inside an include-note preview slot (read-only HTML uses the same Mermaid bundle). */
@@ -3061,9 +3149,11 @@ window.editorBridge = {
         }
       });
 
-      html = tempDoc.body.innerHTML;
+      // Same WebKit innerHTML issue as save: <script type="math/tex"> is dropped here unless we preserve it.
+      html = serializeHtmlBodyPreservingTriliumMath(tempDoc);
     }
     editor.commands.setContent(ckToTiptap(html) || '', false);
+    _lastTriliumMathNodeCount = trinoteCountTriliumMathNodes(editor);
     if (captionTexts.length > 0) {
       requestAnimationFrame(() => {
         const wrappers = document.querySelectorAll('.tiptap .tableWrapper');
@@ -3105,7 +3195,7 @@ window.editorBridge = {
         figcap.textContent = text;
         fig.appendChild(figcap);
       });
-      html = doc.body.innerHTML;
+      html = serializeHtmlBodyPreservingTriliumMath(doc);
     }
     return html;
   },
@@ -3912,10 +4002,6 @@ _ctxSaveBtn.addEventListener('pointerdown', (e) => {
       scrollFraction: window.editorBridge.getScrollFraction()
     });
   } catch (err) {
-    try {
-      var msg = (err && (err.stack || err.message || String(err))) || 'unknown';
-      window.webkit.messageHandlers.debugLog.postMessage('[EDITOR-SAVE] requestSave threw: ' + msg);
-    } catch (_) {}
     try {
       window.webkit.messageHandlers.requestSave.postMessage({ html: null, scrollFraction: 0 });
     } catch (_) {}

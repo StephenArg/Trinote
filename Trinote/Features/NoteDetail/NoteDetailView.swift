@@ -311,28 +311,46 @@ struct NoteDetailView: View {
         var f = window.editorBridge.getScrollFraction();
         return JSON.stringify({ html: html, f: f });
       } catch (e) {
-        try {
-          var msg = (e && (e.stack || e.message || String(e))) || 'unknown';
-          window.webkit.messageHandlers.debugLog.postMessage('[EDITOR-SAVE] getContent threw: ' + msg);
-        } catch (_) {}
         return JSON.stringify({ html: null, f: 0 });
       }
     })();
     """
 
+    /// WKWebView may return `JSON.stringify` as a `String` or as a bridged dictionary; the latter used to force a
+    /// `saveContent()` fallback without `freshHTML`, losing editor-only state (e.g. math restored by undo).
     private static func parseRichTextEditorSavePayload(_ result: Any?) -> (html: String?, scrollFraction: CGFloat?) {
+        if let obj = javaScriptResultAsStringKeyedDictionary(result) {
+            return parseRichTextSavePayloadFromDictionary(obj)
+        }
         guard let s = result as? String, !s.isEmpty else { return (nil, nil) }
         guard s.first == "{",
               let data = s.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return (s, nil)
         }
+        return parseRichTextSavePayloadFromDictionary(obj)
+    }
+
+    private static func javaScriptResultAsStringKeyedDictionary(_ result: Any?) -> [String: Any]? {
+        if let d = result as? [String: Any] { return d }
+        guard let raw = result as? [AnyHashable: Any] else { return nil }
+        var out: [String: Any] = [:]
+        for (k, v) in raw {
+            if let ks = k as? String { out[ks] = v }
+            else if let ks = k as? NSString { out[ks as String] = v }
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    private static func parseRichTextSavePayloadFromDictionary(_ obj: [String: Any]) -> (html: String?, scrollFraction: CGFloat?) {
         let html: String?
         switch obj["html"] {
         case is NSNull, nil:
             html = nil
         case let str as String:
             html = str
+        case let ns as NSString:
+            html = ns as String
         default:
             html = nil
         }

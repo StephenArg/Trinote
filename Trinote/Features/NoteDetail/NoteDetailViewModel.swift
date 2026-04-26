@@ -1734,7 +1734,6 @@ final class NoteDetailViewModel {
             if trimmed.isEmpty {
                 let pendingOK = !(_pendingEditorHTML ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 let seedOK = !editableContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                Log.ui.warning("[EDITOR-SAVE] dropping empty freshHTML; falling back. pendingOK=\(pendingOK, privacy: .public) seedOK=\(seedOK, privacy: .public)")
                 if pendingOK, let p = _pendingEditorHTML {
                     editableContent = p
                 } else if seedOK {
