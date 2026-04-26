@@ -1,0 +1,19 @@
+<!--
+  Reference shapes for Trilium / CKEditor 5 + ckeditor5-math (KaTeX), for manual round-trip checks
+  and documentation. Trinote detects these patterns and re-emits them on save from the editor bridge.
+
+  1) Inline (ckeditor5-math script outputType / MathJax-style)
+-->
+<p>Inline: <script type="math/tex">E = mc^2</script> end.</p>
+
+<!--
+  2) Display mode
+-->
+<p>Display:</p>
+<script type="math/tex; mode=display">\int_0^1 x\,dx</script>
+
+<!--
+  3) Legacy span.math-tex (CKEditor 4 style delimiters)
+-->
+<p>Legacy inline <span class="math-tex">\( \alpha + \beta \)</span> and display
+<span class="math-tex">\[ \sum_{i=1}^n i \]</span>.</p>

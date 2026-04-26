@@ -376,7 +376,17 @@ private struct HTMLNoteWebView: UIViewRepresentable {
            so wide diagrams stay readable instead of being scaled down to the column width. */
         .mermaid { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         .mermaid svg { width: auto; max-width: none; height: auto; display: block; }
+        /* KaTeX (Trilium math): inherit body color; display blocks scroll on small widths */
+        .trinote-katex-inline { display: inline-block; max-width: 100%; vertical-align: middle; }
+        .katex-display.trinote-katex-rendered, .trinote-katex-rendered.katex-display {
+          margin: 0.75em 0; overflow-x: auto; -webkit-overflow-scrolling: touch; text-align: center;
+        }
+        .katex { color: inherit; }
+        @media (prefers-color-scheme: dark) {
+          .katex { color: var(--text-color); }
+        }
         </style>
+        \(Self.katexStylesheetLinkIfNeeded(for: body))
         </head>
         <body>
         \(body)
@@ -669,6 +679,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             reportHeight();
         })();
         </script>
+        \(Self.katexSnippetIfNeeded(for: body))
         \(Self.mermaidSnippetIfNeeded(for: body))
         </body>
         </html>
@@ -763,15 +774,97 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         """#
     }
 
-    /// Use the app bundle as the document base when Mermaid is present so `vendor/mermaid.min.js` loads from the
-    /// app bundle (same layout as `mermaid-viewer.html`), avoiding CDN `DownloadFailed` / network dependency.
-    /// Inlined images use `data:` URLs, so Trilium `api/…` paths should not remain for normal notes.
+    /// Use the app bundle as the document base when bundled `vendor/…` scripts are referenced (Mermaid, KaTeX) so
+    /// WKWebView resolves `vendor/*.js` from the app bundle instead of the note’s canonical base URL.
     private static func effectiveReadOnlyHTMLBaseURL(wrapped: String, canonicalBase: URL?) -> URL? {
-        guard htmlContainsInlineMermaidBlocks(wrapped) else { return canonicalBase }
-        guard Bundle.main.url(forResource: "mermaid.min", withExtension: "js", subdirectory: "vendor") != nil else {
-            return canonicalBase
-        }
+        guard readOnlyHTMLNeedsBundleBaseURL(wrapped: wrapped) else { return canonicalBase }
         return Bundle.main.bundleURL
+    }
+
+    /// True when wrapped HTML loads `vendor/mermaid.min.js` or `vendor/katex/…` from the app bundle.
+    private static func readOnlyHTMLNeedsBundleBaseURL(wrapped: String) -> Bool {
+        if htmlContainsInlineMermaidBlocks(wrapped),
+           Bundle.main.url(forResource: "mermaid.min", withExtension: "js", subdirectory: "vendor") != nil {
+            return true
+        }
+        if TriliumMathHTMLSupport.bodyContainsTriliumMathMarkers(wrapped),
+           TriliumMathHTMLSupport.katexJavaScriptIsBundled() {
+            return true
+        }
+        return false
+    }
+
+    private static func katexStylesheetLinkIfNeeded(for body: String) -> String {
+        guard TriliumMathHTMLSupport.bodyContainsTriliumMathMarkers(body),
+              TriliumMathHTMLSupport.katexJavaScriptIsBundled() else { return "" }
+        return #"<link rel="stylesheet" href="vendor/katex/katex.min.css">"#
+    }
+
+    /// KaTeX JS + in-place render for `<script type="math/tex">` and `span.math-tex` (ckeditor5-math shapes).
+    private static func katexSnippetIfNeeded(for body: String) -> String {
+        guard TriliumMathHTMLSupport.bodyContainsTriliumMathMarkers(body),
+              TriliumMathHTMLSupport.katexJavaScriptIsBundled() else { return "" }
+        return #"""
+        <script src="vendor/katex/katex.min.js"></script>
+        <script>
+        (function() {
+          function trinoteRenderTriliumMath() {
+            if (!window.katex) return;
+            function renderToHTML(tex, displayMode) {
+              try {
+                return katex.renderToString(tex, { displayMode: displayMode, throwOnError: false });
+              } catch (e) {
+                return null;
+              }
+            }
+            document.querySelectorAll('script[type^="math/tex"]').forEach(function(sc) {
+              var type = sc.getAttribute('type') || '';
+              var display = /mode\s*=\s*display/i.test(type);
+              var tex = (sc.textContent || '').trim();
+              if (!tex) {
+                if (sc.parentNode) sc.parentNode.removeChild(sc);
+                return;
+              }
+              var html = renderToHTML(tex, display);
+              var host = document.createElement('span');
+              host.className = display ? 'katex-display trinote-katex-rendered' : 'trinote-katex-inline trinote-katex-rendered';
+              if (html != null) host.innerHTML = html;
+              else host.textContent = tex;
+              sc.parentNode.replaceChild(host, sc);
+            });
+            document.querySelectorAll('span.math-tex').forEach(function(sp) {
+              var raw = (sp.textContent || '').trim();
+              if (!raw) return;
+              var display = false;
+              var tex = raw;
+              if (raw.length >= 4 && raw.charCodeAt(0) === 92 && raw.charAt(1) === '[' &&
+                  raw.charCodeAt(raw.length - 2) === 92 && raw.charAt(raw.length - 1) === ']') {
+                display = true;
+                tex = raw.slice(2, -2).trim();
+              } else if (raw.length >= 4 && raw.charCodeAt(0) === 92 && raw.charAt(1) === '(' &&
+                  raw.charCodeAt(raw.length - 2) === 92 && raw.charAt(raw.length - 1) === ')') {
+                tex = raw.slice(2, -2).trim();
+              } else if (raw.length >= 4 && raw.indexOf('$$') === 0 && raw.lastIndexOf('$$') === raw.length - 2) {
+                display = true;
+                tex = raw.slice(2, -2).trim();
+              } else if (raw.length >= 2 && raw.charAt(0) === '$' && raw.charAt(raw.length - 1) === '$' && raw.indexOf('$$') !== 0) {
+                tex = raw.slice(1, -1).trim();
+              }
+              if (!tex) return;
+              var html = renderToHTML(tex, display);
+              var host = document.createElement('span');
+              host.className = display ? 'katex-display trinote-katex-rendered' : 'trinote-katex-inline trinote-katex-rendered';
+              if (html != null) host.innerHTML = html;
+              else host.textContent = tex;
+              sp.parentNode.replaceChild(host, sp);
+            });
+            try { if (typeof reportHeight === 'function') reportHeight(); } catch (e0) {}
+          }
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', trinoteRenderTriliumMath);
+          else trinoteRenderTriliumMath();
+        })();
+        </script>
+        """#
     }
 
     /// Trilium internal links use `#/<id>` or `#root/…/<id>`; the note id is always the last path segment.

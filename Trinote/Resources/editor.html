@@ -617,7 +617,12 @@ body { display: flex; flex-direction: column; }
 
 /* Loading state */
 #loading { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--placeholder); font-size: 15px; }
+/* Trilium math (KaTeX) in the editor surface */
+.tiptap .trinote-math-nodeview { display: inline-block; max-width: 100%; vertical-align: middle; }
+.tiptap .trinote-math-nodeview--display { display: block; margin: 0.75em 0; text-align: center; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 </style>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<script src="vendor/katex/katex.min.js"></script>
 </head>
 <body>
 
@@ -928,6 +933,79 @@ const IncludeNote = Image.extend({
   },
 });
 
+/* Trilium / ckeditor5-math: inline TeX stored as <script type="math/tex"> on the server; TipTap cannot keep <script> in the doc. */
+const TriliumMath = Image.extend({
+  name: 'triliumMath',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  draggable: false,
+  selectable: true,
+  inline() {
+    return true;
+  },
+  addAttributes() {
+    return {
+      tex: { default: '' },
+      display: { default: false },
+    };
+  },
+  parseHTML() {
+    return [{
+      tag: 'span[data-trinote-math-tex]',
+      priority: 60,
+      getAttrs(el) {
+        const t = el.getAttribute('data-trinote-math-tex');
+        if (t == null || t === '') return false;
+        return {
+          tex: t,
+          display: el.getAttribute('data-trinote-math-display') === '1',
+        };
+      },
+    }];
+  },
+  renderHTML({ node }) {
+    return ['span', {
+      'data-trinote-math-tex': node.attrs.tex,
+      'data-trinote-math-display': node.attrs.display ? '1' : '0',
+      class: 'trinote-math-bridge',
+    }];
+  },
+  addNodeView() {
+    return ({ node }) => {
+      const wrap = document.createElement('span');
+      wrap.className = node.attrs.display ? 'trinote-math-nodeview trinote-math-nodeview--display' : 'trinote-math-nodeview';
+      wrap.contentEditable = 'false';
+      function paint(n) {
+        wrap.replaceChildren();
+        if (typeof window.katex === 'undefined') {
+          wrap.textContent = n.attrs.tex || '';
+          return;
+        }
+        try {
+          const inner = document.createElement('span');
+          inner.innerHTML = window.katex.renderToString(n.attrs.tex || '', {
+            displayMode: !!n.attrs.display,
+            throwOnError: false,
+          });
+          wrap.appendChild(inner);
+        } catch (e) {
+          wrap.textContent = n.attrs.tex || '';
+        }
+      }
+      paint(node);
+      return {
+        dom: wrap,
+        update(updated) {
+          if (updated.type.name !== 'triliumMath') return false;
+          paint(updated);
+          return true;
+        },
+      };
+    };
+  },
+});
+
 const cellStyleAttrs = {
   backgroundColor: {
     default: null,
@@ -1041,6 +1119,7 @@ const editorExtensions = [
   CustomTableHeader,
   Link.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
   IncludeNote,
+  TriliumMath,
   TaskList,
   TaskItem.configure({ nested: true }),
   Placeholder.configure({ placeholder: 'Start writing…' }),
@@ -2716,6 +2795,65 @@ function normalizeCalloutsForTrilium(doc) {
   });
 }
 
+// Trilium math: <script type="math/tex"> and span.math-tex → spans TipTap keeps (see TriliumMath extension).
+function migrateTriliumMathForTiptap(doc) {
+  doc.querySelectorAll('script[type^="math/tex"]').forEach(sc => {
+    if (!sc.parentNode) return;
+    const type = sc.getAttribute('type') || '';
+    const display = /mode\s*=\s*display/i.test(type);
+    const tex = (sc.textContent || '').trim();
+    if (!tex) {
+      sc.parentNode.removeChild(sc);
+      return;
+    }
+    const span = doc.createElement('span');
+    span.setAttribute('data-trinote-math-tex', tex);
+    span.setAttribute('data-trinote-math-display', display ? '1' : '0');
+    span.className = 'trinote-math-bridge';
+    sc.parentNode.replaceChild(span, sc);
+  });
+  doc.querySelectorAll('span.math-tex').forEach(sp => {
+    if (!sp.parentNode) return;
+    const raw = (sp.textContent || '').trim();
+    if (!raw) return;
+    let display = false;
+    let tex = raw;
+    if (raw.length >= 4 && raw.charCodeAt(0) === 92 && raw.charAt(1) === '[' &&
+        raw.charCodeAt(raw.length - 2) === 92 && raw.charAt(raw.length - 1) === ']') {
+      display = true;
+      tex = raw.slice(2, -2).trim();
+    } else if (raw.length >= 4 && raw.charCodeAt(0) === 92 && raw.charAt(1) === '(' &&
+        raw.charCodeAt(raw.length - 2) === 92 && raw.charAt(raw.length - 1) === ')') {
+      tex = raw.slice(2, -2).trim();
+    } else if (raw.length >= 4 && raw.indexOf('$$') === 0 && raw.lastIndexOf('$$') === raw.length - 2) {
+      display = true;
+      tex = raw.slice(2, -2).trim();
+    } else if (raw.length >= 2 && raw.charAt(0) === '$' && raw.charAt(raw.length - 1) === '$' && raw.indexOf('$$') !== 0) {
+      tex = raw.slice(1, -1).trim();
+    }
+    if (!tex) return;
+    const span = doc.createElement('span');
+    span.setAttribute('data-trinote-math-tex', tex);
+    span.setAttribute('data-trinote-math-display', display ? '1' : '0');
+    span.className = 'trinote-math-bridge';
+    sp.parentNode.replaceChild(span, sp);
+  });
+}
+
+// TipTap bridge spans → Trilium <script type="math/tex"> for save / desktop compatibility.
+function migrateTriliumMathSpansToCkScripts(doc) {
+  doc.querySelectorAll('span[data-trinote-math-tex]').forEach(el => {
+    if (!el.parentNode) return;
+    const tex = el.getAttribute('data-trinote-math-tex') || '';
+    if (!tex) return;
+    const display = el.getAttribute('data-trinote-math-display') === '1';
+    const sc = doc.createElement('script');
+    sc.setAttribute('type', display ? 'math/tex; mode=display' : 'math/tex');
+    sc.textContent = tex;
+    el.parentNode.replaceChild(sc, el);
+  });
+}
+
 // CKEditor / Trilium often use <span style="background-color:…">; TipTap Highlight expects <mark data-color>.
 function migrateCkColorMarkupForTiptap(doc) {
   const body = doc.body;
@@ -2798,6 +2936,7 @@ function ckToTiptap(html) {
   });
 
   migrateTriliumAdmonitionsForTiptap(doc);
+  migrateTriliumMathForTiptap(doc);
   migrateCkColorMarkupForTiptap(doc);
   return doc.body.innerHTML;
 }
@@ -2858,6 +2997,8 @@ function tiptapToCk(html) {
     tbl.parentNode.insertBefore(figure, tbl);
     figure.appendChild(tbl);
   });
+
+  migrateTriliumMathSpansToCkScripts(doc);
 
   return doc.body.innerHTML;
 }
