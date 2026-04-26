@@ -1540,14 +1540,18 @@ final class NoteDetailViewModel {
         return contentString ?? ""
     }
 
+    /// Explicitly leaves the editor *without* keeping any draft of in-progress edits.
+    /// Distinct from navigating back, which preserves drafts via `saveDraftLocally()`.
+    /// Any in-memory edits are dropped, the on-disk draft (if any) is deleted, and the
+    /// note's canonical HTML is restored as the editable content.
     func cancelEditing() {
         draftAutoSaveTask?.cancel()
-        flushPendingEditorContent()
-        let canonical = rawContentString ?? contentString
-        if editableContent != canonical {
-            saveDraftLocally()
-            hasDraft = true
+        _pendingEditorHTML = nil
+        if let profileId = self.serverProfileId {
+            try? self.persistence.deleteDraft(noteId: self.noteId, serverProfileId: profileId)
         }
+        hasDraft = false
+        editableContent = richTextEditorSeedHTML
         isEditing = false
         editorDisplayContent = nil
         _editorPrepGeneration &+= 1

@@ -2,7 +2,13 @@ import SwiftUI
 
 struct RecentsView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
+    /// Mirrors the tree's background settings so the Recents list shares the same chrome
+    /// (in particular when the user has chosen a custom tree background colour).
+    @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
+    @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#F2F2F7"
+    @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
     @State private var recentNotes: [RecentNote] = []
     /// Cached breadcrumb path per note (from SwiftData); empty string if unavailable.
     @State private var pathByNoteId: [String: String] = [:]
@@ -14,6 +20,17 @@ struct RecentsView: View {
     @State private var colorLabelByNoteId: [String: String] = [:]
     @State private var navigateToNote: (String, String)?
 
+    private var treeBgColor: Color? {
+        guard useCustomTreeColors else { return nil }
+        return colorScheme == .dark ? Color(hex: treeDarkBgColor) : Color(hex: treeLightBgColor)
+    }
+
+    /// Same fallback as `TreeView.treeChromeBackground` so both views land on the system grouped
+    /// background when no custom colour is configured.
+    private var treeChromeBackground: Color {
+        treeBgColor ?? Color(.systemGroupedBackground)
+    }
+
     var body: some View {
         Group {
             if recentNotes.isEmpty {
@@ -22,6 +39,8 @@ struct RecentsView: View {
                 } description: {
                     Text(String(localized: "Notes you open will appear here for quick access.", comment: "Recents empty hint"))
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(treeChromeBackground)
             } else {
                 List {
                     ForEach(recentNotes, id: \.id) { recent in
@@ -68,9 +87,12 @@ struct RecentsView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .listRowBackground(treeBgColor ?? Color(.systemBackground))
                     }
                 }
                 .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .background(treeChromeBackground)
             }
         }
         .navigationTitle(String(localized: "Recents", comment: "Recents tab title"))
