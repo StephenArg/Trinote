@@ -7,6 +7,7 @@ struct PinSetupSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appPinEnabled") private var appPinEnabled = false
+    @AppStorage("appBiometricEnabled") private var appBiometricEnabled = false
 
     @State private var step: Step = .initial
     @State private var firstEntry = ""
@@ -99,6 +100,7 @@ struct PinSetupSheet: View {
                         if match {
                             try await keychain.deleteAppPin()
                             appPinEnabled = false
+                            appBiometricEnabled = false
                             onComplete()
                             dismiss()
                         } else {

@@ -34,10 +34,11 @@ struct NoteItem: Identifiable, Hashable, Sendable {
         return t.isEmpty ? nil : t
     }
 
-    /// SF Symbol name: custom Trilium `#iconClass` if mapped; else semantic geo map uses map icon; else note `type` default.
+    /// SF Symbol name: custom Trilium `#iconClass` if mapped; else semantic geo map uses map icon; else semantic collection uses grid icon; else note `type` default.
     var resolvedIconName: String {
         if let mapped = NoteIconMapper.sfSymbol(for: iconClass) { return mapped }
         if isSemanticGeoMap { return NoteType.geoMap.iconName }
+        if isTriliumCollectionNote { return NoteType.collection.iconName }
         return type.iconName
     }
 
@@ -88,6 +89,29 @@ struct NoteItem: Identifiable, Hashable, Sendable {
         return v.caseInsensitiveCompare("_template_geo_map") == .orderedSame
     }
 
+    /// True when `~template` targets a Trilium built-in **Note List** / collection presentation (list, grid, table, …).
+    /// These notes are often `type: book` with **no** `#collection` label; the template relation is the reliable signal (e.g. `_template_list_view`).
+    private var hasTriliumNoteListCollectionTemplateRelation: Bool {
+        guard let raw = templateRelationValue else { return false }
+        let v = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if v.isEmpty { return false }
+        let lower = v.lowercased()
+        if lower == "_template_geo_map" { return false }
+        let known: Set<String> = [
+            "_template_list_view",
+            "_template_grid_view",
+            "_template_table",
+            "_template_kanban",
+            "_template_presentation",
+        ]
+        if known.contains(lower) { return true }
+        // Forward-compatible: `_template_<name>_view` for note-list style templates (never geo: `_template_geo_map` ends with `_map`).
+        if lower.hasPrefix("_template_"), lower.hasSuffix("_view"), !lower.contains("geo") {
+            return true
+        }
+        return false
+    }
+
     /// True when this note should use geo map UI:
     /// - native `geoMap` type, OR
     /// - `book` + `#viewType=geoMap`, OR
@@ -95,15 +119,36 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     var isSemanticGeoMap: Bool {
         if type == .geoMap { return true }
         if isCalendarRoot { return false }
-        if type == .book, let v = viewTypeLabelValue, v.caseInsensitiveCompare("geoMap") == .orderedSame {
+        if (type == .book || type == .collection), let v = viewTypeLabelValue, v.caseInsensitiveCompare("geoMap") == .orderedSame {
             return true
         }
         return hasGeoMapTemplateRelation
     }
 
-    /// User-facing type string for tree accessibility and metadata (maps semantic geo map over raw `book`).
+    /// True when Trilium marks this note as a Collection container (`type: collection`, `#collection` on `book`, or built-in list/grid/table `~template` on `book`).
+    /// Excludes geo maps and journal calendar roots.
+    var isTriliumCollectionNote: Bool {
+        if type == .collection {
+            if isCalendarRoot { return false }
+            if isSemanticGeoMap { return false }
+            return true
+        }
+        guard type == .book else { return false }
+        if isCalendarRoot { return false }
+        if isSemanticGeoMap { return false }
+        return hasTriliumCollectionAttributeLabel || hasTriliumNoteListCollectionTemplateRelation
+    }
+
+    private var hasTriliumCollectionAttributeLabel: Bool {
+        attributes.contains { $0.type == .label && $0.name.caseInsensitiveCompare("collection") == .orderedSame }
+    }
+
+    /// User-facing type string for tree accessibility and metadata (maps semantic geo map and collection over raw `book`).
     var uiNoteTypeDisplayName: String {
         if isSemanticGeoMap { return NoteType.geoMap.displayName }
+        if isTriliumCollectionNote {
+            return String(localized: "Collection", comment: "Note type: Trilium collection container")
+        }
         return type.displayName
     }
 }

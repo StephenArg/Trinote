@@ -33,6 +33,8 @@
 	<string>Trinote needs camera access to capture photos for notes.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Trinote needs access to your photos to upload image attachments.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Trinote uses Face ID to unlock the app.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

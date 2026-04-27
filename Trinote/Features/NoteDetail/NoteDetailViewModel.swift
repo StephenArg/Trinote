@@ -343,7 +343,7 @@ final class NoteDetailViewModel {
         // If we skip `getNoteContent` because metadata looks fresh, we never load that JSON.
         let shouldFetchBlobDespiteFreshMeta = !hasUsableBody && (
             note.isSemanticGeoMap
-            || (note.type == .book && !childIdsForBlobPolicy.isEmpty)
+            || ((note.type == .book || note.type == .collection) && !childIdsForBlobPolicy.isEmpty)
         )
 
         let forceFetchProtected = note.isProtected && !appState.protectedSessionActive
@@ -359,7 +359,7 @@ final class NoteDetailViewModel {
                 let blobPolicyLog = NoteDiagnostics.describeBlobFetchDecision(
                     noteId: nid,
                     isSemanticGeoMap: note.isSemanticGeoMap,
-                    noteTypeBook: note.type == .book,
+                    noteTypeBook: note.type == .book || note.type == .collection,
                     childCountForPolicy: childIdsForBlobPolicy.count,
                     hasUsableBody: hasUsableBody,
                     shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
@@ -375,21 +375,21 @@ final class NoteDetailViewModel {
             let blobOverrideLog = NoteDiagnostics.describeBlobFetchDecision(
                 noteId: nid,
                 isSemanticGeoMap: note.isSemanticGeoMap,
-                noteTypeBook: note.type == .book,
-                childCountForPolicy: childIdsForBlobPolicy.count,
-                hasUsableBody: hasUsableBody,
-                shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
-                serverUtc: serverDate,
-                cachedUtc: cachedDate,
-                forceFetchProtected: forceFetchProtected,
-                earlyExitReason: "override_fetch_empty_body_geo_or_book_children"
+                    noteTypeBook: note.type == .book || note.type == .collection,
+                    childCountForPolicy: childIdsForBlobPolicy.count,
+                    hasUsableBody: hasUsableBody,
+                    shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
+                    serverUtc: serverDate,
+                    cachedUtc: cachedDate,
+                    forceFetchProtected: forceFetchProtected,
+                    earlyExitReason: "override_fetch_empty_body_geo_or_book_children"
             )
             Log.noteDiag.info("\(blobOverrideLog)")
         } else {
             let blobFetchLog = NoteDiagnostics.describeBlobFetchDecision(
                 noteId: nid,
                 isSemanticGeoMap: note.isSemanticGeoMap,
-                noteTypeBook: note.type == .book,
+                noteTypeBook: note.type == .book || note.type == .collection,
                 childCountForPolicy: childIdsForBlobPolicy.count,
                 hasUsableBody: hasUsableBody,
                 shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,

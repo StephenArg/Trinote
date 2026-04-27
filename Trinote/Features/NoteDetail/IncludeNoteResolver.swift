@@ -218,7 +218,7 @@ struct IncludeNoteResolver {
                 Log.ui.error("[MMD] IncludeNoteResolver.mermaid noteId=\(nid, privacy: .public) loadRawBodyString nil")
                 bodyHTML = Self.escapeHTML(String(localized: "Could not load diagram.", comment: "Include mermaid failed"))
             }
-        case .book, .noteMap:
+        case .book, .collection, .noteMap:
             bodyHTML = await childListHTML(parent: item)
         case .file:
             bodyHTML = fileCardHTML(note: item)

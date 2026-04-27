@@ -75,6 +75,12 @@ struct TrinoteApp: App {
     @AppStorage("appearanceMode") private var appearanceMode: String = AppearanceMode.device.rawValue
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
     @AppStorage("appPinEnabled") private var appPinEnabled = false
+    @AppStorage("appBiometricEnabled") private var appBiometricEnabled = false
+    @State private var biometricInProgress = false
+    /// After biometric fails or the user cancels, show the PIN keypad until the next time the app lock engages.
+    @State private var preferPinKeypadVisible = false
+    /// Changes when the lock engages so `.task` runs one automatic biometric attempt per lock (no cancel/retry loops).
+    @State private var lockSessionID = UUID()
 
     private var resolvedColorScheme: ColorScheme? {
         AppearanceMode(rawValue: appearanceMode)?.colorScheme
@@ -101,14 +107,6 @@ struct TrinoteApp: App {
                             .task { await appState.bootstrap() }
                             .onChange(of: appearanceMode) { _, _ in
                                 MermaidRenderer.shared.onAppearanceModeChanged()
-                            }
-                            .onChange(of: scenePhase) { _, newPhase in
-                                if newPhase == .active {
-                                    Task { await appState.onForegroundResume() }
-                                } else if newPhase == .background {
-                                    Task { await appState.onBackground() }
-                                    if appPinEnabled { isAppLocked = true }
-                                }
                             }
                     } else if let persistenceError {
                         VStack(spacing: 16) {
@@ -141,9 +139,21 @@ struct TrinoteApp: App {
             .preferredColorScheme(resolvedColorScheme)
             .tint(resolvedAccentColor)
             .foregroundStyle(Color.appText)
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    if let appState {
+                        Task { await appState.onForegroundResume() }
+                    }
+                } else if newPhase == .background {
+                    if let appState {
+                        Task { await appState.onBackground() }
+                    }
+                    if appPinEnabled { engageAppLock() }
+                }
+            }
             .task {
                 guard appState == nil else { return }
-                if appPinEnabled { isAppLocked = true }
+                if appPinEnabled { engageAppLock() }
                 do {
                     try await PersistenceManager.initializeShared()
                     appState = AppState()
@@ -154,24 +164,126 @@ struct TrinoteApp: App {
         }
     }
 
+    private var lockScreenBiometryKind: BiometricKind {
+        BiometricAuthenticator.availability().kind
+    }
+
+    private var lockScreenBiometricHardwareAvailable: Bool {
+        BiometricAuthenticator.availability().available
+    }
+
+    private var shouldShowBiometricPlaceholder: Bool {
+        appBiometricEnabled && lockScreenBiometricHardwareAvailable && !preferPinKeypadVisible
+    }
+
+    private func engageAppLock() {
+        guard appPinEnabled else { return }
+        let offerBiometricFirst = appBiometricEnabled && lockScreenBiometricHardwareAvailable
+        preferPinKeypadVisible = !offerBiometricFirst
+        isAppLocked = true
+        lockSessionID = UUID()
+    }
+
+    private func attemptBiometricUnlockFromUserButton() {
+        Task { @MainActor in
+            await attemptBiometricUnlockAsync(isUserInitiated: true)
+        }
+    }
+
+    @MainActor
+    private func attemptBiometricUnlockAsync(isUserInitiated: Bool) async {
+        guard appBiometricEnabled, isAppLocked else { return }
+        let (_, available, _) = BiometricAuthenticator.availability()
+        if !available {
+            preferPinKeypadVisible = true
+            return
+        }
+        if !isUserInitiated && preferPinKeypadVisible { return }
+        guard !biometricInProgress else { return }
+
+        biometricInProgress = true
+        defer { biometricInProgress = false }
+
+        let reason = String(localized: "Unlock Trinote", comment: "Lock screen biometric prompt")
+        let result = await BiometricAuthenticator.authenticate(localizedReason: reason)
+        if case .success = result {
+            withAnimation(.easeOut(duration: 0.25)) {
+                isAppLocked = false
+                preferPinKeypadVisible = false
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.2)) {
+                preferPinKeypadVisible = true
+            }
+        }
+    }
+
+    private var biometricLockPlaceholder: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            VStack(spacing: 16) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 52, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Image(systemName: "key.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(String(localized: "Locked. Confirm your identity to unlock.", comment: "VoiceOver lock placeholder"))
+
+            Text(String(localized: "Confirm to unlock", comment: "Hint while system Face ID or Touch ID sheet is shown"))
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var pinLockOverlay: some View {
-        ManagedPinEntryView(
-            title: String(localized: "Enter PIN", comment: "Lock screen title"),
-            subtitle: nil,
-            onComplete: { pin in
-                Task {
-                    let match = (try? await KeychainManager.shared.verifyAppPin(pin)) ?? false
-                    if match {
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            isAppLocked = false
+        Group {
+            if shouldShowBiometricPlaceholder {
+                biometricLockPlaceholder
+                    .task(id: lockSessionID) {
+                        guard isAppLocked else { return }
+                        await attemptBiometricUnlockAsync(isUserInitiated: false)
+                    }
+            } else {
+                VStack(spacing: 20) {
+                    ManagedPinEntryView(
+                        title: String(localized: "Enter PIN", comment: "Lock screen title"),
+                        subtitle: nil,
+                        onComplete: { pin in
+                            Task {
+                                let match = (try? await KeychainManager.shared.verifyAppPin(pin)) ?? false
+                                if match {
+                                    withAnimation(.easeOut(duration: 0.25)) {
+                                        isAppLocked = false
+                                        preferPinKeypadVisible = false
+                                    }
+                                } else {
+                                    pinShake = true
+                                }
+                            }
+                        },
+                        triggerShake: $pinShake
+                    )
+
+                    if appBiometricEnabled, lockScreenBiometryKind != .none {
+                        Button {
+                            attemptBiometricUnlockFromUserButton()
+                        } label: {
+                            Text(lockScreenBiometryKind.localizedUseButtonTitle)
                         }
-                    } else {
-                        pinShake = true
+                        .buttonStyle(.bordered)
                     }
                 }
-            },
-            triggerShake: $pinShake
-        )
+            }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
     }

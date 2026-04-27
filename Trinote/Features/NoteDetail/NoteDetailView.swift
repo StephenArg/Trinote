@@ -968,6 +968,13 @@ struct NoteDetailView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
                     .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+                } else if vm.isEditing && note.type == .code {
+                    VStack(spacing: 0) {
+                        editorStatusBanner(vm)
+                        codeEditingView(vm)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
+                    .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
                 } else if vm.isEditing && note.type == .mermaid {
                     mermaidEditingView(vm)
                 } else if vm.isEditing && note.type == .mindMap {
@@ -1407,8 +1414,6 @@ struct NoteDetailView: View {
             ProgressView(String(localized: "Loading content…", comment: "Note body loading"))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 40)
-        } else if vm.isEditing && note.type != .text {
-            codeEditingView(vm)
         } else {
             readingView(vm, note: note, findControl: findControl)
         }
@@ -1453,9 +1458,14 @@ struct NoteDetailView: View {
             }
         case .geoMap:
             GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
-        case .book:
+        case .book, .collection:
             if isGeoMapNote(note, contentString: vm.contentString, vm: vm) {
                 GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
+            } else if note.isTriliumCollectionNote || note.type == .collection {
+                CollectionNoteLimitedSupportBanner(
+                    noteId: note.noteId,
+                    serverURL: appState.activeProfile?.normalizedBaseURL
+                )
             } else {
                 BookNoteView(note: note)
             }
@@ -2104,7 +2114,7 @@ struct NoteDetailView: View {
         if note.isCalendarRoot { return false }
         if note.isSemanticGeoMap { return true }
         if geoMapViewportJSONMatches(contentString) { return true }
-        if note.type == .book, let vm, vm.cachedAnyChildHasGeolocationLabel() { return true }
+        if (note.type == .book || note.type == .collection), let vm, vm.cachedAnyChildHasGeolocationLabel() { return true }
         return false
     }
 
@@ -2141,42 +2151,29 @@ struct NoteDetailView: View {
     @ViewBuilder
     private func codeEditingView(_ vm: NoteDetailViewModel) -> some View {
         @Bindable var vm = vm
-        VStack(spacing: 0) {
-            editorStatusBanner(vm)
-            ZStack(alignment: .bottomTrailing) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(String(localized: "Source", comment: "Code editor label"))
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal)
-                .padding(.top, 8)
-
-                TextEditor(text: $vm.editableContent)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 300)
-                    .padding(.horizontal, 8)
-                    .scrollContentBackground(.hidden)
-                    .background(Color(.systemGroupedBackground))
-                    .background(
-                        NoteDetailScrollOffsetReader { y, verticallyScrollable, _ in
-                            updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
-                        }
-                        .frame(width: 0, height: 0)
-                    )
-            }
+        ZStack(alignment: .bottomTrailing) {
+            TextEditor(text: $vm.editableContent)
+                .font(.system(.body, design: .monospaced))
+                .padding(.horizontal, 8)
+                .scrollContentBackground(.hidden)
+                .background(Color(.systemGroupedBackground))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    NoteDetailScrollOffsetReader { y, verticallyScrollable, _ in
+                        updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
+                    }
+                    .frame(width: 0, height: 0)
+                )
 
             if showEditorSaveCancelChip {
                 editorSaveChip(vm: vm)
                     .padding(.trailing, 16)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 62)
                     .transition(.scale(scale: 0.88).combined(with: .opacity))
                     .zIndex(2)
             }
-            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
             editorSaveCancelScrollBaselineReady = false
             lastEditorScrollOffsetY = 0

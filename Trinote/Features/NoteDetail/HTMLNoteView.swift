@@ -213,7 +213,16 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         figure.image-style-block-align-left { display: table; margin-left: 0; margin-right: auto; clear: both; }
         figure.image-style-block-align-right { display: table; margin-left: auto; margin-right: 0; clear: both; }
         figure.image-style-side { float: right; margin: 0.5em 0 0.5em 1.2em; max-width: 50%; }
-        pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 14px; }
+        pre {
+          background: var(--code-bg);
+          padding: 12px;
+          border-radius: 8px;
+          font-size: 14px;
+          white-space: pre;
+          overflow-x: auto;
+          overflow-y: visible;
+          -webkit-overflow-scrolling: touch;
+        }
         code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14px; }
         pre code { background: none; padding: 0; }
         .table-scroll-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 8px 0; }

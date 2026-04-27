@@ -1,4 +1,14 @@
 import SwiftUI
+import UIKit
+
+private enum PinEntryHaptics {
+    private static let medium = UIImpactFeedbackGenerator(style: .medium)
+
+    static func keypadTap() {
+        medium.prepare()
+        medium.impactOccurred(intensity: 1.0)
+    }
+}
 
 struct PinEntryView: View {
     let title: String
@@ -91,6 +101,7 @@ struct PinEntryView: View {
     private func digitButton(_ digit: String) -> some View {
         Button {
             guard digits.count < pinLength else { return }
+            PinEntryHaptics.keypadTap()
             digits.append(digit)
             if digits.count == pinLength {
                 let pin = digits.joined()
@@ -109,9 +120,9 @@ struct PinEntryView: View {
 
     private var deleteButton: some View {
         Button {
-            if !digits.isEmpty {
-                digits.removeLast()
-            }
+            guard !digits.isEmpty else { return }
+            PinEntryHaptics.keypadTap()
+            digits.removeLast()
         } label: {
             Image(systemName: "delete.backward")
                 .font(.title2)
@@ -226,6 +237,7 @@ struct ManagedPinEntryView: View {
     private func digitButton(_ digit: String) -> some View {
         Button {
             guard digits.count < pinLength else { return }
+            PinEntryHaptics.keypadTap()
             digits.append(digit)
             if digits.count == pinLength {
                 let pin = digits.joined()
@@ -244,9 +256,9 @@ struct ManagedPinEntryView: View {
 
     private var deleteButton: some View {
         Button {
-            if !digits.isEmpty {
-                digits.removeLast()
-            }
+            guard !digits.isEmpty else { return }
+            PinEntryHaptics.keypadTap()
+            digits.removeLast()
         } label: {
             Image(systemName: "delete.backward")
                 .font(.title2)

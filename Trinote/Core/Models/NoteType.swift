@@ -22,6 +22,8 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     case image
     case search
     case book
+    /// Trilium Next / ETAPI `type: "collection"` — container for Note List views (table, kanban, grid, etc.).
+    case collection
     case noteMap = "noteMap"
     case relationMap = "relationMap"
     case render
@@ -45,6 +47,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .image: return "Image"
         case .search: return "Search"
         case .book: return "Book"
+        case .collection: return "Collection"
         case .noteMap: return "Note Map"
         case .relationMap: return "Relation Map"
         case .render: return "Render"
@@ -69,6 +72,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .image: return "photo"
         case .search: return "magnifyingglass"
         case .book: return "book"
+        case .collection: return "square.grid.2x2"
         case .noteMap, .relationMap, .mindMap: return "map"
         case .render: return "globe"
         case .canvas: return "paintpalette"
@@ -92,14 +96,14 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
 
     var isRenderable: Bool {
         switch self {
-        case .text, .code, .image, .file, .book, .render, .mermaid, .mindMap, .geoMap, .calendar: return true
+        case .text, .code, .image, .file, .book, .collection, .render, .mermaid, .mindMap, .geoMap, .calendar: return true
         default: return false
         }
     }
 
     var isAdvanced: Bool {
         switch self {
-        case .canvas, .noteMap, .relationMap, .webView, .contentWidget, .launcher, .mindMap, .geoMap, .calendar:
+        case .canvas, .collection, .noteMap, .relationMap, .webView, .contentWidget, .launcher, .mindMap, .geoMap, .calendar:
             return true
         default:
             return false

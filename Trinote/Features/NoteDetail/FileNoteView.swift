@@ -46,6 +46,46 @@ struct FileNoteView: View {
     }
 }
 
+/// Thin inline notice for Trilium Collection notes (table, Kanban, grid, etc. are not rendered natively).
+struct CollectionNoteLimitedSupportBanner: View {
+    let noteId: String
+    let serverURL: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle.fill")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(
+                    String(
+                        localized: "Collection views are not fully supported in Trinote. Open this note in the official Trilium app for table, Kanban, calendar, and other layouts.",
+                        comment: "Banner explaining limited Collection support; sub-notes list appears below"
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                if let serverURL, let url = URL(string: "\(serverURL)/#/\(noteId)") {
+                    Link(destination: url) {
+                        Label(String(localized: "Open in Web Browser", comment: "Opens note in Trilium web UI"), systemImage: "safari")
+                    }
+                    .font(.caption.weight(.medium))
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+    }
+}
+
 struct BookNoteView: View {
     let note: NoteItem
 

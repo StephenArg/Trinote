@@ -26,7 +26,9 @@ struct SettingsView: View {
     @State private var syncStatuses: [SyncStatus] = []
     @State private var showSyncDetails = false
     @AppStorage("appPinEnabled") private var appPinEnabled = false
+    @AppStorage("appBiometricEnabled") private var appBiometricEnabled = false
     @State private var showPinSetup = false
+    @State private var deviceBiometryKind: BiometricKind = .none
 
     var body: some View {
         List {
@@ -44,6 +46,12 @@ struct SettingsView: View {
         .task { await loadDiagnostics() }
         .sheet(isPresented: $showPinSetup) {
             PinSetupSheet(isCurrentlyEnabled: appPinEnabled) {}
+        }
+        .onAppear {
+            deviceBiometryKind = BiometricAuthenticator.availability().kind
+        }
+        .onChange(of: appPinEnabled) { _, isOn in
+            if !isOn { appBiometricEnabled = false }
         }
     }
 
@@ -199,7 +207,7 @@ struct SettingsView: View {
     }
 
     private var securitySection: some View {
-        Section(String(localized: "Security", comment: "Settings section")) {
+        Section {
             Button {
                 showPinSetup = true
             } label: {
@@ -213,7 +221,49 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            if deviceBiometryKind != .none {
+                Toggle(deviceBiometryKind.localizedUnlockToggleTitle, isOn: biometricUnlockBinding)
+                    .disabled(!appPinEnabled)
+            }
+        } header: {
+            Text(String(localized: "Security", comment: "Settings section"))
+        } footer: {
+            if deviceBiometryKind != .none, !appPinEnabled {
+                Text(
+                    String(
+                        format: String(
+                            localized: "Enable App PIN to use %@.",
+                            comment: "Settings footer: %@ is Face ID, Touch ID, or Optic ID"
+                        ),
+                        locale: .current,
+                        deviceBiometryKind.localizedShortName
+                    )
+                )
+            }
         }
+    }
+
+    private var biometricUnlockBinding: Binding<Bool> {
+        Binding(
+            get: { appBiometricEnabled },
+            set: { newValue in
+                if !newValue {
+                    appBiometricEnabled = false
+                } else {
+                    Task { @MainActor in
+                        let reason = String(
+                            localized: "Confirm to enable biometric unlock for Trinote.",
+                            comment: "System biometric prompt when turning on biometric unlock in Settings"
+                        )
+                        let result = await BiometricAuthenticator.authenticate(localizedReason: reason)
+                        if case .success = result {
+                            appBiometricEnabled = true
+                        }
+                    }
+                }
+            }
+        )
     }
 
     private var serverSection: some View {

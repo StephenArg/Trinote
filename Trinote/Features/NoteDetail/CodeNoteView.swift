@@ -1,10 +1,20 @@
 import SwiftUI
 import UIKit
 
+private enum CodeNoteTextWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct CodeNoteView: View {
     let content: String
     let mime: String
     var findControl: FindOnPageControl?
+
+    @State private var bodyWidth: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 160
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,9 +36,25 @@ struct CodeNoteView: View {
             .padding(.horizontal)
             .padding(.vertical, 8)
 
-            CodeReadonlyTextView(text: content, findControl: findControl)
-                .frame(minHeight: 120)
-                .background(Color(.secondarySystemGroupedBackground))
+            CodeReadonlyTextView(
+                text: content,
+                findControl: findControl
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: viewportHeight)
+            .background {
+                GeometryReader { g in
+                    Color.clear.preference(key: CodeNoteTextWidthKey.self, value: g.size.width)
+                }
+            }
+            .background(Color(.secondarySystemGroupedBackground))
+        }
+        .onPreferenceChange(CodeNoteTextWidthKey.self) { w in
+            bodyWidth = w
+            viewportHeight = CodeNoteView.naturalCodeBodyHeight(text: content, availableWidth: w)
+        }
+        .onChange(of: content) { _, new in
+            viewportHeight = CodeNoteView.naturalCodeBodyHeight(text: new, availableWidth: bodyWidth)
         }
     }
 
@@ -43,6 +69,35 @@ struct CodeNoteView: View {
             return "Plain Text"
         }
         return lang.capitalized
+    }
+
+    /// Width from `GeometryReader` is often `0` on the first pass; using that for measurement forces a ~`minH` frame until a second pass, which can never arrive. Fall back to screen width (minus a typical inset) for **measurement** only; the real width still applies once layout settles.
+    private static func widthForTextMeasurement(geometryWidth: CGFloat) -> CGFloat {
+        if geometryWidth > 1 {
+            return geometryWidth
+        }
+        let screen = UIScreen.main.bounds.width
+        return max(280, screen - 64)
+    }
+
+    /// Read-only code body height. Uses `UITextView`’s `sizeThatFits` to match `CodeReadonlyTextView` (NSString `boundingRect` often over-estimates and leaves a blank band at the bottom).
+    private static func naturalCodeBodyHeight(text: String, availableWidth: CGFloat) -> CGFloat {
+        let minH: CGFloat = 120
+        let w = widthForTextMeasurement(geometryWidth: availableWidth)
+        let h = textViewMeasureHeight(matching: text, width: w)
+        return max(minH, h)
+    }
+
+    private static func textViewMeasureHeight(matching text: String, width: CGFloat) -> CGFloat {
+        let tv = UITextView()
+        tv.isScrollEnabled = false
+        tv.isEditable = false
+        tv.font = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
+        tv.textContainer.lineFragmentPadding = 0
+        tv.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        tv.text = text
+        let sz = tv.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return ceil(sz.height)
     }
 }
 
@@ -65,8 +120,9 @@ private struct CodeReadonlyTextView: UIViewRepresentable {
         tv.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         tv.textContainer.lineFragmentPadding = 0
         tv.isScrollEnabled = true
+        tv.alwaysBounceVertical = false
+        tv.showsVerticalScrollIndicator = false
         tv.showsHorizontalScrollIndicator = true
-        tv.showsVerticalScrollIndicator = true
         tv.textColor = .label
         tv.text = text
         context.coordinator.lastText = text

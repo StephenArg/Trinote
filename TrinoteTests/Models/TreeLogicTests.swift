@@ -30,6 +30,7 @@ final class TreeLogicTests: XCTestCase {
         let response = TestFixtures.noteResponse(id: "gm1", title: "Map", type: "book", mime: "text/html", attributes: attrs)
         let item = NoteItem(from: response)
         XCTAssertTrue(item.isSemanticGeoMap)
+        XCTAssertFalse(item.isTriliumCollectionNote)
         XCTAssertEqual(item.viewTypeLabelValue, "geoMap")
         XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.geoMap.displayName)
         XCTAssertEqual(item.resolvedIconName, NoteType.geoMap.iconName)
@@ -176,6 +177,7 @@ final class TreeLogicTests: XCTestCase {
 
     func testNoteTypeAdvanced() {
         XCTAssertTrue(NoteType.canvas.isAdvanced)
+        XCTAssertTrue(NoteType.collection.isAdvanced)
         XCTAssertTrue(NoteType.noteMap.isAdvanced)
         XCTAssertFalse(NoteType.text.isAdvanced)
     }
@@ -188,6 +190,7 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(NoteType.canvas.creationInitialContent, NoteType.emptyCanvasNoteJSON)
         XCTAssertTrue(NoteType.emptyCanvasNoteJSON.contains("\"type\":\"excalidraw\""))
         XCTAssertEqual(NoteType.calendar.triliumStorageType, "book")
+        XCTAssertEqual(NoteType.collection.triliumStorageType, "collection")
         let calAttrs = NoteType.calendar.creationInitialAttributes
         XCTAssertEqual(calAttrs.count, 6)
         let byName = Dictionary(uniqueKeysWithValues: calAttrs.map { ($0.name, $0) })
@@ -216,7 +219,85 @@ final class TreeLogicTests: XCTestCase {
     func testNoteTypeFromRawValue() {
         XCTAssertEqual(NoteType(rawValue: "text"), .text)
         XCTAssertEqual(NoteType(rawValue: "noteMap"), .noteMap)
+        XCTAssertEqual(NoteType(rawValue: "collection"), .collection)
         XCTAssertNil(NoteType(rawValue: "unknown_type"))
+    }
+
+    /// Trilium Next `type: collection` maps to `NoteType.collection`.
+    func testExplicitCollectionTypeNoteItem() {
+        let response = TestFixtures.noteResponse(id: "col1", title: "Kanban", type: "collection", mime: "text/html")
+        let item = NoteItem(from: response)
+        XCTAssertEqual(item.type, .collection)
+        XCTAssertTrue(item.isTriliumCollectionNote)
+        XCTAssertEqual(
+            item.uiNoteTypeDisplayName,
+            String(localized: "Collection", comment: "Note type: Trilium collection container")
+        )
+        XCTAssertEqual(item.resolvedIconName, NoteType.collection.iconName)
+    }
+
+    /// List/Grid collections: Trilium often uses `~template=_template_list_view` with **no** `#collection` label.
+    func testBookWithListViewTemplateRelationIsTriliumCollectionNote() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "t1", noteId: "list1", type: "relation", name: "template", value: "_template_list_view",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let response = TestFixtures.noteResponse(id: "list1", title: "List Collection", type: "book", attributes: attrs)
+        let item = NoteItem(from: response)
+        XCTAssertEqual(item.templateRelationValue, "_template_list_view")
+        XCTAssertTrue(
+            !item.attributes.contains { $0.type == .label && $0.name.caseInsensitiveCompare("collection") == .orderedSame },
+            "List collections often omit the #collection label"
+        )
+        XCTAssertTrue(item.isTriliumCollectionNote)
+        XCTAssertEqual(
+            item.uiNoteTypeDisplayName,
+            String(localized: "Collection", comment: "Note type: Trilium collection container")
+        )
+    }
+
+    /// Legacy `book` + `#collection` (non-geo) is a Trilium Collection container.
+    func testBookWithCollectionLabelIsTriliumCollectionNote() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "c1", noteId: "coll2", type: "label", name: "collection", value: "",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+            AttributeResponse(
+                attributeId: "v1", noteId: "coll2", type: "label", name: "viewType", value: "list",
+                position: 10, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let response = TestFixtures.noteResponse(id: "coll2", title: "List", type: "book", attributes: attrs)
+        let item = NoteItem(from: response)
+        XCTAssertTrue(item.isTriliumCollectionNote)
+        XCTAssertFalse(item.isSemanticGeoMap)
+        XCTAssertEqual(
+            item.uiNoteTypeDisplayName,
+            String(localized: "Collection", comment: "Note type: Trilium collection container")
+        )
+        XCTAssertEqual(item.resolvedIconName, NoteType.collection.iconName)
+    }
+
+    /// `type: collection` + `#viewType=geoMap` is still a semantic geo map, not a generic collection.
+    func testSemanticGeoMapCollectionApiTypeWithViewType() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "a1", noteId: "gm5", type: "label", name: "viewType", value: "geoMap",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+            AttributeResponse(
+                attributeId: "a2", noteId: "gm5", type: "label", name: "collection", value: "",
+                position: 10, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let response = TestFixtures.noteResponse(id: "gm5", title: "Map", type: "collection", mime: "text/html", attributes: attrs)
+        let item = NoteItem(from: response)
+        XCTAssertTrue(item.isSemanticGeoMap)
+        XCTAssertFalse(item.isTriliumCollectionNote)
+        XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.geoMap.displayName)
     }
 
     // MARK: - AttachmentItem

@@ -464,7 +464,11 @@ body { display: flex; flex-direction: column; }
 @media (prefers-color-scheme: dark) {
   .tiptap aside.admonition, .tiptap div[data-callout-type] { background: rgba(255,255,255,0.05); }
 }
-.tiptap pre { background: rgba(128,128,128,0.1); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }
+.tiptap pre {
+  background: rgba(128,128,128,0.1); padding: 12px; border-radius: 8px;
+  font-size: 14px; font-family: "SF Mono", Menlo, monospace;
+  white-space: pre; overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch;
+}
 .tiptap code { background: rgba(128,128,128,0.1); padding: 2px 6px; border-radius: 4px; font-size: 14px; font-family: "SF Mono", Menlo, monospace; }
 .tiptap pre code { background: none; padding: 0; }
 .tiptap img { max-width: 100%; height: auto; border-radius: 6px; cursor: pointer; }
