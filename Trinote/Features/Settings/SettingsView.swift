@@ -14,6 +14,8 @@ struct SettingsView: View {
     @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
     @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#ffffff"
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
+
+    @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     @State private var showLogoutConfirm = false
     @State private var showClearCacheConfirm = false
     @State private var showResetColorsConfirm = false
@@ -30,6 +32,7 @@ struct SettingsView: View {
         List {
             appearanceSection
             treeViewSection
+            noteEditorSection
             securitySection
             serverSection
             connectionSection
@@ -177,6 +180,22 @@ struct SettingsView: View {
             get: { Color(hex: treeDarkBgColor) },
             set: { treeDarkBgColor = $0.hexString }
         )
+    }
+
+    private var noteEditorSection: some View {
+        Section {
+            Toggle(
+                String(localized: "Long-Press to Edit", comment: "Settings toggle: replace the floating edit button with a long-press gesture"),
+                isOn: $noteEditorLongPressToEdit
+            )
+        } header: {
+            Text(String(localized: "Note Editor", comment: "Settings section header"))
+        } footer: {
+            Text(String(
+                localized: "Hide the floating edit button on read-only notes. Press and hold the note for 1.5 seconds to start editing.",
+                comment: "Explains the long-press-to-edit option"
+            ))
+        }
     }
 
     private var securitySection: some View {

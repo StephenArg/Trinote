@@ -91,6 +91,8 @@ struct NoteDetailView: View {
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
     @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
     @AppStorage("lastActiveOpenTabId") private var lastActiveOpenTabIdStorage: String = ""
+    /// When `true`, hide the floating edit FAB and instead require a 1.5-second hold on the read-only view to start editing. Mirrors `SettingsView`'s toggle of the same key.
+    @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     @State private var activeOpenTabId: String?
     @State private var openNoteTabListNonEmpty: Bool = false
 
@@ -186,7 +188,7 @@ struct NoteDetailView: View {
 
     /// Uses `UIScrollView.contentOffset.y` (via `NoteDetailScrollOffsetReader`): increases when scrolling **down**, decreases when scrolling **up**.
     private func updateFloatingEditVisibility(contentOffsetY: CGFloat, vm: NoteDetailViewModel, note: NoteItem) {
-        guard note.type.isEditable, !vm.needsProtectedSession, !vm.isEditing else {
+        guard !noteEditorLongPressToEdit, note.type.isEditable, !vm.needsProtectedSession, !vm.isEditing else {
             if showFloatingEditButton {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                     showFloatingEditButton = false
@@ -323,6 +325,46 @@ struct NoteDetailView: View {
         }
         editorSaveChipIdleWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.editorSaveChipIdleDelay, execute: work)
+    }
+
+    /// Length of the long-press hold (in seconds) that activates editing when the FAB is replaced
+    /// by gesture-based editing. Matches the description in `SettingsView`'s footer.
+    private static let noteEditorLongPressToEditDuration: TimeInterval = 1.5
+
+    /// Long-press gesture used when `noteEditorLongPressToEdit` is on. Runs as a
+    /// `simultaneousGesture` so it doesn't block scrolling, link taps, or the WebView's own
+    /// long-press for text selection — pressing-and-holding (without moving) for 1.5s simply
+    /// starts editing on top of whatever the underlying view does.
+    private func longPressToEditGesture(vm: NoteDetailViewModel, note: NoteItem) -> some Gesture {
+        LongPressGesture(minimumDuration: Self.noteEditorLongPressToEditDuration)
+            .onEnded { _ in
+                guard noteEditorLongPressToEdit,
+                      note.type.isEditable,
+                      !vm.needsProtectedSession,
+                      !vm.isEditing
+                else { return }
+                let generator = UIImpactFeedbackGenerator(style: .medium)
+                generator.impactOccurred()
+                vm.startEditing()
+            }
+    }
+
+    /// Re-evaluates the FAB visibility after the long-press setting toggles or the note's
+    /// editability changes. Keeps the FAB in sync when the user flips the toggle while a note
+    /// is on screen, without waiting for the next scroll event.
+    private func refreshFloatingEditVisibility(vm: NoteDetailViewModel, note: NoteItem) {
+        let shouldShow = !noteEditorLongPressToEdit
+            && note.type.isEditable
+            && !vm.needsProtectedSession
+            && !vm.isEditing
+        if shouldShow != showFloatingEditButton {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                showFloatingEditButton = shouldShow
+            }
+        }
+        if !shouldShow {
+            floatingEditScrollBaselineReady = false
+        }
     }
 
     @ViewBuilder
@@ -968,8 +1010,9 @@ struct NoteDetailView: View {
                                 .frame(width: 0, height: 0)
                             )
                         }
+                        .simultaneousGesture(longPressToEditGesture(vm: vm, note: note))
 
-                        if showFloatingEditButton {
+                        if showFloatingEditButton && !noteEditorLongPressToEdit {
                             floatingEditFAB(vm: vm)
                                 .padding(.trailing, 16)
                                 .padding(.bottom, findControl.isPresented ? 56 : 12)
@@ -987,7 +1030,10 @@ struct NoteDetailView: View {
                     .onAppear {
                         floatingEditScrollBaselineReady = false
                         lastScrollContentOffsetY = 0
-                        let eligible = note.type.isEditable && !vm.needsProtectedSession && !vm.isEditing
+                        let eligible = !noteEditorLongPressToEdit
+                            && note.type.isEditable
+                            && !vm.needsProtectedSession
+                            && !vm.isEditing
                         if eligible {
                             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                                 showFloatingEditButton = true
@@ -1004,7 +1050,7 @@ struct NoteDetailView: View {
                             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                                 showFloatingEditButton = false
                             }
-                        } else if note.type.isEditable && !vm.needsProtectedSession {
+                        } else if !noteEditorLongPressToEdit && note.type.isEditable && !vm.needsProtectedSession {
                             floatingEditScrollBaselineReady = false
                             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                                 showFloatingEditButton = true
@@ -1017,12 +1063,15 @@ struct NoteDetailView: View {
                                 showFloatingEditButton = false
                             }
                             floatingEditScrollBaselineReady = false
-                        } else if note.type.isEditable && !vm.isEditing {
+                        } else if !noteEditorLongPressToEdit && note.type.isEditable && !vm.isEditing {
                             floatingEditScrollBaselineReady = false
                             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                                 showFloatingEditButton = true
                             }
                         }
+                    }
+                    .onChange(of: noteEditorLongPressToEdit) { _, _ in
+                        refreshFloatingEditVisibility(vm: vm, note: note)
                     }
                     .onDisappear {
                         findControl.unregisterAll()
@@ -1694,8 +1743,9 @@ struct NoteDetailView: View {
                     Spacer()
                 }
             }
+            .simultaneousGesture(longPressToEditGesture(vm: vm, note: note))
 
-            if showFloatingEditButton {
+            if showFloatingEditButton && !noteEditorLongPressToEdit {
                 floatingEditFAB(vm: vm)
                     .padding(.trailing, 16)
                     .padding(.bottom, 12)
@@ -1704,7 +1754,10 @@ struct NoteDetailView: View {
             }
         }
         .onAppear {
-            let eligible = note.type.isEditable && !vm.needsProtectedSession && !vm.isEditing
+            let eligible = !noteEditorLongPressToEdit
+                && note.type.isEditable
+                && !vm.needsProtectedSession
+                && !vm.isEditing
             if eligible {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                     showFloatingEditButton = true
@@ -1716,11 +1769,14 @@ struct NoteDetailView: View {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                     showFloatingEditButton = false
                 }
-            } else if note.type.isEditable && !vm.needsProtectedSession {
+            } else if !noteEditorLongPressToEdit && note.type.isEditable && !vm.needsProtectedSession {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                     showFloatingEditButton = true
                 }
             }
+        }
+        .onChange(of: noteEditorLongPressToEdit) { _, _ in
+            refreshFloatingEditVisibility(vm: vm, note: note)
         }
     }
 

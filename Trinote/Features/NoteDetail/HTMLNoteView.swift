@@ -10,6 +10,7 @@ struct HTMLNoteView: View {
     var findControl: FindOnPageControl?
 
     @State private var contentHeight: CGFloat = 200
+    @State private var fullScreenImage: FullScreenImagePayload?
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
     @AppStorage("useCustomTextColor") private var useCustomTextColor: Bool = false
     @AppStorage("customLightTextColor") private var customLightTextColor: String = "#1c1c1e"
@@ -42,10 +43,24 @@ struct HTMLNoteView: View {
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
             findControl: findControl,
-            onHeightChanged: { contentHeight = $0 }
+            onHeightChanged: { contentHeight = $0 },
+            onImagePreview: { payload in fullScreenImage = payload }
         )
         .frame(height: contentHeight)
+        .fullScreenCover(item: $fullScreenImage) { payload in
+            FullScreenImageViewer(image: payload.image, title: payload.title) {
+                fullScreenImage = nil
+            }
+        }
     }
+}
+
+/// Payload delivered by the read-only HTML's image-tap JS handler. Identifiable so it can be
+/// the binding for `.fullScreenCover(item:)`, which gives us a fresh sheet per tap.
+struct FullScreenImagePayload: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let title: String?
 }
 
 struct HTMLThemeColors: Equatable {
@@ -63,9 +78,15 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
     var findControl: FindOnPageControl?
     var onHeightChanged: ((CGFloat) -> Void)?
+    var onImagePreview: ((FullScreenImagePayload) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onNoteLinkTapped: onNoteLinkTapped, onCheckboxToggled: onCheckboxToggled, onHeightChanged: onHeightChanged)
+        Coordinator(
+            onNoteLinkTapped: onNoteLinkTapped,
+            onCheckboxToggled: onCheckboxToggled,
+            onHeightChanged: onHeightChanged,
+            onImagePreview: onImagePreview
+        )
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -75,6 +96,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         contentController.add(handler, name: "noteLink")
         contentController.add(handler, name: "checkboxToggle")
         contentController.add(handler, name: "debugLog")
+        contentController.add(handler, name: "imagePreview")
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
@@ -112,6 +134,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.onNoteLinkTapped = onNoteLinkTapped
         coordinator.onCheckboxToggled = onCheckboxToggled
         coordinator.onHeightChanged = onHeightChanged
+        coordinator.onImagePreview = onImagePreview
         findControl?.registerHTMLWebView(webView)
 
         let needsReload = html != coordinator.loadedHTML || themeColors != coordinator.themeColors
@@ -128,6 +151,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "noteLink")
         uc.removeScriptMessageHandler(forName: "checkboxToggle")
         uc.removeScriptMessageHandler(forName: "debugLog")
+        uc.removeScriptMessageHandler(forName: "imagePreview")
     }
 
     static func wrapHTML(_ body: String, theme: HTMLThemeColors) -> String {
@@ -160,11 +184,18 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             a { color: \(theme.lightLink); }
         }
         img { max-width: 100%; height: auto; border-radius: 6px; }
-        img[data-trinote-image-note-id] {
-          cursor: pointer;
+        /* Inline images open a full-screen viewer when tapped; linked image notes navigate.
+           Images inside include cards already have `pointer-events: none`, so the cursor /
+           tap-highlight here only affects images that are actually tappable. */
+        img {
+          cursor: zoom-in;
           -webkit-tap-highlight-color: rgba(0, 122, 255, 0.12);
           touch-action: manipulation;
         }
+        img[data-trinote-image-note-id] {
+          cursor: pointer;
+        }
+        .trinote-include__img { cursor: default; }
         figure.image { display: block; clear: both; text-align: center; margin: 0.9em auto; max-width: 100%; overflow: hidden; }
         figure.image img { display: block; margin: 0 auto; max-width: 100%; height: auto; border-radius: 6px; }
         figure.image figcaption {
@@ -608,6 +639,59 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             });
         })();
 
+        // Tap any regular <img> in the note (not a linked image-note, not inside an include card,
+        // not wrapped in an anchor) to open it full-screen. Uses the rendered <img> element so we
+        // capture exactly what the user sees, regardless of whether the source is a `data:` URI,
+        // a same-origin URL, or a remote URL — `canvas.toDataURL` re-encodes the bytes for native.
+        function trinoteImageIsPreviewable(img) {
+            if (!img) return false;
+            if (img.hasAttribute('data-trinote-image-note-id')) return false;
+            if (img.closest('.trinote-include')) return false;
+            if (img.closest('a[href]')) return false;
+            return true;
+        }
+        function trinoteSendImagePreview(img) {
+            try {
+                var natW = img.naturalWidth || img.width || 0;
+                var natH = img.naturalHeight || img.height || 0;
+                if (natW <= 0 || natH <= 0) return false;
+                var canvas = document.createElement('canvas');
+                canvas.width = natW;
+                canvas.height = natH;
+                var ctx = canvas.getContext('2d');
+                if (!ctx) return false;
+                ctx.drawImage(img, 0, 0, natW, natH);
+                var dataURL;
+                try {
+                    dataURL = canvas.toDataURL('image/png');
+                } catch (e) {
+                    // Cross-origin tainted canvases throw on toDataURL — bail silently.
+                    trinoteSendDebug('[IMG] toDataURL failed: ' + (e && e.message || e));
+                    return false;
+                }
+                if (!dataURL || dataURL.indexOf('data:') !== 0) return false;
+                window.webkit.messageHandlers.imagePreview.postMessage({
+                    dataURL: dataURL,
+                    alt: img.getAttribute('alt') || ''
+                });
+                return true;
+            } catch (e) {
+                trinoteSendDebug('[IMG] preview send failed: ' + (e && e.message || e));
+                return false;
+            }
+        }
+        document.addEventListener('click', function(e) {
+            var img = e.target && e.target.tagName === 'IMG' ? e.target : null;
+            if (!img) return;
+            if (!trinoteImageIsPreviewable(img)) return;
+            // The earlier handlers (linked image notes, anchors, includes) already returned
+            // early via their own `closest()` filters, so reaching here means a plain image.
+            if (trinoteSendImagePreview(img)) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, false);
+
         // Per–Open-button listeners (pointerup + touchend) for iOS WKWebView when no synthetic click fires.
         (function() {
             var openBtns = document.querySelectorAll('button.trinote-include__open');
@@ -885,11 +969,18 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var onNoteLinkTapped: ((String) -> Void)?
         var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
         var onHeightChanged: ((CGFloat) -> Void)?
+        var onImagePreview: ((FullScreenImagePayload) -> Void)?
 
-        init(onNoteLinkTapped: ((String) -> Void)?, onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?, onHeightChanged: ((CGFloat) -> Void)?) {
+        init(
+            onNoteLinkTapped: ((String) -> Void)?,
+            onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?,
+            onHeightChanged: ((CGFloat) -> Void)?,
+            onImagePreview: ((FullScreenImagePayload) -> Void)?
+        ) {
             self.onNoteLinkTapped = onNoteLinkTapped
             self.onCheckboxToggled = onCheckboxToggled
             self.onHeightChanged = onHeightChanged
+            self.onImagePreview = onImagePreview
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -912,9 +1003,26 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                       let checked = Self.boolFromScriptValue(dict["checked"])
                 else { return }
                 onCheckboxToggled?(index, checked)
+            case "imagePreview":
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                      let dataURL = dict["dataURL"] as? String,
+                      let image = Self.imageFromDataURL(dataURL)
+                else { return }
+                let title = (dict["alt"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                onImagePreview?(FullScreenImagePayload(image: image, title: title))
             default:
                 break
             }
+        }
+
+        /// Decodes a `data:image/...;base64,...` URI delivered from the read-only HTML.
+        private static func imageFromDataURL(_ dataURL: String) -> UIImage? {
+            guard dataURL.hasPrefix("data:") else { return nil }
+            guard let comma = dataURL.firstIndex(of: ","),
+                  dataURL[..<comma].contains(";base64") else { return nil }
+            let base64 = String(dataURL[dataURL.index(after: comma)...])
+            guard let data = Data(base64Encoded: base64, options: [.ignoreUnknownCharacters]) else { return nil }
+            return UIImage(data: data)
         }
 
         /// WKWebView often delivers `postMessage` numbers as `NSNumber` / `Double`, so `as? Int` fails silently.

@@ -5,6 +5,7 @@ struct ImageNoteView: View {
     let title: String
 
     @State private var showShareSheet = false
+    @State private var showFullScreen = false
 
     var body: some View {
         if let uiImage = UIImage(data: data) {
@@ -15,7 +16,11 @@ struct ImageNoteView: View {
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .padding(.horizontal)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showFullScreen = true }
                     .accessibilityLabel("Image: \(title)")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint(String(localized: "Opens the image full screen.", comment: "Image note tap hint"))
 
                 HStack(spacing: 16) {
                     Button {
@@ -38,6 +43,11 @@ struct ImageNoteView: View {
             .padding(.vertical)
             .sheet(isPresented: $showShareSheet) {
                 ShareSheet(items: [uiImage])
+            }
+            .fullScreenCover(isPresented: $showFullScreen) {
+                FullScreenImageViewer(image: uiImage, title: title) {
+                    showFullScreen = false
+                }
             }
         } else {
             ContentUnavailableView {

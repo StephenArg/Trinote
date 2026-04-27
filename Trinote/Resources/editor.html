@@ -3974,11 +3974,15 @@ document.getElementById('editor-container').addEventListener('click', function(e
   if (e.target.closest('.tn-include-readonly')) return;
   if (e.target.closest('.tiptap img')) return;
   if (e.target.closest('.table-caption-box')) return;
-  var lineCount = 1;
-  try { lineCount = editor.state.doc.childCount; } catch (err) {}
-  var ecRect = this.getBoundingClientRect();
-  var midY = ecRect.top + ecRect.height / 2;
-  if (lineCount < 5 && e.clientY > midY) {
+  // Only redirect taps that land in the empty space *below* the document content.
+  // childCount is unreliable as a "short note" signal because a single long list
+  // (e.g. a task list with many items) is still one top-level node.
+  var contentBottom = null;
+  try {
+    var lastChild = editor.view.dom.lastElementChild;
+    if (lastChild) contentBottom = lastChild.getBoundingClientRect().bottom;
+  } catch (err) {}
+  if (contentBottom != null && e.clientY > contentBottom + 4) {
     e.preventDefault();
     e.stopPropagation();
     editor.commands.focus('end');
