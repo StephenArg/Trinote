@@ -25,6 +25,7 @@ final class PersistenceManager {
                 CachedBranch.self,
                 CachedAttribute.self,
                 RecentNote.self,
+                OpenNoteTab.self,
                 FavoriteNote.self,
                 RecentSearch.self,
                 DraftContent.self,
@@ -539,6 +540,116 @@ final class PersistenceManager {
         return try context.fetch(descriptor).first
     }
 
+    // MARK: - Open note tabs (user-managed strip, max 30 per profile; explicit add, not auto on every open)
+
+    /// Maximum tabs per profile. Oldest (by `addedAt`) is evicted when this would be exceeded.
+    private static let openNoteTabMaxCount = 30
+
+    /// Inserts a new tab; the same `noteId` can appear in multiple open tabs. Evicts the oldest when over the cap.
+    @discardableResult
+    func addOpenNoteTab(noteId: String, title: String, noteType: String, serverProfileId: String) throws -> String {
+        let rowIcon = cachedNoteIconSystemName(noteId: noteId, fallbackNoteType: noteType, serverProfileId: serverProfileId)
+        let tab = OpenNoteTab(
+            noteId: noteId,
+            title: title,
+            noteType: noteType,
+            serverProfileId: serverProfileId,
+            listIconSystemName: rowIcon,
+            addedAt: .now
+        )
+        context.insert(tab)
+        try context.save()
+        try pruneOpenNoteTabs(serverProfileId: serverProfileId, keep: Self.openNoteTabMaxCount)
+        NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil)
+        return tab.id
+    }
+
+    /// When the list is empty and the user opens a note, creates a single starting tab. Returns the new row id, or `nil` if a tab already existed.
+    @discardableResult
+    func ensureFirstOpenNoteTabIfEmpty(noteId: String, title: String, noteType: String, serverProfileId: String) throws -> String? {
+        guard openNoteTabCount(serverProfileId: serverProfileId) == 0 else { return nil }
+        return try addOpenNoteTab(noteId: noteId, title: title, noteType: noteType, serverProfileId: serverProfileId)
+    }
+
+    /// Picks a tab for `noteId` (newest by `addedAt`); used when deep-linking into a note that already has open tab(s).
+    func findPreferredOpenTabId(for noteId: String, serverProfileId: String) throws -> String? {
+        let all = try fetchOpenNoteTabs(serverProfileId: serverProfileId)
+        let matches = all.filter { $0.noteId == noteId }
+        return matches.max(by: { $0.addedAt < $1.addedAt })?.id
+    }
+
+    func fetchOpenNoteTab(id: String, serverProfileId: String) throws -> OpenNoteTab? {
+        var descriptor = FetchDescriptor<OpenNoteTab>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        let row = try context.fetch(descriptor).first
+        guard let row, row.serverProfileId == serverProfileId else { return nil }
+        return row
+    }
+
+    /// Updates an existing open-tab row to point at a different note (same `id`); order in the strip is unchanged.
+    func retargetOpenNoteTab(
+        id: String,
+        to noteId: String,
+        title: String,
+        noteType: String,
+        serverProfileId: String
+    ) throws {
+        guard let row = try fetchOpenNoteTab(id: id, serverProfileId: serverProfileId) else { return }
+        let rowIcon = cachedNoteIconSystemName(
+            noteId: noteId,
+            fallbackNoteType: noteType,
+            serverProfileId: serverProfileId
+        )
+        row.noteId = noteId
+        row.title = title
+        row.noteType = noteType
+        row.listIconSystemName = rowIcon
+        try context.save()
+        NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil)
+    }
+
+    /// Newest open tab in the profile (largest `addedAt`), if any; used to pick a row to retarget when `lastActive` is unknown.
+    func mostRecentlyAddedOpenNoteTabId(serverProfileId: String) throws -> String? {
+        let all = try fetchOpenNoteTabs(serverProfileId: serverProfileId)
+        return all.max(by: { $0.addedAt < $1.addedAt })?.id
+    }
+
+    func openNoteTabCount(serverProfileId: String) -> Int {
+        (try? fetchOpenNoteTabs(serverProfileId: serverProfileId))?.count ?? 0
+    }
+
+    func fetchOpenNoteTabs(serverProfileId: String) throws -> [OpenNoteTab] {
+        let profileId = serverProfileId
+        var descriptor = FetchDescriptor<OpenNoteTab>(
+            predicate: #Predicate { $0.serverProfileId == profileId },
+            sortBy: [SortDescriptor(\.addedAt, order: .forward)]
+        )
+        return try context.fetch(descriptor)
+    }
+
+    func removeOpenNoteTab(id: String, serverProfileId: String) throws {
+        var descriptor = FetchDescriptor<OpenNoteTab>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        guard let row = try context.fetch(descriptor).first, row.serverProfileId == serverProfileId else { return }
+        context.delete(row)
+        try context.save()
+        NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil)
+    }
+
+    /// Deletes the oldest rows (by `addedAt`) until at most `keep` remain.
+    func pruneOpenNoteTabs(serverProfileId: String, keep: Int) throws {
+        var descriptor = FetchDescriptor<OpenNoteTab>(
+            predicate: #Predicate { $0.serverProfileId == serverProfileId },
+            sortBy: [SortDescriptor(\.addedAt, order: .forward)]
+        )
+        let all = try context.fetch(descriptor)
+        guard all.count > keep else { return }
+        for row in all.prefix(all.count - keep) {
+            context.delete(row)
+        }
+        try context.save()
+    }
+
     /// Breadcrumb-style path from cached parent chain under root: `Parent -> … -> note` (no `Root` prefix).
     /// Uses `leafTitle` when the leaf row is missing from the cache.
     /// When `protectedSessionActive` is false, protected notes show a placeholder instead of possibly stale decrypted titles in SwiftData.
@@ -588,6 +699,20 @@ final class PersistenceManager {
         }
 
         return segments.joined(separator: " -> ")
+    }
+
+    /// SF Symbol for the **note itself** (its own `iconClass` label, then its type).
+    /// Falls back to `fallbackNoteType`’s default symbol if the note is not cached yet.
+    func cachedNoteIconSystemName(noteId: String, fallbackNoteType: String, serverProfileId: String) -> String {
+        guard let cached = try? fetchCachedNote(id: noteId, serverProfileId: serverProfileId) else {
+            return (NoteType(rawValue: fallbackNoteType) ?? .text).iconName
+        }
+        let type = NoteType(rawValue: cached.noteType) ?? .text
+        let attrs = (try? fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)) ?? []
+        let iconClass = attrs.first { $0.name == "iconClass" && $0.type == "label" }?.value
+            ?? attrs.first { $0.name == "iconClass" }?.value
+        if let mapped = NoteIconMapper.sfSymbol(for: iconClass) { return mapped }
+        return type.iconName
     }
 
     /// SF Symbol for a recents row: matches the note directly under `root` on the path to `noteId`

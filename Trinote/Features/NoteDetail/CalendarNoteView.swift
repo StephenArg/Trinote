@@ -20,7 +20,12 @@ struct CalendarNoteView: View {
             vm = CalendarNoteViewModel(calendarRootId: calendarRootNote.noteId, appState: appState)
         }
         .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
-            NoteDetailView(noteId: linkedNoteId, title: "", startInEditMode: false)
+            NoteDetailView(
+                noteId: linkedNoteId,
+                title: "",
+                startInEditMode: false,
+                retargetActiveOpenTab: false
+            )
         }
     }
 

@@ -14,6 +14,7 @@ final class PersistenceTests: XCTestCase {
             CachedBranch.self,
             CachedAttribute.self,
             RecentNote.self,
+            OpenNoteTab.self,
             RecentSearch.self,
             DraftContent.self,
             PendingNoteCreation.self,

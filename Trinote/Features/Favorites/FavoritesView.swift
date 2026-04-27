@@ -567,12 +567,6 @@ struct FavoritesView: View {
     }
 }
 
-private struct NoteNavItem: Identifiable, Hashable {
-    let noteId: String
-    let title: String
-    var id: String { noteId }
-}
-
 #Preview {
     NavigationStack {
         FavoritesView()

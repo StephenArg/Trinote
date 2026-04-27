@@ -43,7 +43,7 @@ private struct MoveNoteConfirmPayload {
 struct TreeView: View {
     let parentNoteId: String
     let parentTitle: String
-    /// When set, tapping a note row selects it as a parent (e.g. bulk duplicate / move). `(parentNoteId, title, parentBranchId)`.
+    /// When set, tapping a note row selects it: parent for duplicate/move, or any note in the note / open-tab pickers. `(parentNoteId, displayTitle, parentBranchId)`.
     var onPickParent: ((String, String, String) -> Void)?
 
     init(
@@ -71,7 +71,10 @@ struct TreeView: View {
     @State private var moveNoteSheetContext: MoveNoteSheetContext?
     @State private var moveNoteConfirmPayload: MoveNoteConfirmPayload?
     @State private var moveNoteError: String?
+    @State private var tabsBarNav: NoteNavItem?
+    @AppStorage("lastActiveOpenTabId") private var lastActiveOpenTabIdStorage: String = ""
 
+    @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
@@ -182,6 +185,26 @@ struct TreeView: View {
         .navigationDestination(item: $navigateToNote, destination: noteDetailDestination)
         .navigationDestination(item: $navigateToNoteForEdit, destination: noteEditDestination)
         .navigationDestination(item: $drillDownTarget, destination: subtreeDestination)
+        .navigationDestination(item: $tabsBarNav) { item in
+            NoteDetailView(noteId: item.noteId, title: item.title, openTabId: item.openTabId)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if showNoteTabsBar {
+                NoteTabsBar(
+                    currentOpenTabId: lastActiveOpenTabIdStorage.isEmpty ? nil : lastActiveOpenTabIdStorage,
+                    onSelect: { tab in
+                        lastActiveOpenTabIdStorage = tab.id
+                        tabsBarNav = NoteNavItem(
+                            noteId: tab.noteId, title: tab.title, openTabId: tab.id
+                        )
+                    },
+                    onOpenTabRemoved: { _ in },
+                    onTabsBecameEmpty: {
+                        lastActiveOpenTabIdStorage = ""
+                    }
+                )
+            }
+        }
     }
 
     @ToolbarContentBuilder
@@ -205,6 +228,21 @@ struct TreeView: View {
                         showSharedNotesManagement = true
                     } label: {
                         Label(String(localized: "Shared notes…", comment: "Open shared notes manager"), systemImage: "scale.3d")
+                    }
+                    Button {
+                        showNoteTabsBar.toggle()
+                    } label: {
+                        if showNoteTabsBar {
+                            Label(
+                                String(localized: "Hide tab bar", comment: "Root tree menu: hide open-note tab strip"),
+                                systemImage: "rectangle.split.1x2"
+                            )
+                        } else {
+                            Label(
+                                String(localized: "Show tab bar", comment: "Root tree menu: show open-note tab strip"),
+                                systemImage: "rectangle.split.1x2"
+                            )
+                        }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")

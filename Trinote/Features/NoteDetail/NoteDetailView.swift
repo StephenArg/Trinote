@@ -36,6 +36,10 @@ struct NoteDetailView: View {
     /// When set (e.g. from search), opens find-on-page after content loads and jumps to this 1-based match.
     var pendingFindQuery: String? = nil
     var pendingFindMatchIndex: Int? = nil
+    /// When set (e.g. open tabs bar), which `OpenNoteTab` row to restore scroll for.
+    var openTabId: String? = nil
+    /// When `true` (default), the **last active** open tab (or a chosen row) is retargeted to the note you navigated to from the tree, search, etc. Set `false` for pushed in-note link destinations so the tab strip is not remapped.
+    var retargetActiveOpenTab: Bool = true
 
     init(
         noteId: String,
@@ -43,7 +47,9 @@ struct NoteDetailView: View {
         seedChildSummaries: [ChildNoteSummary]? = nil,
         startInEditMode: Bool = false,
         pendingFindQuery: String? = nil,
-        pendingFindMatchIndex: Int? = nil
+        pendingFindMatchIndex: Int? = nil,
+        openTabId: String? = nil,
+        retargetActiveOpenTab: Bool = true
     ) {
         self.noteId = noteId
         self.title = title
@@ -51,7 +57,10 @@ struct NoteDetailView: View {
         self.startInEditMode = startInEditMode
         self.pendingFindQuery = pendingFindQuery
         self.pendingFindMatchIndex = pendingFindMatchIndex
+        self.openTabId = openTabId
+        self.retargetActiveOpenTab = retargetActiveOpenTab
         _activeNoteId = State(initialValue: noteId)
+        _activeOpenTabId = State(initialValue: openTabId)
     }
 
     @Environment(AppState.self) private var appState
@@ -75,6 +84,10 @@ struct NoteDetailView: View {
     @State private var moveNoteDetailConfirm: MoveNoteDetailConfirm?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.noteDetails.rawValue
+    @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
+    @AppStorage("lastActiveOpenTabId") private var lastActiveOpenTabIdStorage: String = ""
+    @State private var activeOpenTabId: String?
+    @State private var openNoteTabListNonEmpty: Bool = false
 
     /// Aligns “Copy share link” / “Share link…” with the Share/Sharing title (after `scale.3d` column).
     private static let sharingSubmenuTitleLeadingInset: CGFloat = 36
@@ -254,7 +267,8 @@ struct NoteDetailView: View {
         }
     }
 
-    private static let editorSaveChipIdleDelay: TimeInterval = 1.5
+    /// Delay after last typing activity before the save chip fades back in (shorter = snappier; too low flickers on brief pauses).
+    private static let editorSaveChipIdleDelay: TimeInterval = 1
     private static let editorSaveChipIgnoreTypingAfterAppear: TimeInterval = 0.5
 
     private func cancelEditorSaveChipIdleShowTask() {
@@ -461,9 +475,53 @@ struct NoteDetailView: View {
             .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
                 NoteDetailView(noteId: linkedNoteId, title: "", startInEditMode: false)
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if showNoteTabsBar, openNoteTabListNonEmpty, viewModel?.isEditing != true {
+                    NoteTabsBar(
+                        currentOpenTabId: activeOpenTabId,
+                        onSelect: { selectOpenNoteTab($0) },
+                        onOpenTabRemoved: { handleOpenTabRemoved($0) },
+                        onTabsBecameEmpty: {
+                            lastActiveOpenTabIdStorage = ""
+                        }
+                    )
+                    .transition(.move(edge: .bottom))
+                }
+            }
             .toolbar(viewModel?.isEditing == true ? .hidden : .visible, for: .tabBar)
-            .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing)
+            .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing == true)
+            .onChange(of: viewModel?.note?.noteId) { _, _ in refreshOpenNoteTabListNonEmpty() }
+            .onChange(of: showNoteTabsBar) { _, _ in refreshOpenNoteTabListNonEmpty() }
+            .onChange(of: activeOpenTabId) { _, t in
+                if let t {
+                    lastActiveOpenTabIdStorage = t
+                } else {
+                    lastActiveOpenTabIdStorage = ""
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openNoteTabsChanged)) { _ in
+                refreshOpenNoteTabListNonEmpty()
+                validateOrphanedActiveOpenTabId()
+            }
+            .onAppear {
+                refreshOpenNoteTabListNonEmpty()
+                if showNoteTabsBar, let t = activeOpenTabId { lastActiveOpenTabIdStorage = t }
+                if showNoteTabsBar, retargetActiveOpenTab { restoreActiveOpenTabToCurrentNoteIfDrifted() }
+            }
+            .onChange(of: navigateToNoteId) { oldValue, newValue in
+                guard oldValue != nil, newValue == nil else { return }
+                if showNoteTabsBar, retargetActiveOpenTab { restoreActiveOpenTabToCurrentNoteIfDrifted() }
+            }
             .overlay { bodyChangeListeners }
+    }
+
+    private func refreshOpenNoteTabListNonEmpty() {
+        guard let p = appState.activeProfile?.id else {
+            openNoteTabListNonEmpty = false
+            return
+        }
+        let n = PersistenceManager.shared.openNoteTabCount(serverProfileId: p)
+        openNoteTabListNonEmpty = n > 0
     }
 
     @ViewBuilder
@@ -522,6 +580,162 @@ struct NoteDetailView: View {
             if startInEditMode, vm.note != nil {
                 vm.isEditing = true
             }
+        }
+        if showNoteTabsBar { reconcileOpenTabsAfterLoad() }
+    }
+
+    private func reconcileOpenTabsAfterLoad() {
+        guard showNoteTabsBar, let p = appState.activeProfile?.id, let n = viewModel?.note else { return }
+        let pm = PersistenceManager.shared
+        let count = pm.openNoteTabCount(serverProfileId: p)
+        refreshOpenNoteTabListNonEmpty()
+
+        if !retargetActiveOpenTab {
+            if count == 0 {
+                if let newId = try? pm.ensureFirstOpenNoteTabIfEmpty(
+                    noteId: n.noteId, title: n.title, noteType: n.type.rawValue, serverProfileId: p
+                ) { activeOpenTabId = newId }
+            } else {
+                if activeOpenTabId == nil, !lastActiveOpenTabIdStorage.isEmpty,
+                   (try? pm.fetchOpenNoteTab(id: lastActiveOpenTabIdStorage, serverProfileId: p)) != nil {
+                    activeOpenTabId = lastActiveOpenTabIdStorage
+                }
+                if activeOpenTabId == nil, let t = try? pm.findPreferredOpenTabId(
+                    for: n.noteId, serverProfileId: p
+                ) { activeOpenTabId = t }
+            }
+            if let t = activeOpenTabId { applyReadScrollStateFromStoreForOpenTabId(t) }
+            return
+        }
+
+        if count == 0 {
+            if let newId = try? pm.ensureFirstOpenNoteTabIfEmpty(
+                noteId: n.noteId, title: n.title, noteType: n.type.rawValue, serverProfileId: p
+            ) { activeOpenTabId = newId }
+            if let t = activeOpenTabId { applyReadScrollStateFromStoreForOpenTabId(t) }
+            return
+        }
+
+        if let cur = activeOpenTabId, (try? pm.fetchOpenNoteTab(id: cur, serverProfileId: p)) != nil {
+            resolveRetargetToCurrentNote(pm: pm, p: p, n: n, tabId: cur)
+            return
+        }
+
+        if let o = self.openTabId, (try? pm.fetchOpenNoteTab(id: o, serverProfileId: p)) != nil {
+            activeOpenTabId = o
+            resolveRetargetToCurrentNote(pm: pm, p: p, n: n, tabId: o)
+            return
+        }
+
+        if !lastActiveOpenTabIdStorage.isEmpty,
+           (try? pm.fetchOpenNoteTab(id: lastActiveOpenTabIdStorage, serverProfileId: p)) != nil {
+            activeOpenTabId = lastActiveOpenTabIdStorage
+        }
+        if activeOpenTabId == nil, let m = try? pm.mostRecentlyAddedOpenNoteTabId(serverProfileId: p) {
+            activeOpenTabId = m
+        }
+        if let t = activeOpenTabId { resolveRetargetToCurrentNote(pm: pm, p: p, n: n, tabId: t) }
+    }
+
+    /// Re-runs after popping back from a pushed sub-note so the active tab points at *this* view's note again. Skips work if the tab already matches; only retargets, never alters scroll state.
+    private func restoreActiveOpenTabToCurrentNoteIfDrifted() {
+        guard let p = appState.activeProfile?.id,
+              let n = viewModel?.note,
+              let t = activeOpenTabId else { return }
+        let pm = PersistenceManager.shared
+        guard let row = try? pm.fetchOpenNoteTab(id: t, serverProfileId: p) else { return }
+        if row.noteId == n.noteId { return }
+        do {
+            try pm.retargetOpenNoteTab(
+                id: t,
+                to: n.noteId,
+                title: n.title,
+                noteType: n.type.rawValue,
+                serverProfileId: p
+            )
+        } catch {}
+    }
+
+    private func resolveRetargetToCurrentNote(
+        pm: PersistenceManager, p: String, n: NoteItem, tabId: String
+    ) {
+        guard let row = try? pm.fetchOpenNoteTab(id: tabId, serverProfileId: p) else { return }
+        if row.noteId == n.noteId {
+            applyReadScrollStateFromStoreForOpenTabId(tabId)
+            return
+        }
+        do {
+            try pm.retargetOpenNoteTab(
+                id: tabId,
+                to: n.noteId,
+                title: n.title,
+                noteType: n.type.rawValue,
+                serverProfileId: p
+            )
+        } catch {}
+        OpenTabSessionStore.clearReadScrollState(for: tabId)
+        readOnlyScrollFraction = 0
+        readOnlyScrollFractionPendingRestore = 0
+    }
+
+    private func applyReadScrollStateFromStoreForOpenTabId(_ id: String) {
+        if let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
+            readOnlyScrollFraction = f
+            readOnlyScrollFractionPendingRestore = f
+        } else {
+            readOnlyScrollFraction = 0
+            readOnlyScrollFractionPendingRestore = 0
+        }
+    }
+
+    private func selectOpenNoteTab(_ tab: OpenNoteTab) {
+        guard appState.activeProfile?.id == tab.serverProfileId else { return }
+        if let prev = activeOpenTabId, prev != tab.id {
+            OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFraction, for: prev)
+        }
+        if tab.noteId == activeNoteId {
+            if tab.id == activeOpenTabId { return }
+            activeOpenTabId = tab.id
+            applyReadScrollStateFromStoreForOpenTabId(tab.id)
+            return
+        }
+        activeOpenTabId = tab.id
+        applyReadScrollStateFromStoreForOpenTabId(tab.id)
+        viewModel = nil
+        activeNoteId = tab.noteId
+    }
+
+    private func handleOpenTabRemoved(_ removed: OpenNoteTab) {
+        OpenTabSessionStore.clearReadScrollState(for: removed.id)
+        guard removed.id == activeOpenTabId, let p = appState.activeProfile?.id else { return }
+        activeOpenTabId = nil
+        let all = (try? PersistenceManager.shared.fetchOpenNoteTabs(serverProfileId: p)) ?? []
+        if all.isEmpty {
+            lastActiveOpenTabIdStorage = ""
+        } else if let n = viewModel?.note, let m = all.filter({ $0.noteId == n.noteId }).max(by: { $0.addedAt < $1.addedAt }) {
+            selectOpenNoteTab(m)
+        } else if let a = all.max(by: { $0.addedAt < $1.addedAt }) {
+            selectOpenNoteTab(a)
+        }
+    }
+
+    private func validateOrphanedActiveOpenTabId() {
+        guard let p = appState.activeProfile?.id else { return }
+        if PersistenceManager.shared.openNoteTabCount(serverProfileId: p) == 0 {
+            activeOpenTabId = nil
+            lastActiveOpenTabIdStorage = ""
+            return
+        }
+        guard let t = activeOpenTabId else { return }
+        if (try? PersistenceManager.shared.fetchOpenNoteTab(id: t, serverProfileId: p)) != nil { return }
+        activeOpenTabId = nil
+        guard let n = viewModel?.note else { return }
+        if let u = try? PersistenceManager.shared.findPreferredOpenTabId(
+            for: n.noteId, serverProfileId: p
+        ), let row = try? PersistenceManager.shared.fetchOpenNoteTab(id: u, serverProfileId: p) {
+            selectOpenNoteTab(row)
+        } else {
+            lastActiveOpenTabIdStorage = ""
         }
     }
 

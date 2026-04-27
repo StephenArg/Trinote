@@ -46,6 +46,8 @@ extension Notification.Name {
     static let trinoteTreeShouldRefresh = Notification.Name("TrinoteTreeShouldRefresh")
     /// Posted when an offline-created note receives a server id after sync. `userInfo["from"]` / `["to"]` are note ids.
     static let trinoteOfflineNoteIdReplaced = Notification.Name("TrinoteOfflineNoteIdReplaced")
+    /// Posted when the open-note tab strip is updated (add/remove / prune) so visible bars can reload.
+    static let openNoteTabsChanged = Notification.Name("TrinoteOpenNoteTabsChanged")
 }
 
 /// Thread-safe tracker for "ghost notes" — notes the server still lists in its

@@ -1,26 +1,68 @@
 import SwiftUI
 
-/// Search-driven sheet to pick a note for “include note” in the rich text editor.
+/// Pick a note from the tree (browse) or from search. Used for “include note” in the editor and
+/// for the open-tabs bar “+” button.
 struct NotePickerSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
-    /// Hide the note being edited (cannot include self).
+    /// Hide the note being edited (cannot include self), or from another flow (e.g. not applicable).
     var excludeNoteId: String?
+    /// If non-nil, overrides the default “Include note” title (e.g. add open tab from the bar).
+    var navigationTitleOverride: String? = nil
     let onPick: (_ noteId: String, _ title: String) -> Void
 
-    @State private var viewModel: SearchViewModel?
+    @AppStorage("notePickerMode") private var modeRaw: String = PickerMode.search.rawValue
+    @State private var searchViewModel: SearchViewModel?
+
+    private var modeSelection: Binding<PickerMode> {
+        Binding(
+            get: { PickerMode(rawValue: modeRaw) ?? .search },
+            set: { modeRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let vm = viewModel {
-                    pickerContent(vm)
-                } else {
-                    ProgressView()
+            VStack(spacing: 0) {
+                Picker("", selection: modeSelection) {
+                    Label {
+                        Text(String(localized: "Tree", comment: "Note picker: pick from tree"))
+                    } icon: {
+                        Image(systemName: "list.bullet.indent")
+                    }
+                    .tag(PickerMode.tree)
+                    Label {
+                        Text(String(localized: "Search", comment: "Note picker: pick from search"))
+                    } icon: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .tag(PickerMode.search)
+                }
+                .accessibilityLabel(String(localized: "Source", comment: "Note picker: Tree vs Search"))
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+
+                Group {
+                    switch PickerMode(rawValue: modeRaw) ?? .search {
+                    case .tree:
+                        treeContent
+                    case .search:
+                        if let vm = searchViewModel {
+                            searchContent(vm)
+                        } else {
+                            ProgressView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
                 }
             }
-            .navigationTitle(String(localized: "Include note", comment: "Include note picker title"))
+            .navigationTitle(
+                navigationTitleOverride
+                    ?? String(localized: "Include note", comment: "Include note picker title")
+            )
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -28,15 +70,28 @@ struct NotePickerSheet: View {
                 }
             }
         }
-        .task {
-            if viewModel == nil {
-                viewModel = SearchViewModel(appState: appState)
+        .task(id: modeRaw) {
+            if PickerMode(rawValue: modeRaw) == .search, searchViewModel == nil {
+                searchViewModel = SearchViewModel(appState: appState)
             }
         }
     }
 
     @ViewBuilder
-    private func pickerContent(_ vm: SearchViewModel) -> some View {
+    private var treeContent: some View {
+        TreeView(
+            parentNoteId: TriliumTreeConstants.rootNoteId,
+            parentTitle: String(localized: "Notes", comment: "Root notebook / tree title"),
+            onPickParent: { noteId, title, _ in
+                guard noteId != excludeNoteId else { return }
+                onPick(noteId, title)
+                dismiss()
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func searchContent(_ vm: SearchViewModel) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
@@ -114,4 +169,11 @@ struct NotePickerSheet: View {
             }
         }
     }
+}
+
+// MARK: - PickerMode
+
+private enum PickerMode: String, CaseIterable {
+    case tree
+    case search
 }
