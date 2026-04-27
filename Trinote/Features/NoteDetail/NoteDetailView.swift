@@ -64,6 +64,7 @@ struct NoteDetailView: View {
     }
 
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @State private var activeNoteId: String
     @State private var viewModel: NoteDetailViewModel?
@@ -85,6 +86,10 @@ struct NoteDetailView: View {
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.noteDetails.rawValue
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
+    @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
+    @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
+    @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
+    @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
     @AppStorage("lastActiveOpenTabId") private var lastActiveOpenTabIdStorage: String = ""
     @State private var activeOpenTabId: String?
     @State private var openNoteTabListNonEmpty: Bool = false
@@ -135,6 +140,29 @@ struct NoteDetailView: View {
             return n.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
         }
         return title
+    }
+
+    private var principalBarTitleForegroundColor: Color {
+        guard let note = viewModel?.note else { return .primary }
+        return noteDetailTitleForegroundColor(for: note)
+    }
+
+    private var noteDetailTreeTextColor: Color? {
+        guard useCustomTreeColors else { return nil }
+        return colorScheme == .dark ? Color(hex: treeDarkTextColor) : Color(hex: treeLightTextColor)
+    }
+
+    /// Same rules as `TreeView.resolvedTreeTitleColor`: Trilium `#color`, else custom tree text, else primary.
+    private func resolvedNoteDetailTriliumOrThemeTitleColor(for note: NoteItem) -> Color {
+        if useTriliumNoteColors, let c = TriliumNoteColorMapper.swiftUIColor(for: note.colorLabelValue) {
+            return c
+        }
+        return noteDetailTreeTextColor ?? .primary
+    }
+
+    private func noteDetailTitleForegroundColor(for note: NoteItem) -> Color {
+        if note.isProtected, !appState.protectedSessionActive { return .secondary }
+        return resolvedNoteDetailTriliumOrThemeTitleColor(for: note)
     }
 
     private func uiTitle(for note: NoteItem) -> String {
@@ -557,6 +585,7 @@ struct NoteDetailView: View {
                     Text(principalTitleText)
                         .font(.headline)
                         .lineLimit(1)
+                        .foregroundStyle(principalBarTitleForegroundColor)
                 }
             }
         }
@@ -571,6 +600,7 @@ struct NoteDetailView: View {
         if viewModel == nil {
             let vm = NoteDetailViewModel(noteId: activeNoteId, appState: appState, seedChildSummaries: seedChildSummaries)
             viewModel = vm
+            if showNoteTabsBar, retargetActiveOpenTab { eagerRetargetActiveOpenTabFromCache() }
             await vm.load()
             async let contentTask: () = vm.loadContent()
             async let attachTask: () = vm.loadAttachments()
@@ -582,6 +612,49 @@ struct NoteDetailView: View {
             }
         }
         if showNoteTabsBar { reconcileOpenTabsAfterLoad() }
+    }
+
+    /// Synchronously retargets the active open tab to `activeNoteId` using cached metadata, so the tab strip updates immediately when navigating instead of waiting for the destination note's network/file load.
+    private func eagerRetargetActiveOpenTabFromCache() {
+        guard let p = appState.activeProfile?.id else { return }
+        let pm = PersistenceManager.shared
+        guard pm.openNoteTabCount(serverProfileId: p) > 0 else { return }
+
+        var tabId: String? = activeOpenTabId
+        if tabId == nil, let o = self.openTabId,
+           (try? pm.fetchOpenNoteTab(id: o, serverProfileId: p)) != nil {
+            tabId = o
+        }
+        if tabId == nil, !lastActiveOpenTabIdStorage.isEmpty,
+           (try? pm.fetchOpenNoteTab(id: lastActiveOpenTabIdStorage, serverProfileId: p)) != nil {
+            tabId = lastActiveOpenTabIdStorage
+        }
+        if tabId == nil, let m = try? pm.mostRecentlyAddedOpenNoteTabId(serverProfileId: p) {
+            tabId = m
+        }
+
+        guard let t = tabId,
+              let row = try? pm.fetchOpenNoteTab(id: t, serverProfileId: p),
+              row.noteId != activeNoteId else { return }
+
+        let cached = try? pm.fetchCachedNote(id: activeNoteId, serverProfileId: p)
+        let resolvedTitle: String = {
+            if let c = cached, !c.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return c.title }
+            let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? row.title : title
+        }()
+        let resolvedType = cached?.noteType ?? row.noteType
+
+        do {
+            try pm.retargetOpenNoteTab(
+                id: t,
+                to: activeNoteId,
+                title: resolvedTitle,
+                noteType: resolvedType,
+                serverProfileId: p
+            )
+        } catch {}
+        if activeOpenTabId == nil { activeOpenTabId = t }
     }
 
     private func reconcileOpenTabsAfterLoad() {
@@ -1193,6 +1266,7 @@ struct NoteDetailView: View {
                         HStack {
                             TextField(String(localized: "Title", comment: "Note title field"), text: $vm.editedTitle)
                                 .font(.title2.bold())
+                                .foregroundStyle(noteDetailTitleForegroundColor(for: note))
                                 .textFieldStyle(.roundedBorder)
                             Button(String(localized: "Save", comment: "Save title")) {
                                 Task { await vm.renameNote() }
@@ -1219,11 +1293,12 @@ struct NoteDetailView: View {
                         HStack(alignment: .firstTextBaseline, spacing: titleIconSpacing) {
                             Image(systemName: note.resolvedIconName)
                                 .font(.title2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(noteDetailTitleForegroundColor(for: note))
                                 .frame(width: titleIconColumnWidth, alignment: .center)
                                 .accessibilityHidden(true)
                             Text(uiTitle(for: note))
                                 .font(.title2.bold())
+                                .foregroundStyle(noteDetailTitleForegroundColor(for: note))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         if let modified = lastChangedCaption(for: note) {

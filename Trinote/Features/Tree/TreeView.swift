@@ -181,6 +181,10 @@ struct TreeView: View {
                 await vm.loadTree()
             }
             loadFavoriteIds()
+            autoRestoreOpenTabOnLaunchIfNeeded()
+        }
+        .onChange(of: appState.activeProfile?.id) { _, _ in
+            autoRestoreOpenTabOnLaunchIfNeeded()
         }
         .navigationDestination(item: $navigateToNote, destination: noteDetailDestination)
         .navigationDestination(item: $navigateToNoteForEdit, destination: noteEditDestination)
@@ -520,6 +524,47 @@ struct TreeView: View {
 
     private func triggerSyncAndReload() {
         Task { await refreshWithSync() }
+    }
+
+    /// Process-wide flag so we only auto-open a tab on the first qualifying root-tree appearance per app launch.
+    /// Re-arms when the profile changes (multi-account switch) so the new profile gets its own one-shot restore.
+    private static var autoRestoreOpenTabHandledForProfileId: String?
+
+    /// On app launch, when the open-tab bar is enabled and the current profile has at least one tab,
+    /// push the last active tab (or fall back to the most recently added — same precedence as
+    /// `eagerRetargetActiveOpenTabFromCache` / `reconcileOpenTabsAfterLoad`).
+    private func autoRestoreOpenTabOnLaunchIfNeeded() {
+        guard parentNoteId == "root" else { return }
+        guard showNoteTabsBar else { return }
+        guard let profileId = appState.activeProfile?.id else { return }
+        if Self.autoRestoreOpenTabHandledForProfileId == profileId { return }
+
+        let pm = PersistenceManager.shared
+        guard pm.openNoteTabCount(serverProfileId: profileId) > 0 else {
+            // No tabs to restore — still mark as handled so we don't keep retrying this launch.
+            Self.autoRestoreOpenTabHandledForProfileId = profileId
+            return
+        }
+
+        var resolved: OpenNoteTab?
+        if !lastActiveOpenTabIdStorage.isEmpty,
+           let row = try? pm.fetchOpenNoteTab(id: lastActiveOpenTabIdStorage, serverProfileId: profileId) {
+            resolved = row
+        } else if let mostRecentId = try? pm.mostRecentlyAddedOpenNoteTabId(serverProfileId: profileId),
+                  let row = try? pm.fetchOpenNoteTab(id: mostRecentId, serverProfileId: profileId) {
+            resolved = row
+        }
+        guard let tab = resolved else {
+            Self.autoRestoreOpenTabHandledForProfileId = profileId
+            return
+        }
+
+        Self.autoRestoreOpenTabHandledForProfileId = profileId
+        lastActiveOpenTabIdStorage = tab.id
+        // Only push if we're not already showing a destination from this stack.
+        if navigateToNote == nil, navigateToNoteForEdit == nil, drillDownTarget == nil, tabsBarNav == nil {
+            tabsBarNav = NoteNavItem(noteId: tab.noteId, title: tab.title, openTabId: tab.id)
+        }
     }
 
     private func refreshWithSync() async {
