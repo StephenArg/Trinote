@@ -14,6 +14,9 @@ final class AppState {
     /// In-memory: whether the user has unlocked protected notes this foreground session. Server session is cleared on background and after restoring the main login (see `endServerProtectedSessionAndPersistCookies()`).
     var protectedSessionActive = false
 
+    /// Bumped **before** `activeProfile` changes to another instance so `MainTabView` can recreate `NavigationStack`s while the outgoing profile is still current (avoids stale `NoteDetailView` briefly adopting the new profile).
+    private(set) var tabNavigationResetGeneration: Int = 0
+
     let networkMonitor = NetworkMonitor.shared
     let syncManager = SyncManager()
     private let persistence = PersistenceManager.shared
@@ -692,9 +695,12 @@ final class AppState {
         try? persistence.setActiveProfile(profile)
         Log.auth.info("Proceeding offline with persisted session cookies for \(profile.name)")
         _ = try? await triliumInstanceId(for: profile)
-        try? persistence.reconcileCachedNoteBranchesMetadata(serverProfileId: profile.id)
         await runIncrementalSync(maxWaitSeconds: 0)
         startRealtimeIfPossible()
+        let profileId = profile.id
+        Task { @MainActor in
+            try? persistence.reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
+        }
     }
 
     /// Fast path for cold launch: attach client + profile, show cached UI when cookies exist, then validate session and sync in the background.
@@ -762,12 +768,43 @@ final class AppState {
         guard let url = profile.url else { throw APIError.invalidURL }
 
         let cookieData = try? await keychain.loadSessionCookies(forServer: profile.id)
+        let hadPersistedSessionCookies = cookieData.map { !$0.isEmpty } ?? false
+        guard hadPersistedSessionCookies else {
+            throw APIError.noToken
+        }
+
+        if activeProfile?.id != profile.id {
+            NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
+            tabNavigationResetGeneration += 1
+            await Task.yield()
+        }
+
+        syncManager.cancel()
+        realtime?.stop()
+
         let newClient = TriliumClient(baseURL: url, persistedCookieData: cookieData)
 
-        do {
-            try await newClient.restoreSession()
+        let previousClient = self.client
+        let previousProfile = self.activeProfile
+        let previousAuthenticated = self.isAuthenticated
+        let previousConnectionError = self.connectionError
+        let previousLastRefreshed = self.lastRefreshed
+        let previousProtectedSession = self.protectedSessionActive
+
+        if !networkMonitor.isConnected {
             self.client = newClient
             self.activeProfile = profile
+            self.protectedSessionActive = false
+            syncManager.restoreSyncState(profileId: profile.id)
+            await enterOfflineCacheMode(profile: profile)
+            return
+        }
+
+        do {
+            try await restoreSessionWithTimeout(client: newClient, seconds: 12)
+            self.client = newClient
+            self.activeProfile = profile
+            self.protectedSessionActive = false
             await endServerProtectedSessionAndPersistCookies()
             self.isAuthenticated = true
             self.connectionError = nil
@@ -781,15 +818,71 @@ final class AppState {
             await runIncrementalSync(maxWaitSeconds: 30)
             startRealtimeIfPossible()
         } catch {
-            self.client = newClient
-            self.activeProfile = profile
-            self.isAuthenticated = false
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError {
+                revertProfileActivation(
+                    previousClient: previousClient,
+                    previousProfile: previousProfile,
+                    previousAuthenticated: previousAuthenticated,
+                    previousConnectionError: previousConnectionError,
+                    previousLastRefreshed: previousLastRefreshed,
+                    previousProtectedSession: previousProtectedSession
+                )
+                throw error
+            }
+
+            let canUseCacheOffline = !apiError.isAuthError
+                && (apiError.isNetworkError || !networkMonitor.isConnected)
+
+            if canUseCacheOffline {
+                self.client = newClient
+                self.activeProfile = profile
+                self.protectedSessionActive = false
+                syncManager.restoreSyncState(profileId: profile.id)
+                await enterOfflineCacheMode(profile: profile)
+                return
+            }
+
+            revertProfileActivation(
+                previousClient: previousClient,
+                previousProfile: previousProfile,
+                previousAuthenticated: previousAuthenticated,
+                previousConnectionError: previousConnectionError,
+                previousLastRefreshed: previousLastRefreshed,
+                previousProtectedSession: previousProtectedSession
+            )
             throw error
         }
     }
 
+    private func revertProfileActivation(
+        previousClient: (any TriliumClientProtocol)?,
+        previousProfile: ServerProfile?,
+        previousAuthenticated: Bool,
+        previousConnectionError: String?,
+        previousLastRefreshed: Date?,
+        previousProtectedSession: Bool
+    ) {
+        self.client = previousClient
+        self.activeProfile = previousProfile
+        self.isAuthenticated = previousAuthenticated
+        self.connectionError = previousConnectionError
+        self.lastRefreshed = previousLastRefreshed
+        self.protectedSessionActive = previousProtectedSession
+        if let p = previousProfile {
+            syncManager.restoreSyncState(profileId: p.id)
+        }
+        startRealtimeIfPossible()
+    }
+
     func loginWithPassword(_ password: String, rememberMe: Bool, totpToken: String? = nil, profile: ServerProfile) async throws {
         guard let url = profile.url else { throw APIError.invalidURL }
+
+        if activeProfile?.id != profile.id {
+            NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
+            tabNavigationResetGeneration += 1
+            await Task.yield()
+        }
 
         try await keychain.clearServerAuthArtifacts(forServer: profile.id)
         let newClient = TriliumClient(baseURL: url)
@@ -842,7 +935,8 @@ final class AppState {
     }
 
     func signOutAndRemoveProfile(_ profile: ServerProfile) async {
-        if profile.id == activeProfile?.id {
+        let wasActive = profile.id == activeProfile?.id
+        if wasActive {
             await logout()
             activeProfile = nil
         } else {
@@ -853,6 +947,19 @@ final class AppState {
             try persistence.deleteProfile(profile)
         } catch {
             Log.auth.error("Failed to remove profile: \(error)")
+        }
+        if wasActive {
+            let remaining = (try? persistence.fetchServerProfiles()) ?? []
+            let next = remaining.sorted {
+                ($0.lastConnected ?? .distantPast) > ($1.lastConnected ?? .distantPast)
+            }.first
+            if let next {
+                do {
+                    try await activateProfile(next)
+                } catch {
+                    Log.auth.warning("Could not activate next instance after sign-out: \(error)")
+                }
+            }
         }
     }
 

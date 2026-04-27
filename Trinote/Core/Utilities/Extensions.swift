@@ -48,6 +48,10 @@ extension Notification.Name {
     static let trinoteOfflineNoteIdReplaced = Notification.Name("TrinoteOfflineNoteIdReplaced")
     /// Posted when the open-note tab strip is updated (add/remove / prune) so visible bars can reload.
     static let openNoteTabsChanged = Notification.Name("TrinoteOpenNoteTabsChanged")
+    /// Posted when the selected open-tab row id changes for a profile. `userInfo["serverProfileId"]` is the `ServerProfile.id`.
+    static let trinoteLastActiveOpenTabIdChanged = Notification.Name("TrinoteLastActiveOpenTabIdChanged")
+    /// Posted on the main thread **before** `AppState.activeProfile` changes to another instance so tab stacks can pop note destinations (avoids showing the wrong server’s note id against the new profile).
+    static let trinoteWillSwitchServerProfile = Notification.Name("TrinoteWillSwitchServerProfile")
 }
 
 /// Thread-safe tracker for "ghost notes" — notes the server still lists in its

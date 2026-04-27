@@ -1,47 +1,42 @@
 import SwiftUI
 
-struct LoginView: View {
-    private enum Field: Hashable {
-        case displayName
-        case serverURL
-        case password
-    }
+// MARK: - Shared login form (main screen + Add Instance sheet)
 
-    @Environment(AppState.self) private var appState
-    @State private var viewModel = AuthViewModel()
+private enum LoginFormField: Hashable {
+    case displayName
+    case serverURL
+    case password
+}
+
+/// Header, server URL, password, Connect button, errors, and TOTP — shared by `LoginView` and `AddInstanceView`.
+struct LoginFormContent: View {
+    @Bindable var viewModel: AuthViewModel
+    let appState: AppState
+    /// When `true` (Add Instance sheet), block login if the URL matches an existing `ServerProfile`.
+    var rejectIfServerAlreadyAdded: Bool = false
     @State private var isPasswordVisible = false
-    @FocusState private var focusedField: Field?
+    @FocusState private var focusedField: LoginFormField?
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    header
-                    serverForm
-                    credentialForm
-                    loginButton
-                    savedProfilesList
-                }
-                .padding()
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(String(localized: "Connect", comment: "Login screen title"))
-            .navigationBarTitleDisplayMode(.inline)
-            .alert(String(localized: "Error", comment: "Login error"), isPresented: $viewModel.showError) {
-                Button(String(localized: "OK", comment: "Dismiss alert")) { viewModel.showError = false }
-            } message: {
-                Text(viewModel.errorMessage ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
-            }
-            .sheet(isPresented: $viewModel.showTotpEntry) {
-                TotpEntrySheet(viewModel: viewModel, appState: appState)
-            }
-            .onAppear { viewModel.loadProfiles() }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button(String(localized: "Done", comment: "Dismiss keyboard")) {
-                        focusedField = nil
-                    }
+        VStack(spacing: 24) {
+            header
+            serverForm
+            credentialForm
+            loginButton
+        }
+        .alert(String(localized: "Error", comment: "Login error"), isPresented: $viewModel.showError) {
+            Button(String(localized: "OK", comment: "Dismiss alert")) { viewModel.showError = false }
+        } message: {
+            Text(viewModel.errorMessage ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
+        }
+        .sheet(isPresented: $viewModel.showTotpEntry) {
+            TotpEntrySheet(viewModel: viewModel, appState: appState)
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(String(localized: "Done", comment: "Dismiss keyboard")) {
+                    focusedField = nil
                 }
             }
         }
@@ -141,7 +136,7 @@ struct LoginView: View {
     private var loginButton: some View {
         Button {
             focusedField = nil
-            Task { await viewModel.login(appState: appState) }
+            Task { await viewModel.login(appState: appState, rejectIfServerAlreadyAdded: rejectIfServerAlreadyAdded) }
         } label: {
             Group {
                 if viewModel.isLoading {
@@ -159,6 +154,63 @@ struct LoginView: View {
         .controlSize(.large)
         .disabled(!viewModel.canSubmit || viewModel.isLoading)
         .accessibilityLabel(String(localized: "Connect to server", comment: "VoiceOver"))
+    }
+}
+
+// MARK: - Add Instance (from Settings)
+
+struct AddInstanceView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @State private var viewModel = AuthViewModel()
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LoginFormContent(viewModel: viewModel, appState: appState, rejectIfServerAlreadyAdded: true)
+                    .padding()
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(String(localized: "Add Instance", comment: "Sheet title: sign in to another server"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(String(localized: "Cancel", comment: "Dismiss add instance")) {
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                viewModel.didFinishSuccessfulLogin = false
+                viewModel.loadProfiles()
+            }
+            .onChange(of: viewModel.didFinishSuccessfulLogin) { _, finished in
+                if finished { dismiss() }
+            }
+        }
+    }
+}
+
+// MARK: - Main login
+
+struct LoginView: View {
+    @Environment(AppState.self) private var appState
+    @State private var viewModel = AuthViewModel()
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    LoginFormContent(viewModel: viewModel, appState: appState)
+                    savedProfilesList
+                }
+                .padding()
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(String(localized: "Connect", comment: "Login screen title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear { viewModel.loadProfiles() }
+        }
     }
 
     @ViewBuilder
@@ -339,7 +391,12 @@ private struct SavedProfileRow: View {
     }
 }
 
-#Preview {
+#Preview("Login") {
     LoginView()
+        .environment(AppState())
+}
+
+#Preview("Add Instance") {
+    AddInstanceView()
         .environment(AppState())
 }

@@ -16,8 +16,8 @@ struct SettingsView: View {
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
 
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
-    @State private var showLogoutConfirm = false
     @State private var showClearCacheConfirm = false
+    @State private var showClearAllInstancesCacheConfirm = false
     @State private var showResetColorsConfirm = false
     @State private var appInfo: AppInfoResponse?
     @State private var isLoadingInfo = false
@@ -29,6 +29,10 @@ struct SettingsView: View {
     @AppStorage("appBiometricEnabled") private var appBiometricEnabled = false
     @State private var showPinSetup = false
     @State private var deviceBiometryKind: BiometricKind = .none
+    @State private var serverProfiles: [ServerProfile] = []
+    @State private var showAddInstance = false
+    @State private var profileIdPendingSignOut: String?
+    @State private var cacheSizeBytesAllInstances: Int?
 
     var body: some View {
         List {
@@ -36,19 +40,30 @@ struct SettingsView: View {
             treeViewSection
             noteEditorSection
             securitySection
-            serverSection
+            instancesSection
             connectionSection
             cacheSection
             aboutSection
-            accountSection
         }
         .navigationTitle(String(localized: "Settings", comment: "Settings screen title"))
         .task { await loadDiagnostics() }
         .sheet(isPresented: $showPinSetup) {
             PinSetupSheet(isCurrentlyEnabled: appPinEnabled) {}
         }
+        .sheet(isPresented: $showAddInstance) {
+            AddInstanceView()
+                .environment(appState)
+        }
         .onAppear {
             deviceBiometryKind = BiometricAuthenticator.availability().kind
+            reloadServerProfiles()
+        }
+        .onChange(of: appState.activeProfile?.id) { _, _ in
+            reloadServerProfiles()
+            Task { await loadDiagnostics() }
+        }
+        .onChange(of: showAddInstance) { _, isPresented in
+            if !isPresented { reloadServerProfiles() }
         }
         .onChange(of: appPinEnabled) { _, isOn in
             if !isOn { appBiometricEnabled = false }
@@ -266,17 +281,126 @@ struct SettingsView: View {
         )
     }
 
-    private var serverSection: some View {
-        Section(String(localized: "Server", comment: "Settings section")) {
-            if let profile = appState.activeProfile {
-                LabeledContent(String(localized: "Name", comment: "Server profile field"), value: profile.name)
-                LabeledContent(String(localized: "URL", comment: "Server profile field"), value: profile.normalizedBaseURL)
-                if let lastConnected = profile.lastConnected {
-                    LabeledContent(String(localized: "Last Connected", comment: "Server profile field"), value: lastConnected.shortDisplay)
-                }
-            } else {
-                Text(String(localized: "No server connected", comment: "Settings empty server"))
+    private var instancesSection: some View {
+        Section {
+            if serverProfiles.isEmpty {
+                Text(String(localized: "No instances", comment: "Settings when no server profiles"))
                     .foregroundStyle(.secondary)
+            } else {
+                ForEach(serverProfiles, id: \.id) { profile in
+                    let isActive = profile.id == appState.activeProfile?.id
+                    HStack(alignment: .center, spacing: 10) {
+                        Button {
+                            if !isActive {
+                                Task {
+                                    do {
+                                        try await appState.activateProfile(profile)
+                                    } catch {
+                                        appState.connectionError = APIError.from(error).localizedDescription
+                                    }
+                                }
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Text(profile.name)
+                                        .font(.body.weight(.medium))
+                                        .foregroundStyle(.primary)
+                                    if isActive {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                            .font(.caption)
+                                            .accessibilityLabel(String(localized: "Active instance", comment: "VoiceOver: current server"))
+                                    }
+                                }
+                                Text(profile.normalizedBaseURL)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                if isActive {
+                                    Text(String(localized: "Active", comment: "Label on current instance row"))
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isActive)
+
+                        Button {
+                            profileIdPendingSignOut = profile.id
+                        } label: {
+                            Text(String(localized: "Sign Out", comment: "Per-instance sign out in settings"))
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                        .accessibilityLabel(
+                            String(
+                                format: String(localized: "Sign out from %@", comment: "VoiceOver: sign out server; %@ is name"),
+                                locale: .current,
+                                profile.name
+                            )
+                        )
+                    }
+                }
+            }
+
+            Button {
+                showAddInstance = true
+            } label: {
+                Label(String(localized: "Add Instance", comment: "Settings: sign in to another server"), systemImage: "plus.circle.fill")
+            }
+            .disabled(serverProfiles.count >= PersistenceManager.maxServerProfiles)
+        } header: {
+            Text(String(localized: "Instances", comment: "Settings section: multiple servers"))
+        } footer: {
+            if serverProfiles.count >= PersistenceManager.maxServerProfiles {
+                Text(
+                    String(
+                        format: String(
+                            localized: "You can sign in to at most %lld instances. Sign out from one to add another.",
+                            comment: "Settings footer when instance limit reached; %lld is max count"
+                        ),
+                        locale: .current,
+                        Int64(PersistenceManager.maxServerProfiles)
+                    )
+                )
+            }
+        }
+        .confirmationDialog(
+            String(localized: "Sign Out?", comment: "Confirm sign out instance title"),
+            isPresented: Binding(
+                get: { profileIdPendingSignOut != nil },
+                set: { if !$0 { profileIdPendingSignOut = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(String(localized: "Sign Out", comment: "Confirm sign out"), role: .destructive) {
+                if let id = profileIdPendingSignOut,
+                   let profile = serverProfiles.first(where: { $0.id == id }) {
+                    Task { await signOutInstance(profile) }
+                }
+                profileIdPendingSignOut = nil
+            }
+            Button(String(localized: "Cancel", comment: "Cancel sign out"), role: .cancel) {
+                profileIdPendingSignOut = nil
+            }
+        } message: {
+            if let id = profileIdPendingSignOut,
+               let name = serverProfiles.first(where: { $0.id == id })?.name {
+                Text(
+                    String(
+                        format: String(
+                            localized: "Sign out from \"%@\"? This removes the instance, cached notes, and saved session from this device. Data on the server is not deleted.",
+                            comment: "Confirm sign out instance; %@ is server display name"
+                        ),
+                        locale: .current,
+                        name
+                    )
+                )
             }
         }
     }
@@ -330,6 +454,13 @@ struct SettingsView: View {
 
             if let bytes = cacheSizeBytes {
                 LabeledContent(String(localized: "Cache Size", comment: "Settings cache"), value: ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
+            }
+
+            if let bytesAll = cacheSizeBytesAllInstances {
+                LabeledContent(
+                    String(localized: "Cache Size (all instances)", comment: "Settings cache across all signed-in servers"),
+                    value: ByteCountFormatter.string(fromByteCount: Int64(bytesAll), countStyle: .file)
+                )
             }
 
             if let lastSync = appState.syncManager.lastFullSyncDate {
@@ -433,6 +564,27 @@ struct SettingsView: View {
             } message: {
                 Text(String(localized: "This will remove all locally cached notes, branches, and attributes for this server. Your data on the server is not affected.", comment: "Clear cache message"))
             }
+
+            Button(String(localized: "Clear Cache (all instances)", comment: "Settings: clear cache for every server"), role: .destructive) {
+                showClearAllInstancesCacheConfirm = true
+            }
+            .disabled(serverProfiles.isEmpty)
+            .confirmationDialog(
+                String(localized: "Clear Cache (all instances)?", comment: "Confirm clear all instances cache"),
+                isPresented: $showClearAllInstancesCacheConfirm
+            ) {
+                Button(String(localized: "Clear All Instances", comment: "Confirm clear all caches"), role: .destructive) {
+                    clearCacheAllInstances()
+                }
+                Button(String(localized: "Cancel", comment: "Cancel"), role: .cancel) {}
+            } message: {
+                Text(
+                    String(
+                        localized: "This removes locally cached notes, branches, and attributes for every signed-in instance. Profiles and sessions stay signed in. Server data is not affected.",
+                        comment: "Message for clear cache all instances"
+                    )
+                )
+            }
         }
     }
 
@@ -453,22 +605,6 @@ struct SettingsView: View {
         Section(String(localized: "App", comment: "Settings about section")) {
             LabeledContent(String(localized: "Version", comment: "App version label"), value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
             LabeledContent(String(localized: "Build", comment: "App build number"), value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")
-        }
-    }
-
-    private var accountSection: some View {
-        Section {
-            Button(String(localized: "Sign Out", comment: "Settings account"), role: .destructive) {
-                showLogoutConfirm = true
-            }
-            .disabled(!appState.isAuthenticated)
-        }
-        .confirmationDialog(String(localized: "Sign Out?", comment: "Settings confirm"), isPresented: $showLogoutConfirm) {
-            Button(String(localized: "Sign Out", comment: "Settings account"), role: .destructive) {
-                Task { await appState.logout() }
-            }
-        } message: {
-            Text(String(localized: "You will need to re-enter your credentials to reconnect.", comment: "Sign out message"))
         }
     }
 
@@ -497,6 +633,39 @@ struct SettingsView: View {
             cacheEntityCount = (try? PersistenceManager.shared.estimateCacheSize(for: profileId)) ?? 0
             cacheSizeBytes = try? PersistenceManager.shared.estimateCacheSizeInBytes(for: profileId)
             syncStatuses = (try? PersistenceManager.shared.fetchSyncStatuses(serverProfileId: profileId)) ?? []
+        } else {
+            cacheEntityCount = 0
+            cacheSizeBytes = nil
+            syncStatuses = []
+        }
+        cacheSizeBytesAllInstances = try? PersistenceManager.shared.estimateCacheSizeInBytesAllInstances()
+    }
+
+    private func reloadServerProfiles() {
+        serverProfiles = (try? PersistenceManager.shared.fetchServerProfiles()) ?? []
+    }
+
+    private func signOutInstance(_ profile: ServerProfile) async {
+        await appState.signOutAndRemoveProfile(profile)
+        reloadServerProfiles()
+        await loadDiagnostics()
+    }
+
+    private func clearCacheAllInstances() {
+        do {
+            try PersistenceManager.shared.clearCacheAllInstances()
+            cacheSizeBytesAllInstances = 0
+            if let profileId = appState.activeProfile?.id {
+                cacheEntityCount = (try? PersistenceManager.shared.estimateCacheSize(for: profileId)) ?? 0
+                cacheSizeBytes = try? PersistenceManager.shared.estimateCacheSizeInBytes(for: profileId)
+                syncStatuses = (try? PersistenceManager.shared.fetchSyncStatuses(serverProfileId: profileId)) ?? []
+            } else {
+                cacheEntityCount = 0
+                cacheSizeBytes = nil
+                syncStatuses = []
+            }
+        } catch {
+            Log.persistence.error("Failed to clear all-instance cache: \(error)")
         }
     }
 
@@ -507,6 +676,7 @@ struct SettingsView: View {
             cacheEntityCount = 0
             cacheSizeBytes = 0
             syncStatuses = []
+            cacheSizeBytesAllInstances = try? PersistenceManager.shared.estimateCacheSizeInBytesAllInstances()
         } catch {
             Log.persistence.error("Failed to clear cache: \(error)")
         }

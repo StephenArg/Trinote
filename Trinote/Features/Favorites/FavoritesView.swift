@@ -113,6 +113,9 @@ struct FavoritesView: View {
             .refreshable { loadFavorites() }
             .onChange(of: appState.protectedSessionActive) { _, _ in loadFavorites() }
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavorites() }
+            .onReceive(NotificationCenter.default.publisher(for: .trinoteWillSwitchServerProfile)) { _ in
+                navigateToNote = nil
+            }
             .alert(String(localized: "Delete Failed", comment: "Favorites error"), isPresented: deleteErrorBinding) {
                 Button(String(localized: "OK", comment: "Dismiss"), role: .cancel) { deleteError = nil }
             } message: {

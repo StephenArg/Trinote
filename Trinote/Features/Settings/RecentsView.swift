@@ -105,6 +105,9 @@ struct RecentsView: View {
         )) { item in
             NoteDetailView(noteId: item.noteId, title: item.title)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .trinoteWillSwitchServerProfile)) { _ in
+            navigateToNote = nil
+        }
     }
 
     private func loadRecents() {

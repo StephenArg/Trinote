@@ -38,6 +38,9 @@ struct SearchView: View {
                 pendingFindMatchIndex: dest.findMatchIndex1Based
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: .trinoteWillSwitchServerProfile)) { _ in
+            navigateTo = nil
+        }
     }
 
     @ViewBuilder

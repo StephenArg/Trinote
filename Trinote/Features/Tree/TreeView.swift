@@ -72,7 +72,8 @@ struct TreeView: View {
     @State private var moveNoteConfirmPayload: MoveNoteConfirmPayload?
     @State private var moveNoteError: String?
     @State private var tabsBarNav: NoteNavItem?
-    @AppStorage("lastActiveOpenTabId") private var lastActiveOpenTabIdStorage: String = ""
+    /// Mirrors `LastActiveOpenTabStore` for the active profile so the tab bar updates when the store changes.
+    @State private var lastActiveOpenTabIdForBar: String = ""
 
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
@@ -135,7 +136,6 @@ struct TreeView: View {
     private var treeViewWithSharedSheetsAndAlerts: some View {
         treeViewChromeAndDestinations
             .alert(String(localized: "Delete Note", comment: "Tree delete alert title"), isPresented: noteToDeleteBinding, actions: deleteNoteActions, message: deleteNoteMessage)
-            .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteIds() }
             .onReceive(NotificationCenter.default.publisher(for: .noteDeleted)) { _ in
                 triggerSyncAndReload()
             }
@@ -155,6 +155,15 @@ struct TreeView: View {
                 actions: treeSharingErrorActions,
                 message: treeSharingErrorMessage
             )
+            .onReceive(NotificationCenter.default.publisher(for: .trinoteLastActiveOpenTabIdChanged)) { note in
+                guard let pid = note.userInfo?["serverProfileId"] as? String,
+                      pid == appState.activeProfile?.id
+                else { return }
+                lastActiveOpenTabIdForBar = LastActiveOpenTabStore.get(profileId: pid)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .trinoteWillSwitchServerProfile)) { _ in
+                resetNavigationStackBeforeServerProfileChange()
+            }
     }
 
     private var treeViewChromeAndDestinations: some View {
@@ -181,10 +190,22 @@ struct TreeView: View {
                 await vm.loadTree()
             }
             loadFavoriteIds()
+            lastActiveOpenTabIdForBar = LastActiveOpenTabStore.get(profileId: appState.activeProfile?.id)
             autoRestoreOpenTabOnLaunchIfNeeded()
         }
         .onChange(of: appState.activeProfile?.id) { _, _ in
-            autoRestoreOpenTabOnLaunchIfNeeded()
+            loadFavoriteIds()
+            Self.autoRestoreOpenTabHandledForProfileId = nil
+            lastActiveOpenTabIdForBar = LastActiveOpenTabStore.get(profileId: appState.activeProfile?.id)
+            resetNavigationStackBeforeServerProfileChange()
+            Task { @MainActor in
+                let vm = TreeViewModel(appState: appState, parentNoteId: parentNoteId)
+                viewModel = vm
+                await vm.loadTree()
+                if parentNoteId == "root" {
+                    autoRestoreOpenTabOnLaunchIfNeeded()
+                }
+            }
         }
         .navigationDestination(item: $navigateToNote, destination: noteDetailDestination)
         .navigationDestination(item: $navigateToNoteForEdit, destination: noteEditDestination)
@@ -195,16 +216,18 @@ struct TreeView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if showNoteTabsBar {
                 NoteTabsBar(
-                    currentOpenTabId: lastActiveOpenTabIdStorage.isEmpty ? nil : lastActiveOpenTabIdStorage,
+                    currentOpenTabId: lastActiveOpenTabIdForBar.isEmpty ? nil : lastActiveOpenTabIdForBar,
                     onSelect: { tab in
-                        lastActiveOpenTabIdStorage = tab.id
+                        LastActiveOpenTabStore.set(tab.id, profileId: appState.activeProfile?.id)
+                        lastActiveOpenTabIdForBar = tab.id
                         tabsBarNav = NoteNavItem(
                             noteId: tab.noteId, title: tab.title, openTabId: tab.id
                         )
                     },
                     onOpenTabRemoved: { _ in },
                     onTabsBecameEmpty: {
-                        lastActiveOpenTabIdStorage = ""
+                        LastActiveOpenTabStore.set("", profileId: appState.activeProfile?.id)
+                        lastActiveOpenTabIdForBar = ""
                     }
                 )
             }
@@ -509,6 +532,20 @@ struct TreeView: View {
         }
     }
 
+    /// Pops note / subtree / tab destinations so no `NoteDetailView` stays mounted with the outgoing profile’s note ids when `activeProfile` changes (see `AppState` posting `.trinoteWillSwitchServerProfile`).
+    private func resetNavigationStackBeforeServerProfileChange() {
+        navigateToNote = nil
+        navigateToNoteForEdit = nil
+        drillDownTarget = nil
+        tabsBarNav = nil
+        moveNoteSheetContext = nil
+        moveNoteConfirmPayload = nil
+        createSheetContext = nil
+        treeShareSheetPayload = nil
+        noteToDelete = nil
+        showSharedNotesManagement = false
+    }
+
     private func loadFavoriteIds() {
         guard let profileId = appState.activeProfile?.id else {
             favoriteNoteIds = []
@@ -546,9 +583,10 @@ struct TreeView: View {
             return
         }
 
+        let storedTabId = LastActiveOpenTabStore.get(profileId: profileId)
         var resolved: OpenNoteTab?
-        if !lastActiveOpenTabIdStorage.isEmpty,
-           let row = try? pm.fetchOpenNoteTab(id: lastActiveOpenTabIdStorage, serverProfileId: profileId) {
+        if !storedTabId.isEmpty,
+           let row = try? pm.fetchOpenNoteTab(id: storedTabId, serverProfileId: profileId) {
             resolved = row
         } else if let mostRecentId = try? pm.mostRecentlyAddedOpenNoteTabId(serverProfileId: profileId),
                   let row = try? pm.fetchOpenNoteTab(id: mostRecentId, serverProfileId: profileId) {
@@ -560,7 +598,8 @@ struct TreeView: View {
         }
 
         Self.autoRestoreOpenTabHandledForProfileId = profileId
-        lastActiveOpenTabIdStorage = tab.id
+        LastActiveOpenTabStore.set(tab.id, profileId: profileId)
+        lastActiveOpenTabIdForBar = tab.id
         // Only push if we're not already showing a destination from this stack.
         if navigateToNote == nil, navigateToNoteForEdit == nil, drillDownTarget == nil, tabsBarNav == nil {
             tabsBarNav = NoteNavItem(noteId: tab.noteId, title: tab.title, openTabId: tab.id)

@@ -291,11 +291,19 @@ final class NoteDetailViewModel {
 
         loadContentFromCache()
 
+        // Cached HTML still points at `api/images` / `api/attachments`; WKWebView cannot load those like a browser tab.
+        // If we assign `contentString` before inlining completes, images briefly show as broken (e.g. “?”) while online fetches run.
         if let raw = self.rawContentString,
-           raw.contains("api/attachments/") || raw.contains("api/images/") {
+           raw.localizedCaseInsensitiveContains("api/attachments/") || raw.localizedCaseInsensitiveContains("api/images/"),
+           self.note?.type == .text || self.contentString == nil {
+            let hideBodyUntilInlined = self.contentString == nil
+            if hideBodyUntilInlined {
+                self.isLoadingContent = true
+            }
             let inlined = await self.inlineAttachmentImages(in: raw)
-            if inlined != self.contentString {
-                self.contentString = inlined
+            self.contentString = inlined
+            if hideBodyUntilInlined {
+                self.isLoadingContent = false
             }
         }
         await applyIncludeNoteResolutionIfNeeded()
@@ -2492,7 +2500,18 @@ final class NoteDetailViewModel {
             content = data
             let html = String(data: data, encoding: .utf8)
             rawContentString = html
-            contentString = html
+            let isTextHTMLNote = NoteType(rawValue: cached.noteType) == .text
+            let needsDeferredBody: Bool = {
+                guard isTextHTMLNote, let h = html else { return false }
+                return h.localizedCaseInsensitiveContains("api/attachments/")
+                    || h.localizedCaseInsensitiveContains("api/images/")
+            }()
+            // Defer publishing HTML with unresolved Trilium image URLs so the read-only web view does not paint broken `<img>`s before `inlineAttachmentImages` runs.
+            if needsDeferredBody {
+                contentString = nil
+            } else {
+                contentString = html
+            }
             checkForDraft()
             let trimmed = (html ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let cacheHitLog = NoteDiagnostics.describeContentState(

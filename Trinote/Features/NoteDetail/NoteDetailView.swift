@@ -90,11 +90,14 @@ struct NoteDetailView: View {
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
     @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
-    @AppStorage("lastActiveOpenTabId") private var lastActiveOpenTabIdStorage: String = ""
     /// When `true`, hide the floating edit FAB and instead require a 1.5-second hold on the read-only view to start editing. Mirrors `SettingsView`'s toggle of the same key.
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     @State private var activeOpenTabId: String?
     @State private var openNoteTabListNonEmpty: Bool = false
+
+    private var persistedLastActiveOpenTabId: String {
+        LastActiveOpenTabStore.get(profileId: appState.activeProfile?.id)
+    }
 
     /// Aligns “Copy share link” / “Share link…” with the Share/Sharing title (after `scale.3d` column).
     private static let sharingSubmenuTitleLeadingInset: CGFloat = 36
@@ -552,7 +555,7 @@ struct NoteDetailView: View {
                         onSelect: { selectOpenNoteTab($0) },
                         onOpenTabRemoved: { handleOpenTabRemoved($0) },
                         onTabsBecameEmpty: {
-                            lastActiveOpenTabIdStorage = ""
+                            LastActiveOpenTabStore.set("", profileId: appState.activeProfile?.id)
                         }
                     )
                     .transition(.move(edge: .bottom))
@@ -564,9 +567,9 @@ struct NoteDetailView: View {
             .onChange(of: showNoteTabsBar) { _, _ in refreshOpenNoteTabListNonEmpty() }
             .onChange(of: activeOpenTabId) { _, t in
                 if let t {
-                    lastActiveOpenTabIdStorage = t
+                    LastActiveOpenTabStore.set(t, profileId: appState.activeProfile?.id)
                 } else {
-                    lastActiveOpenTabIdStorage = ""
+                    LastActiveOpenTabStore.set("", profileId: appState.activeProfile?.id)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .openNoteTabsChanged)) { _ in
@@ -575,8 +578,11 @@ struct NoteDetailView: View {
             }
             .onAppear {
                 refreshOpenNoteTabListNonEmpty()
-                if showNoteTabsBar, let t = activeOpenTabId { lastActiveOpenTabIdStorage = t }
+                if showNoteTabsBar, let t = activeOpenTabId { LastActiveOpenTabStore.set(t, profileId: appState.activeProfile?.id) }
                 if showNoteTabsBar, retargetActiveOpenTab { restoreActiveOpenTabToCurrentNoteIfDrifted() }
+            }
+            .onChange(of: appState.activeProfile?.id) { _, _ in
+                dismiss()
             }
             .onChange(of: navigateToNoteId) { oldValue, newValue in
                 guard oldValue != nil, newValue == nil else { return }
@@ -667,9 +673,9 @@ struct NoteDetailView: View {
            (try? pm.fetchOpenNoteTab(id: o, serverProfileId: p)) != nil {
             tabId = o
         }
-        if tabId == nil, !lastActiveOpenTabIdStorage.isEmpty,
-           (try? pm.fetchOpenNoteTab(id: lastActiveOpenTabIdStorage, serverProfileId: p)) != nil {
-            tabId = lastActiveOpenTabIdStorage
+        if tabId == nil, !persistedLastActiveOpenTabId.isEmpty,
+           (try? pm.fetchOpenNoteTab(id: persistedLastActiveOpenTabId, serverProfileId: p)) != nil {
+            tabId = persistedLastActiveOpenTabId
         }
         if tabId == nil, let m = try? pm.mostRecentlyAddedOpenNoteTabId(serverProfileId: p) {
             tabId = m
@@ -711,9 +717,9 @@ struct NoteDetailView: View {
                     noteId: n.noteId, title: n.title, noteType: n.type.rawValue, serverProfileId: p
                 ) { activeOpenTabId = newId }
             } else {
-                if activeOpenTabId == nil, !lastActiveOpenTabIdStorage.isEmpty,
-                   (try? pm.fetchOpenNoteTab(id: lastActiveOpenTabIdStorage, serverProfileId: p)) != nil {
-                    activeOpenTabId = lastActiveOpenTabIdStorage
+                if activeOpenTabId == nil, !persistedLastActiveOpenTabId.isEmpty,
+                   (try? pm.fetchOpenNoteTab(id: persistedLastActiveOpenTabId, serverProfileId: p)) != nil {
+                    activeOpenTabId = persistedLastActiveOpenTabId
                 }
                 if activeOpenTabId == nil, let t = try? pm.findPreferredOpenTabId(
                     for: n.noteId, serverProfileId: p
@@ -742,9 +748,9 @@ struct NoteDetailView: View {
             return
         }
 
-        if !lastActiveOpenTabIdStorage.isEmpty,
-           (try? pm.fetchOpenNoteTab(id: lastActiveOpenTabIdStorage, serverProfileId: p)) != nil {
-            activeOpenTabId = lastActiveOpenTabIdStorage
+        if !persistedLastActiveOpenTabId.isEmpty,
+           (try? pm.fetchOpenNoteTab(id: persistedLastActiveOpenTabId, serverProfileId: p)) != nil {
+            activeOpenTabId = persistedLastActiveOpenTabId
         }
         if activeOpenTabId == nil, let m = try? pm.mostRecentlyAddedOpenNoteTabId(serverProfileId: p) {
             activeOpenTabId = m
@@ -826,7 +832,7 @@ struct NoteDetailView: View {
         activeOpenTabId = nil
         let all = (try? PersistenceManager.shared.fetchOpenNoteTabs(serverProfileId: p)) ?? []
         if all.isEmpty {
-            lastActiveOpenTabIdStorage = ""
+            LastActiveOpenTabStore.set("", profileId: appState.activeProfile?.id)
         } else if let n = viewModel?.note, let m = all.filter({ $0.noteId == n.noteId }).max(by: { $0.addedAt < $1.addedAt }) {
             selectOpenNoteTab(m)
         } else if let a = all.max(by: { $0.addedAt < $1.addedAt }) {
@@ -838,7 +844,7 @@ struct NoteDetailView: View {
         guard let p = appState.activeProfile?.id else { return }
         if PersistenceManager.shared.openNoteTabCount(serverProfileId: p) == 0 {
             activeOpenTabId = nil
-            lastActiveOpenTabIdStorage = ""
+            LastActiveOpenTabStore.set("", profileId: appState.activeProfile?.id)
             return
         }
         guard let t = activeOpenTabId else { return }
@@ -850,7 +856,7 @@ struct NoteDetailView: View {
         ), let row = try? PersistenceManager.shared.fetchOpenNoteTab(id: u, serverProfileId: p) {
             selectOpenNoteTab(row)
         } else {
-            lastActiveOpenTabIdStorage = ""
+            LastActiveOpenTabStore.set("", profileId: appState.activeProfile?.id)
         }
     }
 

@@ -15,6 +15,9 @@ final class AuthViewModel {
     var showError = false
     var profiles: [ServerProfile] = []
 
+    /// Set to `true` after a successful `login` / `submitTotp` so sheets (e.g. Add Instance) can dismiss.
+    var didFinishSuccessfulLogin = false
+
     /// TOTP / MFA state
     var totpCode = ""
     var showTotpEntry = false
@@ -68,12 +71,27 @@ final class AuthViewModel {
         }
     }
 
-    func login(appState: AppState) async {
+    func login(appState: AppState, rejectIfServerAlreadyAdded: Bool = false) async {
+        didFinishSuccessfulLogin = false
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
 
         let displayName = serverName.nilIfEmpty ?? serverURL
+        let normalizedInput = ServerProfile(name: displayName, baseURL: fullServerURL).normalizedBaseURL
+
+        if rejectIfServerAlreadyAdded {
+            loadProfiles()
+            if profiles.contains(where: { $0.normalizedBaseURL == normalizedInput }) {
+                errorMessage = String(
+                    localized: "You are already signed in to this server. Switch to it under Settings → Instances, or sign it out there before adding it again.",
+                    comment: "Error when Add Instance URL matches an existing profile"
+                )
+                showError = true
+                return
+            }
+        }
+
         let profile = findOrCreateProfile(name: displayName, url: fullServerURL)
 
         do {
@@ -81,10 +99,14 @@ final class AuthViewModel {
             try await appState.loginWithPassword(password, rememberMe: rememberMe, profile: profile)
             password = ""
             loadProfiles()
+            didFinishSuccessfulLogin = true
         } catch let error as APIError where error == .totpRequired {
             pendingTotpProfile = profile
             totpCode = ""
             showTotpEntry = true
+        } catch let pe as PersistenceError {
+            errorMessage = pe.localizedDescription
+            showError = true
         } catch {
             errorMessage = APIError.from(error).localizedDescription
             showError = true
@@ -95,6 +117,7 @@ final class AuthViewModel {
     /// Completes login after the user enters a TOTP code.
     func submitTotp(appState: AppState) async {
         guard let profile = pendingTotpProfile else { return }
+        didFinishSuccessfulLogin = false
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -106,6 +129,7 @@ final class AuthViewModel {
             pendingTotpProfile = nil
             showTotpEntry = false
             loadProfiles()
+            didFinishSuccessfulLogin = true
         } catch let error as APIError where error == .totpInvalid {
             errorMessage = error.localizedDescription
             showError = true

@@ -4,6 +4,12 @@ struct MainTabView: View {
     @Environment(AppState.self) private var appState
     @State private var selectedTab: Tab = .notes
 
+    /// Recreates each tab’s `NavigationStack` when the active instance or `tabNavigationResetGeneration` changes so pushed `NoteDetailView`s cannot survive with the wrong `serverProfileId`.
+    private var navigationStackInstanceId: String {
+        let pid = appState.activeProfile?.id ?? "__trinote_no_profile__"
+        return "\(pid)-\(appState.tabNavigationResetGeneration)"
+    }
+
     enum Tab: String, CaseIterable {
         case notes
         case favorites
@@ -59,24 +65,29 @@ struct MainTabView: View {
             NavigationStack {
                 TreeView()
             }
+            .id(navigationStackInstanceId)
         case .favorites:
             NavigationStack {
                 FavoritesView(onNoteDeleted: {
                     Task { await appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false) }
                 })
             }
+            .id(navigationStackInstanceId)
         case .search:
             NavigationStack {
                 SearchView()
             }
+            .id(navigationStackInstanceId)
         case .recents:
             NavigationStack {
                 RecentsView()
             }
+            .id(navigationStackInstanceId)
         case .settings:
             NavigationStack {
                 SettingsView()
             }
+            .id(navigationStackInstanceId)
         }
     }
 }

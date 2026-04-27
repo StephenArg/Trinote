@@ -92,8 +92,18 @@ final class PersistenceManager {
         return try context.fetch(descriptor).first
     }
 
+    /// Maximum number of distinct server profiles (signed-in instances) allowed on device.
+    static let maxServerProfiles = 7
+
     func saveProfile(_ profile: ServerProfile) throws {
-        context.insert(profile)
+        let all = try fetchServerProfiles()
+        let isNew = !all.contains(where: { $0.id == profile.id })
+        if isNew, all.count >= Self.maxServerProfiles {
+            throw PersistenceError.tooManyServerProfiles(max: Self.maxServerProfiles)
+        }
+        if isNew {
+            context.insert(profile)
+        }
         try context.save()
     }
 
@@ -1942,5 +1952,34 @@ final class PersistenceManager {
             total += img.data.count
         }
         return total
+    }
+
+    /// Sum of `estimateCacheSizeInBytes` across every saved `ServerProfile`.
+    func estimateCacheSizeInBytesAllInstances() throws -> Int {
+        let profiles = try fetchServerProfiles()
+        return try profiles.reduce(0) { try $0 + estimateCacheSizeInBytes(for: $1.id) }
+    }
+
+    /// Runs `clearCache(for:)` for each profile (does not delete profiles or keychain sessions).
+    func clearCacheAllInstances() throws {
+        for p in try fetchServerProfiles() {
+            try clearCache(for: p.id)
+        }
+    }
+}
+
+// MARK: - Persistence errors
+
+enum PersistenceError: LocalizedError {
+    case tooManyServerProfiles(max: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .tooManyServerProfiles(let max):
+            String(
+                localized: "You can sign in to at most \(max) server instances.",
+                comment: "Error when adding another Trilium server profile beyond the limit"
+            )
+        }
     }
 }
