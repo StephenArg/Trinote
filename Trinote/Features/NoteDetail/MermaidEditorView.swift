@@ -9,11 +9,27 @@ struct MermaidEditorView: View {
     @State private var renderSource: String = ""
     @State private var debounceTask: Task<Void, Never>?
 
+    /// True when the user hasn't typed anything (and hasn't picked a sample yet). Drives the
+    /// starter-chooser-vs-preview swap in the upper pane. Trimmed so a stray newline doesn't
+    /// keep the chooser hidden on freshly created notes.
+    private var hasNoContent: Bool {
+        editableContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 0) {
-                MermaidPreviewWebView(source: $renderSource)
+                if hasNoContent {
+                    MermaidStarterChooser { sample in
+                        editableContent = sample
+                        renderSource = sample
+                        debounceTask?.cancel()
+                    }
                     .frame(height: geo.size.height * 0.5)
+                } else {
+                    MermaidPreviewWebView(source: $renderSource)
+                        .frame(height: geo.size.height * 0.5)
+                }
 
                 Divider()
 

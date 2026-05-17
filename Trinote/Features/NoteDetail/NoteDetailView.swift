@@ -1034,7 +1034,7 @@ struct NoteDetailView: View {
                         }
                     }
                     .animation(.easeInOut(duration: 0.22), value: findControl.isPresented)
-                    .refreshable { await vm.refresh() }
+                    .refreshable { await vm.refresh(force: true) }
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         if findControl.isPresented {
                             FindOnPageBar(control: findControl)
@@ -1462,6 +1462,12 @@ struct NoteDetailView: View {
             if let json = vm.contentString {
                 MindMapNoteView(json: json)
             }
+        case .spreadsheet:
+            SpreadsheetNoteView(
+                json: vm.contentString,
+                noteId: note.noteId,
+                serverURL: appState.activeProfile?.normalizedBaseURL
+            )
         case .geoMap:
             GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
         case .book, .collection:
@@ -1961,7 +1967,7 @@ struct NoteDetailView: View {
             .frame(maxWidth: .infinity)
         }
         .refreshable {
-            await vm.refresh()
+            await vm.refresh(force: true)
             loadGeoMapPins(vm: vm, note: mapParentNote)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

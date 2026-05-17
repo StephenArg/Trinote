@@ -13,6 +13,52 @@ struct AppInfoResponse: Decodable {
     let utcDateTime: String?
 }
 
+/// Server compatibility envelope for the native `/api/*` surface Trinote consumes.
+///
+/// Pinned to the latest Trilium release the iOS client has been **regression-tested** against.
+/// Bumped intentionally — never tracked silently with the upstream `MAX_MIGRATION_VERSION`.
+///
+/// Used by [`SettingsView`](x-source-tag://SettingsAboutSection) to surface a non-blocking
+/// "newer than tested" notice when the connected server is ahead of these values, so users
+/// understand which quirks (new note types, schema changes) might not be fully handled yet.
+enum TriliumServerCompatibility {
+    /// Highest `MAX_MIGRATION_VERSION` (`dbVersion`) the iOS client was tested against.
+    /// v0.103.0 ships migration 238 (revisions.description / revisions.source columns).
+    static let testedMaxDbVersion: Int = 238
+
+    /// Highest `SYNC_VERSION` the iOS client was tested against. v0.103.0 == 39.
+    static let testedMaxSyncVersion: Int = 39
+
+    /// Human label used in the Settings banner when displaying the tested ceiling.
+    static let testedMaxAppVersion = "v0.103.0"
+
+    enum Status: Equatable {
+        /// We have not yet fetched `/api/app-info`, or it returned without versions.
+        case unknown
+        /// Server is at or below what we tested; no banner needed.
+        case withinTestedRange
+        /// Server's `dbVersion` is ahead of `testedMaxDbVersion` — schema may include
+        /// new columns/tables we don't read; usually safe but worth warning.
+        case dbVersionAhead(serverDb: Int, testedDb: Int)
+        /// Server's `syncVersion` is ahead of `testedMaxSyncVersion` — `/api/sync/changed`
+        /// payload shape may have changed; pull sync is more likely to misbehave.
+        case syncVersionAhead(serverSync: Int, testedSync: Int)
+    }
+
+    /// Classifies the server response. `syncVersion` mismatches are reported in preference to
+    /// `dbVersion` mismatches because sync payload shape directly affects our pull loop.
+    static func evaluate(_ info: AppInfoResponse?) -> Status {
+        guard let info else { return .unknown }
+        if let s = info.syncVersion, s > testedMaxSyncVersion {
+            return .syncVersionAhead(serverSync: s, testedSync: testedMaxSyncVersion)
+        }
+        if let d = info.dbVersion, d > testedMaxDbVersion {
+            return .dbVersionAhead(serverDb: d, testedDb: testedMaxDbVersion)
+        }
+        return .withinTestedRange
+    }
+}
+
 // MARK: - Note
 
 struct NoteResponse: Decodable {

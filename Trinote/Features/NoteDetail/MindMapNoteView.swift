@@ -40,6 +40,8 @@ private struct MindMapWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.json = json
+        // Refresh the rendered diagram when the underlying note content changes (e.g. pull-to-refresh).
+        context.coordinator.renderIfNeeded()
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -49,17 +51,20 @@ private struct MindMapWebView: UIViewRepresentable {
     class Coordinator: NSObject, WKScriptMessageHandler {
         var json: String = ""
         weak var webView: WKWebView?
-        private var injected = false
+        private var isReady = false
+        private var lastRenderedJSON: String?
 
         func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "mindmapViewerReady" {
-                injectData()
+                isReady = true
+                renderIfNeeded()
             }
         }
 
-        private func injectData() {
-            guard !injected, let webView else { return }
-            injected = true
+        func renderIfNeeded() {
+            guard isReady, let webView else { return }
+            guard json != lastRenderedJSON else { return }
+            lastRenderedJSON = json
 
             let escaped = json
                 .replacingOccurrences(of: "\\", with: "\\\\")

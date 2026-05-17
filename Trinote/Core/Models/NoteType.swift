@@ -36,6 +36,9 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     case mermaid
     case geoMap = "geoMap"
     case mindMap = "mindMap"
+    /// Trilium v0.103+ Univer Sheets-backed spreadsheet note. Content is Univer workbook JSON (`application/json`).
+    /// Trinote renders this read-only; editing requires the Univer bundle which is not shipped on iOS.
+    case spreadsheet
     /// Client-only: creates a Trilium `book` with `#calendarRoot` (journal / calendar widget root).
     case calendar
 
@@ -60,6 +63,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .mermaid: return "Mermaid"
         case .geoMap: return "Geo Map"
         case .mindMap: return "Mind Map"
+        case .spreadsheet: return "Spreadsheet"
         case .calendar: return "Calendar"
         }
     }
@@ -83,6 +87,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .launcher: return "arrow.up.forward.app"
         case .mermaid: return "chart.bar"
         case .geoMap: return "map"
+        case .spreadsheet: return "tablecells"
         case .calendar: return "calendar"
         }
     }
@@ -96,14 +101,14 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
 
     var isRenderable: Bool {
         switch self {
-        case .text, .code, .image, .file, .book, .collection, .render, .mermaid, .mindMap, .geoMap, .calendar: return true
+        case .text, .code, .image, .file, .book, .collection, .render, .mermaid, .mindMap, .geoMap, .spreadsheet, .calendar: return true
         default: return false
         }
     }
 
     var isAdvanced: Bool {
         switch self {
-        case .canvas, .collection, .noteMap, .relationMap, .webView, .contentWidget, .launcher, .mindMap, .geoMap, .calendar:
+        case .canvas, .collection, .noteMap, .relationMap, .webView, .contentWidget, .launcher, .mindMap, .geoMap, .spreadsheet, .calendar:
             return true
         default:
             return false
@@ -126,12 +131,18 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     /// Minimal MindElixir JSON for an empty mind map note.
     static let emptyMindMapJSON = "{\"nodeData\":{\"id\":\"root\",\"topic\":\"New Mind Map\",\"root\":true,\"children\":[]}}"
 
+    /// Minimal Univer Sheets workbook JSON for an empty spreadsheet note.
+    /// Wrapped in Trilium's `{ version, workbook }` envelope (matches
+    /// `apps/client/src/widgets/type_widgets/spreadsheet/persistence.tsx` in TriliumNext v0.103+).
+    /// The inner `workbook` is a minimal Univer `IWorkbookData`; Univer fills in defaults for everything omitted.
+    static let emptySpreadsheetJSON = "{\"version\":1,\"workbook\":{\"id\":\"trinote-sheet\",\"sheetOrder\":[\"sheet-1\"],\"sheets\":{\"sheet-1\":{\"id\":\"sheet-1\",\"name\":\"Sheet1\",\"cellData\":{},\"rowCount\":100,\"columnCount\":26}}}}"
+
     /// MIME type used when creating a new note of this type.
     var creationMime: String {
         switch self {
         case .code: return "text/plain"
         case .file: return "application/octet-stream"
-        case .canvas, .mindMap: return "application/json"
+        case .canvas, .mindMap, .spreadsheet: return "application/json"
         case .geoMap: return ""
         default: return "text/html"
         }
@@ -146,6 +157,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .canvas: return Self.emptyCanvasNoteJSON
         case .mindMap: return Self.emptyMindMapJSON
         case .geoMap: return Self.emptyGeoMapJSON
+        case .spreadsheet: return Self.emptySpreadsheetJSON
         default: return ""
         }
     }

@@ -187,6 +187,8 @@ private struct ExcalidrawReadOnlyWebView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.json = json
         context.coordinator.onHeightChanged = onHeightChanged
+        // Re-paint the Excalidraw scene whenever `json` changes (e.g. pull-to-refresh).
+        context.coordinator.renderIfNeeded()
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -201,12 +203,14 @@ private struct ExcalidrawReadOnlyWebView: UIViewRepresentable {
         var json: String = ""
         weak var webView: WKWebView?
         var onHeightChanged: ((CGFloat) -> Void)?
-        private var injected = false
+        private var isReady = false
+        private var lastRenderedJSON: String?
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "canvasReady":
-                injectScene()
+                isReady = true
+                renderIfNeeded()
             case "canvasRendered":
                 if let str = message.body as? String, let h = Double(str), h > 0 {
                     DispatchQueue.main.async {
@@ -218,9 +222,10 @@ private struct ExcalidrawReadOnlyWebView: UIViewRepresentable {
             }
         }
 
-        func injectScene() {
-            guard !injected, let webView else { return }
-            injected = true
+        func renderIfNeeded() {
+            guard isReady, let webView else { return }
+            guard json != lastRenderedJSON else { return }
+            lastRenderedJSON = json
 
             let escaped = json
                 .replacingOccurrences(of: "\\", with: "\\\\")

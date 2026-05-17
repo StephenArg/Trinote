@@ -1249,7 +1249,14 @@ final class NoteDetailViewModel {
     /// then applies everything to @Observable state in one batch. This
     /// prevents mid-flight SwiftUI re-evaluation from cancelling the
     /// URLSession content request.
-    func refresh() async {
+    ///
+    /// - Parameter force: When `true` (the default for the `.refreshable` gesture), always
+    ///   re-fetches `getNoteContent` and re-publishes `contentString` even if the server's
+    ///   `utcDateModified` matches the SwiftData cache. This is what the user expects from a
+    ///   pull-to-refresh gesture, and avoids a stale-view bug where SyncManager had already
+    ///   written the latest body to SwiftData (so the timestamps match) while the live
+    ///   `contentString` still held the previous revision.
+    func refresh(force: Bool = false) async {
         guard let client else { return }
         let nid = self.noteId
         let profileId = self.serverProfileId ?? ""
@@ -1275,13 +1282,24 @@ final class NoteDetailViewModel {
         let cachedDate = (try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId))?.utcDateModified
         let serverIsNewer = serverDate != nil && (cachedDate == nil || serverDate! > cachedDate!)
 
-        if !serverIsNewer {
+        if !force, !serverIsNewer {
             if let response = metaResponse {
                 self.note = NoteItem(from: response)
                 self.serverUtcDateModified = serverDate
                 self.serverVerified = true
                 await updateSharedPublicState(client: client)
             }
+            // SyncManager may have written the latest body to SwiftData while this view was
+            // open. Re-publish from cache so the WKWebView picks it up — without this, the
+            // user has to back out and re-enter the note to see the new content (`load()`
+            // does the same `loadContentFromCache()` call on entry).
+            loadContentFromCache()
+            if let raw = self.rawContentString,
+               raw.localizedCaseInsensitiveContains("api/attachments/")
+                   || raw.localizedCaseInsensitiveContains("api/images/") {
+                self.contentString = await self.inlineAttachmentImages(in: raw)
+            }
+            await applyIncludeNoteResolutionIfNeeded()
             await loadChildNotes()
             return
         }

@@ -1014,6 +1014,68 @@ const IncludeNote = Image.extend({
   },
 });
 
+/* Trilium v0.103+ bookmarks/anchors (CKEditor 5 `Bookmark` plugin): empty <a id="..."> elements (no href) used as
+   in-document jump targets and as cross-note `#anchorName` link destinations. TipTap's StarterKit + Link mark drop
+   empty <a> tags by default, so we register a transparent inline atom that round-trips them losslessly. */
+const TriliumAnchor = Image.extend({
+  name: 'triliumAnchor',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  draggable: false,
+  selectable: false,
+  marks: '',
+  addAttributes() {
+    return {
+      anchorId: { default: '' },
+      anchorName: { default: null },
+    };
+  },
+  parseHTML() {
+    return [{
+      tag: 'a',
+      // Empty `<a>` with `id` or `name` but no `href`. Matches CKEditor 5 Bookmark plugin output
+      // (`<a id="foo"></a>`) plus the legacy HTML4 `<a name="foo">` notation Trilium still accepts.
+      getAttrs: (el) => {
+        if (el.getAttribute('href')) return false;
+        const id = (el.getAttribute('id') || '').trim();
+        const name = (el.getAttribute('name') || '').trim();
+        if (!id && !name) return false;
+        if ((el.textContent || '').trim()) return false;
+        return { anchorId: id || name, anchorName: name || null };
+      },
+    }];
+  },
+  renderHTML({ node }) {
+    const attrs = {};
+    if (node.attrs.anchorId) attrs.id = node.attrs.anchorId;
+    if (node.attrs.anchorName) attrs.name = node.attrs.anchorName;
+    if (!attrs.id && !attrs.name) attrs.id = '';
+    return ['a', attrs];
+  },
+  addNodeView() {
+    return ({ node }) => {
+      const dom = document.createElement('a');
+      if (node.attrs.anchorId) dom.id = node.attrs.anchorId;
+      if (node.attrs.anchorName) dom.setAttribute('name', node.attrs.anchorName);
+      dom.className = 'trilium-anchor';
+      dom.setAttribute('contenteditable', 'false');
+      dom.setAttribute('data-trinote-anchor', '1');
+      const label = node.attrs.anchorId || node.attrs.anchorName || '';
+      dom.title = label ? ('Anchor: ' + label) : 'Anchor';
+      // Visible glyph so authors know where anchors are placed. CKEditor uses an icon; a single
+      // bookmark codepoint is the lightest cross-platform equivalent that doesn't pull a font.
+      dom.textContent = '\uD83D\uDD16';
+      dom.style.fontSize = '0.85em';
+      dom.style.opacity = '0.55';
+      dom.style.textDecoration = 'none';
+      dom.style.cursor = 'default';
+      dom.style.userSelect = 'none';
+      return { dom };
+    };
+  },
+});
+
 /* Trilium / ckeditor5-math: inline TeX stored as <script type="math/tex"> on the server; TipTap cannot keep <script> in the doc. */
 const TriliumMath = Image.extend({
   name: 'triliumMath',
@@ -1236,6 +1298,7 @@ const editorExtensions = [
   CustomTableHeader,
   Link.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
   IncludeNote,
+  TriliumAnchor,
   TriliumMath,
   TaskList,
   TaskItem.configure({ nested: true }),

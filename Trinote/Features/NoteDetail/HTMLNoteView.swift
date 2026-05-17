@@ -1099,11 +1099,62 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     }
                 }
 
+                // Fragment-only intra-note jump (CKEditor 5 bookmark / Trilium v0.103+ anchor link),
+                // e.g. `<a href="#Rights">`. Scroll to the target element directly; the default
+                // WKWebView behaviour would otherwise navigate the entire document which loses our
+                // SwiftUI state. Falls back to UIApplication for unknown schemes if no target exists.
+                if let fragment = url.fragment,
+                   !fragment.isEmpty,
+                   HTMLNoteAnchorRouting.urlIsFragmentOnly(url, against: webView.url) {
+                    scrollToAnchor(fragment, in: webView)
+                    return .cancel
+                }
+
                 await UIApplication.shared.open(url)
                 return .cancel
             }
 
             return .allow
         }
+
+        /// Scrolls a WKWebView to a named anchor (`<a id="…">` or `<a name="…">`).
+        private func scrollToAnchor(_ fragment: String, in webView: WKWebView) {
+            let escaped = fragment
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+            let js = """
+            (function(){
+                var f = '\(escaped)';
+                var t = document.getElementById(f)
+                     || document.querySelector('a[name="' + f + '"]')
+                     || document.querySelector('[data-anchor-id="' + f + '"]');
+                if (t && typeof t.scrollIntoView === 'function') {
+                    try { t.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' }); } catch (e) {
+                        t.scrollIntoView();
+                    }
+                    return true;
+                }
+                return false;
+            })();
+            """
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+
+    }
+}
+
+/// Helpers for routing tapped anchor links inside the read-only `HTMLNoteView`.
+/// Extracted from the private `Coordinator` so they can be unit-tested via `@testable`.
+enum HTMLNoteAnchorRouting {
+    /// True when the link target differs from the current document only by its `#fragment`
+    /// (or has no path/host at all — the typical `href="#anchor"` case from CKEditor 5
+    /// bookmarks / Trilium v0.103+ anchors).
+    static func urlIsFragmentOnly(_ url: URL, against current: URL?) -> Bool {
+        if url.host == nil, url.path.isEmpty || url.path == "/" { return true }
+        guard let current else { return false }
+        return url.scheme == current.scheme
+            && url.host == current.host
+            && url.path == current.path
+            && url.query == current.query
     }
 }

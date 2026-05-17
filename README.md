@@ -22,7 +22,7 @@ A native iOS client for self-hosted [TriliumNext](https://github.com/TriliumNext
 - iOS 17.0+
 - Xcode 16.0+
 - Swift 5.9+
-- A self-hosted TriliumNext server (**v0.95.x** recommended; native `/api` routes are pinned in `local_notes/trilium_native_api_v0.95.md`)
+- A self-hosted TriliumNext server (**v0.95.x – v0.103.x** supported; native `/api` routes are pinned in `local_notes/trilium_native_api_v0.95.md`, with v0.103 deltas noted at the bottom of that file)
 
 ## Setup
 
@@ -114,6 +114,7 @@ Tests cover:
 
 - **Text editing** includes many toolbar options mirroring the desktop and browser applications
 - **Canvas/Mermaid/GeoMap** notes show a placeholder image of the diagram.
+- **Spreadsheet notes** (Trilium v0.103+, Univer Sheets) are read-only — the Univer editor is not bundled on iOS. The cell grid renders for preview; use the desktop or web client to edit.
 - **Protected notes** are able to be read (when password is entered) but not generated on this client
 - **Background sync** — data refreshes in the background and on pull-to-refresh. When starting out manually do a full-sync.
 - **Search is server-side only** — no offline full-text search. Can jump to text references

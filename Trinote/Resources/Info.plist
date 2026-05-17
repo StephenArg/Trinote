@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.14</string>
+	<string>1.17</string>
 	<key>CFBundleVersion</key>
-	<string>1.14</string>
+	<string>1.17</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSRequiresIPhoneOS</key>
@@ -31,10 +31,10 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Trinote needs camera access to capture photos for notes.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Trinote needs access to your photos to upload image attachments.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Trinote uses Face ID to unlock the app.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Trinote needs access to your photos to upload image attachments.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

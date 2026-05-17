@@ -53,6 +53,29 @@
         font-size: 15px;
         text-align: center;
     }
+
+    /* See mermaid-viewer.html: Mermaid 11+ treemap/treeView text labels need an explicit
+       light/dark `fill` because the theme palette doesn't cover them yet. */
+    #diagram svg .treemapLabel,
+    #diagram svg .treemapTitle,
+    #diagram svg .treemapValue,
+    #diagram svg .treemapSectionLabel,
+    #diagram svg .treemapSectionValue,
+    #diagram svg .treemapSectionHeader,
+    #diagram svg .treeView-node-label,
+    #diagram svg g.tree-view text { fill: #1c1c1e !important; }
+    #diagram svg .treeView-node-line { stroke: #1c1c1e !important; }
+    @media (prefers-color-scheme: dark) {
+        #diagram svg .treemapLabel,
+        #diagram svg .treemapTitle,
+        #diagram svg .treemapValue,
+        #diagram svg .treemapSectionLabel,
+        #diagram svg .treemapSectionValue,
+        #diagram svg .treemapSectionHeader,
+        #diagram svg .treeView-node-label,
+        #diagram svg g.tree-view text { fill: #ffffff !important; }
+        #diagram svg .treeView-node-line { stroke: #ffffff !important; }
+    }
 </style>
 </head>
 <body>

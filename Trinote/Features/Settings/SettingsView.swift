@@ -596,15 +596,55 @@ struct SettingsView: View {
                 if let dbVersion = info.dbVersion {
                     LabeledContent(String(localized: "DB Version", comment: "Server info"), value: String(dbVersion))
                 }
+                if let syncVersion = info.syncVersion {
+                    LabeledContent(String(localized: "Sync Version", comment: "Server info"), value: String(syncVersion))
+                }
                 if let buildDate = info.buildDate {
                     LabeledContent(String(localized: "Build Date", comment: "Server info"), value: buildDate)
                 }
+                serverCompatibilityRow(for: info)
             }
         }
 
         Section(String(localized: "App", comment: "Settings about section")) {
             LabeledContent(String(localized: "Version", comment: "App version label"), value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
             LabeledContent(String(localized: "Build", comment: "App build number"), value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")
+        }
+    }
+
+    /// Non-blocking notice when the connected Trilium server is newer than what this build
+    /// of Trinote was tested against. Pulled from `TriliumServerCompatibility`.
+    @ViewBuilder
+    private func serverCompatibilityRow(for info: AppInfoResponse) -> some View {
+        switch TriliumServerCompatibility.evaluate(info) {
+        case .withinTestedRange, .unknown:
+            EmptyView()
+        case .syncVersionAhead(let serverSync, let testedSync):
+            CompatibilityBanner(
+                title: String(localized: "Server newer than tested", comment: "Settings: server compatibility banner title"),
+                message: String(
+                    format: String(
+                        localized: "This server's sync protocol (v%1$d) is newer than what this build of Trinote (tested through Trilium %2$@, sync v%3$d) has been verified against. Incremental sync may misbehave; full-sync from Settings if you see stale data.",
+                        comment: "Settings: server sync version warning. %1$d server sync, %2$@ tested Trilium tag, %3$d tested sync."
+                    ),
+                    serverSync,
+                    TriliumServerCompatibility.testedMaxAppVersion,
+                    testedSync
+                )
+            )
+        case .dbVersionAhead(let serverDb, let testedDb):
+            CompatibilityBanner(
+                title: String(localized: "Server newer than tested", comment: "Settings: server compatibility banner title"),
+                message: String(
+                    format: String(
+                        localized: "This server's database schema (v%1$d) is newer than what this build of Trinote (tested through Trilium %2$@, db v%3$d) has been verified against. New note types or fields may not display correctly until Trinote is updated.",
+                        comment: "Settings: server db version warning. %1$d server db, %2$@ tested Trilium tag, %3$d tested db."
+                    ),
+                    serverDb,
+                    TriliumServerCompatibility.testedMaxAppVersion,
+                    testedDb
+                )
+            )
         }
     }
 
@@ -694,6 +734,30 @@ struct SettingsView: View {
         treeDarkTextColor = "#e5e5e7"
         treeLightBgColor = "#ffffff"
         treeDarkBgColor = "#1c1c1e"
+    }
+}
+
+private struct CompatibilityBanner: View {
+    let title: String
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 }
 

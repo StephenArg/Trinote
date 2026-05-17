@@ -355,6 +355,100 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(p.notes[0]["title"] as? String, "Test")
     }
 
+    /// Locks in the shape returned by Trilium v0.103 `/api/sync/changed`: each item is
+    /// `{ entityChange: {…}, entity: {…} }` and the new `description` / `source` fields on
+    /// revisions (migration 238) round-trip into the `revisions` entity bucket without loss.
+    func testSyncPullResponseV0_103IncludesRevisionDescriptionAndSourceFields() throws {
+        let json = #"""
+        {
+            "entityChanges":[
+                {"entityChange":{"entityName":"revisions","entityId":"rev1","isErased":false},
+                 "entity":{"revisionId":"rev1","noteId":"n1","type":"text","mime":"text/html","title":"Old","isProtected":false,"dateLastEdited":"2026-05-01 12:00:00.000+0000","dateCreated":"2026-05-01 12:00:00.000+0000","utcDateLastEdited":"2026-05-01 12:00:00.000Z","utcDateCreated":"2026-05-01 12:00:00.000Z","utcDateModified":"2026-05-01 12:00:00.000Z","contentLength":42,"description":"Before edit","source":"manual"}},
+                {"entityChange":{"entityName":"notes","entityId":"n_spread","isErased":false},
+                 "entity":{"noteId":"n_spread","title":"Budget","type":"spreadsheet","mime":"application/json","isProtected":false}}
+            ],
+            "lastEntityChangeId":238,
+            "outstandingPullCount":0
+        }
+        """#.data(using: .utf8)!
+        let p = try SyncPullResponse.parseFromChanged(jsonData: json)
+        XCTAssertEqual(p.maxEntityChangeId, 238)
+        XCTAssertEqual(p.entityChanges.count, 2)
+        XCTAssertEqual(p.notes.count, 1)
+        XCTAssertEqual(p.notes[0]["type"] as? String, "spreadsheet")
+        XCTAssertEqual(p.notes[0]["mime"] as? String, "application/json")
+        XCTAssertEqual(NoteType(rawValue: p.notes[0]["type"] as? String ?? ""), .spreadsheet)
+    }
+
+    /// v0.103 `/api/sync/check` adds no new fields vs v0.95; verify the existing decoder
+    /// is tolerant of extra unknown top-level keys the server may emit in future point releases.
+    func testSyncCheckResponseIgnoresUnknownTopLevelKeys() throws {
+        let json = #"""
+        {
+            "entityHashes": {"notes": {"abc": "h"}},
+            "maxEntityChangeId": 9999,
+            "futureField": "ignored"
+        }
+        """#.data(using: .utf8)!
+        let r = try JSONDecoder().decode(SyncCheckResponse.self, from: json)
+        XCTAssertEqual(r.maxEntityChangeId, 9999)
+    }
+
+    // MARK: - Server compatibility envelope
+
+    func testServerCompatibilityWithinTestedRangeForV0_103() {
+        let info = AppInfoResponse(
+            appVersion: "0.103.0",
+            dbVersion: TriliumServerCompatibility.testedMaxDbVersion,
+            syncVersion: TriliumServerCompatibility.testedMaxSyncVersion,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertEqual(TriliumServerCompatibility.evaluate(info), .withinTestedRange)
+    }
+
+    func testServerCompatibilityFlagsAheadDbVersion() {
+        let info = AppInfoResponse(
+            appVersion: "0.104.0",
+            dbVersion: TriliumServerCompatibility.testedMaxDbVersion + 2,
+            syncVersion: TriliumServerCompatibility.testedMaxSyncVersion,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        if case .dbVersionAhead(let serverDb, let testedDb) = TriliumServerCompatibility.evaluate(info) {
+            XCTAssertEqual(serverDb, TriliumServerCompatibility.testedMaxDbVersion + 2)
+            XCTAssertEqual(testedDb, TriliumServerCompatibility.testedMaxDbVersion)
+        } else {
+            XCTFail("Expected dbVersionAhead status")
+        }
+    }
+
+    func testServerCompatibilityPrefersSyncVersionWarning() {
+        let info = AppInfoResponse(
+            appVersion: "0.104.0",
+            dbVersion: TriliumServerCompatibility.testedMaxDbVersion + 2,
+            syncVersion: TriliumServerCompatibility.testedMaxSyncVersion + 1,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        if case .syncVersionAhead = TriliumServerCompatibility.evaluate(info) {} else {
+            XCTFail("Sync mismatch should win over db mismatch")
+        }
+    }
+
+    func testServerCompatibilityUnknownWhenInfoMissing() {
+        XCTAssertEqual(TriliumServerCompatibility.evaluate(nil), .unknown)
+    }
+
     // MARK: - APIError
 
     func testAPIErrorIsRetryable() {

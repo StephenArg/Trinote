@@ -15,6 +15,31 @@
              padding: 16px; white-space: pre-wrap; display: none; }
     #loading { font-family: -apple-system, system-ui; color: #888; font-size: 15px;
                text-align: center; padding: 40px; }
+
+    /* Mermaid 11+ adds `treemap` and `treeView` diagram types whose text labels are not yet
+       wired into the `dark`/`default` theme palette — labels keep an inherited near-black `fill`
+       that disappears against a dark background. Force a contrasting fill based on
+       `prefers-color-scheme` so labels stay readable in both modes. */
+    #diagram svg .treemapLabel,
+    #diagram svg .treemapTitle,
+    #diagram svg .treemapValue,
+    #diagram svg .treemapSectionLabel,
+    #diagram svg .treemapSectionValue,
+    #diagram svg .treemapSectionHeader,
+    #diagram svg .treeView-node-label,
+    #diagram svg g.tree-view text { fill: #1c1c1e !important; }
+    #diagram svg .treeView-node-line { stroke: #1c1c1e !important; }
+    @media (prefers-color-scheme: dark) {
+        #diagram svg .treemapLabel,
+        #diagram svg .treemapTitle,
+        #diagram svg .treemapValue,
+        #diagram svg .treemapSectionLabel,
+        #diagram svg .treemapSectionValue,
+        #diagram svg .treemapSectionHeader,
+        #diagram svg .treeView-node-label,
+        #diagram svg g.tree-view text { fill: #ffffff !important; }
+        #diagram svg .treeView-node-line { stroke: #ffffff !important; }
+    }
 </style>
 </head>
 <body>
@@ -101,6 +126,18 @@ window.mermaidViewer = {
         const diagEl = document.getElementById('diagram');
         const errEl = document.getElementById('error');
 
+        // Empty / whitespace-only source: present a blank surface, not the Mermaid 11+
+        // "No diagram type detected …" syntax error. Matches the editor's behavior in
+        // `mermaid-editor.html`. Brand-new Mermaid notes start with an empty body
+        // (NoteType.creationInitialContent for `.mermaid` is ""), so this is the common path.
+        if (typeof source !== 'string' || !source.trim()) {
+            loadEl.style.display = 'none';
+            errEl.style.display = 'none';
+            diagEl.innerHTML = '';
+            reportHeight();
+            return;
+        }
+
         const bodyEl = document.body;
         const prevBodyMinWidth = bodyEl.style.minWidth;
         const prevBodyWidth = bodyEl.style.width;
@@ -127,6 +164,11 @@ window.mermaidViewer = {
     },
     /** Used by `MermaidRenderer` to pre-render linked-note includes without mutating `#diagram`. */
     async renderToString(source) {
+        // Empty source → empty SVG. `MermaidRenderer` treats `""` as "no diagram to inline",
+        // which is the right behavior when an included note's mermaid block is blank.
+        if (typeof source !== 'string' || !source.trim()) {
+            return '';
+        }
         const id = 'mermaid-graph-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
         const bodyEl = document.body;
         const prevBodyMinWidth = bodyEl.style.minWidth;

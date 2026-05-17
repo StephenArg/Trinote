@@ -41,6 +41,11 @@ private struct MermaidWebView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onHeightChanged = onHeightChanged
         context.coordinator.source = source
+        // SwiftUI re-runs `updateUIView` whenever `source` changes (e.g. after pull-to-refresh
+        // republishes `vm.contentString`). If the embedded mermaid runtime is already initialized
+        // we have to re-invoke `mermaidViewer.render` ourselves — otherwise the WKWebView keeps
+        // showing the previously rendered diagram.
+        context.coordinator.renderIfNeeded()
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -55,12 +60,20 @@ private struct MermaidWebView: UIViewRepresentable {
         var source: String = ""
         var onHeightChanged: ((CGFloat) -> Void)?
         weak var webView: WKWebView?
-        private var injected = false
+        /// Flipped to `true` once `mermaid-viewer.html` finishes loading the bundled Mermaid runtime
+        /// and posts `mermaidReady`. Until then, render requests are deferred (they will be replayed
+        /// from the ready handler).
+        private var isReady = false
+        /// Last source we successfully handed off to `mermaidViewer.render`. Used to suppress no-op
+        /// re-renders when SwiftUI runs `updateUIView` for unrelated reasons (height callback swaps,
+        /// theme changes propagating from the parent, etc.).
+        private var lastRenderedSource: String?
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "mermaidReady":
-                injectSource()
+                isReady = true
+                renderIfNeeded()
             case "heightUpdate":
                 if let str = message.body as? String, let h = Double(str), h > 0 {
                     DispatchQueue.main.async {
@@ -72,9 +85,13 @@ private struct MermaidWebView: UIViewRepresentable {
             }
         }
 
-        private func injectSource() {
-            guard !injected, let webView else { return }
-            injected = true
+        /// Pushes `source` into the WKWebView via `window.mermaidViewer.render(...)`, but only when
+        /// the runtime is initialized and the source actually changed. Safe to call from both the
+        /// `mermaidReady` event (first paint) and `updateUIView` (subsequent prop changes).
+        func renderIfNeeded() {
+            guard isReady, let webView else { return }
+            guard source != lastRenderedSource else { return }
+            lastRenderedSource = source
 
             let escaped = source
                 .replacingOccurrences(of: "\\", with: "\\\\")
