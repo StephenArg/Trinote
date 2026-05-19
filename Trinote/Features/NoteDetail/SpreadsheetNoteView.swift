@@ -2,16 +2,11 @@ import SwiftUI
 
 /// Read-only viewer for Trilium v0.103+ spreadsheet notes (Univer Sheets JSON).
 ///
-/// Univer's full editor is too heavy to embed in WKWebView on iOS for now, so we render a
-/// best-effort preview of the first sheet's cell grid and offer a raw-JSON fallback for
-/// inspection / copy-paste. A "Open in Web Browser" deep link sends the user to the desktop
-/// Trilium UI when full editing is needed.
+/// Renders a fast native grid preview of the first sheet so just viewing a spreadsheet doesn't
+/// pay the cost of booting the embedded Univer WKWebView. Tapping Edit hands off to
+/// `SpreadsheetEditorView`, which loads the bundled Univer Sheets mobile build.
 struct SpreadsheetNoteView: View {
     let json: String?
-    let noteId: String
-    let serverURL: String?
-
-    @State private var showRawJSON = false
 
     private var parsed: UniverWorkbookPreview? {
         guard let json, let data = json.data(using: .utf8) else { return nil }
@@ -25,6 +20,8 @@ struct SpreadsheetNoteView: View {
             if let workbook = parsed {
                 SpreadsheetGridPreview(workbook: workbook)
             } else if let json, !json.isEmpty {
+                // Parser failed (unexpected shape from a newer Univer): surface the raw payload
+                // so power-users can still copy it out, instead of showing a blank pane.
                 missingPreviewCallout
                 rawJSONBlock(json: json)
             } else {
@@ -43,11 +40,11 @@ struct SpreadsheetNoteView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(String(localized: "Spreadsheet (read-only)", comment: "Spreadsheet note header"))
+                Text(String(localized: "Spreadsheet preview", comment: "Spreadsheet note header"))
                     .font(.subheadline.weight(.semibold))
                 Text(String(
-                    localized: "Editing spreadsheets is not yet supported in Trinote. Open in the Trilium desktop or web app to make changes.",
-                    comment: "Spreadsheet note read-only explanation"
+                    localized: "Tap Edit to open the full Univer Sheets editor with formulas, formatting, and rich text.",
+                    comment: "Spreadsheet note preview explanation"
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -58,29 +55,6 @@ struct SpreadsheetNoteView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-
-        HStack(spacing: 12) {
-            if let serverURL, let url = URL(string: "\(serverURL)/#/\(noteId)") {
-                Link(destination: url) {
-                    Label(String(localized: "Open in Web Browser", comment: "Spreadsheet note action"), systemImage: "safari")
-                }
-                .font(.caption.weight(.medium))
-            }
-            Button {
-                showRawJSON.toggle()
-            } label: {
-                Label(
-                    showRawJSON
-                        ? String(localized: "Hide Raw JSON", comment: "Spreadsheet note action")
-                        : String(localized: "View Raw JSON", comment: "Spreadsheet note action"),
-                    systemImage: "curlybraces"
-                )
-            }
-            .font(.caption.weight(.medium))
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 10)
 
         Divider()
     }
@@ -107,16 +81,14 @@ struct SpreadsheetNoteView: View {
 
     @ViewBuilder
     private func rawJSONBlock(json: String) -> some View {
-        if showRawJSON || parsed == nil {
-            ScrollView([.horizontal, .vertical]) {
-                Text(json)
-                    .font(.system(.caption2, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(12)
-            }
-            .frame(maxHeight: 320)
-            .background(Color(.secondarySystemGroupedBackground))
+        ScrollView([.horizontal, .vertical]) {
+            Text(json)
+                .font(.system(.caption2, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(12)
         }
+        .frame(maxHeight: 320)
+        .background(Color(.secondarySystemGroupedBackground))
     }
 }
 

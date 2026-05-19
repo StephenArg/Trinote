@@ -29,7 +29,10 @@ final class TriliumMathHTMLSupportTests: XCTestCase {
     }
 
     func testKatexBundledInAppHostBundle() {
-        let bundle = Bundle(for: TrinoteApp.self)
+        // Tests are hosted by the app, so Bundle.main resolves to the Trinote.app bundle that
+        // ships the vendored web assets. `Bundle(for:)` needs an AnyClass and `TrinoteApp` is a
+        // value-type `App`, so we can't introspect through it directly.
+        let bundle = Bundle.main
         XCTAssertNotNil(
             bundle.url(forResource: "katex.min", withExtension: "js", subdirectory: "vendor/katex"),
             "KaTeX should be bundled under vendor/katex for read-only and editor"

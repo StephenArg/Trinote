@@ -1,0 +1,34 @@
+/**
+ * Copyright 2023-present DreamNum Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import { IUniverInstanceService } from '@univerjs/core';
+import { SheetsSelectionsService } from './selection.service';
+/**
+ * Ref selections service reuses code of `SelectionManagerService`. And it only contains ref selections
+ * when user is editing formula.
+ *
+ * Its data should be cleared by the caller quit editing formula and reconstructed when user starts editing.
+ */
+export declare const IRefSelectionsService: import("@wendellhu/redi").IdentifierDecorator<SheetsSelectionsService>;
+/**
+ * RefSelectionsService treats `selectionMoveStart$` `selectionMoving$` and `selectionMoveEnd$` differently
+ * than `SheetsSelectionsService`. Because ref selections can be in different workbooks.
+ */
+export declare class RefSelectionsService extends SheetsSelectionsService {
+    constructor(_instanceSrv: IUniverInstanceService);
+    protected _init(): void;
+    dispose(): void;
+    private _getAliveWorkbooks$;
+}

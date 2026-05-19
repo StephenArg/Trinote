@@ -1,0 +1,66 @@
+/**
+ * Copyright 2023-present DreamNum Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import { FEnum } from '@univerjs/core/facade';
+import { SheetSkeletonChangeType, SheetValueChangeType, SplitDelimiterEnum } from '@univerjs/sheets';
+import { RangePermissionPoint, UnitRole, WorkbookPermissionPoint, WorksheetPermissionPoint } from './permission';
+/**
+ * @ignore
+ */
+export interface IFSheetsEnumMixin {
+    /**
+     * Sheet value change command types. These commands affect the content or style of cells.
+     * Includes operations like setting cell values, moving ranges, merging cells, and applying styles.
+     */
+    SheetValueChangeType: typeof SheetValueChangeType;
+    /**
+     * Sheet skeleton change command types. These commands affect the structure of the worksheet.
+     * Includes operations like changing row/column dimensions, visibility, and grid properties.
+     */
+    SheetSkeletonChangeType: typeof SheetSkeletonChangeType;
+    /**
+     * Split delimiter types.
+     */
+    SplitDelimiterType: typeof SplitDelimiterEnum;
+    /**
+     * Unit roles.
+     */
+    UnitRole: typeof UnitRole;
+    /**
+     * Workbook permission points.
+     */
+    WorkbookPermissionPoint: typeof WorkbookPermissionPoint;
+    /**
+     * Worksheet permission points.
+     */
+    WorksheetPermissionPoint: typeof WorksheetPermissionPoint;
+    /**
+     * Range permission points.
+     */
+    RangePermissionPoint: typeof RangePermissionPoint;
+}
+export declare class FSheetsEnumMixin extends FEnum implements IFSheetsEnumMixin {
+    get SheetValueChangeType(): typeof SheetValueChangeType;
+    get SheetSkeletonChangeType(): typeof SheetSkeletonChangeType;
+    get SplitDelimiterType(): typeof SplitDelimiterEnum;
+    get UnitRole(): typeof UnitRole;
+    get WorkbookPermissionPoint(): typeof WorkbookPermissionPoint;
+    get WorksheetPermissionPoint(): typeof WorksheetPermissionPoint;
+    get RangePermissionPoint(): typeof RangePermissionPoint;
+}
+declare module '@univerjs/core/facade' {
+    interface FEnum extends IFSheetsEnumMixin {
+    }
+}

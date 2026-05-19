@@ -1,0 +1,30 @@
+{
+  "name": "trinote-univer-editor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bundles Univer Sheets 0.22.1 (mobile UI plugins) into a single IIFE for embedding in WKWebView. Mirrors the canvas-editor-build/ pattern.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@univerjs/core": "0.22.1",
+    "@univerjs/design": "0.22.1",
+    "@univerjs/docs": "0.22.1",
+    "@univerjs/docs-ui": "0.22.1",
+    "@univerjs/engine-formula": "0.22.1",
+    "@univerjs/engine-render": "0.22.1",
+    "@univerjs/sheets": "0.22.1",
+    "@univerjs/sheets-formula": "0.22.1",
+    "@univerjs/sheets-formula-ui": "0.22.1",
+    "@univerjs/sheets-numfmt": "0.22.1",
+    "@univerjs/sheets-numfmt-ui": "0.22.1",
+    "@univerjs/sheets-ui": "0.22.1",
+    "@univerjs/ui": "0.22.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "rxjs": "7.8.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

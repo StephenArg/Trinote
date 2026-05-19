@@ -1,0 +1,46 @@
+/**
+ * Copyright 2023-present DreamNum Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import type { IUniverInstanceService, Nullable, Workbook, Worksheet } from '@univerjs/core';
+export declare function getSheetCommandTargetWorkbook(univerInstanceService: IUniverInstanceService, params: {
+    unitId?: string;
+}): Nullable<{
+    workbook: Workbook;
+    unitId: string;
+}>;
+export interface IResult {
+    workbook: Workbook;
+    worksheet: Worksheet;
+    unitId: string;
+    subUnitId: string;
+}
+/**
+ * Get targeted Workbook & Worksheet of a command. If `unitId` and `subUnitId` are given, the function would
+ * try to get these instances. If not, it would try to get the current active instances.
+ *
+ * @param univerInstanceService
+ * @param params - unitId and subUnitId
+ * @param params.unitId - The unitId of the Workbook
+ * @param params.subUnitId - The subUnitId of the Worksheet
+ * @returns Targeted Workbook & Worksheet
+ */
+export declare function getSheetCommandTarget(univerInstanceService: IUniverInstanceService, params?: {
+    unitId?: string;
+    subUnitId?: string;
+}): Nullable<IResult>;
+export declare function getSheetMutationTarget(univerInstanceService: IUniverInstanceService, params: {
+    unitId: string;
+    subUnitId: string;
+}): Nullable<Pick<IResult, 'workbook' | 'worksheet'>>;

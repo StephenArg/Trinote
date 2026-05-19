@@ -1702,6 +1702,58 @@ final class NoteDetailViewModel {
         }
     }
 
+    /// Saves spreadsheet content (Univer Sheets workbook JSON, wrapped in Trilium's
+    /// `{ version, workbook }` envelope by the JS bridge). No sidecar attachment — Trilium
+    /// renders the preview from the JSON itself.
+    func saveSpreadsheetContent(json: String) {
+        guard let note else {
+            saveError = String(localized: "Could not load this note.", comment: "Save without cached note")
+            showSaveError = true
+            return
+        }
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            // Bridge returned nothing — likely Univer hadn't booted. Don't blow away the cached note.
+            saveError = String(localized: "Spreadsheet editor wasn't ready. Try again.", comment: "Spreadsheet save with empty payload")
+            showSaveError = true
+            return
+        }
+        let nid = noteId
+        let data = Data(trimmed.utf8)
+        guard let profileId = serverProfileId else { return }
+        isSaving = true
+        saveError = nil
+        showSaveError = false
+
+        do {
+            try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
+            try persistence.upsertPendingNoteBodyUpload(
+                noteId: nid,
+                body: data,
+                mime: note.mime.isEmpty ? "application/json" : note.mime,
+                serverProfileId: profileId,
+                baseUtcDateModified: nil
+            )
+            content = data
+            contentString = trimmed
+            rawContentString = trimmed
+            serverContentHash = trimmed.hashValue
+            try? persistence.deleteDraft(noteId: nid, serverProfileId: profileId)
+            isEditing = false
+            hasDraft = false
+            draftAutoSaveTask?.cancel()
+            Log.api.info("Saved spreadsheet body locally (queued for sync): \(nid)")
+        } catch {
+            saveError = error.localizedDescription
+            showSaveError = true
+            isSaving = false
+            return
+        }
+
+        isSaving = false
+        appState.backgroundSyncPendingChanges()
+    }
+
     /// Uploads or updates the `canvas-export.svg` attachment for the current canvas note.
     private func uploadCanvasSVGAttachment(svg: String) async {
         guard let client else { return }

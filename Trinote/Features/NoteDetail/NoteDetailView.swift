@@ -66,6 +66,7 @@ struct NoteDetailView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var activeNoteId: String
     @State private var viewModel: NoteDetailViewModel?
     @State private var navigateToNoteId: String?
@@ -131,6 +132,10 @@ struct NoteDetailView: View {
     /// Bridge to communicate with the canvas editor WKWebView (call getSceneData on save).
     @StateObject private var canvasEditorBridge = CanvasEditorBridge()
     @State private var canvasHasUnsavedChanges = false
+
+    /// Bridge to communicate with the spreadsheet editor WKWebView (call getWorkbook on save).
+    @StateObject private var spreadsheetEditorBridge = SpreadsheetEditorBridge()
+    @State private var spreadsheetHasUnsavedChanges = false
 
     /// Bridge to communicate with the mind map editor WKWebView (call getMapData on save).
     @StateObject private var mindMapEditorBridge = MindMapEditorBridge()
@@ -987,6 +992,8 @@ struct NoteDetailView: View {
                     mindMapEditingView(vm)
                 } else if vm.isEditing && note.type == .canvas {
                     canvasEditingView(vm)
+                } else if vm.isEditing && note.type == .spreadsheet && horizontalSizeClass == .regular {
+                    spreadsheetEditingView(vm)
                 } else if note.type == .mindMap {
                     mindMapReadOnlyView(vm, note: note)
                 } else {
@@ -1101,6 +1108,20 @@ struct NoteDetailView: View {
             }
             .sheet(isPresented: $vm.showCreateChild) {
                 CreateChildNoteSheet(viewModel: vm)
+            }
+            .fullScreenCover(isPresented: Binding(
+                get: { vm.isEditing && note.type == .spreadsheet && horizontalSizeClass != .regular },
+                set: { newValue in
+                    // Cover dismissal (programmatic only — no swipe-down) returns control
+                    // to read-only mode. Cancel/Save buttons inside the cover already
+                    // toggle vm.isEditing; this setter mainly catches edge cases.
+                    if !newValue && vm.isEditing && note.type == .spreadsheet {
+                        spreadsheetHasUnsavedChanges = false
+                        vm.cancelEditing()
+                    }
+                }
+            )) {
+                spreadsheetEditorCover(vm: vm)
             }
             .sheet(isPresented: $showMoveParentPicker) {
                 ParentPickerSheet(
@@ -1463,11 +1484,7 @@ struct NoteDetailView: View {
                 MindMapNoteView(json: json)
             }
         case .spreadsheet:
-            SpreadsheetNoteView(
-                json: vm.contentString,
-                noteId: note.noteId,
-                serverURL: appState.activeProfile?.normalizedBaseURL
-            )
+            SpreadsheetNoteView(json: vm.contentString)
         case .geoMap:
             GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
         case .book, .collection:
@@ -1742,6 +1759,114 @@ struct NoteDetailView: View {
             DispatchQueue.main.async {
                 vm.saveCanvasContent(json: json, svg: svg)
                 canvasHasUnsavedChanges = false
+            }
+        }
+    }
+
+    // MARK: - Spreadsheet editing
+
+    /// iPad/regular-size-class inline editor. Mirrors `canvasEditingView` so the
+    /// floating save chip + WKWebView host fill the note pane.
+    @ViewBuilder
+    private func spreadsheetEditingView(_ vm: NoteDetailViewModel) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            SpreadsheetEditorView(
+                initialJSON: vm.editableContent,
+                bridge: spreadsheetEditorBridge,
+                colorScheme: colorScheme,
+                onWorkbookChanged: { spreadsheetHasUnsavedChanges = true }
+            )
+            .onAppear {
+                spreadsheetHasUnsavedChanges = false
+            }
+
+            spreadsheetSaveChip(vm: vm)
+                .padding(.trailing, 16)
+                .padding(.bottom, 72)
+                .transition(.scale(scale: 0.88).combined(with: .opacity))
+                .zIndex(2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(uiColor: .trinoteSpreadsheetBackground).ignoresSafeArea(edges: [.bottom, .horizontal]))
+    }
+
+    @ViewBuilder
+    private func spreadsheetSaveChip(vm: NoteDetailViewModel) -> some View {
+        Button {
+            saveSpreadsheetContent(vm: vm)
+        } label: {
+            ZStack {
+                if vm.isSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image("SaveNoteFloating")
+                        .resizable()
+                        .renderingMode(.template)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 24, height: 24)
+                }
+            }
+            .foregroundStyle(.primary)
+            .frame(width: 48, height: 48)
+            .background(.ultraThinMaterial, in: Circle())
+            .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+        }
+        .buttonStyle(.plain)
+        .disabled(vm.isSaving)
+        .accessibilityLabel(String(localized: "Save", comment: "Spreadsheet save chip"))
+    }
+
+    private func saveSpreadsheetContent(vm: NoteDetailViewModel) {
+        spreadsheetEditorBridge.getWorkbook { json in
+            DispatchQueue.main.async {
+                vm.saveSpreadsheetContent(json: json)
+                spreadsheetHasUnsavedChanges = false
+            }
+        }
+    }
+
+    /// iPhone/compact-size-class modal editor — Univer's chrome (formula bar +
+    /// toolbar) is cramped at 390 pt inline, so we present it full-screen with a
+    /// native nav bar that hosts Cancel/Save.
+    @ViewBuilder
+    private func spreadsheetEditorCover(vm: NoteDetailViewModel) -> some View {
+        NavigationStack {
+            SpreadsheetEditorView(
+                initialJSON: vm.editableContent,
+                bridge: spreadsheetEditorBridge,
+                colorScheme: colorScheme,
+                onWorkbookChanged: { spreadsheetHasUnsavedChanges = true }
+            )
+            .ignoresSafeArea(edges: .bottom)
+            .navigationTitle(vm.note?.uiTitle(forProtectedSessionActive: appState.protectedSessionActive) ?? "")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        spreadsheetHasUnsavedChanges = false
+                        vm.cancelEditing()
+                    } label: {
+                        Text(String(localized: "Cancel", comment: "Spreadsheet editor cancel button"))
+                    }
+                    .disabled(vm.isSaving)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        saveSpreadsheetContent(vm: vm)
+                    } label: {
+                        if vm.isSaving {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text(String(localized: "Save", comment: "Spreadsheet editor save button"))
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .disabled(vm.isSaving)
+                }
+            }
+            .onAppear {
+                spreadsheetHasUnsavedChanges = false
             }
         }
     }
@@ -2283,9 +2408,12 @@ struct NoteDetailView: View {
                 if note.type.isEditable {
                     Button {
                         if vm.isEditing {
-                            if note.type == .canvas {
+                            switch note.type {
+                            case .canvas:
                                 saveCanvasContent(vm: vm)
-                            } else {
+                            case .spreadsheet:
+                                saveSpreadsheetContent(vm: vm)
+                            default:
                                 saveRichTextContent(vm: vm)
                             }
                         } else {

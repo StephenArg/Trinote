@@ -43,15 +43,22 @@ targets:
           - "**/Resources/editor-vendor/node_modules/**"
           # Build-time npm project only; runtime uses canvas-editor.html + canvas-editor-assets. Bundling the folder duplicates package.json (and node_modules filenames) vs editor-vendor.
           - "**/Resources/canvas-editor-build/**"
+          # Same rationale as canvas-editor-build: the univer-editor-build/ npm project
+          # produces univer-editor-assets/, which is the runtime artifact bundled below.
+          - "**/Resources/univer-editor-build/**"
           # Directories below are added as folder references so HTML files can use relative paths
           # (e.g. vendor/leaflet.js, canvas-editor-assets/excalidraw-bundle.js).
           - "**/Resources/vendor/**"
           - "**/Resources/canvas-editor-assets/**"
+          - "**/Resources/univer-editor-assets/**"
       # Folder references: preserve directory structure in the bundle for HTML relative paths.
       - path: Trinote/Resources/vendor
         type: folder
         buildPhase: resources
       - path: Trinote/Resources/canvas-editor-assets
+        type: folder
+        buildPhase: resources
+      - path: Trinote/Resources/univer-editor-assets
         type: folder
         buildPhase: resources
     resources:

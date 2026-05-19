@@ -1,0 +1,138 @@
+/**
+ * Copyright 2023-present DreamNum Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import type { DependencyOverride } from '@univerjs/core';
+import type { IScrollBarProps } from '@univerjs/engine-render';
+import type { ComponentType, MenuConfig } from '@univerjs/ui';
+import type { IPermissionDetailUserPartProps } from '../views/permission/panel-detail/PermissionDetailUserPart';
+export declare const SHEETS_UI_PLUGIN_CONFIG_KEY = "sheets-ui.config";
+export declare const configSymbol: unique symbol;
+export interface IUniverSheetsUIConfig {
+    menu?: MenuConfig;
+    disableAutoFocus?: true;
+    override?: DependencyOverride;
+    /**
+     * The maximum count of rows triggering auto height. This is used to avoid performance issue.
+     * @default 1000
+     */
+    maxAutoHeightCount?: number;
+    /**
+     * Whether to show the formula bar.
+     */
+    formulaBar?: boolean;
+    /**
+     * The config of the footer.
+     * @default {}
+     */
+    footer?: false | {
+        /**
+         * Sheet bar is the manager of sub sheets, including add/switch/delete sub sheets.
+         * @default true
+         */
+        sheetBar?: boolean;
+        /**
+         * statistic bar including statistic info current selections, such as count, sum, average, etc.
+         * @default true
+         */
+        statisticBar?: boolean;
+        /**
+         * Including the menus in the footer. such as highlight, gridlines, etc.
+         * @default true
+         */
+        menus?: boolean;
+        /**
+         * Zoom slider is the zoom slider in the footer.
+         * @default true
+         */
+        zoomSlider?: boolean;
+        /**
+         * The config of the add sheet button in the sheet bar.
+         */
+        addSheetButtonConfig?: {
+            /**
+             * Whether to show the add sheet button in the sheet bar.
+             * When `footer` or `footer.sheetBar` is false, this config will not work because the sheet bar will not be rendered.
+             * @default true
+             */
+            show?: boolean;
+            /**
+             * The default row count of the new sheet created by the add sheet button.
+             * @default 1000
+             */
+            defaultRowCount?: number;
+            /**
+             * The default column count of the new sheet created by the add sheet button.
+             * @default 20
+             */
+            defaultColumnCount?: number;
+        };
+    };
+    /**
+     * @deprecated Use `footer.statisticBar` instead.
+     */
+    statusBarStatistic?: boolean;
+    clipboardConfig?: {
+        hidePasteOptions?: boolean;
+    };
+    /** The config of the scroll bar. */
+    scrollConfig?: IScrollBarProps;
+    /**
+     * Strategy for showing the protected range shadow.
+     * - true or 'always': Show shadow for all protected ranges (default behavior)
+     * - 'non-editable': Only show shadow for ranges that cannot be edited (Edit permission is false)
+     * - 'non-viewable': Only show shadow for ranges that cannot be viewed (View permission is false)
+     * - false or 'none': Never show shadow for protected ranges
+     * @default true
+     */
+    protectedRangeShadow?: boolean | 'always' | 'non-editable' | 'non-viewable' | 'none';
+    /**
+     * The custom component of the protected range user selector.
+     */
+    protectedRangeUserSelector?: {
+        /**
+         * custom component, should implement the `IPermissionDetailUserPartProps` interface.
+         */
+        component: ComponentType<IPermissionDetailUserPartProps>;
+        /**
+         * The framework of the component. Must be passed correctly.
+         */
+        framework: string;
+    };
+    /**
+     * Whether to disable the force string alert.
+     * @default false
+     */
+    disableForceStringAlert?: boolean;
+    /**
+     * Whether to disable the force string mark.
+     * @default false
+     */
+    disableForceStringMark?: boolean;
+    /**
+     * Whether to disable the edit.
+     * @default false
+     */
+    disableEdit?: boolean;
+}
+export declare const defaultPluginConfig: IUniverSheetsUIConfig;
+/**
+ * Convert the protectedRangeShadow config to shadow strategy
+ * - true -> 'always'
+ * - false -> 'none'
+ * - string values remain unchanged
+ * @param config The protectedRangeShadow config value
+ * @returns The shadow strategy
+ */
+export declare function convertToShadowStrategy(config?: boolean | 'always' | 'non-editable' | 'non-viewable' | 'none'): 'always' | 'non-editable' | 'non-viewable' | 'none';

@@ -94,7 +94,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
 
     var isEditable: Bool {
         switch self {
-        case .text, .code, .mermaid, .canvas, .mindMap: return true
+        case .text, .code, .mermaid, .canvas, .mindMap, .spreadsheet: return true
         default: return false
         }
     }

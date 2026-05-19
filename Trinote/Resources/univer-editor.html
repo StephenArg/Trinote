@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <!--
+        viewport-fit=cover so the editor reaches under the home indicator on
+        notched iPhones. maximum-scale + user-scalable disabled so the browser
+        zoom gesture doesn't fight Univer's own pinch-to-zoom.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="stylesheet" href="univer-editor-assets/univer-bundle.css" />
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            background: var(--univer-bg-color, #ffffff);
+            color-scheme: light dark;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+            overscroll-behavior: none;
+        }
+        body {
+            /*
+                touch-action:none lets Univer's mobile gesture controller
+                receive raw touches (PR #6483 / MobileSheetsScrollRenderController)
+                instead of the browser converting them to scroll/zoom first.
+            */
+            touch-action: none;
+        }
+        #app {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            overflow: hidden;
+        }
+        @media (prefers-color-scheme: dark) {
+            html, body { background: #1c1c1e; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+    <script src="univer-editor-assets/univer-bundle.js"></script>
+</body>
+</html>
