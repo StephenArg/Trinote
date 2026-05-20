@@ -7,6 +7,8 @@
 <meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
 <style>
 :root {
+  /* Matches `NoteDetailFloatingChipLayout.scrollClearance(editing: true)` (Swift sets on load). */
+  --editor-floating-chip-clearance: 81px;
   --bg: #ffffff;
   --fg: #1c1c1e;
   --toolbar-bg: #f2f2f7;
@@ -298,7 +300,7 @@ body { display: flex; flex-direction: column; }
   background: var(--editor-bg);
 }
 .tiptap {
-  padding: 16px 16px 20px; outline: none; min-height: 100%; font-size: 18px; line-height: 1.6; color: var(--fg);
+  padding: 16px 16px var(--editor-floating-chip-clearance); outline: none; min-height: 100%; font-size: 18px; line-height: 1.6; color: var(--fg);
   background: var(--editor-bg);
 }
 .tiptap p { margin: 0.4em 0; }
@@ -3837,6 +3839,10 @@ function trinoteRunMermaidInSlot(slot) {
 // --- Bridge ---
 window.editorBridge = {
   setKeyboardToolbarGap(px) {},
+  setFloatingChipScrollClearance(px) {
+    const n = Math.max(0, Number(px) || 0);
+    document.documentElement.style.setProperty('--editor-floating-chip-clearance', n + 'px');
+  },
   setContent(html) {
     // Extract captions before ProseMirror parsing (PM would discard them).
     // Supports CKEditor 5 format (<figure class="table">...<figcaption>) and standard <caption>.

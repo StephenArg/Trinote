@@ -307,7 +307,7 @@ struct NoteDetailView: View {
     }
 
     /// Delay after last typing activity before the save chip fades back in (shorter = snappier; too low flickers on brief pauses).
-    private static let editorSaveChipIdleDelay: TimeInterval = 1
+    private static let editorSaveChipIdleDelay: TimeInterval = 0.75
     private static let editorSaveChipIgnoreTypingAfterAppear: TimeInterval = 0.5
 
     private func cancelEditorSaveChipIdleShowTask() {
@@ -1027,6 +1027,15 @@ struct NoteDetailView: View {
                                 if vm.showDetails {
                                     attachmentsSection(vm)
                                     metadataSection(note)
+                                }
+
+                                if note.type.isEditable, !vm.needsProtectedSession, !noteEditorLongPressToEdit {
+                                    Color.clear.frame(
+                                        height: NoteDetailFloatingChipLayout.scrollClearance(
+                                            findBarPresented: findControl.isPresented,
+                                            editing: false
+                                        )
+                                    )
                                 }
                             }
                             .background(
@@ -2309,6 +2318,11 @@ struct NoteDetailView: View {
                 .font(.system(.body, design: .monospaced))
                 .padding(.horizontal, 8)
                 .scrollContentBackground(.hidden)
+                .contentMargins(
+                    .bottom,
+                    NoteDetailFloatingChipLayout.scrollClearance(findBarPresented: false, editing: true),
+                    for: .scrollContent
+                )
                 .background(Color(.systemGroupedBackground))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(
@@ -2788,9 +2802,40 @@ struct NoteDetailView: View {
 
 // MARK: - Create Child Sheet
 
+/// Note types offered when creating a child note. Spreadsheet is omitted on servers before Trilium v0.103.0.
+struct NewNoteTypePicker: View {
+    @Binding var selection: NoteType
+    var supportsSpreadsheet: Bool
+
+    var body: some View {
+        Picker(String(localized: "Type", comment: "New note type"), selection: $selection) {
+            Text(String(localized: "Text", comment: "Note type")).tag(NoteType.text)
+            Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
+            Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
+            Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
+            Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
+            if supportsSpreadsheet {
+                Text(String(localized: "Spreadsheet", comment: "Note type")).tag(NoteType.spreadsheet)
+            }
+            Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
+            Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
+        }
+        .onChange(of: supportsSpreadsheet) { _, supported in
+            if !supported, selection == .spreadsheet {
+                selection = .text
+            }
+        }
+    }
+}
+
 struct CreateChildNoteSheet: View {
     @Bindable var viewModel: NoteDetailViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+
+    private var supportsSpreadsheetNoteType: Bool {
+        TriliumServerCompatibility.supportsSpreadsheetNotes(appState.serverAppInfo)
+    }
 
     var body: some View {
         NavigationStack {
@@ -2801,16 +2846,10 @@ struct CreateChildNoteSheet: View {
                 )
                     .textInputAutocapitalization(.sentences)
 
-                Picker(String(localized: "Type", comment: "New note type"), selection: $viewModel.newNoteType) {
-                    Text(String(localized: "Text", comment: "Note type")).tag(NoteType.text)
-                    Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
-                    Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
-                    Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
-                    Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
-                    Text(String(localized: "Spreadsheet", comment: "Note type")).tag(NoteType.spreadsheet)
-                    Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
-                    Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
-                }
+                NewNoteTypePicker(
+                    selection: $viewModel.newNoteType,
+                    supportsSpreadsheet: supportsSpreadsheetNoteType
+                )
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))
             .navigationBarTitleDisplayMode(.inline)

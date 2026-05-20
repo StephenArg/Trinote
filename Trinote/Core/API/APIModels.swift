@@ -32,6 +32,44 @@ enum TriliumServerCompatibility {
     /// Human label used in the Settings banner when displaying the tested ceiling.
     static let testedMaxAppVersion = "v0.103.0"
 
+    /// Trilium release that introduced the `spreadsheet` note type (Univer Sheets).
+    static let spreadsheetMinAppVersion = "0.103.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.103.0 or newer (spreadsheet note type).
+    static func supportsSpreadsheetNotes(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: spreadsheetMinAppVersion)
+    }
+
+    /// Semantic compare for Trilium `appVersion` strings (`0.103.0`, `v0.102.1`, `0.103.0-beta.1`).
+    static func isAppVersion(_ version: String, atLeast minimum: String) -> Bool {
+        compareAppVersions(version, minimum) != .orderedAscending
+    }
+
+    static func compareAppVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let a = parseAppVersionComponents(lhs)
+        let b = parseAppVersionComponents(rhs)
+        let count = max(a.count, b.count)
+        for i in 0..<count {
+            let av = i < a.count ? a[i] : 0
+            let bv = i < b.count ? b[i] : 0
+            if av < bv { return .orderedAscending }
+            if av > bv { return .orderedDescending }
+        }
+        return .orderedSame
+    }
+
+    private static func parseAppVersionComponents(_ raw: String) -> [Int] {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("v") || s.hasPrefix("V") {
+            s.removeFirst()
+        }
+        return s.split(separator: ".", omittingEmptySubsequences: false).map { segment in
+            let digits = segment.prefix(while: { $0.isNumber })
+            return Int(digits) ?? 0
+        }
+    }
+
     enum Status: Equatable {
         /// We have not yet fetched `/api/app-info`, or it returned without versions.
         case unknown

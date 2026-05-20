@@ -231,6 +231,9 @@ struct RichTextEditorView: UIViewRepresentable {
                 setContent(html)
                 setKeyboardToolbarGap(pendingKeyboardToolbarGapPoints ?? 0)
                 pendingKeyboardToolbarGapPoints = nil
+                setFloatingChipScrollClearance(
+                    NoteDetailFloatingChipLayout.scrollClearance(findBarPresented: false, editing: true)
+                )
                 if initialScrollFraction > 0 {
                     scrollToFraction(initialScrollFraction)
                 }
@@ -438,6 +441,14 @@ struct RichTextEditorView: UIViewRepresentable {
             let px = Int(clamped.rounded())
             webView.evaluateJavaScript("window.editorBridge.setKeyboardToolbarGap(\(px))") { _, error in
                 if let error { Log.api.error("setKeyboardToolbarGap failed: \(error)") }
+            }
+        }
+
+        private func setFloatingChipScrollClearance(_ points: CGFloat) {
+            let px = Int(max(0, points).rounded())
+            guard editorReady, let webView else { return }
+            webView.evaluateJavaScript("window.editorBridge.setFloatingChipScrollClearance(\(px))") { _, error in
+                if let error { Log.api.error("setFloatingChipScrollClearance failed: \(error)") }
             }
         }
 

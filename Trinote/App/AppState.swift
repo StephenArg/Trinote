@@ -11,6 +11,8 @@ final class AppState {
     var isLoading = true
     var connectionError: String?
     var lastRefreshed: Date?
+    /// Cached from the latest successful `restoreSession()` (`/api/app-info`). Used for server capability gates (e.g. spreadsheet note type).
+    private(set) var serverAppInfo: AppInfoResponse?
     /// In-memory: whether the user has unlocked protected notes this foreground session. Server session is cleared on background and after restoring the main login (see `endServerProtectedSessionAndPersistCookies()`).
     var protectedSessionActive = false
 
@@ -685,6 +687,7 @@ final class AppState {
             try await group.next()!
             group.cancelAll()
         }
+        serverAppInfo = await client.lastFetchedAppInfo
     }
 
     /// Use SwiftData branch rows to repopulate `CachedNote` parent/child id lists (fixes detail sub-notes when incremental rows omitted tree fields).
@@ -776,6 +779,7 @@ final class AppState {
         if activeProfile?.id != profile.id {
             NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
             tabNavigationResetGeneration += 1
+            serverAppInfo = nil
             await Task.yield()
         }
 
@@ -881,6 +885,7 @@ final class AppState {
         if activeProfile?.id != profile.id {
             NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
             tabNavigationResetGeneration += 1
+            serverAppInfo = nil
             await Task.yield()
         }
 
@@ -898,6 +903,7 @@ final class AppState {
         self.isAuthenticated = true
         self.connectionError = nil
         self.lastRefreshed = .now
+        self.serverAppInfo = await newClient.lastFetchedAppInfo
         try persistence.setActiveProfile(profile)
         Log.auth.info("Logged in to \(profile.name) (session)")
         syncManager.restoreSyncState(profileId: profile.id)
@@ -931,6 +937,7 @@ final class AppState {
         isAuthenticated = false
         connectionError = nil
         lastRefreshed = nil
+        serverAppInfo = nil
         Log.auth.info("Logged out")
     }
 

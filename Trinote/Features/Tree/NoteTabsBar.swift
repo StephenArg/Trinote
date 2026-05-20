@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct NoteTabsBar: View {
     /// The `OpenNoteTab.id` of the currently visible open-tab row, if any.
@@ -10,6 +11,10 @@ struct NoteTabsBar: View {
     @Environment(AppState.self) private var appState
     @State private var tabs: [OpenNoteTab] = []
     @State private var showAddNotePicker = false
+    @State private var draggingTabId: String?
+    @State private var dragTranslation: CGFloat = 0
+
+    private static let reorderLongPressDuration: TimeInterval = 0.3
 
     private static let addButtonWidth: CGFloat = 44
     private static let horizontalPadding: CGFloat = 10
@@ -36,13 +41,29 @@ struct NoteTabsBar: View {
                                     ForEach(tabs) { tab in
                                         let title = displayTitle(for: tab)
                                         let icon = rowIcon(for: tab)
+                                        let isDragging = draggingTabId == tab.id
                                         NoteTabCell(
                                             displayTitle: title,
                                             systemImage: icon,
                                             isActive: currentOpenTabId != nil && tab.id == currentOpenTabId,
                                             width: tabW,
-                                            onTap: { onSelect(tab) },
+                                            onTap: {
+                                                guard draggingTabId == nil else { return }
+                                                onSelect(tab)
+                                            },
                                             onClose: { removeTab(tab) }
+                                        )
+                                        .offset(x: isDragging ? dragTranslation : 0)
+                                        .scaleEffect(isDragging ? 1.04 : 1)
+                                        .shadow(color: isDragging ? .black.opacity(0.18) : .clear, radius: 6, y: 2)
+                                        .zIndex(isDragging ? 10 : 0)
+                                        .opacity(isDragging ? 0.92 : 1)
+                                        .gesture(tabReorderGesture(tab: tab, tabWidth: tabW))
+                                        .accessibilityHint(
+                                            String(
+                                                localized: "Hold, then drag to reorder tabs.",
+                                                comment: "A11y: open note tab reorder hint"
+                                            )
                                         )
                                         .id(tab.id)
                                     }
@@ -133,6 +154,59 @@ struct NoteTabsBar: View {
         onOpenTabRemoved?(removed)
         reload()
         if tabs.isEmpty { onTabsBecameEmpty?() }
+    }
+
+    private func tabReorderGesture(tab: OpenNoteTab, tabWidth: CGFloat) -> some Gesture {
+        LongPressGesture(minimumDuration: Self.reorderLongPressDuration)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .onChanged { value in
+                switch value {
+                case .first(true):
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                case .second(true, let drag?):
+                    if draggingTabId == nil { draggingTabId = tab.id }
+                    dragTranslation = drag.translation.width
+                default:
+                    break
+                }
+            }
+            .onEnded { value in
+                guard case .second(true, _) = value else {
+                    draggingTabId = nil
+                    dragTranslation = 0
+                    return
+                }
+                let draggedId = draggingTabId ?? tab.id
+                let translation = dragTranslation
+                draggingTabId = nil
+                dragTranslation = 0
+                guard let from = tabs.firstIndex(where: { $0.id == draggedId }) else { return }
+                let to = dropIndex(movingFrom: from, translation: translation, tabWidth: tabWidth)
+                guard from != to else { return }
+                applyTabReorder(from: from, to: to)
+            }
+    }
+
+    private func dropIndex(movingFrom source: Int, translation: CGFloat, tabWidth: CGFloat) -> Int {
+        let slot = tabWidth + Self.tabGap
+        guard slot > 0 else { return source }
+        let delta = Int(round(translation / slot))
+        return min(max(source + delta, 0), tabs.count - 1)
+    }
+
+    private func applyTabReorder(from source: Int, to destination: Int) {
+        guard source != destination,
+              source >= 0, source < tabs.count,
+              destination >= 0, destination < tabs.count else { return }
+        var reordered = tabs
+        let item = reordered.remove(at: source)
+        reordered.insert(item, at: destination)
+        tabs = reordered
+        guard let profileId = appState.activeProfile?.id else { return }
+        try? PersistenceManager.shared.reorderOpenNoteTabs(
+            orderedIds: reordered.map(\.id),
+            serverProfileId: profileId
+        )
     }
 
     private func rowIcon(for tab: OpenNoteTab) -> String {

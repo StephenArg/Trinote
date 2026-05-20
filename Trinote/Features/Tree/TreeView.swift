@@ -1076,9 +1076,14 @@ private struct CreateChildNoteFromTreeSheet: View {
     var onNoteCreated: ((String, String) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
     @State private var newNoteTitle = ""
     @State private var newNoteType: NoteType = .text
     @State private var isCreating = false
+
+    private var supportsSpreadsheetNoteType: Bool {
+        TriliumServerCompatibility.supportsSpreadsheetNotes(appState.serverAppInfo)
+    }
 
     var body: some View {
         NavigationStack {
@@ -1089,16 +1094,10 @@ private struct CreateChildNoteFromTreeSheet: View {
                 )
                     .textInputAutocapitalization(.sentences)
 
-                Picker(String(localized: "Type", comment: "New note type"), selection: $newNoteType) {
-                    Text(String(localized: "Text", comment: "Note type")).tag(NoteType.text)
-                    Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
-                    Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
-                    Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
-                    Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
-                    Text(String(localized: "Spreadsheet", comment: "Note type")).tag(NoteType.spreadsheet)
-                    Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
-                    Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
-                }
+                NewNoteTypePicker(
+                    selection: $newNoteType,
+                    supportsSpreadsheet: supportsSpreadsheetNoteType
+                )
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))
             .navigationBarTitleDisplayMode(.inline)

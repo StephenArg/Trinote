@@ -313,7 +313,7 @@ actor TriliumClient: TriliumClientProtocol {
             }
         }
 
-        _ = try await getAppInfo()
+        lastFetchedAppInfo = try await getAppInfo()
 
         isSessionValid = true
     }
@@ -378,9 +378,12 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
 
+    /// Last `/api/app-info` payload from the most recent successful `restoreSession()`.
+    private(set) var lastFetchedAppInfo: AppInfoResponse?
+
     func restoreSession() async throws {
         try await refreshCsrf()
-        _ = try await getAppInfo()
+        lastFetchedAppInfo = try await getAppInfo()
         isSessionValid = true
     }
 
@@ -388,6 +391,7 @@ actor TriliumClient: TriliumClientProtocol {
         defer {
             isSessionValid = false
             csrfToken = nil
+            lastFetchedAppInfo = nil
             Self.clearCookies(in: httpCookieStorage, for: baseURL)
         }
 

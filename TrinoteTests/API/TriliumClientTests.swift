@@ -449,6 +449,54 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(TriliumServerCompatibility.evaluate(nil), .unknown)
     }
 
+    func testSupportsSpreadsheetNotesRequiresV0_103() {
+        XCTAssertFalse(TriliumServerCompatibility.supportsSpreadsheetNotes(nil))
+        let before = AppInfoResponse(
+            appVersion: "0.102.9",
+            dbVersion: 237,
+            syncVersion: 38,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertFalse(TriliumServerCompatibility.supportsSpreadsheetNotes(before))
+        let at = AppInfoResponse(
+            appVersion: "0.103.0",
+            dbVersion: 238,
+            syncVersion: 39,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertTrue(TriliumServerCompatibility.supportsSpreadsheetNotes(at))
+        let newer = AppInfoResponse(
+            appVersion: "v0.104.2",
+            dbVersion: 240,
+            syncVersion: 40,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertTrue(TriliumServerCompatibility.supportsSpreadsheetNotes(newer))
+    }
+
+    func testCompareAppVersionsHandlesPrereleaseSuffix() {
+        XCTAssertEqual(
+            TriliumServerCompatibility.compareAppVersions("0.103.0-beta.1", "0.103.0"),
+            .orderedSame
+        )
+        XCTAssertEqual(
+            TriliumServerCompatibility.compareAppVersions("0.102.1", "0.103.0"),
+            .orderedAscending
+        )
+    }
+
     // MARK: - APIError
 
     func testAPIErrorIsRetryable() {

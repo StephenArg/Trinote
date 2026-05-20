@@ -637,6 +637,17 @@ final class PersistenceManager {
         return try context.fetch(descriptor)
     }
 
+    /// Persists a new left-to-right order for the tab strip by rewriting `addedAt` (strip sorts by `addedAt` ascending).
+    func reorderOpenNoteTabs(orderedIds: [String], serverProfileId: String) throws {
+        let base = Date(timeIntervalSince1970: 0)
+        for (index, id) in orderedIds.enumerated() {
+            guard let row = try fetchOpenNoteTab(id: id, serverProfileId: serverProfileId) else { continue }
+            row.addedAt = base.addingTimeInterval(TimeInterval(index))
+        }
+        try context.save()
+        NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil)
+    }
+
     func removeOpenNoteTab(id: String, serverProfileId: String) throws {
         var descriptor = FetchDescriptor<OpenNoteTab>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
