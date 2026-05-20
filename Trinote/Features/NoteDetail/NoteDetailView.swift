@@ -61,6 +61,16 @@ struct NoteDetailView: View {
         self.retargetActiveOpenTab = retargetActiveOpenTab
         _activeNoteId = State(initialValue: noteId)
         _activeOpenTabId = State(initialValue: openTabId)
+
+        // Seed scroll restoration before the first read-only render (avoids top-then-jump on launch / tab bar).
+        if let id = openTabId, let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
+            _readOnlyScrollFraction = State(initialValue: f)
+            _readOnlyScrollFractionPendingRestore = State(initialValue: f)
+            _isReadOnlyScrollRevealPending = State(initialValue: f > Self.readOnlyScrollRevealMaskThreshold)
+            _lastAppliedReadScrollTabId = State(initialValue: id)
+        } else {
+            _lastAppliedReadScrollTabId = State(initialValue: openTabId)
+        }
     }
 
     @Environment(AppState.self) private var appState
@@ -112,6 +122,13 @@ struct NoteDetailView: View {
     @State private var readOnlyScrollFraction: CGFloat = 0
     /// After save leaves the rich-text editor, applied once to the read-only `ScrollView` (same fraction as the web editor).
     @State private var readOnlyScrollFractionPendingRestore: CGFloat?
+    /// Hides read-only content until tab scroll restoration settles (avoids top-then-jump).
+    @State private var isReadOnlyScrollRevealPending = false
+    /// Dedupes `applyReadScrollStateFromStoreForOpenTabId` when the same tab is applied twice after load.
+    @State private var lastAppliedReadScrollTabId: String?
+
+    /// Saved scroll fractions at or below this count as "top of note" and skip the reveal mask.
+    private static let readOnlyScrollRevealMaskThreshold: CGFloat = 0.01
 
     /// Save/cancel chip while editing: hide on scroll up, show on scroll down (same rules as read-mode edit FAB).
     @State private var showEditorSaveCancelChip = true
@@ -395,6 +412,12 @@ struct NoteDetailView: View {
         .accessibilityLabel(String(localized: "Edit note", comment: "Floating scroll edit button"))
     }
 
+    private static let richTextEditorScrollFractionScript = """
+    (function(){
+      try { return window.editorBridge.getScrollFraction(); } catch (e) { return 0; }
+    })();
+    """
+
     /// Fetches HTML + scroll fraction from `editor.html` in one round-trip (see `getScrollFraction` / `scrollToFraction`).
     private static let richTextEditorSavePayloadScript = """
     (function(){
@@ -457,10 +480,18 @@ struct NoteDetailView: View {
         return (html, f)
     }
 
+    private static func parseRichTextEditorScrollFraction(_ result: Any?) -> CGFloat? {
+        if let n = result as? NSNumber { return CGFloat(truncating: n) }
+        if let d = result as? Double { return CGFloat(d) }
+        if let s = result as? String, let d = Double(s) { return CGFloat(d) }
+        return nil
+    }
+
     private func queueReadOnlyScrollRestoreAfterRichTextSave(fraction: CGFloat) {
         let f = min(max(fraction, 0), 1)
         readOnlyScrollFraction = f
         readOnlyScrollFractionPendingRestore = f
+        isReadOnlyScrollRevealPending = f > Self.readOnlyScrollRevealMaskThreshold
     }
 
     /// Escape for use inside a JS template literal (same pattern as `RichTextEditorView.setContent`).
@@ -494,6 +525,29 @@ struct NoteDetailView: View {
               let json = String(data: data, encoding: .utf8) else { return }
         let escaped = javaScriptTemplateLiteralContent(json)
         webView.evaluateJavaScript("window.editorBridge.applyIncludeNotePreviewJSON(`\(escaped)`);", completionHandler: nil)
+    }
+
+    /// Leaves the rich-text editor and restores read-only scroll to the editor's current position.
+    private func cancelRichTextEditing(vm: NoteDetailViewModel) {
+        if let wv = editorWebView {
+            wv.evaluateJavaScript(Self.richTextEditorScrollFractionScript) { result, _ in
+                DispatchQueue.main.async {
+                    let frac = Self.parseRichTextEditorScrollFraction(result) ?? readOnlyScrollFraction
+                    queueReadOnlyScrollRestoreAfterRichTextSave(fraction: frac)
+                    vm.cancelEditing()
+                }
+            }
+        } else {
+            vm.cancelEditing()
+        }
+    }
+
+    private func cancelNoteEditing(vm: NoteDetailViewModel, note: NoteItem) {
+        if vm.isEditing && note.type == .text {
+            cancelRichTextEditing(vm: vm)
+        } else {
+            vm.cancelEditing()
+        }
     }
 
     /// Fetches the latest HTML from the rich-text editor (including non-ProseMirror state like
@@ -815,16 +869,23 @@ struct NoteDetailView: View {
         OpenTabSessionStore.clearReadScrollState(for: tabId)
         readOnlyScrollFraction = 0
         readOnlyScrollFractionPendingRestore = 0
+        isReadOnlyScrollRevealPending = false
+        lastAppliedReadScrollTabId = tabId
     }
 
     private func applyReadScrollStateFromStoreForOpenTabId(_ id: String) {
+        if lastAppliedReadScrollTabId == id { return }
+
         if let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
             readOnlyScrollFraction = f
             readOnlyScrollFractionPendingRestore = f
+            isReadOnlyScrollRevealPending = f > Self.readOnlyScrollRevealMaskThreshold
         } else {
             readOnlyScrollFraction = 0
             readOnlyScrollFractionPendingRestore = 0
+            isReadOnlyScrollRevealPending = false
         }
+        lastAppliedReadScrollTabId = id
     }
 
     private func selectOpenNoteTab(_ tab: OpenNoteTab) {
@@ -1050,19 +1111,35 @@ struct NoteDetailView: View {
                                     }
                                     NoteDetailReadOnlyScrollRestoration(fraction: readOnlyScrollFractionPendingRestore) {
                                         readOnlyScrollFractionPendingRestore = nil
+                                        if isReadOnlyScrollRevealPending {
+                                            withAnimation(.easeOut(duration: 0.18)) {
+                                                isReadOnlyScrollRevealPending = false
+                                            }
+                                        }
                                     }
                                 }
                                 .frame(width: 0, height: 0)
                             )
                         }
                         .simultaneousGesture(longPressToEditGesture(vm: vm, note: note))
+                        .opacity(isReadOnlyScrollRevealPending ? 0 : 1)
 
-                        if showFloatingEditButton && !noteEditorLongPressToEdit {
+                        if showFloatingEditButton && !noteEditorLongPressToEdit && !isReadOnlyScrollRevealPending {
                             floatingEditFAB(vm: vm)
                                 .padding(.trailing, 16)
                                 .padding(.bottom, findControl.isPresented ? 56 : 12)
                                 .transition(.scale(scale: 0.88).combined(with: .opacity))
                                 .zIndex(2)
+                        }
+                    }
+                    .overlay {
+                        if isReadOnlyScrollRevealPending {
+                            ProgressView()
+                                .controlSize(.regular)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .background(Color(uiColor: .systemBackground))
+                                .transition(.opacity)
+                                .allowsHitTesting(false)
                         }
                     }
                     .animation(.easeInOut(duration: 0.22), value: findControl.isPresented)
@@ -1090,6 +1167,7 @@ struct NoteDetailView: View {
                     .onChange(of: vm.isEditing) { _, editing in
                         if editing {
                             readOnlyScrollFractionPendingRestore = nil
+                            isReadOnlyScrollRevealPending = false
                             findControl.close()
                             floatingEditScrollBaselineReady = false
                             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
@@ -2469,7 +2547,7 @@ struct NoteDetailView: View {
 
                 if vm.isEditing {
                     Button {
-                        vm.cancelEditing()
+                        cancelNoteEditing(vm: vm, note: note)
                     } label: {
                         Label(
                             String(localized: "Cancel Editing", comment: "Leave note editor from overflow menu"),
@@ -2667,7 +2745,7 @@ struct NoteDetailView: View {
     private func performToolbarQuickAction(_ action: NoteDetailToolbarQuickAction, vm: NoteDetailViewModel, note: NoteItem) {
         switch action {
         case .cancelEditing:
-            vm.cancelEditing()
+            cancelNoteEditing(vm: vm, note: note)
         case .newChild:
             vm.showCreateChild = true
         case .noteDetails:

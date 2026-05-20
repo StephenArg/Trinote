@@ -1,9 +1,17 @@
 import SwiftUI
 import UIKit
 
-/// After leaving the rich-text editor, restores the read-only `ScrollView` to match the editor’s vertical position
-/// (same 0–1 fraction as `editorBridge.scrollToFraction` / `getScrollFraction`).
+/// Restores the read-only `ScrollView` to a saved 0–1 vertical fraction (same fraction emitted by
+/// `NoteDetailScrollOffsetReader` and the rich-text editor's `getScrollFraction`).
+///
+/// HTML/WKWebView content reports its height asynchronously: `HTMLNoteView` starts at 200pt and grows
+/// via `onHeightChanged`, so a one-shot `setContentOffset` based on the first non-zero `contentSize`
+/// lands at a tiny offset and the user is left near the top once the body finishes laying out. The
+/// coordinator observes `contentSize` and `bounds` and re-applies the same fraction on every change
+/// until the size stays stable for `stabilityWindow`, then signals completion. A hard `maxWaitWindow`
+/// guarantees the caller's mask never sticks if layout never settles (e.g. infinite-scroll children).
 struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
+    /// Set to a saved fraction (0…1) to request a restore. `nil` cancels any in-flight restore.
     var fraction: CGFloat?
     var onApplied: () -> Void
 
@@ -22,67 +30,147 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
         context.coordinator.onApplied = onApplied
         if let f = fraction {
             context.coordinator.scheduleApply(fraction: f, from: uiView)
+        } else {
+            context.coordinator.cancel()
         }
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.cancel()
     }
 
     final class Coordinator {
         var onApplied: () -> Void
         private var applyToken: UUID?
+        private var pendingFraction: CGFloat?
+        private weak var attachedScrollView: UIScrollView?
+        private var contentSizeObservation: NSKeyValueObservation?
+        private var boundsObservation: NSKeyValueObservation?
+        private var stabilityWorkItem: DispatchWorkItem?
+        private var giveUpWorkItem: DispatchWorkItem?
+
+        private static let stabilityWindow: TimeInterval = 0.22
+        private static let maxWaitWindow: TimeInterval = 2.0
+        private static let minOffsetReapplyDelta: CGFloat = 0.5
 
         init(onApplied: @escaping () -> Void) {
             self.onApplied = onApplied
         }
 
+        func cancel() {
+            applyToken = nil
+            pendingFraction = nil
+            stabilityWorkItem?.cancel()
+            stabilityWorkItem = nil
+            giveUpWorkItem?.cancel()
+            giveUpWorkItem = nil
+            detachObservations()
+        }
+
         func scheduleApply(fraction: CGFloat, from view: UIView) {
+            if let pending = pendingFraction, abs(pending - fraction) < 0.0005, applyToken != nil {
+                return
+            }
+
+            pendingFraction = fraction
             let token = UUID()
             applyToken = token
+
+            stabilityWorkItem?.cancel()
+            stabilityWorkItem = nil
+
+            giveUpWorkItem?.cancel()
+            let giveUp = DispatchWorkItem { [weak self] in
+                guard let self, self.applyToken == token else { return }
+                self.fireOnApplied()
+            }
+            giveUpWorkItem = giveUp
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.maxWaitWindow, execute: giveUp)
+
             DispatchQueue.main.async { [weak self, weak view] in
                 guard let self else { return }
                 guard let view else {
-                    onApplied()
+                    self.fireOnApplied()
                     return
                 }
-                tryApply(fraction: fraction, view: view, token: token, attempts: 0)
+                self.attachAndApply(view: view, token: token, attempts: 0)
             }
         }
 
-        private func tryApply(fraction: CGFloat, view: UIView, token: UUID, attempts: Int) {
+        private func attachAndApply(view: UIView, token: UUID, attempts: Int) {
             guard applyToken == token else { return }
             guard let sv = Self.findEnclosingScrollView(from: view) else {
-                if attempts < 15 {
+                if attempts < 30 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak view] in
-                        guard let self else { return }
-                        guard let view else {
-                            onApplied()
-                            return
-                        }
-                        tryApply(fraction: fraction, view: view, token: token, attempts: attempts + 1)
+                        guard let self, let view else { return }
+                        self.attachAndApply(view: view, token: token, attempts: attempts + 1)
                     }
                 } else {
-                    onApplied()
+                    fireOnApplied()
                 }
                 return
             }
 
+            if attachedScrollView !== sv {
+                detachObservations()
+                attachedScrollView = sv
+                contentSizeObservation = sv.observe(\.contentSize, options: [.new]) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.applyAndRestartStability() }
+                }
+                boundsObservation = sv.observe(\.bounds, options: [.new]) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.applyAndRestartStability() }
+                }
+            }
+            applyAndRestartStability()
+        }
+
+        private func applyAndRestartStability() {
+            guard let sv = attachedScrollView, let fraction = pendingFraction, let token = applyToken else { return }
             sv.layoutIfNeeded()
             let maxOffset = max(sv.contentSize.height - sv.bounds.height, 0)
-            if maxOffset <= 0 && attempts < 15 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak view] in
-                    guard let self else { return }
-                    guard let view else {
-                        onApplied()
-                        return
-                    }
-                    tryApply(fraction: fraction, view: view, token: token, attempts: attempts + 1)
-                }
-                return
-            }
-
             if maxOffset > 0 {
                 let y = min(max(fraction * maxOffset, 0), maxOffset)
-                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
+                if abs(sv.contentOffset.y - y) > Self.minOffsetReapplyDelta {
+                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
+                }
             }
+
+            stabilityWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.applyToken == token else { return }
+                if let sv = self.attachedScrollView,
+                   let fraction = self.pendingFraction {
+                    let maxOffset = max(sv.contentSize.height - sv.bounds.height, 0)
+                    if maxOffset > 0 {
+                        let y = min(max(fraction * maxOffset, 0), maxOffset)
+                        if abs(sv.contentOffset.y - y) > Self.minOffsetReapplyDelta {
+                            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
+                        }
+                    }
+                }
+                self.fireOnApplied()
+            }
+            stabilityWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.stabilityWindow, execute: work)
+        }
+
+        private func fireOnApplied() {
+            stabilityWorkItem?.cancel()
+            stabilityWorkItem = nil
+            giveUpWorkItem?.cancel()
+            giveUpWorkItem = nil
+            applyToken = nil
+            pendingFraction = nil
+            detachObservations()
             onApplied()
+        }
+
+        private func detachObservations() {
+            contentSizeObservation?.invalidate()
+            contentSizeObservation = nil
+            boundsObservation?.invalidate()
+            boundsObservation = nil
+            attachedScrollView = nil
         }
 
         private static func findEnclosingScrollView(from view: UIView) -> UIScrollView? {
