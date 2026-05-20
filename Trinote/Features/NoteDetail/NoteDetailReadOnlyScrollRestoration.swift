@@ -49,9 +49,10 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
         private var stabilityWorkItem: DispatchWorkItem?
         private var giveUpWorkItem: DispatchWorkItem?
 
-        private static let stabilityWindow: TimeInterval = 0.22
-        private static let maxWaitWindow: TimeInterval = 2.0
+        private static let stabilityWindow: TimeInterval = 0.28
+        private static let maxWaitWindow: TimeInterval = 3.5
         private static let minOffsetReapplyDelta: CGFloat = 0.5
+        private static let fractionEpsilon: CGFloat = 0.004
 
         init(onApplied: @escaping () -> Void) {
             self.onApplied = onApplied
@@ -138,14 +139,25 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
             stabilityWorkItem?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 guard let self, self.applyToken == token else { return }
-                if let sv = self.attachedScrollView,
-                   let fraction = self.pendingFraction {
-                    let maxOffset = max(sv.contentSize.height - sv.bounds.height, 0)
-                    if maxOffset > 0 {
-                        let y = min(max(fraction * maxOffset, 0), maxOffset)
-                        if abs(sv.contentOffset.y - y) > Self.minOffsetReapplyDelta {
-                            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
-                        }
+                guard let sv = self.attachedScrollView, let fraction = self.pendingFraction else {
+                    self.fireOnApplied()
+                    return
+                }
+                let maxOffset = max(sv.contentSize.height - sv.bounds.height, 0)
+                if fraction > Self.fractionEpsilon, maxOffset <= 0 {
+                    self.applyAndRestartStability()
+                    return
+                }
+                if maxOffset > 0 {
+                    let y = min(max(fraction * maxOffset, 0), maxOffset)
+                    if abs(sv.contentOffset.y - y) > Self.minOffsetReapplyDelta {
+                        sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
+                    }
+                    if fraction > Self.fractionEpsilon,
+                       maxOffset > 0,
+                       abs(sv.contentOffset.y - y) > Self.minOffsetReapplyDelta {
+                        self.applyAndRestartStability()
+                        return
                     }
                 }
                 self.fireOnApplied()

@@ -625,9 +625,9 @@ struct NoteDetailView: View {
             .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing == true)
             .onChange(of: viewModel?.note?.noteId) { _, _ in refreshOpenNoteTabListNonEmpty() }
             .onChange(of: showNoteTabsBar) { _, _ in refreshOpenNoteTabListNonEmpty() }
-            .onChange(of: activeOpenTabId) { _, t in
-                if let t {
-                    LastActiveOpenTabStore.set(t, profileId: appState.activeProfile?.id)
+            .onChange(of: activeOpenTabId) { _, newTab in
+                if let newTab {
+                    LastActiveOpenTabStore.set(newTab, profileId: appState.activeProfile?.id)
                 } else {
                     LastActiveOpenTabStore.set("", profileId: appState.activeProfile?.id)
                 }
@@ -642,10 +642,12 @@ struct NoteDetailView: View {
                 if showNoteTabsBar, retargetActiveOpenTab { restoreActiveOpenTabToCurrentNoteIfDrifted() }
             }
             .onDisappear {
+                persistReadScrollFractionForActiveOpenTab()
                 viewModel?.persistEditingDraftIfNeeded()
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background || phase == .inactive {
+                    persistReadScrollFractionForActiveOpenTab()
                     viewModel?.persistEditingDraftIfNeeded()
                 }
             }
@@ -868,7 +870,7 @@ struct NoteDetailView: View {
         } catch {}
         OpenTabSessionStore.clearReadScrollState(for: tabId)
         readOnlyScrollFraction = 0
-        readOnlyScrollFractionPendingRestore = 0
+        readOnlyScrollFractionPendingRestore = nil
         isReadOnlyScrollRevealPending = false
         lastAppliedReadScrollTabId = tabId
     }
@@ -882,16 +884,28 @@ struct NoteDetailView: View {
             isReadOnlyScrollRevealPending = f > Self.readOnlyScrollRevealMaskThreshold
         } else {
             readOnlyScrollFraction = 0
-            readOnlyScrollFractionPendingRestore = 0
+            readOnlyScrollFractionPendingRestore = nil
             isReadOnlyScrollRevealPending = false
         }
         lastAppliedReadScrollTabId = id
     }
 
+    /// Fraction to persist: target restore position while layout is settling, else live scroll.
+    private var readOnlyScrollFractionToPersist: CGFloat {
+        readOnlyScrollFractionPendingRestore ?? readOnlyScrollFraction
+    }
+
+    /// Writes the current read-only scroll fraction for the active open tab (same store as tab switches).
+    private func persistReadScrollFractionForActiveOpenTab() {
+        guard let tabId = activeOpenTabId ?? openTabId else { return }
+        OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: tabId)
+    }
+
     private func selectOpenNoteTab(_ tab: OpenNoteTab) {
         guard appState.activeProfile?.id == tab.serverProfileId else { return }
         if let prev = activeOpenTabId, prev != tab.id {
-            OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFraction, for: prev)
+            OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: prev)
+            lastAppliedReadScrollTabId = prev
         }
         if tab.noteId == activeNoteId {
             if tab.id == activeOpenTabId { return }
@@ -1102,7 +1116,9 @@ struct NoteDetailView: View {
                             .background(
                                 ZStack {
                                     NoteDetailScrollOffsetReader { y, _, fraction in
-                                        readOnlyScrollFraction = fraction
+                                        if readOnlyScrollFractionPendingRestore == nil {
+                                            readOnlyScrollFraction = fraction
+                                        }
                                         updateFloatingEditVisibility(
                                             contentOffsetY: y,
                                             vm: vm,
@@ -1110,6 +1126,9 @@ struct NoteDetailView: View {
                                         )
                                     }
                                     NoteDetailReadOnlyScrollRestoration(fraction: readOnlyScrollFractionPendingRestore) {
+                                        if let restored = readOnlyScrollFractionPendingRestore {
+                                            readOnlyScrollFraction = restored
+                                        }
                                         readOnlyScrollFractionPendingRestore = nil
                                         if isReadOnlyScrollRevealPending {
                                             withAnimation(.easeOut(duration: 0.18)) {
