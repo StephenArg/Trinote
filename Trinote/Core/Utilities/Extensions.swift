@@ -268,6 +268,25 @@ extension Data {
     }
 }
 
+// MARK: - Note creation title
+
+enum NoteCreationTitle {
+    /// Uses `raw` when non-blank after trimming; otherwise `Note dd-MM-yyyy HH:mm:ss` at `date`.
+    static func resolved(from raw: String, at date: Date = Date()) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return defaultTitle(at: date)
+    }
+
+    static func defaultTitle(at date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "dd-MM-yyyy HH:mm:ss"
+        return "Note \(formatter.string(from: date))"
+    }
+}
+
 // MARK: - Task Debounce
 
 extension Task where Success == Never, Failure == Never {

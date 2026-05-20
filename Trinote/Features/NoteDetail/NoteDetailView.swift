@@ -66,6 +66,7 @@ struct NoteDetailView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var activeNoteId: String
     @State private var viewModel: NoteDetailViewModel?
@@ -586,6 +587,14 @@ struct NoteDetailView: View {
                 if showNoteTabsBar, let t = activeOpenTabId { LastActiveOpenTabStore.set(t, profileId: appState.activeProfile?.id) }
                 if showNoteTabsBar, retargetActiveOpenTab { restoreActiveOpenTabToCurrentNoteIfDrifted() }
             }
+            .onDisappear {
+                viewModel?.persistEditingDraftIfNeeded()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background || phase == .inactive {
+                    viewModel?.persistEditingDraftIfNeeded()
+                }
+            }
             .onChange(of: appState.activeProfile?.id) { _, _ in
                 dismiss()
             }
@@ -655,14 +664,18 @@ struct NoteDetailView: View {
             viewModel = vm
             if showNoteTabsBar, retargetActiveOpenTab { eagerRetargetActiveOpenTabFromCache() }
             await vm.load()
+            // Flip into edit mode as soon as `note` is available so SwiftUI never renders the read
+            // layout for a frame before the editor takes over. Only the new-note flow sets
+            // `startInEditMode` (TreeView.noteEditDestination), so `editableContent` being empty at
+            // this point is correct — there's no existing content to wait on.
+            if startInEditMode, vm.note != nil {
+                vm.startEditing()
+            }
             async let contentTask: () = vm.loadContent()
             async let attachTask: () = vm.loadAttachments()
             await vm.loadChildNotes()
             _ = await (contentTask, attachTask)
             await vm.prefetchChildNotesForGeoMapBookIfNeeded()
-            if startInEditMode, vm.note != nil {
-                vm.isEditing = true
-            }
         }
         if showNoteTabsBar { reconcileOpenTabsAfterLoad() }
     }
@@ -880,7 +893,10 @@ struct NoteDetailView: View {
                       let to = notification.userInfo?["to"] as? String,
                       from == activeNoteId
                 else { return }
-                viewModel = nil
+                // Migrate the existing view model in place rather than tearing it down. Rebuilding
+                // would unmount the (possibly already open) editor and re-run `initialLoad`, producing
+                // the "detail → editor → detail → editor" flash users see right after creating a note.
+                viewModel?.migrateAfterOfflineIdReplacement(to: to)
                 activeNoteId = to
             }
             .onChange(of: needsProtected) { _, needs in
@@ -2779,7 +2795,10 @@ struct CreateChildNoteSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField(String(localized: "Note Title", comment: "New child sheet"), text: $viewModel.newNoteTitle)
+                TextField(
+                    String(localized: "Note Title (leave blank for default)", comment: "New child sheet"),
+                    text: $viewModel.newNoteTitle
+                )
                     .textInputAutocapitalization(.sentences)
 
                 Picker(String(localized: "Type", comment: "New note type"), selection: $viewModel.newNoteType) {
@@ -2788,6 +2807,7 @@ struct CreateChildNoteSheet: View {
                     Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
                     Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
                     Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
+                    Text(String(localized: "Spreadsheet", comment: "Note type")).tag(NoteType.spreadsheet)
                     Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
                     Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
                 }
@@ -2802,7 +2822,7 @@ struct CreateChildNoteSheet: View {
                     Button(String(localized: "Create", comment: "New child sheet")) {
                         Task { _ = await viewModel.createChildNote() }
                     }
-                    .disabled(viewModel.newNoteTitle.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isSaving)
+                    .disabled(viewModel.isSaving)
                 }
             }
         }

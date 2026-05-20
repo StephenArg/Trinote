@@ -441,8 +441,8 @@ final class TreeViewModel {
     }
 
     func createChildNote(parentNoteId: String, title: String, type: NoteType = .text) async -> String? {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let profileId = serverProfileId, appState.isAuthenticated else { return nil }
+        let resolvedTitle = NoteCreationTitle.resolved(from: title)
+        guard let profileId = serverProfileId, appState.isAuthenticated else { return nil }
 
         let mime = type.creationMime
         let initial = type.creationInitialContent
@@ -452,7 +452,7 @@ final class TreeViewModel {
         do {
             let (noteId, _) = try persistence.createOfflineChildNote(
                 parentNoteId: parentNoteId,
-                title: trimmed,
+                title: resolvedTitle,
                 noteType: storageType,
                 mime: mime,
                 initialContent: initial,

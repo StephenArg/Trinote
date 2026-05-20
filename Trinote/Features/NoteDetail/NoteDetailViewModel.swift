@@ -69,7 +69,10 @@ final class NoteDetailViewModel {
     /// Bumped when `childNotes` reloads so SwiftUI re-evaluates geo-map routing (uses cached child attributes).
     private(set) var geoMapDetectionTick = 0
 
-    let noteId: String
+    /// Mutable so the view model can survive an offline → server id swap
+    /// (`.trinoteOfflineNoteIdReplaced`) without being torn down and rebuilt.
+    /// See `migrateAfterOfflineIdReplacement(to:)`.
+    private(set) var noteId: String
     private let appState: AppState
     /// From the tree when opening a note whose children are in memory but not (yet) in SwiftData — critical offline.
     @ObservationIgnored private let seedChildSummaries: [ChildNoteSummary]?
@@ -83,6 +86,23 @@ final class NoteDetailViewModel {
         self.noteId = noteId
         self.appState = appState
         self.seedChildSummaries = seedChildSummaries
+    }
+
+    /// Called when `.trinoteOfflineNoteIdReplaced` swaps an offline `ol_*` id for a server id while this
+    /// note is currently being viewed/edited. Updates the in-memory id and re-pulls the cached note from
+    /// persistence (which has already been renamed by `applyOfflineNoteCreationServerResult`, including
+    /// drafts via `remapLocalNoteIdReferences`). Avoids destroying and rebuilding the view model, which
+    /// otherwise causes a visible read-mode flash and aborts any in-progress edit setup.
+    func migrateAfterOfflineIdReplacement(to newId: String) {
+        guard newId != noteId else { return }
+        noteId = newId
+        loadFromCache()
+        loadContentFromCache()
+        // Receiving this notification proves the server accepted the create
+        // (see `AppState.flushPendingNoteCreationsIfPossible`), so flip the
+        // toolbar's `icloud.slash` indicator off in real time instead of
+        // waiting for the next user-initiated refresh.
+        serverVerified = true
     }
 
     var client: (any TriliumClientProtocol)? { appState.client }
@@ -1501,6 +1521,11 @@ final class NoteDetailViewModel {
 
     func restoreDraft() {
         isEditing = true
+        startDraftAutoSave()
+        editorDisplayContent = nil
+        Task { [weak self] in
+            await self?.prepareEditorDisplayContent()
+        }
     }
 
     func discardDraft() {
@@ -1598,6 +1623,12 @@ final class NoteDetailViewModel {
         flushPendingEditorContent()
         guard let profileId = self.serverProfileId else { return }
         try? self.persistence.saveDraft(noteId: self.noteId, content: self.editableContent, serverProfileId: profileId)
+    }
+
+    /// Saves in-progress edits when leaving the screen or backgrounding the app.
+    func persistEditingDraftIfNeeded() {
+        guard isEditing else { return }
+        saveDraftLocally()
     }
 
     // MARK: - Saving
@@ -2015,8 +2046,8 @@ final class NoteDetailViewModel {
 
     func createChildNote() async -> String? {
         let nid = self.noteId
-        let trimmed = self.newNoteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let profileId = serverProfileId else { return nil }
+        let title = NoteCreationTitle.resolved(from: self.newNoteTitle)
+        guard let profileId = serverProfileId else { return nil }
         guard appState.isAuthenticated else {
             self.saveError = String(localized: "Sign in to create notes.", comment: "Error when creating child offline without session")
             self.showSaveError = true
@@ -2033,7 +2064,7 @@ final class NoteDetailViewModel {
         do {
             let (newId, _) = try persistence.createOfflineChildNote(
                 parentNoteId: nid,
-                title: trimmed,
+                title: title,
                 noteType: storageType,
                 mime: mime,
                 initialContent: initial,

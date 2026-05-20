@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
 
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
+    @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @State private var showClearCacheConfirm = false
     @State private var showClearAllInstancesCacheConfirm = false
     @State private var showResetColorsConfirm = false
@@ -141,6 +142,11 @@ struct SettingsView: View {
 
     private var treeViewSection: some View {
         Section(String(localized: "Tree View", comment: "Settings section")) {
+            Toggle(
+                String(localized: "Show tab bar", comment: "Settings: show open-note tab strip at bottom of tree"),
+                isOn: $showNoteTabsBar
+            )
+
             Toggle(String(localized: "Use Trilium Note Colors", comment: "Settings: per-note colors from server"), isOn: $useTriliumNoteColors)
 
             Toggle(String(localized: "Custom Tree Colors", comment: "Settings"), isOn: $useCustomTreeColors)

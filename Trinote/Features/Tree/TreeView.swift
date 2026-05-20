@@ -1083,7 +1083,10 @@ private struct CreateChildNoteFromTreeSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField(String(localized: "Note Title", comment: "New note from tree"), text: $newNoteTitle)
+                TextField(
+                    String(localized: "Note Title (leave blank for default)", comment: "New note from tree"),
+                    text: $newNoteTitle
+                )
                     .textInputAutocapitalization(.sentences)
 
                 Picker(String(localized: "Type", comment: "New note type"), selection: $newNoteType) {
@@ -1092,6 +1095,7 @@ private struct CreateChildNoteFromTreeSheet: View {
                     Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
                     Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
                     Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
+                    Text(String(localized: "Spreadsheet", comment: "Note type")).tag(NoteType.spreadsheet)
                     Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
                     Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
                 }
@@ -1109,7 +1113,7 @@ private struct CreateChildNoteFromTreeSheet: View {
                     Button(String(localized: "Create", comment: "New note sheet")) {
                         Task { await createAndDismiss() }
                     }
-                    .disabled(newNoteTitle.trimmingCharacters(in: .whitespaces).isEmpty || isCreating)
+                    .disabled(isCreating)
                 }
             }
         }
@@ -1117,19 +1121,19 @@ private struct CreateChildNoteFromTreeSheet: View {
     }
 
     private func createAndDismiss() async {
-        guard !newNoteTitle.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         isCreating = true
         defer { isCreating = false }
 
+        let title = NoteCreationTitle.resolved(from: newNoteTitle)
         let noteId = await viewModel.createChildNote(
             parentNoteId: parentNote.noteId,
-            title: newNoteTitle,
+            title: title,
             type: newNoteType
         )
         onDismiss()
         dismiss()
         if let noteId {
-            onNoteCreated?(noteId, newNoteTitle)
+            onNoteCreated?(noteId, title)
         }
     }
 }
