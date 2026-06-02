@@ -345,6 +345,10 @@ final class PersistenceManager {
         }
     }
 
+    func fetchCachedBranch(branchId: String, serverProfileId: String) throws -> CachedBranch? {
+        try fetchCachedBranchById(branchId: branchId, serverProfileId: serverProfileId)
+    }
+
     private func fetchCachedBranchById(branchId: String, serverProfileId: String) throws -> CachedBranch? {
         let bid = branchId
         let profileId = serverProfileId
@@ -1391,7 +1395,7 @@ final class PersistenceManager {
 
         try deletePendingNoteBodyUpload(noteId: noteId, serverProfileId: profileId)
         try deletePendingNotePatch(noteId: noteId, serverProfileId: profileId)
-        try deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
+        try deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId, clearGhost: false)
 
         let pending = PendingNoteDeletion(
             serverProfileId: profileId,
@@ -1696,13 +1700,15 @@ final class PersistenceManager {
     }
 
     /// Deletes cached notes (and their branches/attributes) for the profile.
-    func deleteCachedNotes(noteIds: [String], serverProfileId: String) throws {
-        try deleteCachedNotes(noteIds: Set(noteIds), serverProfileId: serverProfileId)
+    func deleteCachedNotes(noteIds: [String], serverProfileId: String, clearGhost: Bool = true) throws {
+        try deleteCachedNotes(noteIds: Set(noteIds), serverProfileId: serverProfileId, clearGhost: clearGhost)
     }
 
-    func deleteCachedNotes(noteIds: Set<String>, serverProfileId: String) throws {
+    func deleteCachedNotes(noteIds: Set<String>, serverProfileId: String, clearGhost: Bool = true) throws {
         let profileId = serverProfileId
         for noteId in noteIds {
+            try purgeNoteFromAuxiliaryStores(noteId: noteId, serverProfileId: profileId, clearGhost: clearGhost)
+
             let nid = noteId
             let pid = profileId
 
@@ -1722,6 +1728,155 @@ final class PersistenceManager {
             attrs.forEach { context.delete($0) }
         }
         try context.save()
+    }
+
+    func pendingDeletionNoteIds(serverProfileId: String) throws -> Set<String> {
+        Set(try fetchPendingNoteDeletions(serverProfileId: serverProfileId).map(\.noteId))
+    }
+
+    /// Removes recents, favorites, tabs, drafts, images, and optionally ghost IDs for a note (no save).
+    func purgeNoteFromAuxiliaryStores(noteId: String, serverProfileId: String, clearGhost: Bool = true) throws {
+        let compositeId = "\(serverProfileId):\(noteId)"
+        let profileId = serverProfileId
+        let nid = noteId
+
+        var recentDesc = FetchDescriptor<RecentNote>(predicate: #Predicate { $0.id == compositeId })
+        recentDesc.fetchLimit = 1
+        if let recent = try context.fetch(recentDesc).first {
+            context.delete(recent)
+        }
+
+        var favDesc = FetchDescriptor<FavoriteNote>(predicate: #Predicate { $0.id == compositeId })
+        favDesc.fetchLimit = 1
+        if let fav = try context.fetch(favDesc).first {
+            context.delete(fav)
+        }
+
+        let tabs = try context.fetch(
+            FetchDescriptor<OpenNoteTab>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId }
+            )
+        )
+        tabs.forEach { context.delete($0) }
+
+        var draftDesc = FetchDescriptor<DraftContent>(predicate: #Predicate { $0.id == compositeId })
+        draftDesc.fetchLimit = 1
+        if let draft = try context.fetch(draftDesc).first {
+            context.delete(draft)
+        }
+
+        let images = try context.fetch(
+            FetchDescriptor<CachedImageData>(
+                predicate: #Predicate { $0.entityId == nid && $0.serverProfileId == profileId }
+            )
+        )
+        images.forEach { context.delete($0) }
+
+        if clearGhost {
+            GhostNoteTracker.shared.remove(noteId, serverProfileId: serverProfileId)
+        }
+    }
+
+    /// Removes cached branches under `parentNoteId` absent from the live API tree, then deletes
+    /// note rows that no longer have any branch placements (unless listed in `hiddenNoteIds`).
+    @discardableResult
+    func pruneStaleBranchesUnderParent(
+        parentNoteId: String,
+        liveBranchIds: Set<String>,
+        serverProfileId: String,
+        hiddenNoteIds: Set<String>
+    ) throws -> Int {
+        let parentId = parentNoteId
+        let profileId = serverProfileId
+        let cachedPairs = try fetchCachedChildren(parentNoteId: parentId, serverProfileId: profileId)
+        var pruned = 0
+        var noteIdsToCheck: Set<String> = []
+
+        for (branch, _) in cachedPairs where !liveBranchIds.contains(branch.branchId) {
+            let branchId = branch.branchId
+            let rows = try context.fetch(
+                FetchDescriptor<CachedBranch>(
+                    predicate: #Predicate { $0.branchId == branchId && $0.serverProfileId == profileId }
+                )
+            )
+            rows.forEach { context.delete($0) }
+            pruned += 1
+            noteIdsToCheck.insert(branch.noteId)
+        }
+
+        var notesDeleted = 0
+        for noteId in noteIdsToCheck where !hiddenNoteIds.contains(noteId) {
+            let nid = noteId
+            let remaining = try context.fetch(
+                FetchDescriptor<CachedBranch>(
+                    predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId }
+                )
+            )
+            if remaining.isEmpty {
+                try deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
+                notesDeleted += 1
+            }
+        }
+
+        if pruned > 0 {
+            try reconcileCachedNoteBranchesMetadata(forNoteId: parentNoteId, serverProfileId: profileId)
+        } else if notesDeleted > 0 {
+            try reconcileCachedNoteBranchesMetadata(forNoteId: parentNoteId, serverProfileId: profileId)
+        }
+
+        if pruned > 0 || notesDeleted > 0 {
+            try context.save()
+        }
+        return pruned + notesDeleted
+    }
+
+    /// Removes one branch placement, refreshes the parent's tree id lists, and deletes the note row when it has no branches left.
+    func deleteCachedBranchAndReconcilePlacement(
+        branchId: String,
+        noteId: String,
+        parentNoteId: String,
+        serverProfileId: String,
+        hiddenNoteIds: Set<String>
+    ) throws {
+        try deleteCachedBranch(branchId: branchId, serverProfileId: serverProfileId)
+        try reconcileCachedNoteBranchesMetadata(forNoteId: parentNoteId, serverProfileId: serverProfileId)
+        let nid = noteId
+        let pid = serverProfileId
+        let remaining = try context.fetch(
+            FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
+            )
+        )
+        if remaining.isEmpty, !hiddenNoteIds.contains(noteId) {
+            try deleteCachedNotes(noteIds: [noteId], serverProfileId: serverProfileId)
+        } else {
+            try context.save()
+        }
+    }
+
+    /// Rebuilds one note's parent/child id lists from `CachedBranch` rows (cheap targeted reconcile).
+    func reconcileCachedNoteBranchesMetadata(forNoteId noteId: String, serverProfileId: String) throws {
+        guard let note = try fetchCachedNote(id: noteId, serverProfileId: serverProfileId) else { return }
+        let profileId = serverProfileId
+        let nid = noteId
+
+        let childBranches = try context.fetch(
+            FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.parentNoteId == nid && $0.serverProfileId == profileId },
+                sortBy: [SortDescriptor(\.notePosition)]
+            )
+        )
+        note.childBranchIds = childBranches.map(\.branchId)
+        note.childNoteIds = childBranches.map(\.noteId)
+
+        let parentBranches = try context.fetch(
+            FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId },
+                sortBy: [SortDescriptor(\.branchId)]
+            )
+        )
+        note.parentBranchIds = parentBranches.map(\.branchId)
+        note.parentNoteIds = parentBranches.map(\.parentNoteId)
     }
 
     /// Returns note IDs from `serverModifiedAfter` that need their content downloaded.

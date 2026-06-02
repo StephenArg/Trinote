@@ -106,13 +106,12 @@ struct TreeView: View {
         treeBgColor ?? Color(.systemGroupedBackground)
     }
 
-    /// Keep refresh disabled during active refresh/sync, except allow retry after failures (sync or session).
+    /// Keep refresh disabled only while sync is actively running, except allow retry after failures.
     private var canTriggerRefresh: Bool {
         let sync = appState.syncManager
         if sync.syncError != nil { return true }
         if appState.connectionError != nil { return true }
-        if sync.isSyncing { return false }
-        return !(viewModel?.isRefreshing ?? false)
+        return !sync.isSyncing
     }
 
     var body: some View {
@@ -563,6 +562,13 @@ struct TreeView: View {
         Task { await refreshWithSync() }
     }
 
+    /// Shared by pull-to-refresh and the toolbar refresh button.
+    private func refreshWithSync() async {
+        await self.appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
+        self.viewModel?.pruneDeletedNodes()
+        await self.viewModel?.refreshFromServerIfOnline()
+    }
+
     /// Process-wide flag so we only auto-open a tab on the first qualifying root-tree appearance per app launch.
     /// Re-arms when the profile changes (multi-account switch) so the new profile gets its own one-shot restore.
     private static var autoRestoreOpenTabHandledForProfileId: String?
@@ -604,11 +610,6 @@ struct TreeView: View {
         if navigateToNote == nil, navigateToNoteForEdit == nil, drillDownTarget == nil, tabsBarNav == nil {
             tabsBarNav = NoteNavItem(noteId: tab.noteId, title: tab.title, openTabId: tab.id)
         }
-    }
-
-    private func refreshWithSync() async {
-        await self.appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
-        await self.viewModel?.refresh()
     }
 
     @ViewBuilder

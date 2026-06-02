@@ -57,4 +57,14 @@ final class ExtensionsTests: XCTestCase {
         let display = Date().shortDisplay
         XCTAssertFalse(display.isEmpty)
     }
+
+    // MARK: - Offline local note ids
+
+    func testIsOfflineLocalNoteId() {
+        XCTAssertTrue("ol_abc123".isOfflineLocalNoteId)
+        XCTAssertTrue("ol_".isOfflineLocalNoteId)
+        XCTAssertFalse("root".isOfflineLocalNoteId)
+        XCTAssertFalse("n1".isOfflineLocalNoteId)
+        XCTAssertFalse("".isOfflineLocalNoteId)
+    }
 }

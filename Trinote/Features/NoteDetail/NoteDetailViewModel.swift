@@ -51,6 +51,8 @@ final class NoteDetailViewModel {
 
     // Delete
     var showDeleteConfirm = false
+    /// Set when refresh discovers the note was deleted on the server; the view should dismiss.
+    private(set) var shouldDismissAfterServerDeletion = false
 
     // Details panel
     var showDetails = false
@@ -260,6 +262,12 @@ final class NoteDetailViewModel {
 
         rebuildBreadcrumbsFromCache()
 
+        // Pending local creates are not on the server yet — same stall as offline when interface is “up”.
+        if nid.isOfflineLocalNoteId {
+            Log.noteDiag.info("NoteDiag READ phase=load.skipServer noteId=\(nid) reason=offlineLocalPlaceholder")
+            return
+        }
+
         // Do not await getNote while offline — same long URLSession stall as bootstrap “Connecting…”.
         if !appState.isOnline {
             Log.noteDiag.info("NoteDiag READ phase=load.skipServer noteId=\(nid) reason=offline")
@@ -274,6 +282,10 @@ final class NoteDetailViewModel {
 
         do {
             let response = try await client.getNote(nid)
+            if response.isDeleted {
+                handleServerDeletedNote(noteId: nid)
+                return
+            }
             Log.noteDiag.info("\(NoteDiagnostics.describeNoteResponse(response, phase: "load.getNote.success"))")
             let fresh = NoteItem(from: response)
             self.note = fresh
@@ -293,6 +305,10 @@ final class NoteDetailViewModel {
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError {
+                return
+            }
+            if case .notFound = apiError {
+                handleServerDeletedNote(noteId: nid)
                 return
             }
             Log.api.error("Failed to load note: \(error)")
@@ -341,6 +357,20 @@ final class NoteDetailViewModel {
         }
 
         self.checkForDraft()
+
+        if nid.isOfflineLocalNoteId {
+            let trimmed = (self.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let offlineLocalLog = NoteDiagnostics.describeContentState(
+                phase: "loadContent.skipServer.offlineLocalPlaceholder",
+                noteId: nid,
+                contentBytes: self.content?.count,
+                trimmedBodyEmpty: trimmed.isEmpty,
+                previewSource: self.rawContentString
+            )
+            Log.noteDiag.info("\(offlineLocalLog)")
+            await applyIncludeNoteResolutionIfNeeded()
+            return
+        }
 
         // When offline, rely on SwiftData only; avoid getNoteContent timeouts and a stuck loading state.
         if !appState.isOnline {
@@ -1286,12 +1316,20 @@ final class NoteDetailViewModel {
         var serverDate: String?
         do {
             let response = try await client.getNote(nid)
+            if response.isDeleted {
+                handleServerDeletedNote(noteId: nid)
+                return
+            }
             metaResponse = response
             serverDate = response.utcDateModified
             Log.noteDiag.info("\(NoteDiagnostics.describeNoteResponse(response, phase: "refresh.getNote.success"))")
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError {
+                return
+            }
+            if case .notFound = apiError {
+                handleServerDeletedNote(noteId: nid)
                 return
             }
             Log.api.error("Note detail refresh: getNote failed — leaving UI unchanged")
@@ -2084,6 +2122,15 @@ final class NoteDetailViewModel {
         }
     }
 
+    private func handleServerDeletedNote(noteId: String) {
+        self.error = String(localized: "This note was deleted on the server.", comment: "Note detail when server note is gone")
+        if let profileId = serverProfileId {
+            try? persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
+        }
+        shouldDismissAfterServerDeletion = true
+        NotificationCenter.default.post(name: .noteDeleted, object: nil, userInfo: ["noteId": noteId])
+    }
+
     func deleteNote() async -> Bool {
         let nid = self.noteId
         self.isSaving = true
@@ -2223,36 +2270,15 @@ final class NoteDetailViewModel {
 
     // MARK: - Child Notes
 
-    /// Merges every local source: `CachedBranch` rows (canonical order), `childBranchIds` on the parent note, `childNoteIds`, then notes that list this id in `parentNoteIds`.
+    /// Canonical child list: `CachedBranch` rows under this note only (not stale `CachedNote.childNoteIds`).
     private func resolvedChildNoteIdsForDetail() -> [String] {
         guard let profileId = serverProfileId else { return [] }
-        var seen = Set<String>()
-        var ordered: [String] = []
-        func append(_ ids: [String]) {
-            for id in ids {
-                guard !id.isEmpty, seen.insert(id).inserted else { continue }
-                ordered.append(id)
-            }
-        }
-        append(
-            (try? persistence.fetchChildNoteIdsOrderedFromBranches(
-                parentNoteId: noteId,
-                serverProfileId: profileId
-            )) ?? []
-        )
-        if let n = note, !n.childBranchIds.isEmpty {
-            append((try? persistence.fetchNoteIdsForChildBranchIds(branchIds: n.childBranchIds, serverProfileId: profileId)) ?? [])
-        }
-        append(note?.childNoteIds ?? [])
-        if ordered.isEmpty {
-            append(
-                (try? persistence.fetchChildNoteIdsReferencingParent(
-                    parentNoteId: noteId,
-                    serverProfileId: profileId
-                )) ?? []
-            )
-        }
-        return ordered
+        let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
+        let fromBranches = (try? persistence.fetchChildNoteIdsOrderedFromBranches(
+            parentNoteId: noteId,
+            serverProfileId: profileId
+        )) ?? []
+        return fromBranches.filter { !ghosts.contains($0) }
     }
 
     /// Fetches the parent and each direct child from the server, updates the local cache, then reloads `childNotes`.
@@ -2263,20 +2289,34 @@ final class NoteDetailViewModel {
             return
         }
         do {
-            let parentResp = try await client.getNote(noteId)
+            let (parentResp, liveBranches) = try await client.getNoteWithBranches(noteId)
+            if parentResp.isDeleted {
+                handleServerDeletedNote(noteId: noteId)
+                return
+            }
             Self.persistNoteResponse(parentResp, profileId: profileId, persistence: persistence)
             self.note = NoteItem(from: parentResp)
+            let liveBranchIds = Set(liveBranches.map(\.branchId))
+            try? persistence.pruneStaleBranchesUnderParent(
+                parentNoteId: noteId,
+                liveBranchIds: liveBranchIds,
+                serverProfileId: profileId,
+                hiddenNoteIds: TriliumSharing.hiddenSystemChildNoteIds
+            )
+            for branch in liveBranches {
+                let childId = branch.noteId
+                do {
+                    let response = try await client.getNote(childId)
+                    if response.isDeleted { continue }
+                    Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+                } catch {
+                    let apiError = APIError.from(error)
+                    if case .notFound = apiError { continue }
+                }
+            }
+            try? persistence.commitBatch()
         } catch {
         }
-        let childIds = resolvedChildNoteIdsForDetail()
-        for childId in childIds {
-            do {
-                let response = try await client.getNote(childId)
-                Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
-            } catch {
-            }
-        }
-        try? persistence.commitBatch()
         await loadChildNotes()
     }
 
@@ -2284,8 +2324,17 @@ final class NoteDetailViewModel {
     func loadChildNotes() async {
         let childIds = resolvedChildNoteIdsForDetail()
         if childIds.isEmpty {
-            if let seed = seedChildSummaries, !seed.isEmpty {
-                childNotes = seed
+            if let seed = seedChildSummaries, !seed.isEmpty, let profileId = serverProfileId {
+                childNotes = seed.filter { summary in
+                    if GhostNoteTracker.shared.contains(summary.noteId, serverProfileId: profileId) {
+                        return false
+                    }
+                    return (try? persistence.fetchCachedBranch(
+                        noteId: summary.noteId,
+                        parentNoteId: noteId,
+                        serverProfileId: profileId
+                    )) != nil
+                }
             } else {
                 childNotes = []
             }
@@ -2323,30 +2372,27 @@ final class NoteDetailViewModel {
             return
         }
         var results: [ChildNoteSummary] = []
-        let missingMetaTitle = String(localized: "Sub-note", comment: "Child row title when this note is not in the local database yet (offline or not synced)")
         for childId in childNoteIds {
-            if let cached = try? self.persistence.fetchCachedNote(id: childId, serverProfileId: profileId) {
-                let cachedAttrs = (try? self.persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
-                let iconClass = cachedAttrs.first { $0.name == "iconClass" }?.value
-                results.append(ChildNoteSummary(
-                    noteId: cached.noteId,
-                    title: cached.title,
-                    isProtected: cached.isProtected,
-                    type: NoteType(rawValue: cached.noteType) ?? .text,
-                    iconClass: iconClass,
-                    childCount: cached.childNoteIds.count
-                ))
-            } else {
-                // Parent lists child IDs from metadata, but we never stored a row for this child (common when only part of the tree was synced).
-                results.append(ChildNoteSummary(
-                    noteId: childId,
-                    title: missingMetaTitle,
-                    isProtected: false,
-                    type: .text,
-                    iconClass: nil,
-                    childCount: 0
-                ))
+            if GhostNoteTracker.shared.contains(childId, serverProfileId: profileId) {
+                continue
             }
+            guard let cached = try? self.persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else {
+                continue
+            }
+            let cachedAttrs = (try? self.persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
+            let iconClass = cachedAttrs.first { $0.name == "iconClass" }?.value
+            let childBranchCount = (try? persistence.fetchChildNoteIdsOrderedFromBranches(
+                parentNoteId: childId,
+                serverProfileId: profileId
+            ).count) ?? cached.childBranchIds.count
+            results.append(ChildNoteSummary(
+                noteId: cached.noteId,
+                title: cached.title,
+                isProtected: cached.isProtected,
+                type: NoteType(rawValue: cached.noteType) ?? .text,
+                iconClass: iconClass,
+                childCount: childBranchCount
+            ))
         }
         self.childNotes = results
         geoMapDetectionTick &+= 1

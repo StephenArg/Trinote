@@ -6,7 +6,7 @@ final class TreeLogicTests: XCTestCase {
     // MARK: - NoteItem
 
     func testNoteItemFromResponse() {
-        let response = TestFixtures.noteResponse(id: "n1", title: "Hello", childNoteIds: ["c1"])
+        let response = TestFixtures.noteResponse(id: "n1", title: "Hello", childNoteIds: ["c1"], childBranchIds: ["b1"])
         let item = NoteItem(from: response)
         XCTAssertEqual(item.noteId, "n1")
         XCTAssertEqual(item.title, "Hello")

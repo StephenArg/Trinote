@@ -18,7 +18,8 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     let attributes: [AttributeItem]
 
     var id: String { noteId }
-    var hasChildren: Bool { !childNoteIds.isEmpty }
+    /// Branch placements are canonical; `childNoteIds` alone can be stale after a server delete until reconcile runs.
+    var hasChildren: Bool { !childBranchIds.isEmpty }
     var isRoot: Bool { noteId == "root" }
 
     var iconClass: String? {

@@ -54,6 +54,7 @@ struct MainTabView: View {
             Task {
                 let refreshed = await appState.refreshTriliumSession()
                 await appState.flushPendingLocalChangesIfPossible(assumeSessionIsReady: refreshed)
+                await appState.runIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
             }
         }
     }

@@ -27,6 +27,11 @@ private struct MoveNoteDetailConfirm {
     let targetParentBranchId: String
 }
 
+private struct NoteEditTarget: Hashable {
+    let noteId: String
+    let title: String
+}
+
 struct NoteDetailView: View {
     let noteId: String
     let title: String
@@ -81,6 +86,7 @@ struct NoteDetailView: View {
     @State private var activeNoteId: String
     @State private var viewModel: NoteDetailViewModel?
     @State private var navigateToNoteId: String?
+    @State private var navigateToNoteForEdit: NoteEditTarget?
 
     // Inline image insertion state
     @State private var showEditorImageSourceDialog = false
@@ -608,6 +614,9 @@ struct NoteDetailView: View {
             .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
                 NoteDetailView(noteId: linkedNoteId, title: "", startInEditMode: false)
             }
+            .navigationDestination(item: $navigateToNoteForEdit) { target in
+                NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if showNoteTabsBar, openNoteTabListNonEmpty, viewModel?.isEditing != true {
                     NoteTabsBar(
@@ -624,6 +633,9 @@ struct NoteDetailView: View {
             .toolbar(viewModel?.isEditing == true ? .hidden : .visible, for: .tabBar)
             .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing == true)
             .onChange(of: viewModel?.note?.noteId) { _, _ in refreshOpenNoteTabListNonEmpty() }
+            .onChange(of: viewModel?.shouldDismissAfterServerDeletion) { _, shouldDismiss in
+                if shouldDismiss == true { dismiss() }
+            }
             .onChange(of: showNoteTabsBar) { _, _ in refreshOpenNoteTabListNonEmpty() }
             .onChange(of: activeOpenTabId) { _, newTab in
                 if let newTab {
@@ -1017,9 +1029,7 @@ struct NoteDetailView: View {
                     return
                 }
                 Task {
-                    await vm.refreshDirectChildrenMetadataFromServer()
-                    guard let parent = vm.note else { return }
-                    loadGeoMapPins(vm: vm, note: parent)
+                    loadGeoMapPins(vm: vm, note: n)
                 }
             }
     }
@@ -1223,13 +1233,25 @@ struct NoteDetailView: View {
             .toolbar { noteToolbar(vm, note: note) }
             .onAppear { loadFavoriteNoteIds() }
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteNoteIds() }
+            .onReceive(NotificationCenter.default.publisher(for: .trinoteTreeShouldRefresh)) { _ in
+                guard let vm = viewModel else { return }
+                Task {
+                    await vm.refreshDirectChildrenMetadataFromServer()
+                    guard let n = vm.note else { return }
+                    if isGeoMapNote(n, contentString: vm.contentString, vm: vm) {
+                        loadGeoMapPins(vm: vm, note: n)
+                    }
+                }
+            }
             .alert(String(localized: "Error", comment: "Save error alert"), isPresented: $vm.showSaveError) {
                 Button(String(localized: "OK", comment: "Alert dismiss")) { vm.showSaveError = false }
             } message: {
                 Text(vm.saveError ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
             }
             .sheet(isPresented: $vm.showCreateChild) {
-                CreateChildNoteSheet(viewModel: vm)
+                CreateChildNoteSheet(viewModel: vm) { noteId, title in
+                    navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
+                }
             }
             .fullScreenCover(isPresented: Binding(
                 get: { vm.isEditing && note.type == .spreadsheet && horizontalSizeClass != .regular },
@@ -2927,6 +2949,7 @@ struct NewNoteTypePicker: View {
 
 struct CreateChildNoteSheet: View {
     @Bindable var viewModel: NoteDetailViewModel
+    var onNoteCreated: ((String, String) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
 
@@ -2956,13 +2979,21 @@ struct CreateChildNoteSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(String(localized: "Create", comment: "New child sheet")) {
-                        Task { _ = await viewModel.createChildNote() }
+                        Task { await createAndDismiss() }
                     }
                     .disabled(viewModel.isSaving)
                 }
             }
         }
         .presentationDetents([.medium])
+    }
+
+    private func createAndDismiss() async {
+        let title = NoteCreationTitle.resolved(from: viewModel.newNoteTitle)
+        if let noteId = await viewModel.createChildNote() {
+            dismiss()
+            onNoteCreated?(noteId, title)
+        }
     }
 }
 

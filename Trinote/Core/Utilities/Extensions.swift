@@ -101,6 +101,18 @@ final class GhostNoteTracker: @unchecked Sendable {
         lock.unlock()
     }
 
+    func remove(_ noteId: String, serverProfileId: String) {
+        lock.lock()
+        var s = workingSet(for: serverProfileId)
+        guard s.remove(noteId) != nil else {
+            lock.unlock()
+            return
+        }
+        memory[serverProfileId] = s
+        Self.writeDisk(serverProfileId, s)
+        lock.unlock()
+    }
+
     func contains(_ noteId: String, serverProfileId: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -266,6 +278,13 @@ extension Data {
         }
         return str.hasPrefix("<svg") || (str.hasPrefix("<?xml") && str.contains("<svg"))
     }
+}
+
+// MARK: - Offline local note ids
+
+extension String {
+    /// True for placeholder ids assigned by `createOfflineChildNote` before server sync (`ol_*`).
+    var isOfflineLocalNoteId: Bool { hasPrefix("ol_") }
 }
 
 // MARK: - Note creation title

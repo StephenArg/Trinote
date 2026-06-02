@@ -457,12 +457,16 @@ final class AppState {
             do {
                 try await client.deleteNote(row.noteId)
                 try persistence.deletePendingNoteDeletion(id: row.id, serverProfileId: profileId)
+                GhostNoteTracker.shared.add(row.noteId, serverProfileId: profileId)
+                try? persistence.deleteCachedNotes(noteIds: [row.noteId], serverProfileId: profileId, clearGhost: false)
                 didAny = true
                 Log.sync.info("Flushed offline-queued deletion for note \(row.noteId)")
             } catch {
                 let apiErr = APIError.from(error)
                 if case .notFound = apiErr {
                     try? persistence.deletePendingNoteDeletion(id: row.id, serverProfileId: profileId)
+                    GhostNoteTracker.shared.add(row.noteId, serverProfileId: profileId)
+                    try? persistence.deleteCachedNotes(noteIds: [row.noteId], serverProfileId: profileId, clearGhost: false)
                     didAny = true
                     Log.sync.info("Note \(row.noteId) already deleted on server, removed queue entry")
                 } else {
@@ -692,6 +696,7 @@ final class AppState {
                 guard let self else { return }
                 Task { @MainActor in
                     guard let c = self.client, let pid = self.activeProfile?.id else { return }
+                    await self.flushPendingNoteDeletionsIfPossible(assumeSessionIsReady: true)
                     if let iid = try? await self.keychain.loadTriliumInstanceId(forServer: pid) {
                         self.syncManager.incrementalSync(client: c, profileId: pid, triliumInstanceId: iid)
                     }

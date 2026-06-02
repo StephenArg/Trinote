@@ -15,13 +15,16 @@ final class PersistenceTests: XCTestCase {
             CachedAttribute.self,
             RecentNote.self,
             OpenNoteTab.self,
+            FavoriteNote.self,
             RecentSearch.self,
             DraftContent.self,
             PendingNoteCreation.self,
-            PendingNoteBodyUpload.self,
-            PendingBranchMove.self,
-            SyncStatus.self,
-        ])
+                PendingNoteBodyUpload.self,
+                PendingBranchMove.self,
+                PendingNoteDeletion.self,
+                SyncStatus.self,
+                CachedImageData.self,
+            ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try! ModelContainer(for: schema, configurations: [config])
         persistence = PersistenceManager(container: container)
@@ -227,6 +230,110 @@ final class PersistenceTests: XCTestCase {
 
     // MARK: - Cleanup
 
+    func testDeleteCachedNotesPurgesAuxiliaryStores() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1", title: "Note"), serverProfileId: "s1")
+        try persistence.commitBatch()
+        try persistence.recordRecentNote(noteId: "n1", title: "Note", noteType: "text", serverProfileId: "s1")
+        try persistence.addFavorite(noteId: "n1", title: "Note", noteType: "text", serverProfileId: "s1")
+        _ = try persistence.addOpenNoteTab(noteId: "n1", title: "Note", noteType: "text", serverProfileId: "s1")
+        try persistence.saveDraft(noteId: "n1", content: "draft", serverProfileId: "s1")
+        try persistence.cacheImage(entityId: "n1", entityType: "notes", data: Data("x".utf8), mime: "image/png", serverProfileId: "s1")
+        GhostNoteTracker.shared.add("n1", serverProfileId: "s1")
+
+        try persistence.deleteCachedNotes(noteIds: ["n1"], serverProfileId: "s1")
+
+        XCTAssertNil(try persistence.fetchCachedNote(id: "n1", serverProfileId: "s1"))
+        XCTAssertEqual(try persistence.fetchRecentNotes(serverProfileId: "s1").count, 0)
+        XCTAssertEqual(try persistence.fetchFavorites(serverProfileId: "s1").count, 0)
+        XCTAssertEqual(try persistence.fetchOpenNoteTabs(serverProfileId: "s1").count, 0)
+        XCTAssertNil(try persistence.loadDraft(noteId: "n1", serverProfileId: "s1"))
+        XCTAssertNil(try persistence.fetchCachedImage(entityId: "n1", entityType: "notes", serverProfileId: "s1"))
+        XCTAssertFalse(GhostNoteTracker.shared.contains("n1", serverProfileId: "s1"))
+    }
+
+    func testOfflineQueuedDeletionPreservesGhost() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1", title: "Note"), serverProfileId: "s1")
+        try persistence.cacheBranch(
+            from: TestFixtures.branchResponse(branchId: "b1", noteId: "n1", parentNoteId: "root"),
+            serverProfileId: "s1"
+        )
+        try persistence.commitBatch()
+
+        try persistence.enqueueOfflineNoteDeletion(noteId: "n1", serverProfileId: "s1")
+
+        XCTAssertNil(try persistence.fetchCachedNote(id: "n1", serverProfileId: "s1"))
+        XCTAssertTrue(GhostNoteTracker.shared.contains("n1", serverProfileId: "s1"))
+        XCTAssertEqual(try persistence.pendingDeletionNoteIds(serverProfileId: "s1"), ["n1"])
+    }
+
+    func testPruneStaleBranchesUnderParentRemovesOrphanedNote() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1", title: "Gone"), serverProfileId: "s1")
+        try persistence.cacheBranch(
+            from: TestFixtures.branchResponse(branchId: "b1", noteId: "n1", parentNoteId: "root"),
+            serverProfileId: "s1"
+        )
+        try persistence.commitBatch()
+
+        let pruned = try persistence.pruneStaleBranchesUnderParent(
+            parentNoteId: "root",
+            liveBranchIds: [],
+            serverProfileId: "s1",
+            hiddenNoteIds: []
+        )
+
+        XCTAssertEqual(pruned, 2)
+        XCTAssertEqual(try persistence.fetchCachedChildren(parentNoteId: "root", serverProfileId: "s1").count, 0)
+        XCTAssertNil(try persistence.fetchCachedNote(id: "n1", serverProfileId: "s1"))
+    }
+
+    func testPruneStaleBranchesUnderParentKeepsNoteWithOtherPlacements() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1", title: "Clone"), serverProfileId: "s1")
+        try persistence.cacheBranch(
+            from: TestFixtures.branchResponse(branchId: "b-root", noteId: "n1", parentNoteId: "root"),
+            serverProfileId: "s1"
+        )
+        try persistence.cacheBranch(
+            from: TestFixtures.branchResponse(branchId: "b-other", noteId: "n1", parentNoteId: "other"),
+            serverProfileId: "s1"
+        )
+        try persistence.commitBatch()
+
+        let pruned = try persistence.pruneStaleBranchesUnderParent(
+            parentNoteId: "root",
+            liveBranchIds: [],
+            serverProfileId: "s1",
+            hiddenNoteIds: []
+        )
+
+        XCTAssertEqual(pruned, 1)
+        XCTAssertNil(try persistence.fetchCachedBranch(noteId: "n1", parentNoteId: "root", serverProfileId: "s1"))
+        XCTAssertNotNil(try persistence.fetchCachedNote(id: "n1", serverProfileId: "s1"))
+        XCTAssertNotNil(try persistence.fetchCachedBranch(noteId: "n1", parentNoteId: "other", serverProfileId: "s1"))
+    }
+
+    func testDeleteCachedBranchAndReconcilePlacementUpdatesParent() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "parent", title: "Parent", childNoteIds: ["child"], childBranchIds: ["b1"]), serverProfileId: "s1")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "child", title: "Child"), serverProfileId: "s1")
+        try persistence.cacheBranch(
+            from: TestFixtures.branchResponse(branchId: "b1", noteId: "child", parentNoteId: "parent"),
+            serverProfileId: "s1"
+        )
+        try persistence.commitBatch()
+
+        try persistence.deleteCachedBranchAndReconcilePlacement(
+            branchId: "b1",
+            noteId: "child",
+            parentNoteId: "parent",
+            serverProfileId: "s1",
+            hiddenNoteIds: []
+        )
+
+        let parent = try persistence.fetchCachedNote(id: "parent", serverProfileId: "s1")
+        XCTAssertEqual(parent?.childBranchIds, [])
+        XCTAssertEqual(parent?.childNoteIds, [])
+        XCTAssertNil(try persistence.fetchCachedNote(id: "child", serverProfileId: "s1"))
+    }
+
     func testClearCache() throws {
         try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1"), serverProfileId: "s1")
         try persistence.commitBatch()
@@ -248,5 +355,34 @@ final class PersistenceTests: XCTestCase {
 
         XCTAssertNil(try persistence.fetchCachedNote(id: "n1", serverProfileId: "s1"))
         XCTAssertNotNil(try persistence.fetchCachedNote(id: "n2", serverProfileId: "s2"))
+    }
+
+    // MARK: - Offline note creation
+
+    func testCreateOfflineChildNoteIsImmediatelyFetchable() throws {
+        let parent = TestFixtures.noteResponse(id: "parent1", title: "Parent")
+        try persistence.cacheNote(from: parent, serverProfileId: "s1")
+        try persistence.commitBatch()
+
+        let (noteId, branchId) = try persistence.createOfflineChildNote(
+            parentNoteId: "parent1",
+            title: "New Child",
+            noteType: "text",
+            mime: "text/html",
+            initialContent: "<p>hello</p>",
+            serverProfileId: "s1"
+        )
+
+        XCTAssertTrue(noteId.isOfflineLocalNoteId)
+        XCTAssertTrue(branchId.hasPrefix("olb_"))
+
+        let cached = try persistence.fetchCachedNote(id: noteId, serverProfileId: "s1")
+        XCTAssertNotNil(cached)
+        XCTAssertEqual(cached?.title, "New Child")
+        XCTAssertEqual(String(data: cached?.content ?? Data(), encoding: .utf8), "<p>hello</p>")
+
+        let pending = try persistence.fetchPendingNoteCreations(serverProfileId: "s1")
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual(pending[0].localNoteId, noteId)
     }
 }

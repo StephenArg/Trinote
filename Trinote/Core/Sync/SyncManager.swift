@@ -374,6 +374,24 @@ final class SyncManager {
                 Log.sync.warning("Incremental sync: stopped after \(Self.maxSyncPullIterations) pull iterations (safety cap)")
             }
 
+            // Lightweight safety net: compare live API branches under root with cache so deletions
+            // missed by the entity-change stream (cursor gaps, etc.) still purge local rows.
+            var reconcilePruned = 0
+            do {
+                reconcilePruned = try await self.reconcileScopedBranchPlacements(
+                    client: client,
+                    profileId: profileId,
+                    parentNoteIds: ["root"]
+                )
+                if reconcilePruned > 0 {
+                    deletionCount += reconcilePruned
+                }
+            } catch {
+                let apiError = APIError.from(error)
+                if case .cancelled = apiError { return }
+                Log.sync.warning("Incremental sync: scoped branch reconcile failed: \(error)")
+            }
+
             // Do not run `reconcileCachedNoteBranchesMetadata` here — it walks the entire branch/note tables on every
             // incremental run and can block the main actor for a long time. Full sync already reconciles; incremental
             // updates come from `applyBranchRow` / `applyNoteRow`.
@@ -432,6 +450,38 @@ final class SyncManager {
         }
     }
 
+    /// Compares live API child branches with SwiftData under each parent and prunes stale placements.
+    private func reconcileScopedBranchPlacements(
+        client: any TriliumClientProtocol,
+        profileId: String,
+        parentNoteIds: [String]
+    ) async throws -> Int {
+        var totalPruned = 0
+        for parentId in parentNoteIds {
+            let (_, liveBranches) = try await client.getNoteWithBranches(parentId)
+            let liveBranchIds = Set(liveBranches.map(\.branchId))
+            let cachedCount = (try? persistence.fetchCachedChildren(
+                parentNoteId: parentId,
+                serverProfileId: profileId
+            ).count) ?? 0
+            let pruned = try persistence.pruneStaleBranchesUnderParent(
+                parentNoteId: parentId,
+                liveBranchIds: liveBranchIds,
+                serverProfileId: profileId,
+                hiddenNoteIds: Self.hiddenNoteIds
+            )
+            if pruned > 0 {
+                Log.sync.info("Scoped reconcile under \(parentId): pruned \(pruned) stale branch/note row(s)")
+            } else if cachedCount > liveBranchIds.count {
+                Log.sync.warning(
+                    "Scoped reconcile under \(parentId): cache has \(cachedCount) children but API has \(liveBranchIds.count) — no rows pruned"
+                )
+            }
+            totalPruned += pruned
+        }
+        return totalPruned
+    }
+
     // MARK: - Entity Application (from sync/pull rows)
 
     /// When the key is absent or JSON null, keep `existing`. When present (including `[]`), use the decoded array.
@@ -453,13 +503,38 @@ final class SyncManager {
         return index
     }
 
+    /// Client-deleted notes (ghost / offline queue) must not be resurrected by stale sync rows.
+    private func shouldSuppressIncomingNote(_ noteId: String, profileId: String) -> Bool {
+        if GhostNoteTracker.shared.contains(noteId, serverProfileId: profileId) { return true }
+        if let pending = try? persistence.pendingDeletionNoteIds(serverProfileId: profileId),
+           pending.contains(noteId) {
+            return true
+        }
+        return false
+    }
+
     private func applyErasedEntity(entityName: String, entityId: String, profileId: String) throws {
         switch entityName {
         case "notes":
+            let parentIds = (try? persistence.fetchCachedNote(id: entityId, serverProfileId: profileId))?.parentNoteIds ?? []
             GhostNoteTracker.shared.add(entityId, serverProfileId: profileId)
             try persistence.deleteCachedNotes(noteIds: [entityId], serverProfileId: profileId)
+            for parentId in parentIds {
+                try? persistence.reconcileCachedNoteBranchesMetadata(forNoteId: parentId, serverProfileId: profileId)
+            }
+            try? persistence.commitBatch()
         case "branches":
-            try persistence.deleteCachedBranch(branchId: entityId, serverProfileId: profileId)
+            if let branch = try? persistence.fetchCachedBranch(branchId: entityId, serverProfileId: profileId) {
+                try persistence.deleteCachedBranchAndReconcilePlacement(
+                    branchId: entityId,
+                    noteId: branch.noteId,
+                    parentNoteId: branch.parentNoteId,
+                    serverProfileId: profileId,
+                    hiddenNoteIds: Self.hiddenNoteIds
+                )
+            } else {
+                try persistence.deleteCachedBranch(branchId: entityId, serverProfileId: profileId)
+            }
         case "attributes":
             try persistence.deleteCachedAttribute(attributeId: entityId, serverProfileId: profileId)
         default:
@@ -472,9 +547,18 @@ final class SyncManager {
         guard let noteId = FlexJSON.string(d["noteId"]) else { return false }
 
         if FlexJSON.bool(d["isDeleted"]) {
+            let parentIds = (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
             GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
             try persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
+            for parentId in parentIds {
+                try? persistence.reconcileCachedNoteBranchesMetadata(forNoteId: parentId, serverProfileId: profileId)
+            }
+            try? persistence.commitBatch()
             return true
+        }
+
+        if shouldSuppressIncomingNote(noteId, profileId: profileId) {
+            return false
         }
 
         let title = d["title"] as? String ?? ""
@@ -518,9 +602,18 @@ final class SyncManager {
               let parentNoteId = FlexJSON.string(d["parentNoteId"]) else { return false }
 
         if FlexJSON.bool(d["isDeleted"]) {
-            // Branch-only delete: remove this placement; do not ghost the note (it may exist under other parents/clones).
-            try persistence.deleteCachedBranch(branchId: branchId, serverProfileId: profileId)
+            try persistence.deleteCachedBranchAndReconcilePlacement(
+                branchId: branchId,
+                noteId: noteId,
+                parentNoteId: parentNoteId,
+                serverProfileId: profileId,
+                hiddenNoteIds: Self.hiddenNoteIds
+            )
             return true
+        }
+
+        if shouldSuppressIncomingNote(noteId, profileId: profileId) {
+            return false
         }
 
         let notePosition = FlexJSON.int(d["notePosition"]) ?? 0
@@ -550,6 +643,10 @@ final class SyncManager {
             return true
         }
 
+        if shouldSuppressIncomingNote(noteId, profileId: profileId) {
+            return false
+        }
+
         let ar = AttributeResponse(
             attributeId: attributeId,
             noteId: noteId,
@@ -572,11 +669,12 @@ final class SyncManager {
         if let contentStr = d["content"] as? String,
            let data = Data(base64Encoded: contentStr) ?? contentStr.data(using: .utf8) {
             let noteId = d["noteId"] as? String
-            if let noteId {
+            if let noteId, !shouldSuppressIncomingNote(noteId, profileId: profileId) {
                 try? persistence.cacheNoteContent(noteId, content: data, serverProfileId: profileId, utcDateModified: nil)
             }
         }
-        if let noteId = FlexJSON.string(d["noteId"]) {
+        if let noteId = FlexJSON.string(d["noteId"]),
+           !shouldSuppressIncomingNote(noteId, profileId: profileId) {
             notesToRefreshUtc[noteId] = notesToRefreshUtc[noteId] ?? ""
         }
         _ = blobId

@@ -186,6 +186,16 @@ final class TreeViewModel {
             rootChildren = children
             isFromCache = false
 
+            if let profileId = serverProfileId {
+                let liveBranchIds = Set(children.map(\.branch.branchId))
+                try? persistence.pruneStaleBranchesUnderParent(
+                    parentNoteId: parentNoteId,
+                    liveBranchIds: liveBranchIds,
+                    serverProfileId: profileId,
+                    hiddenNoteIds: Self.hiddenNoteIds
+                )
+            }
+
             persistTreeBatch(rootNote: parentNote)
 
             if let profileId = serverProfileId {
@@ -354,7 +364,23 @@ final class TreeViewModel {
         rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = true }
 
         // Prefer SwiftData (updated by incremental sync) like Trilium’s local Becca/Froca read path.
-        let cached = loadCachedChildren(parentNoteId: node.note.noteId)
+        // When online, verify cached branch IDs match the live API so server-deleted children do not reappear.
+        var cached = loadCachedChildren(parentNoteId: node.note.noteId)
+        if let client, appState.isOnline, !cached.isEmpty {
+            if let (_, liveBranches) = try? await client.getNoteWithBranches(node.note.noteId) {
+                let liveBranchIds = Set(liveBranches.map(\.branchId))
+                let cachedBranchIds = Set(cached.map { $0.branch.branchId })
+                if cachedBranchIds != liveBranchIds, let profileId = serverProfileId {
+                    try? persistence.pruneStaleBranchesUnderParent(
+                        parentNoteId: node.note.noteId,
+                        liveBranchIds: liveBranchIds,
+                        serverProfileId: profileId,
+                        hiddenNoteIds: Self.hiddenNoteIds
+                    )
+                    cached = loadCachedChildren(parentNoteId: node.note.noteId)
+                }
+            }
+        }
         if !cached.isEmpty {
             rootChildren = setNodeState(branchId: branchId, in: rootChildren) {
                 $0.children = cached
@@ -382,9 +408,28 @@ final class TreeViewModel {
         }
     }
 
+    /// Pull-to-refresh / toolbar after sync: always prefer a live server tree load when online.
+    func refreshFromServerIfOnline() async {
+        noteCache.removeAll()
+        branchCache.removeAll()
+        if !appState.isOnline {
+            reloadFromCache()
+            return
+        }
+        await loadTree()
+    }
+
     func refresh() async {
         noteCache.removeAll()
         branchCache.removeAll()
+        if !appState.isOnline {
+            reloadFromCache()
+            return
+        }
+        if appState.syncManager.lastCompletedSyncUpdatedLocalDatabase {
+            reloadFromCache()
+            return
+        }
         await loadTree()
     }
 
@@ -459,7 +504,7 @@ final class TreeViewModel {
                 serverProfileId: profileId,
                 initialAttributes: attrs
             )
-            await refresh()
+            reloadFromCache()
             appState.backgroundSyncPendingChanges()
             return noteId
         } catch {
@@ -896,9 +941,22 @@ final class TreeViewModel {
                     dateCreated: "",
                     dateModified: "",
                     parentNoteIds: note.parentNoteIds,
-                    childNoteIds: note.childNoteIds,
+                    childNoteIds: (try? persistence.fetchChildNoteIdsOrderedFromBranches(
+                        parentNoteId: note.noteId,
+                        serverProfileId: profileId
+                    )) ?? note.childNoteIds,
                     parentBranchIds: note.parentBranchIds,
-                    childBranchIds: note.childBranchIds,
+                    childBranchIds: {
+                        let pid = profileId
+                        let nid = note.noteId
+                        let branches = (try? persistence.context.fetch(
+                            FetchDescriptor<CachedBranch>(
+                                predicate: #Predicate { $0.parentNoteId == nid && $0.serverProfileId == pid },
+                                sortBy: [SortDescriptor(\.notePosition)]
+                            )
+                        )) ?? []
+                        return branches.isEmpty ? note.childBranchIds : branches.map(\.branchId)
+                    }(),
                     attributes: attrs
                 )
 
