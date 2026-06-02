@@ -5,6 +5,10 @@ struct ParentPickerSheet: View {
     let navigationTitle: String
     let instruction: String
     let topLevelButtonTitle: String
+    /// When `false`, rely on `rootHeaderPlacementTitle` on the embedded tree instead of the bordered top button.
+    var showsTopLevelButton: Bool = true
+    /// Shown on the root tree header instead of **+** when picking a parent (local transfer).
+    var rootHeaderPlacementTitle: String? = nil
     /// `(parentNoteId, displayTitle, parentBranchId)` — `parentBranchId` is the tree branch for the chosen parent (see `TriliumTreeConstants.rootBranchId` for top level).
     let onPick: (String, String, String) -> Void
 
@@ -19,26 +23,29 @@ struct ParentPickerSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding()
 
-                Button {
-                    onPick(
-                        TriliumTreeConstants.rootNoteId,
-                        String(localized: "Notes", comment: "Root notebook screen title"),
-                        TriliumTreeConstants.rootBranchId
-                    )
-                } label: {
-                    Label(topLevelButtonTitle, systemImage: "tray.full")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                if showsTopLevelButton {
+                    Button {
+                        onPick(
+                            TriliumTreeConstants.rootNoteId,
+                            String(localized: "Notes", comment: "Root notebook screen title"),
+                            TriliumTreeConstants.rootBranchId
+                        )
+                    } label: {
+                        Label(topLevelButtonTitle, systemImage: "tray.full")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
                 }
-                .buttonStyle(.bordered)
-                .padding(.horizontal)
-                .padding(.bottom, 8)
 
                 TreeView(
                     parentNoteId: TriliumTreeConstants.rootNoteId,
                     parentTitle: String(localized: "Notes", comment: "Root notebook screen title"),
                     onPickParent: { noteId, title, parentBranchId in
                         onPick(noteId, title, parentBranchId)
-                    }
+                    },
+                    rootPlacementButtonTitle: rootHeaderPlacementTitle
                 )
             }
             .navigationTitle(navigationTitle)

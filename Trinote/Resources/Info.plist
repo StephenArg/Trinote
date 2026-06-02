@@ -35,6 +35,12 @@
 	<string>Trinote uses Face ID to unlock the app.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Trinote needs access to your photos to upload image attachments.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Trinote uses the local network to send and receive notes with nearby devices running Trinote.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_trinote-xfer._tcp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

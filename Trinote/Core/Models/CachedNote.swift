@@ -341,6 +341,42 @@ final class PendingBranchMove {
     }
 }
 
+/// Attachment bytes received via local transfer; uploaded after the owning note syncs to the server.
+@Model
+final class PendingAttachmentImport {
+    @Attribute(.unique) var id: String
+    var serverProfileId: String
+    var noteId: String
+    var role: String
+    var mime: String
+    var title: String
+    var position: Int
+    @Attribute(.externalStorage) var data: Data
+    var queuedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        serverProfileId: String,
+        noteId: String,
+        role: String,
+        mime: String,
+        title: String,
+        position: Int,
+        data: Data,
+        queuedAt: Date = .now
+    ) {
+        self.id = id
+        self.serverProfileId = serverProfileId
+        self.noteId = noteId
+        self.role = role
+        self.mime = mime
+        self.title = title
+        self.position = position
+        self.data = data
+        self.queuedAt = queuedAt
+    }
+}
+
 @Model
 final class SyncStatus {
     @Attribute(.unique) var id: String

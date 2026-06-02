@@ -21,6 +21,7 @@ final class AppState {
 
     let networkMonitor = NetworkMonitor.shared
     let syncManager = SyncManager()
+    let localTransfer = LocalNoteTransferService()
     private let persistence = PersistenceManager.shared
     private let keychain = KeychainManager.shared
 
@@ -51,6 +52,7 @@ final class AppState {
     /// Called when the app enters background.
     /// Starts a short background execution window if a sync is running, and persists cookies.
     func onBackground() async {
+        localTransfer.onBackground()
         syncManager.beginBackgroundTimeExtensionIfNeeded()
         await endServerProtectedSessionAndPersistCookies()
     }
@@ -139,10 +141,11 @@ final class AppState {
             for w in waiters { w.resume() }
         }
         await flushPendingNoteCreationsIfPossible(assumeSessionIsReady: assumeSessionIsReady)
+        await flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
+        await flushPendingAttachmentImportsIfPossible(assumeSessionIsReady: true)
         await flushPendingNotePatchesIfPossible(assumeSessionIsReady: true)
         await flushPendingNoteDeletionsIfPossible(assumeSessionIsReady: true)
         await flushPendingBranchMovesIfPossible(assumeSessionIsReady: true)
-        await flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
     }
 
     /// Fire-and-forget: tries to push all pending local changes to the server in the background.
@@ -160,7 +163,8 @@ final class AppState {
             let hasPatches = (try? self.persistence.fetchPendingNotePatches(serverProfileId: pid))?.isEmpty == false
             let hasDeletions = (try? self.persistence.fetchPendingNoteDeletions(serverProfileId: pid))?.isEmpty == false
             let hasUploads = (try? self.persistence.fetchPendingNoteBodyUploads(serverProfileId: pid))?.isEmpty == false
-            if hasCreations || hasPatches || hasDeletions || hasUploads {
+            let hasAttachments = (try? self.persistence.fetchPendingAttachmentImports(serverProfileId: pid))?.isEmpty == false
+            if hasCreations || hasPatches || hasDeletions || hasUploads || hasAttachments {
                 await self.flushPendingLocalChangesIfPossible()
             }
         }
@@ -624,9 +628,62 @@ final class AppState {
         }
     }
 
+    /// Uploads attachments queued from local note transfer after the owning note has a server id.
+    func flushPendingAttachmentImportsIfPossible(assumeSessionIsReady: Bool = false) async {
+        guard networkMonitor.isConnected,
+              let client,
+              let profile = activeProfile
+        else { return }
+        let profileId = profile.id
+        let pending: [PendingAttachmentImport]
+        do {
+            pending = try persistence.fetchPendingAttachmentImports(serverProfileId: profileId)
+        } catch {
+            Log.sync.warning("Failed to read pending attachment imports: \(error)")
+            return
+        }
+        guard !pending.isEmpty else { return }
+        if !assumeSessionIsReady, let tc = client as? TriliumClient {
+            do {
+                try await restoreSessionWithTimeout(client: tc, seconds: 10)
+            } catch {
+                Log.sync.warning("Pending attachment import flush skipped — session refresh failed: \(error)")
+                return
+            }
+        }
+        if protectedSessionActive {
+            try? await client.touchProtectedSession()
+        }
+        for row in pending {
+            if row.noteId.isOfflineLocalNoteId {
+                let stillPending = (try? persistence.hasPendingNoteCreation(noteId: row.noteId, serverProfileId: profileId)) ?? true
+                if stillPending { continue }
+            }
+            do {
+                let created = try await client.createAttachment(
+                    CreateAttachmentRequest(
+                        ownerId: row.noteId,
+                        role: row.role,
+                        mime: row.mime,
+                        title: row.title,
+                        content: "",
+                        position: row.position
+                    )
+                )
+                try await client.uploadAttachmentContent(created.attachmentId, data: row.data, contentType: row.mime)
+                try persistence.deletePendingAttachmentImport(id: row.id, serverProfileId: profileId)
+                Log.sync.info("Flushed local-transfer attachment for note \(row.noteId)")
+            } catch {
+                Log.sync.warning("Pending attachment import failed for note \(row.noteId): \(error)")
+                break
+            }
+        }
+    }
+
     func bootstrap() async {
         isLoading = true
         defer { isLoading = false }
+        localTransfer.configure(appState: self)
 
         do {
             if let profile = try persistence.activeProfile() {

@@ -49,6 +49,15 @@ struct MainTabView: View {
                     .tag(tab)
             }
         }
+        .overlay(alignment: .top) {
+            if let message = appState.localTransfer.successNotification {
+                LocalTransferSuccessBanner(message: message)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: appState.localTransfer.successNotification)
         .onChange(of: appState.networkMonitor.isConnected) { _, online in
             guard online, appState.isAuthenticated else { return }
             Task {

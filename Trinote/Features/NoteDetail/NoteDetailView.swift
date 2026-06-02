@@ -100,6 +100,7 @@ struct NoteDetailView: View {
     @State private var findDeepLinkConsumed = false
     @State private var noteDetailShareURLSheetItem: NoteDetailShareURLSheetItem?
     @State private var showMoveParentPicker = false
+    @State private var showShareLocally = false
     @State private var moveNoteDetailConfirm: MoveNoteDetailConfirm?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.noteDetails.rawValue
@@ -1291,6 +1292,12 @@ struct NoteDetailView: View {
                     }
                 )
                 .environment(appState)
+            }
+            .sheet(isPresented: $showShareLocally) {
+                if let note = vm.note {
+                    ShareLocallyView(note: note, client: vm.client)
+                        .environment(appState)
+                }
             }
             .alert(
                 String(localized: "Move Note", comment: "Move confirmation title"),
@@ -2649,6 +2656,26 @@ struct NoteDetailView: View {
                 }
 
                 Divider()
+
+                if note.isProtected || vm.needsProtectedSession {
+                    Button {
+                    } label: {
+                        Label(
+                            String(localized: "Share locally unavailable (protected note)", comment: "Local share disabled"),
+                            systemImage: "lock.fill"
+                        )
+                    }
+                    .disabled(true)
+                } else {
+                    Button {
+                        showShareLocally = true
+                    } label: {
+                        Label(
+                            String(localized: "Share locally", comment: "Note overflow: nearby device transfer"),
+                            systemImage: "square.and.arrow.up"
+                        )
+                    }
+                }
 
                 if note.isProtected || vm.needsProtectedSession {
                     Button {

@@ -22,6 +22,11 @@ private struct TreeShareSheetPayload: Identifiable {
     let url: URL
 }
 
+private struct ShareLocallySheetContext: Identifiable {
+    var id: String { note.noteId }
+    let note: NoteItem
+}
+
 private struct MoveNoteSheetContext: Identifiable {
     let id = UUID()
     let sourceBranchId: String
@@ -45,15 +50,19 @@ struct TreeView: View {
     let parentTitle: String
     /// When set, tapping a note row selects it: parent for duplicate/move, or any note in the note / open-tab pickers. `(parentNoteId, displayTitle, parentBranchId)`.
     var onPickParent: ((String, String, String) -> Void)?
+    /// Replaces the root **+** button in parent-picker mode (e.g. local transfer “Add as root note”).
+    var rootPlacementButtonTitle: String?
 
     init(
         parentNoteId: String = "root",
         parentTitle: String = "Notes",
-        onPickParent: ((String, String, String) -> Void)? = nil
+        onPickParent: ((String, String, String) -> Void)? = nil,
+        rootPlacementButtonTitle: String? = nil
     ) {
         self.parentNoteId = parentNoteId
         self.parentTitle = parentTitle
         self.onPickParent = onPickParent
+        self.rootPlacementButtonTitle = rootPlacementButtonTitle
     }
 
     @Environment(AppState.self) private var appState
@@ -67,6 +76,7 @@ struct TreeView: View {
     @State private var favoriteNoteIds: Set<String> = []
     @State private var showSharedNotesManagement = false
     @State private var treeShareSheetPayload: TreeShareSheetPayload?
+    @State private var shareLocallySheetContext: ShareLocallySheetContext?
     @State private var treeSharingError: String?
     @State private var moveNoteSheetContext: MoveNoteSheetContext?
     @State private var moveNoteConfirmPayload: MoveNoteConfirmPayload?
@@ -114,6 +124,11 @@ struct TreeView: View {
         return !sync.isSyncing
     }
 
+    /// Only the main Notes tab tree hosts local-transfer alerts/sheets (not picker-embedded trees).
+    private var isLocalTransferUIHost: Bool {
+        onPickParent == nil && parentNoteId == TriliumTreeConstants.rootNoteId
+    }
+
     var body: some View {
         treeViewWithSharedSheetsAndAlerts
             .sheet(item: $moveNoteSheetContext, content: moveNoteParentPickerSheet)
@@ -133,6 +148,25 @@ struct TreeView: View {
 
     /// Split from `body` so Swift can type-check the tree without timing out on one huge expression.
     private var treeViewWithSharedSheetsAndAlerts: some View {
+        Group {
+            if isLocalTransferUIHost {
+                treeViewCommonSheetsAndAlerts
+                    .alert(
+                        String(localized: "Incoming note", comment: "Local transfer offer alert title"),
+                        isPresented: localTransferOfferAlertBinding,
+                        actions: localTransferOfferAlertActions,
+                        message: localTransferOfferAlertMessage
+                    )
+                    .sheet(isPresented: localTransferParentPickerBinding) {
+                        localTransferParentPickerSheet
+                    }
+            } else {
+                treeViewCommonSheetsAndAlerts
+            }
+        }
+    }
+
+    private var treeViewCommonSheetsAndAlerts: some View {
         treeViewChromeAndDestinations
             .alert(String(localized: "Delete Note", comment: "Tree delete alert title"), isPresented: noteToDeleteBinding, actions: deleteNoteActions, message: deleteNoteMessage)
             .onReceive(NotificationCenter.default.publisher(for: .noteDeleted)) { _ in
@@ -148,6 +182,10 @@ struct TreeView: View {
                     .environment(appState)
             }
             .sheet(item: $treeShareSheetPayload, content: treeShareSheet)
+            .sheet(item: $shareLocallySheetContext) { ctx in
+                ShareLocallyView(note: ctx.note, client: appState.client)
+                    .environment(appState)
+            }
             .alert(
                 "Error",
                 isPresented: treeSharingErrorBinding,
@@ -163,6 +201,76 @@ struct TreeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .trinoteWillSwitchServerProfile)) { _ in
                 resetNavigationStackBeforeServerProfileChange()
             }
+    }
+
+    private var localTransferOfferAlertBinding: Binding<Bool> {
+        Binding(
+            get: { appState.localTransfer.incomingOffer != nil },
+            set: { newValue in
+                if !newValue, appState.localTransfer.incomingOffer != nil {
+                    Task { await appState.localTransfer.declineIncomingOffer() }
+                }
+            }
+        )
+    }
+
+    private var localTransferParentPickerBinding: Binding<Bool> {
+        Binding(
+            get: { appState.localTransfer.showParentPicker },
+            set: { newValue in
+                if !newValue {
+                    Task { await appState.localTransfer.parentPickerWasDismissedWithoutSelection() }
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func localTransferOfferAlertActions() -> some View {
+        Button(String(localized: "Accept", comment: "Local transfer offer accept")) {
+            appState.localTransfer.beginAcceptanceFlow()
+        }
+        Button(String(localized: "Decline", comment: "Local transfer offer decline"), role: .cancel) {
+            Task { await appState.localTransfer.declineIncomingOffer() }
+        }
+    }
+
+    @ViewBuilder
+    private func localTransferOfferAlertMessage() -> some View {
+        if let offer = appState.localTransfer.incomingOffer {
+            Text(
+                String(
+                    format: String(
+                        localized: "%1$@ wants to send you “%2$@”.",
+                        comment: "Local transfer offer message. %1$@ sender name, %2$@ note title."
+                    ),
+                    offer.senderDisplayName,
+                    offer.title
+                )
+            )
+        }
+    }
+
+    private var localTransferParentPickerSheet: some View {
+        ParentPickerSheet(
+            navigationTitle: String(localized: "Place Note", comment: "Local transfer parent picker title"),
+            instruction: String(
+                localized: "Choose where to add the received note in your tree.",
+                comment: "Local transfer parent picker instruction"
+            ),
+            topLevelButtonTitle: "",
+            showsTopLevelButton: false,
+            rootHeaderPlacementTitle: String(
+                localized: "Add as root note",
+                comment: "Local transfer: place received note at top level"
+            ),
+            onPick: { parentNoteId, _, _ in
+                Task {
+                    await appState.localTransfer.parentPickerDidSelect(parentNoteId)
+                }
+            }
+        )
+        .environment(appState)
     }
 
     private var treeViewChromeAndDestinations: some View {
@@ -250,6 +358,23 @@ struct TreeView: View {
                 )
 
                 Menu {
+                    Button {
+                        let enabled = !appState.localTransfer.receiveModeEnabled
+                        appState.localTransfer.setReceiveMode(enabled)
+                    } label: {
+                        if appState.localTransfer.receiveModeEnabled {
+                            Label(
+                                String(localized: "Stop receiving notes", comment: "Tree menu: disable local receive"),
+                                systemImage: "antenna.radiowaves.left.and.right.slash"
+                            )
+                        } else {
+                            Label(
+                                String(localized: "Receive note locally", comment: "Tree menu: enable local receive"),
+                                systemImage: "antenna.radiowaves.left.and.right"
+                            )
+                        }
+                    }
+
                     Button {
                         showSharedNotesManagement = true
                     } label: {
@@ -543,6 +668,8 @@ struct TreeView: View {
         treeShareSheetPayload = nil
         noteToDelete = nil
         showSharedNotesManagement = false
+        appState.localTransfer.cancelStagedIncomingOffer()
+        appState.localTransfer.setReceiveMode(false)
     }
 
     private func loadFavoriteIds() {
@@ -698,6 +825,27 @@ struct TreeView: View {
         .padding(.vertical, 10)
     }
 
+    private var localTransferReceiveBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "antenna.radiowaves.left.and.right")
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(String(localized: "Receiving notes locally", comment: "Tree banner title"))
+                    .font(.subheadline.weight(.semibold))
+                Text(
+                    String(
+                        localized: "Nearby Trinote users can send you a note. Turn this off from ⋯ when you are done.",
+                        comment: "Tree banner local receive help"
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .listRowBackground(Color.accentColor.opacity(0.08))
+    }
+
     private func fullSyncPhaseLabel(_ sync: SyncManager) -> String {
         switch sync.phase {
         case .walkingTree:       String(localized: "Building note tree…", comment: "Full sync phase")
@@ -722,15 +870,30 @@ struct TreeView: View {
                 }
             }
             Spacer(minLength: 0)
-            Button {
-                createSheetContext = CreateNoteSheetContext(parentNote: syntheticRootNoteItem(), viewModel: vm)
-            } label: {
-                Image(systemName: "plus")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+            if let onPickParent, let rootPlacementButtonTitle, parentNoteId == TriliumTreeConstants.rootNoteId {
+                Button {
+                    onPickParent(
+                        TriliumTreeConstants.rootNoteId,
+                        String(localized: "Notes", comment: "Root notebook screen title"),
+                        TriliumTreeConstants.rootBranchId
+                    )
+                } label: {
+                    Text(rootPlacementButtonTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Button {
+                    createSheetContext = CreateNoteSheetContext(parentNote: syntheticRootNoteItem(), viewModel: vm)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(String(localized: "New top-level note", comment: "Toolbar add note"))
             }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(String(localized: "New top-level note", comment: "Toolbar add note"))
         }
     }
 
@@ -755,6 +918,9 @@ struct TreeView: View {
     private func treeList(_ vm: TreeViewModel) -> some View {
         let sync = appState.syncManager
         return List {
+            if isLocalTransferUIHost, appState.localTransfer.receiveModeEnabled {
+                localTransferReceiveBanner
+            }
             if let error = vm.error, !vm.rootChildren.isEmpty {
                 errorBanner(error)
                     .listRowInsets(EdgeInsets())
@@ -841,6 +1007,9 @@ struct TreeView: View {
             },
             onPresentShareSheet: { scheduleTreeShareSheet(url: $0) },
             onSharingError: { treeSharingError = $0 },
+            onShareLocally: {
+                shareLocallySheetContext = ShareLocallySheetContext(note: flat.node.note)
+            },
             onMove: {
                 moveNoteSheetContext = MoveNoteSheetContext(
                     sourceBranchId: flat.node.branch.branchId,

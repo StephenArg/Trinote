@@ -22,6 +22,7 @@ final class PersistenceTests: XCTestCase {
                 PendingNoteBodyUpload.self,
                 PendingBranchMove.self,
                 PendingNoteDeletion.self,
+                PendingAttachmentImport.self,
                 SyncStatus.self,
                 CachedImageData.self,
             ])

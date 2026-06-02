@@ -34,6 +34,7 @@ final class PersistenceManager {
                 PendingNotePatch.self,
                 PendingNoteDeletion.self,
                 PendingBranchMove.self,
+                PendingAttachmentImport.self,
                 SyncStatus.self,
                 CachedImageData.self,
                 EntityPullCursor.self,
@@ -1252,6 +1253,15 @@ final class PersistenceManager {
             try upsertPendingNotePatch(noteId: newId, title: title, serverProfileId: profileId)
         }
 
+        let attachRows = try context.fetch(
+            FetchDescriptor<PendingAttachmentImport>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId }
+            )
+        )
+        for row in attachRows {
+            row.noteId = newId
+        }
+
         try context.save()
     }
 
@@ -1575,6 +1585,76 @@ final class PersistenceManager {
             return true
         }
         return true
+    }
+
+    // MARK: - Local transfer attachment import queue
+
+    func enqueuePendingAttachmentImport(
+        noteId: String,
+        role: String,
+        mime: String,
+        title: String,
+        position: Int,
+        data: Data,
+        serverProfileId: String
+    ) throws {
+        let row = PendingAttachmentImport(
+            serverProfileId: serverProfileId,
+            noteId: noteId,
+            role: role,
+            mime: mime,
+            title: title,
+            position: position,
+            data: data
+        )
+        context.insert(row)
+        try context.save()
+    }
+
+    func fetchPendingAttachmentImports(serverProfileId: String) throws -> [PendingAttachmentImport] {
+        let profileId = serverProfileId
+        return try context.fetch(
+            FetchDescriptor<PendingAttachmentImport>(
+                predicate: #Predicate { $0.serverProfileId == profileId },
+                sortBy: [SortDescriptor(\.queuedAt, order: .forward)]
+            )
+        )
+    }
+
+    func fetchPendingAttachmentImports(noteId: String, serverProfileId: String) throws -> [PendingAttachmentImport] {
+        let profileId = serverProfileId
+        let nid = noteId
+        return try context.fetch(
+            FetchDescriptor<PendingAttachmentImport>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId },
+                sortBy: [SortDescriptor(\.position, order: .forward)]
+            )
+        )
+    }
+
+    func deletePendingAttachmentImport(id: String, serverProfileId: String) throws {
+        let profileId = serverProfileId
+        let rowId = id
+        var descriptor = FetchDescriptor<PendingAttachmentImport>(
+            predicate: #Predicate { $0.id == rowId && $0.serverProfileId == profileId }
+        )
+        descriptor.fetchLimit = 1
+        if let existing = try context.fetch(descriptor).first {
+            context.delete(existing)
+            try context.save()
+        }
+    }
+
+    /// True when `noteId` still has a pending offline creation row (attachments must wait for server id).
+    func hasPendingNoteCreation(noteId: String, serverProfileId: String) throws -> Bool {
+        let profileId = serverProfileId
+        let localId = noteId
+        let rows = try context.fetch(
+            FetchDescriptor<PendingNoteCreation>(
+                predicate: #Predicate { $0.localNoteId == localId && $0.serverProfileId == profileId }
+            )
+        )
+        return !rows.isEmpty
     }
 
     // MARK: - Sync Status

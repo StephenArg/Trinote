@@ -16,6 +16,7 @@ struct TreeListRowContextMenuModel {
     var onDelete: () -> Void
     var onPresentShareSheet: (URL) -> Void
     var onSharingError: (String) -> Void
+    var onShareLocally: () -> Void
     var onMove: () -> Void
 }
 
@@ -176,14 +177,31 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
             if note.isProtected {
                 return [
                     UIAction(
+                        title: String(localized: "Share locally unavailable (protected note)", comment: "Local share disabled"),
+                        image: UIImage(systemName: "lock.fill"),
+                        attributes: .disabled
+                    ) { _ in },
+                    UIAction(
                         title: String(localized: "Sharing unavailable (protected note)", comment: "Share menu disabled"),
                         image: UIImage(systemName: "lock.fill"),
                         attributes: .disabled
                     ) { _ in },
                 ]
             }
+
+            var elements: [UIMenuElement] = [
+                UIAction(
+                    title: String(localized: "Share locally", comment: "Note overflow: nearby device transfer"),
+                    image: UIImage(systemName: "square.and.arrow.up")
+                ) { [weak self] _ in
+                    guard let self else { return }
+                    DispatchQueue.main.async {
+                        self.model.onShareLocally()
+                    }
+                },
+            ]
             if model.client == nil {
-                return [
+                return elements + [
                     UIAction(
                         title: String(localized: "Sharing requires connection", comment: "Share menu offline"),
                         image: UIImage(systemName: "wifi.slash"),
@@ -192,7 +210,7 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
                 ]
             }
 
-            var elements: [UIMenuElement] = [makeShareToggleAction()]
+            elements.append(makeShareToggleAction())
             if appearsShared(note) {
                 elements.append(UIAction(
                     title: String(localized: "Copy share link", comment: "Copy public Trilium URL"),
