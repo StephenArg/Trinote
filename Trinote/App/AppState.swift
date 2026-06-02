@@ -645,6 +645,37 @@ final class AppState {
         return fresh
     }
 
+    private func makeTriliumClient(baseURL: URL, profileId: String, persistedCookieData: Data?) async -> TriliumClient {
+        let cfCredentials = try? await keychain.loadCloudflareAccessCredentials(forServer: profileId)
+        return TriliumClient(
+            baseURL: baseURL,
+            persistedCookieData: persistedCookieData,
+            cloudflareAccessCredentials: cfCredentials
+        )
+    }
+
+    func hasCloudflareAccessCredentials(for profile: ServerProfile) async -> Bool {
+        (try? await keychain.hasCloudflareAccessCredentials(forServer: profile.id)) ?? false
+    }
+
+    /// Recreates the active `TriliumClient` after Cloudflare Access settings change.
+    func rebuildActiveClientIfNeeded() async {
+        guard isAuthenticated, let profile = activeProfile, let url = profile.url else { return }
+        let cookieData = try? await keychain.loadSessionCookies(forServer: profile.id)
+        let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: cookieData)
+        self.client = newClient
+        do {
+            try await restoreSessionWithTimeout(client: newClient, seconds: 12)
+            connectionError = nil
+            lastRefreshed = .now
+            let exported = await newClient.exportSessionCookieData()
+            try? await keychain.saveSessionCookies(exported, forServer: profile.id)
+        } catch {
+            connectionError = APIError.from(error).localizedDescription
+        }
+        startRealtimeIfPossible()
+    }
+
     private func startRealtimeIfPossible() {
         realtime?.stop()
         guard let client = client as? TriliumClient,
@@ -652,9 +683,11 @@ final class AppState {
 
         let storage = client.httpCookieStorage
         let base = client.baseURL
+        let cfCredentials = client.cloudflareAccessCredentials
         realtime = TriliumWebSocketConnection(
             baseURL: base,
             cookieStorage: storage,
+            cloudflareAccessCredentials: cfCredentials,
             onEvent: { [weak self] in
                 guard let self else { return }
                 Task { @MainActor in
@@ -710,7 +743,7 @@ final class AppState {
     private func quickActivateProfileForLaunch(_ profile: ServerProfile) async {
         guard let url = profile.url else { return }
         let cookieData = try? await keychain.loadSessionCookies(forServer: profile.id)
-        let newClient = TriliumClient(baseURL: url, persistedCookieData: cookieData)
+        let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: cookieData)
         let hadPersistedSessionCookies = cookieData.map { !$0.isEmpty } ?? false
 
         self.client = newClient
@@ -786,7 +819,7 @@ final class AppState {
         syncManager.cancel()
         realtime?.stop()
 
-        let newClient = TriliumClient(baseURL: url, persistedCookieData: cookieData)
+        let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: cookieData)
 
         let previousClient = self.client
         let previousProfile = self.activeProfile
@@ -890,7 +923,7 @@ final class AppState {
         }
 
         try await keychain.clearServerAuthArtifacts(forServer: profile.id)
-        let newClient = TriliumClient(baseURL: url)
+        let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: nil)
         try await newClient.login(password: password, rememberMe: rememberMe, totpToken: totpToken)
 
         let exportedLogin = await newClient.exportSessionCookieData()
@@ -914,12 +947,18 @@ final class AppState {
     }
 
     func logout() async {
+        await clearLocalSessionState(notifyServer: true)
+        Log.auth.info("Logged out")
+    }
+
+    /// Tears down the in-app session and clears local auth artifacts. Optionally notifies the server (explicit logout only).
+    private func clearLocalSessionState(notifyServer: Bool) async {
         syncManager.cancel()
         realtime?.stop()
         realtime = nil
         protectedSessionActive = false
 
-        if let client {
+        if notifyServer, let client {
             if let tc = client as? TriliumClient {
                 try? await tc.exitProtectedSession()
             }
@@ -938,17 +977,17 @@ final class AppState {
         connectionError = nil
         lastRefreshed = nil
         serverAppInfo = nil
-        Log.auth.info("Logged out")
     }
 
     func signOutAndRemoveProfile(_ profile: ServerProfile) async {
         let wasActive = profile.id == activeProfile?.id
         if wasActive {
-            await logout()
+            await clearLocalSessionState(notifyServer: false)
             activeProfile = nil
         } else {
             try? await keychain.clearServerAuthArtifacts(forServer: profile.id)
         }
+        try? await keychain.deleteCloudflareAccessCredentials(forServer: profile.id)
         do {
             try persistence.clearCache(for: profile.id)
             try persistence.deleteProfile(profile)

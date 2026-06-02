@@ -6,6 +6,8 @@ private enum LoginFormField: Hashable {
     case displayName
     case serverURL
     case password
+    case cloudflareClientId
+    case cloudflareClientSecret
 }
 
 /// Header, server URL, password, Connect button, errors, and TOTP — shared by `LoginView` and `AddInstanceView`.
@@ -15,6 +17,7 @@ struct LoginFormContent: View {
     /// When `true` (Add Instance sheet), block login if the URL matches an existing `ServerProfile`.
     var rejectIfServerAlreadyAdded: Bool = false
     @State private var isPasswordVisible = false
+    @State private var showAdvanced = false
     @FocusState private var focusedField: LoginFormField?
 
     var body: some View {
@@ -22,6 +25,7 @@ struct LoginFormContent: View {
             header
             serverForm
             credentialForm
+            advancedForm
             loginButton
         }
         .alert(String(localized: "Error", comment: "Login error"), isPresented: $viewModel.showError) {
@@ -129,6 +133,36 @@ struct LoginFormContent: View {
             Text(String(localized: "TOTP is supported. SSO must be completed in the browser.", comment: "Login hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        .textFieldStyle(.roundedBorder)
+    }
+
+    private var advancedForm: some View {
+        DisclosureGroup(String(localized: "Advanced", comment: "Login advanced section"), isExpanded: $showAdvanced) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(String(localized: "Optional. Required only if your Trilium server is behind Cloudflare Access / Zero Trust.", comment: "Cloudflare Access hint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextField(
+                    String(localized: "Cloudflare Access Client ID", comment: "Cloudflare Access field; header CF-Access-Client-Id"),
+                    text: $viewModel.cloudflareClientId
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focusedField, equals: .cloudflareClientId)
+                .accessibilityLabel(String(localized: "Cloudflare Access Client ID", comment: "VoiceOver"))
+
+                SecureField(
+                    String(localized: "Cloudflare Access Client Secret", comment: "Cloudflare Access field; header CF-Access-Client-Secret"),
+                    text: $viewModel.cloudflareClientSecret
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focusedField, equals: .cloudflareClientSecret)
+                .accessibilityLabel(String(localized: "Cloudflare Access Client Secret", comment: "VoiceOver"))
+            }
+            .padding(.top, 4)
         }
         .textFieldStyle(.roundedBorder)
     }

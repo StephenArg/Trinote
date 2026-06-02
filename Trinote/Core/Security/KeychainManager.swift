@@ -17,6 +17,11 @@ protocol KeychainManaging: Actor {
     func loadTriliumInstanceId(forServer serverID: String) throws -> String?
     func deleteTriliumInstanceId(forServer serverID: String) throws
 
+    func saveCloudflareAccessCredentials(_ credentials: CloudflareAccessCredentials?, forServer serverID: String) throws
+    func loadCloudflareAccessCredentials(forServer serverID: String) throws -> CloudflareAccessCredentials?
+    func deleteCloudflareAccessCredentials(forServer serverID: String) throws
+    func hasCloudflareAccessCredentials(forServer serverID: String) throws -> Bool
+
     /// Removes ETAPI token, session cookies, and sync instance id for a profile.
     func clearServerAuthArtifacts(forServer serverID: String) async throws
 }
@@ -112,6 +117,49 @@ actor KeychainManager: KeychainManaging {
         try deleteInstanceId(forServer: serverID)
     }
 
+    func saveCloudflareAccessCredentials(_ credentials: CloudflareAccessCredentials?, forServer serverID: String) throws {
+        try deleteCloudflareAccessCredentials(forServer: serverID)
+        guard let credentials, credentials.isComplete else { return }
+        let data = try JSONEncoder().encode(credentials)
+        var query = cloudflareAccessBaseQuery(for: serverID)
+        query[kSecValueData as String] = data
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
+    }
+
+    func loadCloudflareAccessCredentials(forServer serverID: String) throws -> CloudflareAccessCredentials? {
+        var query = cloudflareAccessBaseQuery(for: serverID)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data,
+                  let credentials = try? JSONDecoder().decode(CloudflareAccessCredentials.self, from: data),
+                  credentials.isComplete else {
+                return nil
+            }
+            return credentials
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw KeychainError.loadFailed(status)
+        }
+    }
+
+    func deleteCloudflareAccessCredentials(forServer serverID: String) throws {
+        let status = SecItemDelete(cloudflareAccessBaseQuery(for: serverID) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError.deleteFailed(status)
+        }
+    }
+
+    func hasCloudflareAccessCredentials(forServer serverID: String) throws -> Bool {
+        try loadCloudflareAccessCredentials(forServer: serverID) != nil
+    }
+
     func clearServerAuthArtifacts(forServer serverID: String) async throws {
         try? deleteToken(forServer: serverID)
         try saveSessionCookies(nil, forServer: serverID)
@@ -205,6 +253,14 @@ actor KeychainManager: KeychainManaging {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "\(servicePrefix).\(serverID)",
             kSecAttrAccount as String: "trilium-instance-id",
+        ]
+    }
+
+    private func cloudflareAccessBaseQuery(for serverID: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "\(servicePrefix).\(serverID)",
+            kSecAttrAccount as String: "cloudflare-access-credentials",
         ]
     }
 

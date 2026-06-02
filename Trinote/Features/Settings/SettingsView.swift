@@ -34,6 +34,8 @@ struct SettingsView: View {
     @State private var showAddInstance = false
     @State private var profileIdPendingSignOut: String?
     @State private var cacheSizeBytesAllInstances: Int?
+    @State private var activeProfileHasCloudflareAccess = false
+    @State private var showCloudflareAccessSettings = false
 
     var body: some View {
         List {
@@ -55,16 +57,31 @@ struct SettingsView: View {
             AddInstanceView()
                 .environment(appState)
         }
+        .sheet(isPresented: $showCloudflareAccessSettings) {
+            if let profile = appState.activeProfile {
+                CloudflareAccessSettingsView(profile: profile)
+                    .environment(appState)
+            }
+        }
         .onAppear {
             deviceBiometryKind = BiometricAuthenticator.availability().kind
             reloadServerProfiles()
+            Task { await refreshCloudflareAccessVisibility() }
         }
         .onChange(of: appState.activeProfile?.id) { _, _ in
             reloadServerProfiles()
-            Task { await loadDiagnostics() }
+            Task {
+                await loadDiagnostics()
+                await refreshCloudflareAccessVisibility()
+            }
         }
         .onChange(of: showAddInstance) { _, isPresented in
             if !isPresented { reloadServerProfiles() }
+        }
+        .onChange(of: showCloudflareAccessSettings) { _, isPresented in
+            if !isPresented {
+                Task { await refreshCloudflareAccessVisibility() }
+            }
         }
         .onChange(of: appPinEnabled) { _, isOn in
             if !isOn { appBiometricEnabled = false }
@@ -376,22 +393,21 @@ struct SettingsView: View {
                 )
             }
         }
-        .confirmationDialog(
+        .alert(
             String(localized: "Sign Out?", comment: "Confirm sign out instance title"),
             isPresented: Binding(
                 get: { profileIdPendingSignOut != nil },
                 set: { if !$0 { profileIdPendingSignOut = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
+            Button(String(localized: "Cancel", comment: "Cancel sign out"), role: .cancel) {
+                profileIdPendingSignOut = nil
+            }
             Button(String(localized: "Sign Out", comment: "Confirm sign out"), role: .destructive) {
                 if let id = profileIdPendingSignOut,
                    let profile = serverProfiles.first(where: { $0.id == id }) {
                     Task { await signOutInstance(profile) }
                 }
-                profileIdPendingSignOut = nil
-            }
-            Button(String(localized: "Cancel", comment: "Cancel sign out"), role: .cancel) {
                 profileIdPendingSignOut = nil
             }
         } message: {
@@ -445,6 +461,12 @@ struct SettingsView: View {
 
             if let lastRefreshed = appState.lastRefreshed {
                 LabeledContent(String(localized: "Last Refreshed", comment: "Settings"), value: lastRefreshed.relativeDisplay)
+            }
+
+            if activeProfileHasCloudflareAccess {
+                Button(String(localized: "Cloudflare Access", comment: "Settings button to edit Cloudflare Access headers")) {
+                    showCloudflareAccessSettings = true
+                }
             }
 
             Button(String(localized: "Test Connection", comment: "Settings button")) {
@@ -689,6 +711,14 @@ struct SettingsView: View {
 
     private func reloadServerProfiles() {
         serverProfiles = (try? PersistenceManager.shared.fetchServerProfiles()) ?? []
+    }
+
+    private func refreshCloudflareAccessVisibility() async {
+        guard let profile = appState.activeProfile else {
+            activeProfileHasCloudflareAccess = false
+            return
+        }
+        activeProfileHasCloudflareAccess = await appState.hasCloudflareAccessCredentials(for: profile)
     }
 
     private func signOutInstance(_ profile: ServerProfile) async {

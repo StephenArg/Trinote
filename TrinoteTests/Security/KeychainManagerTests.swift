@@ -6,6 +6,7 @@ final class KeychainManagerTests: XCTestCase {
 
     override func tearDown() async throws {
         try await KeychainManager.shared.clearServerAuthArtifacts(forServer: testServerId)
+        try await KeychainManager.shared.deleteCloudflareAccessCredentials(forServer: testServerId)
     }
 
     func testSaveAndLoadToken() async throws {
@@ -67,5 +68,55 @@ final class KeychainManagerTests: XCTestCase {
         try await KeychainManager.shared.deleteTriliumInstanceId(forServer: testServerId)
         let afterDelete = try await KeychainManager.shared.loadTriliumInstanceId(forServer: testServerId)
         XCTAssertNil(afterDelete)
+    }
+
+    func testSaveLoadDeleteCloudflareAccessCredentials() async throws {
+        let credentials = CloudflareAccessCredentials(clientId: "cf-client-id", clientSecret: "cf-client-secret")
+        try await KeychainManager.shared.saveCloudflareAccessCredentials(credentials, forServer: testServerId)
+
+        let loaded = try await KeychainManager.shared.loadCloudflareAccessCredentials(forServer: testServerId)
+        XCTAssertEqual(loaded, credentials)
+        let hasCredentials = try await KeychainManager.shared.hasCloudflareAccessCredentials(forServer: testServerId)
+        XCTAssertTrue(hasCredentials)
+
+        try await KeychainManager.shared.saveCloudflareAccessCredentials(nil, forServer: testServerId)
+        let cleared = try await KeychainManager.shared.loadCloudflareAccessCredentials(forServer: testServerId)
+        XCTAssertNil(cleared)
+        let hasAfterClear = try await KeychainManager.shared.hasCloudflareAccessCredentials(forServer: testServerId)
+        XCTAssertFalse(hasAfterClear)
+    }
+
+    func testCloudflareAccessCredentialsIsolatedPerServer() async throws {
+        let otherServerId = "other-server-\(UUID().uuidString)"
+
+        let first = CloudflareAccessCredentials(clientId: "server-a-id", clientSecret: "server-a-secret")
+        let second = CloudflareAccessCredentials(clientId: "server-b-id", clientSecret: "server-b-secret")
+
+        try await KeychainManager.shared.saveCloudflareAccessCredentials(first, forServer: testServerId)
+        try await KeychainManager.shared.saveCloudflareAccessCredentials(second, forServer: otherServerId)
+
+        let loadedFirst = try await KeychainManager.shared.loadCloudflareAccessCredentials(forServer: testServerId)
+        let loadedSecond = try await KeychainManager.shared.loadCloudflareAccessCredentials(forServer: otherServerId)
+        XCTAssertEqual(loadedFirst, first)
+        XCTAssertEqual(loadedSecond, second)
+
+        try await KeychainManager.shared.deleteCloudflareAccessCredentials(forServer: otherServerId)
+    }
+
+    func testClearServerAuthArtifactsDoesNotRemoveCloudflareAccessCredentials() async throws {
+        let credentials = CloudflareAccessCredentials(clientId: "cf-id", clientSecret: "cf-secret")
+        try await KeychainManager.shared.saveCloudflareAccessCredentials(credentials, forServer: testServerId)
+
+        try await KeychainManager.shared.clearServerAuthArtifacts(forServer: testServerId)
+
+        let loaded = try await KeychainManager.shared.loadCloudflareAccessCredentials(forServer: testServerId)
+        XCTAssertEqual(loaded, credentials)
+    }
+
+    func testCloudflareAccessValidationRequiresBothFields() {
+        XCTAssertNil(CloudflareAccessValidation.errorMessage(clientId: "", clientSecret: ""))
+        XCTAssertNil(CloudflareAccessValidation.errorMessage(clientId: "id", clientSecret: "secret"))
+        XCTAssertNotNil(CloudflareAccessValidation.errorMessage(clientId: "id", clientSecret: ""))
+        XCTAssertNotNil(CloudflareAccessValidation.errorMessage(clientId: "", clientSecret: "secret"))
     }
 }

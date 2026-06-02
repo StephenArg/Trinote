@@ -10,17 +10,20 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
 
     private let cookieStorage: HTTPCookieStorage
     private let baseURL: URL
+    private let cloudflareAccessCredentials: CloudflareAccessCredentials?
     private let onEvent: @Sendable () -> Void
     private let onProtectedSessionLogout: (@Sendable () -> Void)?
 
     init(
         baseURL: URL,
         cookieStorage: HTTPCookieStorage,
+        cloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
         onEvent: @escaping @Sendable () -> Void,
         onProtectedSessionLogout: (@Sendable () -> Void)? = nil
     ) {
         self.baseURL = baseURL
         self.cookieStorage = cookieStorage
+        self.cloudflareAccessCredentials = cloudflareAccessCredentials?.isComplete == true ? cloudflareAccessCredentials : nil
         self.onEvent = onEvent
         self.onProtectedSessionLogout = onProtectedSessionLogout
         super.init()
@@ -33,7 +36,13 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     func start() {
         stop()
         guard let wsURL = Self.webSocketURL(from: baseURL) else { return }
-        let t = session.webSocketTask(with: wsURL)
+        var request = URLRequest(url: wsURL)
+        if let cloudflareAccessCredentials {
+            for (name, value) in cloudflareAccessCredentials.httpHeaders {
+                request.setValue(value, forHTTPHeaderField: name)
+            }
+        }
+        let t = session.webSocketTask(with: request)
         task = t
         t.resume()
         reconnectAttempt = 0

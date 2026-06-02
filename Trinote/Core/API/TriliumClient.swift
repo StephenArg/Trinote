@@ -174,10 +174,25 @@ actor TriliumClient: TriliumClientProtocol {
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+    private let accessHeaders: [String: String]?
+    nonisolated let cloudflareAccessCredentials: CloudflareAccessCredentials?
+    private let injectedProtocolClasses: [AnyClass]?
 
     /// - Parameter urlSessionConfiguration: Optional config (e.g. tests with `URLProtocol`). Always wired to this client’s `httpCookieStorage`.
-    init(baseURL: URL, persistedCookieData: Data? = nil, urlSessionConfiguration: URLSessionConfiguration? = nil) {
+    init(
+        baseURL: URL,
+        persistedCookieData: Data? = nil,
+        cloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
+        urlSessionConfiguration: URLSessionConfiguration? = nil
+    ) {
         self.baseURL = baseURL
+        if let cloudflareAccessCredentials, cloudflareAccessCredentials.isComplete {
+            self.cloudflareAccessCredentials = cloudflareAccessCredentials
+            self.accessHeaders = cloudflareAccessCredentials.httpHeaders
+        } else {
+            self.cloudflareAccessCredentials = nil
+            self.accessHeaders = nil
+        }
 
         // `HTTPCookieStorage()` creates a non-functional standalone instance on iOS — `setCookie` silently discards.
         // `.shared` is the only storage where `cookies(for:)` reliably returns what was set.
@@ -203,6 +218,7 @@ actor TriliumClient: TriliumClientProtocol {
         config.httpShouldSetCookies = true
         config.httpCookieAcceptPolicy = .always
 
+        self.injectedProtocolClasses = urlSessionConfiguration?.protocolClasses
         self.session = URLSession(configuration: config)
     }
 
@@ -237,6 +253,7 @@ actor TriliumClient: TriliumClientProtocol {
         var req = URLRequest(url: loginURL)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        applyAccessHeaders(to: &req)
         req.httpBody = Data(body.utf8)
 
         let (redirectStopData, redirectStopHTTP, loginSession) = try await postLoginStoppingAtRedirect(request: req)
@@ -277,6 +294,7 @@ actor TriliumClient: TriliumClientProtocol {
                 forHTTPHeaderField: "User-Agent"
             )
             getReq.cachePolicy = .reloadIgnoringLocalCacheData
+            applyAccessHeaders(to: &getReq)
             let (d, r) = try await session.data(for: getReq)
             guard let h = r as? HTTPURLResponse else { throw APIError.invalidResponse }
             TriliumCookieResponseParser.storeCookies(from: h, in: httpCookieStorage)
@@ -326,7 +344,10 @@ actor TriliumClient: TriliumClientProtocol {
         cfg.httpCookieAcceptPolicy = .always
         cfg.timeoutIntervalForRequest = 30
         cfg.timeoutIntervalForResource = 120
-        cfg.waitsForConnectivity = true
+        cfg.waitsForConnectivity = injectedProtocolClasses == nil
+        if let injectedProtocolClasses {
+            cfg.protocolClasses = injectedProtocolClasses
+        }
 
         let delegate = TriliumStopRedirectDelegate(cookieStorage: httpCookieStorage)
         let loginSession = URLSession(configuration: cfg, delegate: delegate, delegateQueue: nil)
@@ -402,6 +423,7 @@ actor TriliumClient: TriliumClientProtocol {
         var req = URLRequest(url: baseURL.appendingPathComponent("logout"))
         req.httpMethod = "POST"
         req.setValue(csrfToken, forHTTPHeaderField: TriliumHTTP.csrfHeader)
+        applyAccessHeaders(to: &req)
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         if http.statusCode == 401 { return }
@@ -450,6 +472,7 @@ actor TriliumClient: TriliumClientProtocol {
             req.httpMethod = "GET"
             req.setValue("application/json", forHTTPHeaderField: "Accept")
             req.cachePolicy = .reloadIgnoringLocalCacheData
+            applyAccessHeaders(to: &req)
             let (data, response) = try await session.data(for: req)
             guard let http = response as? HTTPURLResponse else { return false }
 
@@ -618,6 +641,8 @@ actor TriliumClient: TriliumClientProtocol {
             "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
             forHTTPHeaderField: "User-Agent"
         )
+
+        applyAccessHeaders(to: &req)
 
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
@@ -1200,6 +1225,7 @@ actor TriliumClient: TriliumClientProtocol {
         if let csrf = csrfToken {
             req.setValue(csrf, forHTTPHeaderField: TriliumHTTP.csrfHeader)
         }
+        applyAccessHeaders(to: &req)
         req.httpBody = body
 
         let (respData, response) = try await session.data(for: req)
@@ -1314,7 +1340,16 @@ actor TriliumClient: TriliumClientProtocol {
             request.setValue(csrfToken, forHTTPHeaderField: TriliumHTTP.csrfHeader)
         }
 
+        applyAccessHeaders(to: &request)
+
         return request
+    }
+
+    private func applyAccessHeaders(to request: inout URLRequest) {
+        guard let accessHeaders else { return }
+        for (name, value) in accessHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
     }
 
     private static func makeURL(baseURL: URL, path: String, queryParams: [String: String]?) throws -> URL {

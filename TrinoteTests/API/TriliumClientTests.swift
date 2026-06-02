@@ -28,10 +28,18 @@ final class TriliumClientTests: XCTestCase {
         override func stopLoading() {}
     }
 
-    private func makeClient(persistedCookies: Data? = nil) -> TriliumClient {
+    private func makeClient(
+        persistedCookies: Data? = nil,
+        cloudflareAccessCredentials: CloudflareAccessCredentials? = nil
+    ) -> TriliumClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
-        return TriliumClient(baseURL: URL(string: "https://trilium.test")!, persistedCookieData: persistedCookies, urlSessionConfiguration: config)
+        return TriliumClient(
+            baseURL: URL(string: "https://trilium.test")!,
+            persistedCookieData: persistedCookies,
+            cloudflareAccessCredentials: cloudflareAccessCredentials,
+            urlSessionConfiguration: config
+        )
     }
 
     private func respondJSON(_ json: String, statusCode: Int = 200) -> (URLRequest) throws -> (HTTPURLResponse, Data) {
@@ -513,5 +521,77 @@ final class TriliumClientTests: XCTestCase {
         if case .cancelled = apiError {} else {
             XCTFail("Expected cancelled, got \(apiError)")
         }
+    }
+
+    // MARK: - Cloudflare Access headers
+
+    func testAccessHeadersOmittedWhenNotConfigured() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            XCTAssertNil(request.value(forHTTPHeaderField: CloudflareAccessCredentials.clientIdHeader))
+            XCTAssertNil(request.value(forHTTPHeaderField: CloudflareAccessCredentials.clientSecretHeader))
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"boot_csrf_42","device":"mobile","triliumVersion":"0.102.1"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        try await client.restoreSession()
+        _ = try await client.getAppInfo()
+    }
+
+    func testAccessHeadersIncludedWhenConfigured() async throws {
+        let credentials = CloudflareAccessCredentials(clientId: "configured-id", clientSecret: "configured-secret")
+        MockURLProtocol.requestHandler = { [appInfoJSON, credentials] request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: CloudflareAccessCredentials.clientIdHeader), credentials.clientId)
+            XCTAssertEqual(request.value(forHTTPHeaderField: CloudflareAccessCredentials.clientSecretHeader), credentials.clientSecret)
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"boot_csrf_42","device":"mobile","triliumVersion":"0.102.1"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(cloudflareAccessCredentials: credentials)
+        try await client.restoreSession()
+        _ = try await client.getAppInfo()
+    }
+
+    func testAccessHeadersOnLoginPOST() async throws {
+        let credentials = CloudflareAccessCredentials(clientId: "login-id", clientSecret: "login-secret")
+        MockURLProtocol.requestHandler = { [appInfoJSON, credentials] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/login"), request.httpMethod == "POST" {
+                XCTAssertEqual(request.value(forHTTPHeaderField: CloudflareAccessCredentials.clientIdHeader), credentials.clientId)
+                XCTAssertEqual(request.value(forHTTPHeaderField: CloudflareAccessCredentials.clientSecretHeader), credentials.clientSecret)
+                let headers = ["Location": "/"]
+                return (HTTPURLResponse(url: request.url!, statusCode: 302, httpVersion: nil, headerFields: headers)!, Data())
+            }
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"boot_csrf_42","device":"mobile","triliumVersion":"0.102.1"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.isEmpty || path == "/" {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("<html></html>".utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(cloudflareAccessCredentials: credentials)
+        try await client.login(password: "secret", rememberMe: false, totpToken: nil)
     }
 }

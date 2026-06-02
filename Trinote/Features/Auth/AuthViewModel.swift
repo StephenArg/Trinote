@@ -10,6 +10,8 @@ final class AuthViewModel {
     var password = ""
     /// Matches Trilium "Remember me" session cookie behavior.
     var rememberMe = true
+    var cloudflareClientId = ""
+    var cloudflareClientSecret = ""
     var isLoading = false
     var errorMessage: String?
     var showError = false
@@ -25,6 +27,7 @@ final class AuthViewModel {
     private var pendingTotpProfile: ServerProfile?
 
     private let persistence = PersistenceManager.shared
+    private let keychain = KeychainManager.shared
 
     enum URLScheme: String, CaseIterable {
         case https = "https://"
@@ -94,10 +97,21 @@ final class AuthViewModel {
 
         let profile = findOrCreateProfile(name: displayName, url: fullServerURL)
 
+        if let validationError = CloudflareAccessValidation.errorMessage(
+            clientId: cloudflareClientId,
+            clientSecret: cloudflareClientSecret
+        ) {
+            errorMessage = validationError
+            showError = true
+            return
+        }
+
         do {
             try persistence.saveProfile(profile)
+            try await saveCloudflareAccessCredentials(for: profile)
             try await appState.loginWithPassword(password, rememberMe: rememberMe, profile: profile)
             password = ""
+            cloudflareClientSecret = ""
             loadProfiles()
             didFinishSuccessfulLogin = true
         } catch let error as APIError where error == .totpRequired {
@@ -106,6 +120,9 @@ final class AuthViewModel {
             showTotpEntry = true
         } catch let pe as PersistenceError {
             errorMessage = pe.localizedDescription
+            showError = true
+        } catch let error as KeychainError {
+            errorMessage = error.localizedDescription
             showError = true
         } catch {
             errorMessage = APIError.from(error).localizedDescription
@@ -175,6 +192,17 @@ final class AuthViewModel {
             return existing
         }
         return ServerProfile(name: name, baseURL: url)
+    }
+
+    private func saveCloudflareAccessCredentials(for profile: ServerProfile) async throws {
+        let id = cloudflareClientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = cloudflareClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        if id.isEmpty && secret.isEmpty {
+            try await keychain.saveCloudflareAccessCredentials(nil, forServer: profile.id)
+            return
+        }
+        let credentials = CloudflareAccessCredentials(clientId: id, clientSecret: secret)
+        try await keychain.saveCloudflareAccessCredentials(credentials, forServer: profile.id)
     }
 }
 
