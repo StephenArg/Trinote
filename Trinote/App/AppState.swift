@@ -706,8 +706,18 @@ final class AppState {
         return fresh
     }
 
-    private func makeTriliumClient(baseURL: URL, profileId: String, persistedCookieData: Data?) async -> TriliumClient {
-        let cfCredentials = try? await keychain.loadCloudflareAccessCredentials(forServer: profileId)
+    private func makeTriliumClient(
+        baseURL: URL,
+        profileId: String,
+        persistedCookieData: Data?,
+        pendingCloudflareAccessCredentials: CloudflareAccessCredentials? = nil
+    ) async -> TriliumClient {
+        let cfCredentials: CloudflareAccessCredentials?
+        if let pendingCloudflareAccessCredentials {
+            cfCredentials = pendingCloudflareAccessCredentials
+        } else {
+            cfCredentials = try? await keychain.loadCloudflareAccessCredentials(forServer: profileId)
+        }
         return TriliumClient(
             baseURL: baseURL,
             persistedCookieData: persistedCookieData,
@@ -974,8 +984,23 @@ final class AppState {
         startRealtimeIfPossible()
     }
 
-    func loginWithPassword(_ password: String, rememberMe: Bool, totpToken: String? = nil, profile: ServerProfile) async throws {
+    func loginWithPassword(
+        _ password: String,
+        rememberMe: Bool,
+        totpToken: String? = nil,
+        profile: ServerProfile,
+        cloudflareAccessCredentials: CloudflareAccessCredentials? = nil
+    ) async throws {
         guard let url = profile.url else { throw APIError.invalidURL }
+
+        try await keychain.clearServerAuthArtifacts(forServer: profile.id)
+        let newClient = await makeTriliumClient(
+            baseURL: url,
+            profileId: profile.id,
+            persistedCookieData: nil,
+            pendingCloudflareAccessCredentials: cloudflareAccessCredentials
+        )
+        try await newClient.login(password: password, rememberMe: rememberMe, totpToken: totpToken)
 
         if activeProfile?.id != profile.id {
             NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
@@ -984,13 +1009,14 @@ final class AppState {
             await Task.yield()
         }
 
-        try await keychain.clearServerAuthArtifacts(forServer: profile.id)
-        let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: nil)
-        try await newClient.login(password: password, rememberMe: rememberMe, totpToken: totpToken)
-
         let exportedLogin = await newClient.exportSessionCookieData()
         try? await keychain.saveSessionCookies(exportedLogin, forServer: profile.id)
         _ = try await triliumInstanceId(for: profile)
+
+        try persistence.saveProfile(profile)
+        if let cloudflareAccessCredentials {
+            try await keychain.saveCloudflareAccessCredentials(cloudflareAccessCredentials, forServer: profile.id)
+        }
 
         self.client = newClient
         self.activeProfile = profile

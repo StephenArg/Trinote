@@ -27,7 +27,6 @@ final class AuthViewModel {
     private var pendingTotpProfile: ServerProfile?
 
     private let persistence = PersistenceManager.shared
-    private let keychain = KeychainManager.shared
 
     enum URLScheme: String, CaseIterable {
         case https = "https://"
@@ -107,9 +106,12 @@ final class AuthViewModel {
         }
 
         do {
-            try persistence.saveProfile(profile)
-            try await saveCloudflareAccessCredentials(for: profile)
-            try await appState.loginWithPassword(password, rememberMe: rememberMe, profile: profile)
+            try await appState.loginWithPassword(
+                password,
+                rememberMe: rememberMe,
+                profile: profile,
+                cloudflareAccessCredentials: cloudflareCredentialsFromForm()
+            )
             password = ""
             cloudflareClientSecret = ""
             loadProfiles()
@@ -140,7 +142,13 @@ final class AuthViewModel {
         defer { isLoading = false }
 
         do {
-            try await appState.loginWithPassword(password, rememberMe: rememberMe, totpToken: totpCode, profile: profile)
+            try await appState.loginWithPassword(
+                password,
+                rememberMe: rememberMe,
+                totpToken: totpCode,
+                profile: profile,
+                cloudflareAccessCredentials: cloudflareCredentialsFromForm()
+            )
             password = ""
             totpCode = ""
             pendingTotpProfile = nil
@@ -194,15 +202,11 @@ final class AuthViewModel {
         return ServerProfile(name: name, baseURL: url)
     }
 
-    private func saveCloudflareAccessCredentials(for profile: ServerProfile) async throws {
+    private func cloudflareCredentialsFromForm() -> CloudflareAccessCredentials? {
         let id = cloudflareClientId.trimmingCharacters(in: .whitespacesAndNewlines)
         let secret = cloudflareClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        if id.isEmpty && secret.isEmpty {
-            try await keychain.saveCloudflareAccessCredentials(nil, forServer: profile.id)
-            return
-        }
-        let credentials = CloudflareAccessCredentials(clientId: id, clientSecret: secret)
-        try await keychain.saveCloudflareAccessCredentials(credentials, forServer: profile.id)
+        guard !id.isEmpty, !secret.isEmpty else { return nil }
+        return CloudflareAccessCredentials(clientId: id, clientSecret: secret)
     }
 }
 
