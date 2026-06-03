@@ -45,6 +45,14 @@ actor MockTriliumClient: TriliumClientProtocol {
         self.baseURL = baseURL
     }
 
+    func setNoteContentResult(_ noteId: String, _ result: Result<Data, Error>) {
+        noteContentResults[noteId] = result
+    }
+
+    func setAttachmentContentResult(_ result: Result<Data, Error>) {
+        attachmentContentResult = result
+    }
+
     func exportSessionCookieData() -> Data? { nil }
 
     func login(password: String, rememberMe: Bool, totpToken: String? = nil) async throws {

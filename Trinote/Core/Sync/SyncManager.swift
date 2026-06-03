@@ -31,6 +31,7 @@ final class SyncManager {
     private var syncTask: Task<Void, Never>?
     private var syncGeneration: UInt64 = 0
     private let persistence = PersistenceManager.shared
+    private let cacheExclusion = CacheExclusionPolicy()
     private static let maxConcurrency = 8
     /// `POST /api/tree/load` note IDs per request during full-sync BFS (split on failure).
     private static let treeWalkBatchSize = 50
@@ -111,7 +112,8 @@ final class SyncManager {
                 serverNotes: map,
                 client: client,
                 profileId: profileId,
-                protectedBodiesOnly: true
+                protectedBodiesOnly: true,
+                respectCacheExclusion: true
             )
             Log.sync.info("Protected note body prefetch finished (\(map.count) candidates)")
         } catch {
@@ -163,6 +165,25 @@ final class SyncManager {
         self.endBackgroundTimeExtension()
     }
 
+    /// Walks and caches one top-level notebook subtree (after re-enabling cache exclusion).
+    func syncSubtree(client: any TriliumClientProtocol, profileId: String, rootNoteId: String) {
+        guard !isSyncing else { return }
+        self.syncTask?.cancel()
+        self.syncGeneration &+= 1
+        let gen = self.syncGeneration
+        self.isSyncing = true
+        self.syncError = nil
+        self.phase = .walkingTree
+        self.syncTask = Task { [self] in
+            await self.performSubtreeSync(
+                client: client,
+                profileId: profileId,
+                rootNoteId: rootNoteId,
+                generation: gen
+            )
+        }
+    }
+
     private func isStale(_ generation: UInt64) -> Bool {
         Task.isCancelled || self.syncGeneration != generation
     }
@@ -184,7 +205,13 @@ final class SyncManager {
         let syncStartedAt = Date.now
 
         do {
-            let serverNotes = try await self.walkTree(client: client, profileId: profileId, generation: generation)
+            let serverNotes = try await self.walkTree(
+                client: client,
+                profileId: profileId,
+                generation: generation,
+                startNoteIds: ["root"],
+                respectCacheExclusion: true
+            )
             if isStale(generation) { return }
 
             try? self.persistence.reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
@@ -199,7 +226,8 @@ final class SyncManager {
                 serverNotes: serverNotes,
                 client: client,
                 profileId: profileId,
-                protectedBodiesOnly: false
+                protectedBodiesOnly: false,
+                respectCacheExclusion: true
             )
             let backfillRetry = (try? self.persistence.serverModifiedMapForUnprotectedNotesMissingContent(serverProfileId: profileId)) ?? [:]
             if !backfillRetry.isEmpty {
@@ -207,7 +235,8 @@ final class SyncManager {
                     serverNotes: backfillRetry,
                     client: client,
                     profileId: profileId,
-                    protectedBodiesOnly: false
+                    protectedBodiesOnly: false,
+                    respectCacheExclusion: true
                 )
                 ghostIds.formUnion(ghost2)
             }
@@ -240,6 +269,7 @@ final class SyncManager {
             self.lastCompletedSyncUpdatedLocalDatabase = true
             self.phase = .done
             self.syncProgress = 1.0
+            await self.pruneCacheExclusions(client: client, profileId: profileId)
             NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
             Log.sync.info("Full sync complete: \(self.syncedNoteCount) notes synced")
 
@@ -408,7 +438,8 @@ final class SyncManager {
                         serverNotes: serverNotesForContent,
                         client: client,
                         profileId: profileId,
-                        protectedBodiesOnly: false
+                        protectedBodiesOnly: false,
+                        respectCacheExclusion: true
                     )
                     if !ghostIds.isEmpty {
                         for gid in ghostIds {
@@ -426,6 +457,7 @@ final class SyncManager {
             if isStale(generation) { return }
             self.lastCompletedSyncUpdatedLocalDatabase = (totalApplied > 0 || deletionCount > 0 || ranContentPass)
 
+            await self.pruneCacheExclusions(client: client, profileId: profileId)
             try? self.persistence.updateSyncStatus(domain: "incrementalSync", serverProfileId: profileId)
             self.lastIncrementalSyncDate = .now
             self.phase = .done
@@ -513,12 +545,94 @@ final class SyncManager {
         return false
     }
 
+    private func shouldSuppressCaching(
+        noteId: String,
+        parentNoteIds: [String],
+        profileId: String
+    ) -> Bool {
+        cacheExclusion.isNoteExcludedFromCache(
+            noteId: noteId,
+            parentNoteIds: parentNoteIds,
+            serverProfileId: profileId
+        )
+    }
+
+    private func cachedParentNoteIds(noteId: String, profileId: String) -> [String] {
+        (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
+    }
+
+    private func pruneCacheExclusions(client: any TriliumClientProtocol, profileId: String) async {
+        do {
+            let (_, branches) = try await client.getNoteWithBranches(TriliumTreeConstants.rootNoteId)
+            let live = Set(branches.map(\.noteId).filter { !Self.hiddenNoteIds.contains($0) })
+            try cacheExclusion.pruneStaleExcludedRoots(
+                liveRootChildIds: live,
+                serverProfileId: profileId,
+                authoritativeLiveList: true
+            )
+        } catch {
+            Log.sync.debug("pruneCacheExclusions skipped: \(error)")
+        }
+    }
+
+    private func performSubtreeSync(
+        client: any TriliumClientProtocol,
+        profileId: String,
+        rootNoteId: String,
+        generation: UInt64
+    ) async {
+        defer {
+            if !isStale(generation) {
+                self.isSyncing = false
+            }
+            self.endBackgroundTimeExtension()
+        }
+        self.syncProgress = 0
+        self.syncedNoteCount = 0
+        self.totalNoteCount = 0
+
+        do {
+            let serverNotes = try await self.walkTree(
+                client: client,
+                profileId: profileId,
+                generation: generation,
+                startNoteIds: [rootNoteId],
+                respectCacheExclusion: false
+            )
+            if isStale(generation) { return }
+
+            self.phase = .downloadingContent
+            _ = try await self.downloadContent(
+                serverNotes: serverNotes,
+                client: client,
+                profileId: profileId,
+                protectedBodiesOnly: false,
+                respectCacheExclusion: false
+            )
+            if isStale(generation) { return }
+
+            try? self.persistence.reconcileCachedNoteBranchesMetadata(forNoteId: rootNoteId, serverProfileId: profileId)
+            self.phase = .done
+            self.syncProgress = 1.0
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+            Log.sync.info("Subtree sync complete for \(rootNoteId): \(serverNotes.count) notes")
+        } catch {
+            if isStale(generation) { return }
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError { return }
+            self.syncError = apiError.localizedDescription
+            self.phase = .idle
+            Log.sync.error("Subtree sync failed: \(error)")
+        }
+    }
+
     private func applyErasedEntity(entityName: String, entityId: String, profileId: String) throws {
         switch entityName {
         case "notes":
             let parentIds = (try? persistence.fetchCachedNote(id: entityId, serverProfileId: profileId))?.parentNoteIds ?? []
             GhostNoteTracker.shared.add(entityId, serverProfileId: profileId)
             try persistence.deleteCachedNotes(noteIds: [entityId], serverProfileId: profileId)
+            try? cacheExclusion.removeExcludedRootNoteIfNeeded(noteId: entityId, serverProfileId: profileId)
             for parentId in parentIds {
                 try? persistence.reconcileCachedNoteBranchesMetadata(forNoteId: parentId, serverProfileId: profileId)
             }
@@ -561,14 +675,19 @@ final class SyncManager {
             return false
         }
 
+        let existingForParents = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId)
+        let parentNoteIds = Self.treeStringArrayField(d, key: "parentNoteIds", existing: existingForParents?.parentNoteIds)
+        if shouldSuppressCaching(noteId: noteId, parentNoteIds: parentNoteIds, profileId: profileId) {
+            return false
+        }
+
         let title = d["title"] as? String ?? ""
         let type = d["type"] as? String ?? "text"
         let mime = d["mime"] as? String ?? "text/html"
         let isProtected = FlexJSON.bool(d["isProtected"])
         let utc = d["utcDateModified"] as? String ?? ""
 
-        let existing = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId)
-        let parentNoteIds = Self.treeStringArrayField(d, key: "parentNoteIds", existing: existing?.parentNoteIds)
+        let existing = existingForParents
         let childNoteIds = Self.treeStringArrayField(d, key: "childNoteIds", existing: existing?.childNoteIds)
         let parentBranchIds = Self.treeStringArrayField(d, key: "parentBranchIds", existing: existing?.parentBranchIds)
         let childBranchIds = Self.treeStringArrayField(d, key: "childBranchIds", existing: existing?.childBranchIds)
@@ -616,6 +735,11 @@ final class SyncManager {
             return false
         }
 
+        let parentNoteIds = cachedParentNoteIds(noteId: noteId, profileId: profileId)
+        if shouldSuppressCaching(noteId: noteId, parentNoteIds: parentNoteIds, profileId: profileId) {
+            return false
+        }
+
         let notePosition = FlexJSON.int(d["notePosition"]) ?? 0
         let isExpanded = FlexJSON.bool(d["isExpanded"])
         let prefix = d["prefix"] as? String
@@ -647,6 +771,11 @@ final class SyncManager {
             return false
         }
 
+        let parentNoteIds = cachedParentNoteIds(noteId: noteId, profileId: profileId)
+        if shouldSuppressCaching(noteId: noteId, parentNoteIds: parentNoteIds, profileId: profileId) {
+            return false
+        }
+
         let ar = AttributeResponse(
             attributeId: attributeId,
             noteId: noteId,
@@ -670,12 +799,18 @@ final class SyncManager {
            let data = Data(base64Encoded: contentStr) ?? contentStr.data(using: .utf8) {
             let noteId = d["noteId"] as? String
             if let noteId, !shouldSuppressIncomingNote(noteId, profileId: profileId) {
-                try? persistence.cacheNoteContent(noteId, content: data, serverProfileId: profileId, utcDateModified: nil)
+                let parentNoteIds = cachedParentNoteIds(noteId: noteId, profileId: profileId)
+                if !shouldSuppressCaching(noteId: noteId, parentNoteIds: parentNoteIds, profileId: profileId) {
+                    try? persistence.cacheNoteContent(noteId, content: data, serverProfileId: profileId, utcDateModified: nil)
+                }
             }
         }
         if let noteId = FlexJSON.string(d["noteId"]),
            !shouldSuppressIncomingNote(noteId, profileId: profileId) {
-            notesToRefreshUtc[noteId] = notesToRefreshUtc[noteId] ?? ""
+            let parentNoteIds = cachedParentNoteIds(noteId: noteId, profileId: profileId)
+            if !shouldSuppressCaching(noteId: noteId, parentNoteIds: parentNoteIds, profileId: profileId) {
+                notesToRefreshUtc[noteId] = notesToRefreshUtc[noteId] ?? ""
+            }
         }
         _ = blobId
     }
@@ -702,11 +837,13 @@ final class SyncManager {
     private func walkTree(
         client: any TriliumClientProtocol,
         profileId: String,
-        generation: UInt64
+        generation: UInt64,
+        startNoteIds: [String],
+        respectCacheExclusion: Bool
     ) async throws -> [String: String] {
         var serverNotes: [String: String] = [:]
         var visited = Set<String>()
-        var frontier: [String] = ["root"]
+        var frontier: [String] = startNoteIds
         var maxTotalEstimate = 1
 
         var knownNoteIds = try self.persistence.prefetchExistingNoteIds(serverProfileId: profileId)
@@ -758,19 +895,32 @@ final class SyncManager {
                 }
                 if visited.contains(response.noteId) { continue }
                 visited.insert(response.noteId)
-                serverNotes[response.noteId] = response.utcDateModified
 
-                try self.persistence.cacheNoteBatchForFullSync(from: response, serverProfileId: profileId, knownExisting: &knownNoteIds)
-                for attr in response.attributes {
-                    try? self.persistence.cacheAttributeBatchForFullSync(from: attr, serverProfileId: profileId, knownExisting: &knownAttributeIds)
-                }
-                for br in entry.childBranches {
-                    try? self.persistence.cacheBranchBatchForFullSync(from: br, serverProfileId: profileId, knownExisting: &knownBranchIds)
+                let isExcludedRoot = respectCacheExclusion
+                    && cacheExclusion.isExcludedRootNote(response.noteId, serverProfileId: profileId)
+                let shouldCacheThisNote = !respectCacheExclusion
+                    || (!isExcludedRoot && !cacheExclusion.isNoteExcludedFromCache(
+                        noteId: response.noteId,
+                        parentNoteIds: response.parentNoteIds,
+                        serverProfileId: profileId
+                    ))
+
+                if shouldCacheThisNote {
+                    serverNotes[response.noteId] = response.utcDateModified
+                    try self.persistence.cacheNoteBatchForFullSync(from: response, serverProfileId: profileId, knownExisting: &knownNoteIds)
+                    for attr in response.attributes {
+                        try? self.persistence.cacheAttributeBatchForFullSync(from: attr, serverProfileId: profileId, knownExisting: &knownAttributeIds)
+                    }
+                    for br in entry.childBranches {
+                        try? self.persistence.cacheBranchBatchForFullSync(from: br, serverProfileId: profileId, knownExisting: &knownBranchIds)
+                    }
                 }
 
-                for cid in response.childNoteIds where !Self.hiddenNoteIds.contains(cid) {
-                    if !visited.contains(cid) {
-                        nextNoteIds.append(cid)
+                if !isExcludedRoot {
+                    for cid in response.childNoteIds where !Self.hiddenNoteIds.contains(cid) {
+                        if !visited.contains(cid) {
+                            nextNoteIds.append(cid)
+                        }
                     }
                 }
             }
@@ -795,7 +945,8 @@ final class SyncManager {
         serverNotes: [String: String],
         client: any TriliumClientProtocol,
         profileId: String,
-        protectedBodiesOnly: Bool
+        protectedBodiesOnly: Bool,
+        respectCacheExclusion: Bool
     ) async throws -> Set<String> {
         let noteIdsNeedingContent: [String]
         if protectedBodiesOnly {
@@ -810,22 +961,32 @@ final class SyncManager {
             )
         }
 
-        let alreadyUpToDate = self.totalNoteCount - noteIdsNeedingContent.count
+        let filteredNoteIds: [String]
+        if respectCacheExclusion {
+            filteredNoteIds = noteIdsNeedingContent.filter { noteId in
+                let parentNoteIds = cachedParentNoteIds(noteId: noteId, profileId: profileId)
+                return !shouldSuppressCaching(noteId: noteId, parentNoteIds: parentNoteIds, profileId: profileId)
+            }
+        } else {
+            filteredNoteIds = noteIdsNeedingContent
+        }
+
+        let alreadyUpToDate = self.totalNoteCount - filteredNoteIds.count
         self.syncedNoteCount = max(alreadyUpToDate, 0)
         var ghostNoteIds = Set<String>()
 
-        if noteIdsNeedingContent.isEmpty {
+        if filteredNoteIds.isEmpty {
             self.syncProgress = 1.0
             return ghostNoteIds
         }
 
-        Log.sync.info("Downloading content for \(noteIdsNeedingContent.count) of \(self.totalNoteCount) notes")
+        Log.sync.info("Downloading content for \(filteredNoteIds.count) of \(self.totalNoteCount) notes")
 
-        for batchStart in stride(from: 0, to: noteIdsNeedingContent.count, by: Self.maxConcurrency) {
+        for batchStart in stride(from: 0, to: filteredNoteIds.count, by: Self.maxConcurrency) {
             if Task.isCancelled { return ghostNoteIds }
 
-            let batchEnd = min(batchStart + Self.maxConcurrency, noteIdsNeedingContent.count)
-            let batch = Array(noteIdsNeedingContent[batchStart..<batchEnd])
+            let batchEnd = min(batchStart + Self.maxConcurrency, filteredNoteIds.count)
+            let batch = Array(filteredNoteIds[batchStart..<batchEnd])
 
             let results = try await self.fetchInParallel(
                 ids: batch,
@@ -851,10 +1012,17 @@ final class SyncManager {
                 if isGhost {
                     ghostNoteIds.insert(noteId)
                 } else if let data {
-                    try? self.persistence.cacheNoteContent(
-                        noteId, content: data, serverProfileId: profileId,
-                        utcDateModified: serverNotes[noteId]
-                    )
+                    let parentNoteIds = cachedParentNoteIds(noteId: noteId, profileId: profileId)
+                    if !respectCacheExclusion || !shouldSuppressCaching(
+                        noteId: noteId,
+                        parentNoteIds: parentNoteIds,
+                        profileId: profileId
+                    ) {
+                        try? self.persistence.cacheNoteContent(
+                            noteId, content: data, serverProfileId: profileId,
+                            utcDateModified: serverNotes[noteId]
+                        )
+                    }
                 }
             }
 

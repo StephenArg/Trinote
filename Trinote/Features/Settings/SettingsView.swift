@@ -530,6 +530,7 @@ struct SettingsView: View {
                 Task {
                     guard await appState.refreshTriliumSession() else { return }
                     if let client = appState.client, let profileId = appState.activeProfile?.id {
+                        appState.imageCachePrefetcher.cancel()
                         appState.syncManager.fullSync(client: client, profileId: profileId)
                     }
                 }
@@ -537,6 +538,62 @@ struct SettingsView: View {
                 Label(String(localized: "Full Sync (All Notes)", comment: "Settings sync button"), systemImage: "arrow.triangle.2.circlepath")
             }
             .disabled(appState.syncManager.isSyncing || appState.client == nil)
+
+            if appState.imageCachePrefetcher.isRunning {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    let prefetch = appState.imageCachePrefetcher
+                    if prefetch.totalImageRefs > 0 {
+                        Text(
+                            String(
+                                localized: "Prefetching images \(prefetch.prefetchedCount)/\(prefetch.totalImageRefs)…",
+                                comment: "Settings image cache prefetch progress"
+                            )
+                        )
+                    } else {
+                        Text(String(localized: "Scanning notes for images…", comment: "Settings image cache prefetch"))
+                    }
+                }
+                .font(.callout)
+                .foregroundStyle(.blue)
+            }
+
+            Button {
+                Task {
+                    guard await appState.refreshTriliumSession() else { return }
+                    if let client = appState.client, let profileId = appState.activeProfile?.id {
+                        appState.imageCachePrefetcher.prefetchAllInlineImages(client: client, profileId: profileId)
+                    }
+                }
+            } label: {
+                Label(String(localized: "Fetch All Images", comment: "Settings button to cache inline images"), systemImage: "photo.on.rectangle.angled")
+            }
+            .disabled(
+                appState.syncManager.isSyncing
+                    || appState.imageCachePrefetcher.isRunning
+                    || appState.client == nil
+                    || !appState.isOnline
+            )
+
+            Text(
+                String(
+                    localized: "Downloads images referenced in cached note HTML. Protected notes without cached bodies are skipped. Canvas and mermaid image links may still load from the server when no export image exists.",
+                    comment: "Settings footnote for Fetch All Images"
+                )
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            if let prefetchError = appState.imageCachePrefetcher.lastError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(prefetchError)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
 
             if let error = appState.syncManager.syncError {
                 HStack(alignment: .top, spacing: 6) {
@@ -580,6 +637,17 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            NavigationLink {
+                CacheExcludedRootNotesView()
+                    .environment(appState)
+            } label: {
+                Label(
+                    String(localized: "Cached Notebooks", comment: "Settings link to cache exclusion list"),
+                    systemImage: "externaldrive.badge.xmark"
+                )
+            }
+            .disabled(appState.activeProfile == nil)
 
             Button(String(localized: "Clear Cache", comment: "Settings destructive"), role: .destructive) {
                 showClearCacheConfirm = true

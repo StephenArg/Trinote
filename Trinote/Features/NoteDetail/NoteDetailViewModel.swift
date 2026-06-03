@@ -79,6 +79,7 @@ final class NoteDetailViewModel {
     /// From the tree when opening a note whose children are in memory but not (yet) in SwiftData — critical offline.
     @ObservationIgnored private let seedChildSummaries: [ChildNoteSummary]?
     private let persistence = PersistenceManager.shared
+    private let cacheExclusion = CacheExclusionPolicy()
     private var draftAutoSaveTask: Task<Void, Never>?
     private var serverContentHash: Int?
     /// The server's utcDateModified for the current note, set during metadata fetch.
@@ -112,11 +113,40 @@ final class NoteDetailViewModel {
     var isOnline: Bool { appState.isOnline }
     var serverBaseURL: URL? { (appState.client as? TriliumClient)?.baseURL }
 
-    private static func persistNoteResponse(_ response: NoteResponse, profileId: String, persistence: PersistenceManager) {
-        try? persistence.cacheNote(from: response, serverProfileId: profileId)
+    private func parentNoteIdsForCache(noteId: String, response: NoteResponse? = nil) -> [String] {
+        if let response { return response.parentNoteIds }
+        if note?.noteId == noteId { return note?.parentNoteIds ?? [] }
+        guard let profileId = serverProfileId else { return [] }
+        return (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
+    }
+
+    private func persistNoteResponse(_ response: NoteResponse, profileId: String) {
+        try? persistence.cacheNoteIfAllowed(from: response, serverProfileId: profileId, policy: cacheExclusion)
         for attr in response.attributes {
-            try? persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
+            try? persistence.cacheAttributeBatchIfAllowed(
+                from: attr,
+                parentNoteIds: response.parentNoteIds,
+                serverProfileId: profileId,
+                policy: cacheExclusion
+            )
         }
+    }
+
+    private func cacheNoteContentIfAllowed(
+        _ noteId: String,
+        content: Data,
+        profileId: String,
+        utcDateModified: String? = nil,
+        response: NoteResponse? = nil
+    ) {
+        try? persistence.cacheNoteContentIfAllowed(
+            noteId,
+            content: content,
+            parentNoteIds: parentNoteIdsForCache(noteId: noteId, response: response),
+            serverProfileId: profileId,
+            utcDateModified: utcDateModified,
+            policy: cacheExclusion
+        )
     }
 
     /// Refetches this note, ancestors, and direct children so titles match the current protected session (decrypted vs encrypted).
@@ -129,7 +159,7 @@ final class NoteDetailViewModel {
             visited.insert(nid)
             do {
                 let response = try await client.getNote(nid)
-                Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+                persistNoteResponse(response, profileId: profileId)
                 if nid == noteId {
                     self.note = NoteItem(from: response)
                     self.serverUtcDateModified = response.utcDateModified
@@ -147,7 +177,7 @@ final class NoteDetailViewModel {
             for childId in n.childNoteIds where !visited.contains(childId) {
                 do {
                     let response = try await client.getNote(childId)
-                    Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+                    persistNoteResponse(response, profileId: profileId)
                 } catch {
                     Log.api.debug("Protected title resync: child getNote failed for \(childId)")
                 }
@@ -187,7 +217,7 @@ final class NoteDetailViewModel {
         guard let client else { return refId }
         do {
             let r = try await client.getNote(refId)
-            Self.persistNoteResponse(r, profileId: profileId, persistence: persistence)
+            persistNoteResponse(r, profileId: profileId)
             try? persistence.commitBatch()
             let t = NoteItem.maskedStoredTitle(r.title, isProtected: r.isProtected, protectedSessionActive: sessionActive)
             let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -294,7 +324,7 @@ final class NoteDetailViewModel {
             await updateSharedPublicState(client: client)
 
             if let profileId = self.serverProfileId {
-                Self.persistNoteResponse(response, profileId: profileId, persistence: self.persistence)
+                persistNoteResponse(response, profileId: profileId)
                 try? self.persistence.commitBatch()
                 try? self.persistence.recordRecentNote(
                     noteId: nid, title: response.title,
@@ -330,7 +360,7 @@ final class NoteDetailViewModel {
         // Cached HTML still points at `api/images` / `api/attachments`; WKWebView cannot load those like a browser tab.
         // If we assign `contentString` before inlining completes, images briefly show as broken (e.g. “?”) while online fetches run.
         if let raw = self.rawContentString,
-           raw.localizedCaseInsensitiveContains("api/attachments/") || raw.localizedCaseInsensitiveContains("api/images/"),
+           TriliumInlineImageCaching.hasResolvableInlineImageURLs(in: raw),
            self.note?.type == .text || self.contentString == nil {
             let hideBodyUntilInlined = self.contentString == nil
             if hideBodyUntilInlined {
@@ -343,6 +373,8 @@ final class NoteDetailViewModel {
             }
         }
         await applyIncludeNoteResolutionIfNeeded()
+
+        await ensureNoteMetadataIfNeeded()
 
         guard let note = self.note else {
             Log.noteDiag.info("NoteDiag CONTENT phase=loadContent.noNote noteId=\(self.noteId)")
@@ -405,7 +437,12 @@ final class NoteDetailViewModel {
         )
 
         let forceFetchProtected = note.isProtected && !appState.protectedSessionActive
-        if let serverDate = self.serverUtcDateModified, let cachedDate, serverDate <= cachedDate, !forceFetchProtected {
+        // Metadata can be cached without a body (e.g. cache-excluded subtree). Do not skip the network fetch when there is no usable local body.
+        if let serverDate = self.serverUtcDateModified,
+           let cachedDate,
+           serverDate <= cachedDate,
+           !forceFetchProtected,
+           hasUsableBody {
             self.serverVerified = true
             if note.isProtected {
                 self.needsProtectedSession = false
@@ -497,8 +534,8 @@ final class NoteDetailViewModel {
             }
 
             if let profileId = self.serverProfileId {
-                try? self.persistence.cacheNoteContent(
-                    nid, content: data, serverProfileId: profileId,
+                cacheNoteContentIfAllowed(
+                    nid, content: data, profileId: profileId,
                     utcDateModified: self.serverUtcDateModified
                 )
             }
@@ -546,79 +583,16 @@ final class NoteDetailViewModel {
     /// base64 data URIs. Matches `api/images|attachments` with any prefix (relative, `/api/…`, or `https://host/…/api/…`).
     /// Applies replacements from the end of the string so ranges stay valid when lengths change.
     private func inlineAttachmentImages(in html: String) async -> String {
-        let pattern = try! NSRegularExpression(
-            pattern: #"(?i)(src|data-src|data-cke-saved-src)=(["'])([^"']*?)api/(attachments|images)/([a-zA-Z0-9_-]+)/[^"']*\2"#,
-            options: []
-        )
-        let htmlNS = html as NSString
-        let fullRange = NSRange(location: 0, length: htmlNS.length)
-        let matches = pattern.matches(in: html, options: [], range: fullRange)
-        guard !matches.isEmpty else { return html }
-
         let profileId = self.serverProfileId ?? ""
-        let ms = NSMutableString(string: html)
-        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
-            guard match.numberOfRanges >= 6 else { continue }
-            let attr = htmlNS.substring(with: match.range(at: 1))
-            let quote = htmlNS.substring(with: match.range(at: 2))
-            let routeType = htmlNS.substring(with: match.range(at: 4))
-            let entityId = htmlNS.substring(with: match.range(at: 5))
-
-            var imageData: Data?
-            do {
-                if let cached = try self.persistence.fetchCachedImage(
-                    entityId: entityId, entityType: routeType, serverProfileId: profileId
-                ) {
-                    imageData = cached.data
-                    Log.api.debug("Image cache hit: \(routeType)/\(entityId)")
-                }
-            } catch {
-                Log.api.warning("Image cache lookup failed: \(error)")
-            }
-
-            if imageData == nil, let client {
-                do {
-                    if routeType == "attachments" {
-                        imageData = try await client.getAttachmentContent(entityId)
-                    } else {
-                        imageData = try await client.getNoteContent(entityId)
-                    }
-                    if let data = imageData {
-                        let mime = data.detectImageMIME()
-                        do {
-                            try self.persistence.cacheImage(
-                                entityId: entityId, entityType: routeType,
-                                data: data, mime: mime, serverProfileId: profileId
-                            )
-                            Log.api.debug("Cached image: \(routeType)/\(entityId)")
-                        } catch {
-                            Log.api.warning("Failed to cache image: \(error)")
-                        }
-                    }
-                } catch {
-                    Log.api.error("Failed to download image \(routeType)/\(entityId)")
-                }
-            }
-
-            guard let data = imageData, data.isPlausibleInlineImagePayload else { continue }
-            let mime = data.detectImageMIME()
-            let b64 = data.base64EncodedString()
-            let dataURI = "data:\(mime);base64,\(b64)"
-            // For `api/images/{noteId}` (Trilium `~imageLink`), preserve the linked note id on every
-            // inlined attribute (`src`, `data-src`, `data-cke-saved-src`). CKEditor often keeps the
-            // real URL on `data-src` only — previously we only annotated `src`, so canvas/mermaid
-            // imageLinks never got `data-trinote-image-note-id` and couldn't be wrapped in cards.
-            let replacement: String
-            if routeType.lowercased() == "images" {
-                let escId = entityId.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;")
-                replacement = "\(attr)=\(quote)\(dataURI)\(quote) data-trinote-image-note-id=\(quote)\(escId)\(quote)"
-            } else {
-                replacement = "\(attr)=\(quote)\(dataURI)\(quote)"
-            }
-            ms.replaceCharacters(in: match.range, with: replacement)
-        }
-
-        return Self.dedupeTrinoteImageNoteIdAttributesInHTML(ms as String)
+        let inlined = await TriliumInlineImageCaching.inlineAttachmentImages(
+            in: html,
+            client: client,
+            persistence: persistence,
+            serverProfileId: profileId,
+            sourceNoteId: noteId,
+            parentNoteIds: parentNoteIdsForCache(noteId: noteId)
+        )
+        return Self.dedupeTrinoteImageNoteIdAttributesInHTML(inlined)
     }
 
     /// `~imageLink` to mermaid/canvas notes still uses `api/images/{noteId}/…`, but `getNoteContent` returns diagram
@@ -751,7 +725,11 @@ final class NoteDetailViewModel {
             let bodyHTML: String
             if meta.type == .mermaid {
                 let source = await Self.loadRawMermaidSourceForImageLinkWrap(
-                    noteId: noteId, client: client, persistence: persistence, profileId: serverProfileId, isOnline: isOnline
+                    noteId: noteId,
+                    client: client,
+                    persistence: persistence,
+                    profileId: serverProfileId,
+                    isOnline: isOnline
                 )
                 if let source, let svg = await MermaidRenderer.shared.render(source: source) {
                     bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--mermaid\">\(svg)</div>"
@@ -821,7 +799,16 @@ final class NoteDetailViewModel {
         }
         do {
             let data = try await client.getNoteContent(noteId)
-            try? persistence.cacheNoteContent(noteId, content: data, serverProfileId: profileId, utcDateModified: nil)
+            let parentNoteIds = (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
+            let policy = CacheExclusionPolicy(persistence: persistence)
+            try? persistence.cacheNoteContentIfAllowed(
+                noteId,
+                content: data,
+                parentNoteIds: parentNoteIds,
+                serverProfileId: profileId,
+                utcDateModified: nil,
+                policy: policy
+            )
             if let str = String(data: data, encoding: .utf8) {
                 return IncludeNoteResolver.normalizedMermaidSource(str)
             }
@@ -844,7 +831,7 @@ final class NoteDetailViewModel {
         guard isOnline, let client else { return nil }
         do {
             let response = try await client.getNote(noteId)
-            Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+            persistNoteResponse(response, profileId: profileId)
             try? persistence.commitBatch()
             let item = NoteItem(from: response)
             let trimmed = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1023,8 +1010,11 @@ final class NoteDetailViewModel {
                 switch meta.type {
                 case .mermaid:
                     let source = await Self.loadRawMermaidSourceForImageLinkWrap(
-                        noteId: entityId, client: client, persistence: persistence,
-                        profileId: serverProfileId, isOnline: isOnline
+                        noteId: entityId,
+                        client: client,
+                        persistence: persistence,
+                        profileId: serverProfileId,
+                        isOnline: isOnline
                     )
                     guard let source, !source.isEmpty else { return nil }
                     guard let svg = await MermaidRenderer.shared.render(source: source) else { return nil }
@@ -1049,32 +1039,18 @@ final class NoteDetailViewModel {
     /// subsequent read-only render hits the cache.
     private func fetchInlinableDataURI(routeType: String, entityId: String) async -> String? {
         let profileId = self.serverProfileId ?? ""
-        var imageData: Data?
-        if let cached = try? persistence.fetchCachedImage(
-            entityId: entityId, entityType: routeType, serverProfileId: profileId
-        ) {
-            imageData = cached.data
+        let clientForLoad: (any TriliumClientProtocol)? = isOnline ? client : nil
+        guard let data = await TriliumInlineImageCaching.loadImageData(
+            routeType: routeType,
+            entityId: entityId,
+            client: clientForLoad,
+            persistence: persistence,
+            serverProfileId: profileId,
+            sourceNoteId: noteId,
+            parentNoteIds: parentNoteIdsForCache(noteId: noteId)
+        ), data.isPlausibleInlineImagePayload else {
+            return nil
         }
-        if imageData == nil, isOnline, let client {
-            do {
-                if routeType == "attachments" {
-                    imageData = try await client.getAttachmentContent(entityId)
-                } else {
-                    imageData = try await client.getNoteContent(entityId)
-                }
-                if let data = imageData, data.isPlausibleInlineImagePayload {
-                    let mime = data.detectImageMIME()
-                    try? persistence.cacheImage(
-                        entityId: entityId, entityType: routeType,
-                        data: data, mime: mime, serverProfileId: profileId
-                    )
-                }
-            } catch {
-                Log.api.error("Editor decorate: failed to download \(routeType)/\(entityId): \(String(describing: error))")
-                return nil
-            }
-        }
-        guard let data = imageData, data.isPlausibleInlineImagePayload else { return nil }
         let mime = data.detectImageMIME()
         return "data:\(mime);base64,\(data.base64EncodedString())"
     }
@@ -1083,43 +1059,25 @@ final class NoteDetailViewModel {
     /// returning the raw SVG bytes (as a UTF-8 string) so we can build a `data:image/svg+xml;…` URI.
     private func canvasExportSVGForEditor(noteId: String) async -> String? {
         guard let profileId = serverProfileId, !profileId.isEmpty else { return nil }
+        let clientForLoad: (any TriliumClientProtocol)? = isOnline ? client : nil
         guard let attachmentId = await canvasExportSVGAttachmentIdForEditor(noteId: noteId) else { return nil }
-        var data: Data?
-        if let cached = try? persistence.fetchCachedImage(
-            entityId: attachmentId, entityType: "attachments", serverProfileId: profileId
-        ) {
-            data = cached.data
+        guard let data = await TriliumInlineImageCaching.loadImageData(
+            routeType: "attachments",
+            entityId: attachmentId,
+            client: clientForLoad,
+            persistence: persistence,
+            serverProfileId: profileId,
+            sourceNoteId: noteId,
+            parentNoteIds: parentNoteIdsForCache(noteId: noteId)
+        ), !data.isEmpty else {
+            return nil
         }
-        if data == nil, isOnline, let client {
-            do {
-                let fetched = try await client.getAttachmentContent(attachmentId)
-                data = fetched
-                if fetched.isPlausibleInlineImagePayload {
-                    let mime = fetched.detectImageMIME()
-                    try? persistence.cacheImage(
-                        entityId: attachmentId, entityType: "attachments",
-                        data: fetched, mime: mime, serverProfileId: profileId
-                    )
-                }
-            } catch {
-                Log.api.error("Editor decorate: canvas SVG attachment failed for \(noteId): \(String(describing: error))")
-            }
-        }
-        guard let d = data, !d.isEmpty else { return nil }
-        return String(data: d, encoding: .utf8)
+        return String(data: data, encoding: .utf8)
     }
 
     private func canvasExportSVGAttachmentIdForEditor(noteId: String) async -> String? {
         guard isOnline, let client else { return nil }
-        do {
-            let list = try await client.getNoteAttachments(noteId)
-            if let hit = list.first(where: { $0.title == "canvas-export.svg" && $0.mime == "image/svg+xml" }) {
-                return hit.attachmentId
-            }
-            return list.first { $0.title == "canvas-export.svg" }?.attachmentId
-        } catch {
-            return nil
-        }
+        return await TriliumInlineImageCaching.canvasExportSVGAttachmentId(noteId: noteId, client: client)
     }
 
     private static func svgDataURI(_ svg: String) -> String {
@@ -1340,7 +1298,10 @@ final class NoteDetailViewModel {
         let cachedDate = (try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId))?.utcDateModified
         let serverIsNewer = serverDate != nil && (cachedDate == nil || serverDate! > cachedDate!)
 
-        if !force, !serverIsNewer {
+        loadContentFromCache()
+        let hasUsableBody = hasUsableDisplayedBodyContent()
+
+        if !force, !serverIsNewer, hasUsableBody {
             if let response = metaResponse {
                 self.note = NoteItem(from: response)
                 self.serverUtcDateModified = serverDate
@@ -1351,7 +1312,6 @@ final class NoteDetailViewModel {
             // open. Re-publish from cache so the WKWebView picks it up — without this, the
             // user has to back out and re-enter the note to see the new content (`load()`
             // does the same `loadContentFromCache()` call on entry).
-            loadContentFromCache()
             if let raw = self.rawContentString,
                raw.localizedCaseInsensitiveContains("api/attachments/")
                    || raw.localizedCaseInsensitiveContains("api/images/") {
@@ -1401,7 +1361,7 @@ final class NoteDetailViewModel {
                 self.serverUtcDateModified = serverDate
                 self.serverVerified = true
                 if let pid = self.serverProfileId {
-                    Self.persistNoteResponse(response, profileId: pid, persistence: persistence)
+                    persistNoteResponse(response, profileId: pid)
                     try? persistence.commitBatch()
                 }
                 await updateSharedPublicState(client: client)
@@ -1428,8 +1388,8 @@ final class NoteDetailViewModel {
         await applyIncludeNoteResolutionIfNeeded()
 
         if let pid = self.serverProfileId {
-            try? self.persistence.cacheNoteContent(
-                nid, content: data, serverProfileId: pid,
+            cacheNoteContentIfAllowed(
+                nid, content: data, profileId: pid,
                 utcDateModified: serverDate
             )
         }
@@ -1522,7 +1482,7 @@ final class NoteDetailViewModel {
         guard let profileId = serverProfileId else { return }
 
         do {
-            try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
+            cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
             // Pass nil so the upsert reads baseUtcDateModified from the cache for new rows.
             // The cache is kept current by the flush after each successful upload, preventing
             // false conflicts when rapid checkbox toggles create successive pending rows.
@@ -1692,7 +1652,7 @@ final class NoteDetailViewModel {
         showSaveError = false
         defer { isSaving = false }
         do {
-            try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
+            cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
             try persistence.upsertPendingNoteBodyUpload(
                 noteId: nid,
                 body: data,
@@ -1736,7 +1696,7 @@ final class NoteDetailViewModel {
         showSaveError = false
 
         do {
-            try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
+            cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
             try persistence.upsertPendingNoteBodyUpload(
                 noteId: nid,
                 body: data,
@@ -1795,7 +1755,7 @@ final class NoteDetailViewModel {
         showSaveError = false
 
         do {
-            try persistence.cacheNoteContent(nid, content: data, serverProfileId: profileId, utcDateModified: nil)
+            cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
             try persistence.upsertPendingNoteBodyUpload(
                 noteId: nid,
                 body: data,
@@ -1931,7 +1891,7 @@ final class NoteDetailViewModel {
                 self.note = NoteItem(from: updated)
                 self.editingTitle = false
                 if let profileId = serverProfileId {
-                    Self.persistNoteResponse(updated, profileId: profileId, persistence: persistence)
+                    persistNoteResponse(updated, profileId: profileId)
                     try? persistence.commitBatch()
                 }
                 NotificationCenter.default.post(
@@ -1986,8 +1946,13 @@ final class NoteDetailViewModel {
         do {
             let response = try await client.duplicateNoteAsChild(sourceNoteId: nid, parentNoteId: parentId)
             if let profileId = serverProfileId {
-                try? persistence.cacheNote(from: response.note, serverProfileId: profileId)
-                try? persistence.cacheBranch(from: response.branch, serverProfileId: profileId)
+                try? persistence.cacheNoteIfAllowed(from: response.note, serverProfileId: profileId, policy: cacheExclusion)
+                try? persistence.cacheBranchIfAllowed(
+                    from: response.branch,
+                    parentNoteIdsForNote: response.note.parentNoteIds,
+                    serverProfileId: profileId,
+                    policy: cacheExclusion
+                )
                 try? persistence.commitBatch()
             }
             return (response.note.noteId, response.note.title)
@@ -2281,21 +2246,75 @@ final class NoteDetailViewModel {
         return fromBranches.filter { !ghosts.contains($0) }
     }
 
-    /// Fetches the parent and each direct child from the server, updates the local cache, then reloads `childNotes`.
+    /// Fetches the parent and each direct child from the server, updates the local cache when allowed, then refreshes `childNotes`.
     /// Use after geo-map pin changes or when child titles may have changed on the server.
     func refreshDirectChildrenMetadataFromServer() async {
-        guard let client, let profileId = serverProfileId else {
-            await loadChildNotes()
-            return
+        await fetchDirectChildrenFromServer()
+    }
+
+    /// Loads sub-notes from cache first; when online, fills gaps from the server (required for cache-excluded subtrees).
+    func loadChildNotes() async {
+        let childIds = resolvedChildNoteIdsForDetail()
+        if !childIds.isEmpty {
+            loadChildNotesFromCache(childNoteIds: childIds)
+        } else if let seed = seedChildSummaries, !seed.isEmpty, let profileId = serverProfileId {
+            childNotes = seed.filter { summary in
+                !GhostNoteTracker.shared.contains(summary.noteId, serverProfileId: profileId)
+            }
+        } else {
+            childNotes = []
         }
+        applySeedChildMetadataMerge()
+
+        if needsDirectChildrenFromServer() {
+            await fetchDirectChildrenFromServer()
+        }
+    }
+
+    private func needsDirectChildrenFromServer() -> Bool {
+        guard appState.isOnline, client != nil, let profileId = serverProfileId else { return false }
+        guard !noteId.isOfflineLocalNoteId else { return false }
+
+        let branchChildIds = resolvedChildNoteIdsForDetail()
+        let loadedIds = Set(childNotes.map(\.noteId))
+        let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
+
+        if branchChildIds.isEmpty {
+            if childNotes.isEmpty { return true }
+            if let note {
+                let fromMeta = Set(note.childNoteIds.filter { !ghosts.contains($0) })
+                if fromMeta.count > loadedIds.count { return true }
+            }
+            return false
+        }
+
+        if loadedIds.count < branchChildIds.count { return true }
+        for childId in branchChildIds where !loadedIds.contains(childId) {
+            return true
+        }
+        for childId in branchChildIds where loadedIds.contains(childId) {
+            if (try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId)) == nil {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func fetchDirectChildrenFromServer() async {
+        guard let client, let profileId = serverProfileId else { return }
+        let showSpinner = childNotes.isEmpty
+        if showSpinner { isLoadingChildren = true }
+        defer { if showSpinner { isLoadingChildren = false } }
+
         do {
             let (parentResp, liveBranches) = try await client.getNoteWithBranches(noteId)
             if parentResp.isDeleted {
                 handleServerDeletedNote(noteId: noteId)
                 return
             }
-            Self.persistNoteResponse(parentResp, profileId: profileId, persistence: persistence)
-            self.note = NoteItem(from: parentResp)
+            persistNoteResponse(parentResp, profileId: profileId)
+            note = NoteItem(from: parentResp)
+
             let liveBranchIds = Set(liveBranches.map(\.branchId))
             try? persistence.pruneStaleBranchesUnderParent(
                 parentNoteId: noteId,
@@ -2303,46 +2322,87 @@ final class NoteDetailViewModel {
                 serverProfileId: profileId,
                 hiddenNoteIds: TriliumSharing.hiddenSystemChildNoteIds
             )
-            for branch in liveBranches {
+
+            let hidden = TriliumSharing.hiddenSystemChildNoteIds
+            let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
+            var results: [ChildNoteSummary] = []
+            results.reserveCapacity(liveBranches.count)
+
+            for branch in liveBranches.sorted(by: { $0.notePosition < $1.notePosition }) {
                 let childId = branch.noteId
-                do {
-                    let response = try await client.getNote(childId)
-                    if response.isDeleted { continue }
-                    Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
-                } catch {
-                    let apiError = APIError.from(error)
-                    if case .notFound = apiError { continue }
-                }
+                guard !hidden.contains(childId), !ghosts.contains(childId) else { continue }
+
+                try? persistence.cacheBranchIfAllowed(
+                    from: branch,
+                    parentNoteIdsForNote: [noteId],
+                    serverProfileId: profileId,
+                    policy: cacheExclusion
+                )
+
+                guard let summary = await childSummaryForDetail(
+                    childId: childId,
+                    profileId: profileId,
+                    client: client
+                ) else { continue }
+                results.append(summary)
             }
+
             try? persistence.commitBatch()
+            childNotes = results
+            geoMapDetectionTick &+= 1
+            applySeedChildMetadataMerge()
         } catch {
+            Log.api.error("fetchDirectChildrenFromServer failed: \(error)")
         }
-        await loadChildNotes()
     }
 
-    /// Loads child notes purely from cache. The sync keeps the cache fresh.
-    func loadChildNotes() async {
-        let childIds = resolvedChildNoteIdsForDetail()
-        if childIds.isEmpty {
-            if let seed = seedChildSummaries, !seed.isEmpty, let profileId = serverProfileId {
-                childNotes = seed.filter { summary in
-                    if GhostNoteTracker.shared.contains(summary.noteId, serverProfileId: profileId) {
-                        return false
-                    }
-                    return (try? persistence.fetchCachedBranch(
-                        noteId: summary.noteId,
-                        parentNoteId: noteId,
-                        serverProfileId: profileId
-                    )) != nil
-                }
-            } else {
-                childNotes = []
-            }
-            geoMapDetectionTick &+= 1
-            return
+    private func childSummaryForDetail(
+        childId: String,
+        profileId: String,
+        client: any TriliumClientProtocol
+    ) async -> ChildNoteSummary? {
+        if let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) {
+            return childSummaryFromCachedNote(cached, profileId: profileId)
         }
-        loadChildNotesFromCache(childNoteIds: childIds)
-        applySeedChildMetadataMerge()
+        do {
+            let response = try await client.getNote(childId)
+            if response.isDeleted { return nil }
+            persistNoteResponse(response, profileId: profileId)
+            return childSummaryFromNoteResponse(response, profileId: profileId)
+        } catch {
+            if case .notFound = APIError.from(error) { return nil }
+            Log.api.debug("childSummaryForDetail getNote failed for \(childId): \(error)")
+            return nil
+        }
+    }
+
+    private func childSummaryFromCachedNote(_ cached: CachedNote, profileId: String) -> ChildNoteSummary {
+        let cachedAttrs = (try? persistence.fetchCachedAttributes(noteId: cached.noteId, serverProfileId: profileId)) ?? []
+        let iconClass = cachedAttrs.first { $0.name == "iconClass" }?.value
+        let childBranchCount = (try? persistence.fetchChildNoteIdsOrderedFromBranches(
+            parentNoteId: cached.noteId,
+            serverProfileId: profileId
+        ).count) ?? cached.childBranchIds.count
+        return ChildNoteSummary(
+            noteId: cached.noteId,
+            title: cached.title,
+            isProtected: cached.isProtected,
+            type: NoteType(rawValue: cached.noteType) ?? .text,
+            iconClass: iconClass,
+            childCount: childBranchCount
+        )
+    }
+
+    private func childSummaryFromNoteResponse(_ response: NoteResponse, profileId: String) -> ChildNoteSummary {
+        let iconClass = response.attributes.first { $0.name == "iconClass" }?.value
+        return ChildNoteSummary(
+            noteId: response.noteId,
+            title: response.title,
+            isProtected: response.isProtected,
+            type: NoteType(rawValue: response.type) ?? .text,
+            iconClass: iconClass,
+            childCount: response.childBranchIds.count
+        )
     }
 
     private func applySeedChildMetadataMerge() {
@@ -2379,20 +2439,7 @@ final class NoteDetailViewModel {
             guard let cached = try? self.persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else {
                 continue
             }
-            let cachedAttrs = (try? self.persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
-            let iconClass = cachedAttrs.first { $0.name == "iconClass" }?.value
-            let childBranchCount = (try? persistence.fetchChildNoteIdsOrderedFromBranches(
-                parentNoteId: childId,
-                serverProfileId: profileId
-            ).count) ?? cached.childBranchIds.count
-            results.append(ChildNoteSummary(
-                noteId: cached.noteId,
-                title: cached.title,
-                isProtected: cached.isProtected,
-                type: NoteType(rawValue: cached.noteType) ?? .text,
-                iconClass: iconClass,
-                childCount: childBranchCount
-            ))
+            results.append(childSummaryFromCachedNote(cached, profileId: profileId))
         }
         self.childNotes = results
         geoMapDetectionTick &+= 1
@@ -2492,7 +2539,7 @@ final class NoteDetailViewModel {
                 Log.noteDiag.info(
                     "NoteDiag GEO_PREFETCH child noteId=\(childId) api.type=\(response.type) title=\(String(response.title.prefix(80))) attrCount=\(response.attributes.count)"
                 )
-                Self.persistNoteResponse(response, profileId: profileId, persistence: persistence)
+                persistNoteResponse(response, profileId: profileId)
             } catch {
                 Log.noteDiag.warning("NoteDiag GEO_PREFETCH child failed noteId=\(childId) \(error.localizedDescription)")
             }
@@ -2502,6 +2549,32 @@ final class NoteDetailViewModel {
     }
 
     // MARK: - Cache Fallback
+
+    private func hasUsableDisplayedBodyContent() -> Bool {
+        !((contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    /// Fetches note metadata when `load()` has not run yet but we need to download the body.
+    private func ensureNoteMetadataIfNeeded() async {
+        guard note == nil else { return }
+        guard !noteId.isOfflineLocalNoteId, appState.isOnline, let client else { return }
+        do {
+            let response = try await client.getNote(noteId)
+            if response.isDeleted {
+                handleServerDeletedNote(noteId: noteId)
+                return
+            }
+            note = NoteItem(from: response)
+            serverUtcDateModified = response.utcDateModified
+            serverVerified = true
+            if let profileId = serverProfileId {
+                persistNoteResponse(response, profileId: profileId)
+                try? persistence.commitBatch()
+            }
+        } catch {
+            Log.api.error("ensureNoteMetadataIfNeeded failed: \(error)")
+        }
+    }
 
     private func loadFromCache() {
         guard let profileId = self.serverProfileId else {

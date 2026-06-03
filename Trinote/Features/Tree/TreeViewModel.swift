@@ -29,6 +29,7 @@ final class TreeViewModel {
     private let appState: AppState
     private let parentNoteId: String
     private let persistence = PersistenceManager.shared
+    private let cacheExclusion = CacheExclusionPolicy()
 
     init(appState: AppState, parentNoteId: String = "root") {
         self.appState = appState
@@ -66,10 +67,15 @@ final class TreeViewModel {
         rebuildVisibleNodes(animated: animateList)
         if let profileId = serverProfileId {
             let response = NoteResponse(forSwiftDataCache: newNote)
-            try? persistence.cacheNote(from: response, serverProfileId: profileId)
+            try? persistence.cacheNoteIfAllowed(from: response, serverProfileId: profileId, policy: cacheExclusion)
             try? persistence.commitBatch()
             for attr in response.attributes {
-                try? persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
+                try? persistence.cacheAttributeBatchIfAllowed(
+                    from: attr,
+                    parentNoteIds: response.parentNoteIds,
+                    serverProfileId: profileId,
+                    policy: cacheExclusion
+                )
             }
             try? persistence.commitBatch()
         }
@@ -472,8 +478,13 @@ final class TreeViewModel {
         do {
             let response = try await client.duplicateNoteAsChild(sourceNoteId: sourceNoteId, parentNoteId: parentNoteId)
             if let profileId = serverProfileId {
-                try? persistence.cacheNote(from: response.note, serverProfileId: profileId)
-                try? persistence.cacheBranch(from: response.branch, serverProfileId: profileId)
+                try? persistence.cacheNoteIfAllowed(from: response.note, serverProfileId: profileId, policy: cacheExclusion)
+                try? persistence.cacheBranchIfAllowed(
+                    from: response.branch,
+                    parentNoteIdsForNote: response.note.parentNoteIds,
+                    serverProfileId: profileId,
+                    policy: cacheExclusion
+                )
                 try? persistence.commitBatch()
             }
             await refresh()
@@ -719,10 +730,15 @@ final class TreeViewModel {
         let item = NoteItem(from: response)
         noteCache[noteId] = item
         if let profileId = serverProfileId {
-            try? persistence.cacheNote(from: response, serverProfileId: profileId)
+            try? persistence.cacheNoteIfAllowed(from: response, serverProfileId: profileId, policy: cacheExclusion)
             try? persistence.commitBatch()
             for attr in response.attributes {
-                try? persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
+                try? persistence.cacheAttributeBatchIfAllowed(
+                    from: attr,
+                    parentNoteIds: response.parentNoteIds,
+                    serverProfileId: profileId,
+                    policy: cacheExclusion
+                )
             }
             try? persistence.commitBatch()
         }
@@ -809,7 +825,7 @@ final class TreeViewModel {
         guard let profileId = serverProfileId else { return }
         Task {
             do {
-                try persistence.cacheNoteBatch(from: rootNote, serverProfileId: profileId)
+                try persistence.cacheNoteBatchIfAllowed(from: rootNote, serverProfileId: profileId, policy: cacheExclusion)
                 persistNodesRecursive(rootChildren, profileId: profileId)
                 try persistence.commitBatch()
             } catch {
@@ -850,7 +866,7 @@ final class TreeViewModel {
                     )
                 }
             )
-            try? persistence.cacheNoteBatch(from: noteResponse, serverProfileId: profileId)
+            try? persistence.cacheNoteBatchIfAllowed(from: noteResponse, serverProfileId: profileId, policy: cacheExclusion)
 
             // Cache attributes
             for attr in node.note.attributes {
@@ -864,7 +880,12 @@ final class TreeViewModel {
                     isInheritable: attr.isInheritable,
                     utcDateModified: nil
                 )
-                try? persistence.cacheAttributeBatch(from: attrResp, serverProfileId: profileId)
+                try? persistence.cacheAttributeBatchIfAllowed(
+                    from: attrResp,
+                    parentNoteIds: noteResponse.parentNoteIds,
+                    serverProfileId: profileId,
+                    policy: cacheExclusion
+                )
             }
 
             let branchResponse = BranchResponse(
@@ -876,7 +897,12 @@ final class TreeViewModel {
                 isExpanded: node.branch.isExpanded,
                 utcDateModified: nil
             )
-            try? persistence.cacheBranchBatch(from: branchResponse, serverProfileId: profileId)
+            try? persistence.cacheBranchBatchIfAllowed(
+                from: branchResponse,
+                parentNoteIdsForNote: noteResponse.parentNoteIds,
+                serverProfileId: profileId,
+                policy: cacheExclusion
+            )
 
             if let children = node.children {
                 persistNodesRecursive(children, profileId: profileId)

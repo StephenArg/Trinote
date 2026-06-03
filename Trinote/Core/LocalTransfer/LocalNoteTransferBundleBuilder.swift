@@ -55,7 +55,9 @@ enum LocalNoteTransferBundleBuilder {
                 in: html,
                 client: client,
                 persistence: persistence,
-                serverProfileId: serverProfileId
+                serverProfileId: serverProfileId,
+                hostNoteId: noteId,
+                parentNoteIds: cached.parentNoteIds
             )
             textContent = html
         }

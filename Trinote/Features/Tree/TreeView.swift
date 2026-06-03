@@ -454,7 +454,11 @@ struct TreeView: View {
         let nid = notification.userInfo?["noteId"] as? String
         guard let nid else {
             self.viewModel?.pruneDeletedNodes()
-            self.viewModel?.reloadFromCache()
+            if notification.userInfo?[Notification.Name.trinoteTreeReloadFromServerUserInfoKey] as? Bool == true {
+                Task { await self.viewModel?.refreshFromServerIfOnline() }
+            } else {
+                self.viewModel?.reloadFromCache()
+            }
             return
         }
         Task {

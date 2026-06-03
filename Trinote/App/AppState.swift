@@ -21,8 +21,10 @@ final class AppState {
 
     let networkMonitor = NetworkMonitor.shared
     let syncManager = SyncManager()
+    let imageCachePrefetcher = ImageCachePrefetcher()
     let localTransfer = LocalNoteTransferService()
     private let persistence = PersistenceManager.shared
+    private let cacheExclusion = CacheExclusionPolicy()
     private let keychain = KeychainManager.shared
 
     private var realtime: TriliumWebSocketConnection?
@@ -54,6 +56,7 @@ final class AppState {
     func onBackground() async {
         localTransfer.onBackground()
         syncManager.beginBackgroundTimeExtensionIfNeeded()
+        imageCachePrefetcher.beginBackgroundTimeExtensionIfNeeded()
         await endServerProtectedSessionAndPersistCookies()
     }
 
@@ -361,7 +364,7 @@ final class AppState {
                 if let fresh = try? await client.getNote(newId) {
                     let postCreatePhase = "create.flush.postGetNote serverId=\(newId)"
                     Log.noteDiag.info("\(NoteDiagnostics.describeNoteResponse(fresh, phase: postCreatePhase))")
-                    Self.persistNoteResponseToCache(fresh, profileId: profileId, persistence: persistence)
+                    persistNoteResponseToCache(fresh, profileId: profileId)
                 } else {
                     Log.noteDiag.warning("NoteDiag CREATE flush postGetNote failed for serverId=\(newId)")
                 }
@@ -594,8 +597,13 @@ final class AppState {
                                 mime: fresh.mime,
                                 body: row.body
                             )
-                            try? persistence.cacheNote(from: response.note, serverProfileId: profileId)
-                            try? persistence.cacheBranch(from: response.branch, serverProfileId: profileId)
+                            try? persistence.cacheNoteIfAllowed(from: response.note, serverProfileId: profileId, policy: cacheExclusion)
+                            try? persistence.cacheBranchIfAllowed(
+                                from: response.branch,
+                                parentNoteIdsForNote: response.note.parentNoteIds,
+                                serverProfileId: profileId,
+                                policy: cacheExclusion
+                            )
                             try? persistence.commitBatch()
                             Log.sync.info(
                                 "Offline body conflict for \(row.noteId): saved iOS copy as new note \(response.note.noteId) under \(parentId)"
@@ -614,7 +622,15 @@ final class AppState {
                 let newServerMod = afterUpload?.utcDateModified ?? ""
                 if !newServerMod.isEmpty {
                     lastOwnUploadTimestamps[row.noteId] = newServerMod
-                    try? persistence.cacheNoteContent(row.noteId, content: row.body, serverProfileId: profileId, utcDateModified: newServerMod)
+                    let parentNoteIds = (try? persistence.fetchCachedNote(id: row.noteId, serverProfileId: profileId))?.parentNoteIds ?? []
+                    try? persistence.cacheNoteContentIfAllowed(
+                        row.noteId,
+                        content: row.body,
+                        parentNoteIds: parentNoteIds,
+                        serverProfileId: profileId,
+                        utcDateModified: newServerMod,
+                        policy: cacheExclusion
+                    )
                 }
                 let deleted = (try? persistence.deletePendingNoteBodyUploadIfUnchanged(noteId: row.noteId, serverProfileId: profileId, snapshotDate: snapshotDate)) ?? true
                 if !deleted, !newServerMod.isEmpty {
@@ -1124,10 +1140,15 @@ final class AppState {
 
     // MARK: - Offline flush helpers
 
-    private static func persistNoteResponseToCache(_ response: NoteResponse, profileId: String, persistence: PersistenceManager) {
-        try? persistence.cacheNote(from: response, serverProfileId: profileId)
+    private func persistNoteResponseToCache(_ response: NoteResponse, profileId: String) {
+        try? persistence.cacheNoteIfAllowed(from: response, serverProfileId: profileId, policy: cacheExclusion)
         for attr in response.attributes {
-            try? persistence.cacheAttributeBatch(from: attr, serverProfileId: profileId)
+            try? persistence.cacheAttributeBatchIfAllowed(
+                from: attr,
+                parentNoteIds: response.parentNoteIds,
+                serverProfileId: profileId,
+                policy: cacheExclusion
+            )
         }
         try? persistence.commitBatch()
     }

@@ -113,6 +113,7 @@ struct NoteDetailView: View {
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     @State private var activeOpenTabId: String?
     @State private var openNoteTabListNonEmpty: Bool = false
+    @State private var isTabBarReordering = false
 
     private var persistedLastActiveOpenTabId: String {
         LastActiveOpenTabStore.get(profileId: appState.activeProfile?.id)
@@ -610,7 +611,7 @@ struct NoteDetailView: View {
 
     var body: some View {
         bodyCore
-            .background(NavigationPopGestureBlocker(blocked: viewModel?.isEditing == true || isGeoMapNote(viewModel?.note, contentString: viewModel?.contentString, vm: viewModel)).frame(width: 0, height: 0))
+            .background(NavigationPopGestureBlocker(blocked: viewModel?.isEditing == true || isGeoMapNote(viewModel?.note, contentString: viewModel?.contentString, vm: viewModel) || isTabBarReordering).frame(width: 0, height: 0))
             .task(id: activeNoteId) { await initialLoad() }
             .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
                 NoteDetailView(noteId: linkedNoteId, title: "", startInEditMode: false)
@@ -626,7 +627,8 @@ struct NoteDetailView: View {
                         onOpenTabRemoved: { handleOpenTabRemoved($0) },
                         onTabsBecameEmpty: {
                             LastActiveOpenTabStore.set("", profileId: appState.activeProfile?.id)
-                        }
+                        },
+                        onReorderActiveChanged: { isTabBarReordering = $0 }
                     )
                     .transition(.move(edge: .bottom))
                 }
@@ -3074,64 +3076,6 @@ private extension View {
             self.menuActionDismissBehavior(.disabled)
         } else {
             self
-        }
-    }
-}
-
-// MARK: - Navigation pop-gesture blocker
-
-/// Blocks iOS interactive back-swipe while this view is visible.
-private struct NavigationPopGestureBlocker: UIViewControllerRepresentable {
-    let blocked: Bool
-
-    func makeUIViewController(context: Context) -> Controller {
-        let vc = Controller()
-        vc.blocked = blocked
-        return vc
-    }
-
-    func updateUIViewController(_ uiViewController: Controller, context: Context) {
-        uiViewController.blocked = blocked
-        uiViewController.applyBlocking()
-    }
-
-    final class Controller: UIViewController, UIGestureRecognizerDelegate {
-        var blocked = true
-        private weak var previousDelegate: UIGestureRecognizerDelegate?
-
-        override func viewDidAppear(_ animated: Bool) {
-            super.viewDidAppear(animated)
-            applyBlocking()
-        }
-
-        override func viewWillDisappear(_ animated: Bool) {
-            super.viewWillDisappear(animated)
-            restoreDelegate()
-        }
-
-        func applyBlocking() {
-            guard let gesture = navigationController?.interactivePopGestureRecognizer else { return }
-            if blocked {
-                if gesture.delegate !== self {
-                    previousDelegate = gesture.delegate
-                    gesture.delegate = self
-                }
-                gesture.isEnabled = true
-            } else {
-                restoreDelegate()
-            }
-        }
-
-        private func restoreDelegate() {
-            guard let gesture = navigationController?.interactivePopGestureRecognizer else { return }
-            if gesture.delegate === self {
-                gesture.delegate = previousDelegate
-            }
-            gesture.isEnabled = true
-        }
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            !blocked
         }
     }
 }

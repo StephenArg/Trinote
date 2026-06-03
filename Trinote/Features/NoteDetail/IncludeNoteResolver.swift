@@ -346,54 +346,40 @@ struct IncludeNoteResolver {
     /// Canvas read-only view prefers `canvas-export.svg`; same for include previews.
     private func canvasExportSVGPreviewTag(noteId: String) async -> String? {
         guard let attachmentId = await canvasExportSVGAttachmentId(noteId: noteId) else { return nil }
-        var data: Data?
-        if let cached = try? persistence.fetchCachedImage(
-            entityId: attachmentId, entityType: "attachments", serverProfileId: profileId
-        ) {
-            data = cached.data
+        let clientForLoad: (any TriliumClientProtocol)? = isOnline ? client : nil
+        let parentNoteIds = (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
+        guard let d = await TriliumInlineImageCaching.loadImageData(
+            routeType: "attachments",
+            entityId: attachmentId,
+            client: clientForLoad,
+            persistence: persistence,
+            serverProfileId: profileId,
+            sourceNoteId: noteId,
+            parentNoteIds: parentNoteIds
+        ), !d.isEmpty, d.isPlausibleInlineImagePayload else {
+            return nil
         }
-        if data == nil, isOnline, let client {
-            do {
-                let fetched = try await client.getAttachmentContent(attachmentId)
-                data = fetched
-                if fetched.isPlausibleInlineImagePayload {
-                    let mime = fetched.detectImageMIME()
-                    try? persistence.cacheImage(
-                        entityId: attachmentId, entityType: "attachments",
-                        data: fetched, mime: mime, serverProfileId: profileId
-                    )
-                }
-            } catch {
-                Log.api.debug("IncludeNoteResolver: canvas SVG attachment failed for \(noteId): \(error)")
-            }
-        }
-        guard let d = data, !d.isEmpty, d.isPlausibleInlineImagePayload else { return nil }
         let mime = d.detectImageMIME()
         return "<img class=\"trinote-include__img\" src=\"data:\(mime);base64,\(d.base64EncodedString())\" alt=\"\" />"
     }
 
     private func canvasExportSVGAttachmentId(noteId: String) async -> String? {
         guard isOnline, let client else { return nil }
-        do {
-            let list = try await client.getNoteAttachments(noteId)
-            if let hit = list.first(where: { $0.title == "canvas-export.svg" && $0.mime == "image/svg+xml" }) {
-                return hit.attachmentId
-            }
-            return list.first { $0.title == "canvas-export.svg" }?.attachmentId
-        } catch {
-            return nil
-        }
+        return await TriliumInlineImageCaching.canvasExportSVGAttachmentId(noteId: noteId, client: client)
     }
 
     /// When online, ensure SwiftData has metadata and body for a referenced note (mirrors read-only `load` + `loadContent` cache fill).
     private func hydrateNoteFromServerIfNeeded(noteId: String) async {
         guard isOnline, let client else { return }
+        let policy = CacheExclusionPolicy()
         let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId)
         let contentEmpty = cached?.content == nil || (cached?.content?.isEmpty ?? true)
+        var parentNoteIds = cached?.parentNoteIds ?? []
         if cached == nil {
             do {
                 let response = try await client.getNote(noteId)
-                try? persistence.cacheNote(from: response, serverProfileId: profileId)
+                parentNoteIds = response.parentNoteIds
+                try? persistence.cacheNoteIfAllowed(from: response, serverProfileId: profileId, policy: policy)
             } catch {
                 return
             }
@@ -401,8 +387,13 @@ struct IncludeNoteResolver {
         guard contentEmpty else { return }
         do {
             let data = try await client.getNoteContent(noteId)
-            try? persistence.cacheNoteContent(
-                noteId, content: data, serverProfileId: profileId, utcDateModified: nil
+            try? persistence.cacheNoteContentIfAllowed(
+                noteId,
+                content: data,
+                parentNoteIds: parentNoteIds,
+                serverProfileId: profileId,
+                utcDateModified: nil,
+                policy: policy
             )
         } catch {
             Log.api.debug("IncludeNoteResolver: hydrate getNoteContent failed for \(noteId): \(error)")
@@ -420,9 +411,18 @@ struct IncludeNoteResolver {
             return c
         }
         guard isOnline, let client else { return nil }
+        let policy = CacheExclusionPolicy()
+        let parentNoteIds = (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
         do {
             let data = try await client.getNoteContent(noteId)
-            try? persistence.cacheNoteContent(noteId, content: data, serverProfileId: profileId, utcDateModified: nil)
+            try? persistence.cacheNoteContentIfAllowed(
+                noteId,
+                content: data,
+                parentNoteIds: parentNoteIds,
+                serverProfileId: profileId,
+                utcDateModified: nil,
+                policy: policy
+            )
             return data
         } catch {
             Log.api.debug("IncludeNoteResolver: getNoteContent failed for \(noteId): \(error)")
@@ -455,7 +455,11 @@ struct IncludeNoteResolver {
         guard isOnline, let client else { return nil }
         do {
             let response = try await client.getNote(noteId)
-            try? persistence.cacheNote(from: response, serverProfileId: profileId)
+            try? persistence.cacheNoteIfAllowed(
+                from: response,
+                serverProfileId: profileId,
+                policy: CacheExclusionPolicy()
+            )
             return NoteItem(from: response)
         } catch {
             return nil

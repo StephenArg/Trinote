@@ -406,6 +406,20 @@ final class EntityPullCursor {
     }
 }
 
+/// Top-level notebook (child of Trilium `root`) excluded from offline cache for this server profile.
+@Model
+final class CacheExcludedRootNote {
+    @Attribute(.unique) var id: String
+    var rootNoteId: String
+    var serverProfileId: String
+
+    init(rootNoteId: String, serverProfileId: String) {
+        self.id = "\(serverProfileId):\(rootNoteId)"
+        self.rootNoteId = rootNoteId
+        self.serverProfileId = serverProfileId
+    }
+}
+
 @Model
 final class CachedImageData {
     @Attribute(.unique) var id: String

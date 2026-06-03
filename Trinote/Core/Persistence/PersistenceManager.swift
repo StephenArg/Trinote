@@ -38,6 +38,7 @@ final class PersistenceManager {
                 SyncStatus.self,
                 CachedImageData.self,
                 EntityPullCursor.self,
+                CacheExcludedRootNote.self,
             ])
 
             let config = ModelConfiguration(
@@ -2068,7 +2069,187 @@ final class PersistenceManager {
         try context.save()
     }
 
+    // MARK: - Cache exclusion preferences
+
+    func fetchExcludedRootNoteIds(serverProfileId: String) throws -> Set<String> {
+        let profileId = serverProfileId
+        let rows = try context.fetch(
+            FetchDescriptor<CacheExcludedRootNote>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        return Set(rows.map(\.rootNoteId))
+    }
+
+    func setExcludedRootNoteIds(_ ids: Set<String>, serverProfileId: String) throws {
+        let profileId = serverProfileId
+        let existing = try context.fetch(
+            FetchDescriptor<CacheExcludedRootNote>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        existing.forEach { context.delete($0) }
+        for rootId in ids {
+            context.insert(CacheExcludedRootNote(rootNoteId: rootId, serverProfileId: profileId))
+        }
+        try context.save()
+    }
+
+    /// Removes inline attachment/image rows referenced in cached HTML bodies for the given notes.
+    func deleteCachedImagesReferencedInBodies(noteIds: Set<String>, serverProfileId: String) throws {
+        let profileId = serverProfileId
+        for noteId in noteIds {
+            let nid = noteId
+            guard let note = try fetchCachedNote(id: noteId, serverProfileId: profileId),
+                  let content = note.content,
+                  !content.isEmpty,
+                  let html = String(data: content, encoding: .utf8)
+            else { continue }
+
+            let refs = TriliumInlineImageCaching.extractImageReferences(from: html)
+            for ref in refs {
+                let compositeId = "\(profileId):\(ref.routeType):\(ref.entityId)"
+                var descriptor = FetchDescriptor<CachedImageData>(predicate: #Predicate { $0.id == compositeId })
+                descriptor.fetchLimit = 1
+                if let row = try context.fetch(descriptor).first {
+                    context.delete(row)
+                }
+            }
+        }
+        try context.save()
+    }
+
+    /// Purges cached subtree when the root row exists locally; no-op if the root is not cached.
+    func purgeCachedSubtreeIfRootCached(rootNoteId: String, serverProfileId: String) throws {
+        guard try fetchCachedNote(id: rootNoteId, serverProfileId: serverProfileId) != nil else { return }
+        let ids = cachedDescendantNoteIds(rootNoteId: rootNoteId, serverProfileId: serverProfileId)
+        try deleteCachedImagesReferencedInBodies(noteIds: ids, serverProfileId: serverProfileId)
+        try deleteCachedNotes(noteIds: ids, serverProfileId: serverProfileId)
+    }
+
+    // MARK: - Cache-if-allowed (cache exclusion)
+
+    func cacheNoteIfAllowed(
+        from response: NoteResponse,
+        serverProfileId: String,
+        policy: CacheExclusionPolicy
+    ) throws {
+        guard !policy.isNoteExcludedFromCache(
+            noteId: response.noteId,
+            parentNoteIds: response.parentNoteIds,
+            serverProfileId: serverProfileId
+        ) else { return }
+        try cacheNote(from: response, serverProfileId: serverProfileId)
+    }
+
+    func cacheNoteContentIfAllowed(
+        _ noteId: String,
+        content: Data,
+        parentNoteIds: [String],
+        serverProfileId: String,
+        utcDateModified: String? = nil,
+        policy: CacheExclusionPolicy
+    ) throws {
+        guard !policy.isNoteExcludedFromCache(
+            noteId: noteId,
+            parentNoteIds: parentNoteIds,
+            serverProfileId: serverProfileId
+        ) else { return }
+        try cacheNoteContent(noteId, content: content, serverProfileId: serverProfileId, utcDateModified: utcDateModified)
+    }
+
+    func cacheNoteBatchIfAllowed(
+        from response: NoteResponse,
+        serverProfileId: String,
+        policy: CacheExclusionPolicy
+    ) throws {
+        try cacheNoteIfAllowed(from: response, serverProfileId: serverProfileId, policy: policy)
+    }
+
+    func cacheBranchIfAllowed(
+        from response: BranchResponse,
+        parentNoteIdsForNote: [String],
+        serverProfileId: String,
+        policy: CacheExclusionPolicy
+    ) throws {
+        guard !policy.isNoteExcludedFromCache(
+            noteId: response.noteId,
+            parentNoteIds: parentNoteIdsForNote,
+            serverProfileId: serverProfileId
+        ) else { return }
+        try cacheBranch(from: response, serverProfileId: serverProfileId)
+    }
+
+    func cacheBranchBatchIfAllowed(
+        from response: BranchResponse,
+        parentNoteIdsForNote: [String],
+        serverProfileId: String,
+        policy: CacheExclusionPolicy
+    ) throws {
+        try cacheBranchIfAllowed(
+            from: response,
+            parentNoteIdsForNote: parentNoteIdsForNote,
+            serverProfileId: serverProfileId,
+            policy: policy
+        )
+    }
+
+    func cacheAttributeBatchIfAllowed(
+        from response: AttributeResponse,
+        parentNoteIds: [String],
+        serverProfileId: String,
+        policy: CacheExclusionPolicy
+    ) throws {
+        guard !policy.isNoteExcludedFromCache(
+            noteId: response.noteId,
+            parentNoteIds: parentNoteIds,
+            serverProfileId: serverProfileId
+        ) else { return }
+        try cacheAttributeBatch(from: response, serverProfileId: serverProfileId)
+    }
+
+    func cacheImageIfAllowed(
+        entityId: String,
+        entityType: String,
+        data: Data,
+        mime: String,
+        sourceNoteId: String,
+        parentNoteIds: [String],
+        serverProfileId: String,
+        policy: CacheExclusionPolicy
+    ) throws {
+        guard !policy.isNoteExcludedFromCache(
+            noteId: sourceNoteId,
+            parentNoteIds: parentNoteIds,
+            serverProfileId: serverProfileId
+        ) else { return }
+        try cacheImage(
+            entityId: entityId,
+            entityType: entityType,
+            data: data,
+            mime: mime,
+            serverProfileId: serverProfileId
+        )
+    }
+
     // MARK: - Image Cache
+
+    /// Note bodies already stored locally (non-empty), for bulk image prefetch.
+    func cachedNoteBodies(serverProfileId: String) throws -> [(noteId: String, content: Data)] {
+        let profileId = serverProfileId
+        let notes = try context.fetch(
+            FetchDescriptor<CachedNote>(
+                predicate: #Predicate { $0.serverProfileId == profileId }
+            )
+        )
+        var result: [(noteId: String, content: Data)] = []
+        result.reserveCapacity(notes.count)
+        for note in notes {
+            guard let content = note.content, !content.isEmpty else { continue }
+            result.append((note.noteId, content))
+        }
+        return result
+    }
 
     func fetchCachedImage(entityId: String, entityType: String, serverProfileId: String) throws -> CachedImageData? {
         let id = "\(serverProfileId):\(entityType):\(entityId)"

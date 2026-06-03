@@ -1325,10 +1325,84 @@ function scheduleEditorTypingActivity() {
   });
 }
 
+// --- Clipboard image paste (iOS WKWebView often exposes file:// URLs instead of image bytes) ---
+function trinoteInsertImageFromDataUri(src) {
+  if (!src) return;
+  try {
+    editor.chain().focus().insertContent({ type: 'image', attrs: { src } }).run();
+    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+  } catch (e) {}
+}
+
+function trinoteRequestNativePaste(mode) {
+  try {
+    window.webkit.messageHandlers.pasteImageRequest.postMessage({ mode: mode || 'embed' });
+  } catch (e) {}
+}
+
+function trinoteClipboardHasImageFile(cd) {
+  if (!cd || !cd.items) return false;
+  for (let i = 0; i < cd.items.length; i++) {
+    const item = cd.items[i];
+    if (item.kind === 'file' && item.type && item.type.indexOf('image/') === 0) return item;
+  }
+  return null;
+}
+
+function trinotePasteImageFileFromClipboard(item) {
+  const file = item.getAsFile();
+  if (!file) {
+    trinoteRequestNativePaste('embed');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function () {
+    const src = reader.result;
+    if (typeof src === 'string') trinoteInsertImageFromDataUri(src);
+  };
+  reader.onerror = function () { trinoteRequestNativePaste('embed'); };
+  reader.readAsDataURL(file);
+}
+
+function trinoteHandleClipboardPaste(view, event) {
+  if (!editor.isEditable) return false;
+  if (editor.isActive('codeBlock')) return false;
+
+  if (event.shiftKey && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pasteImageRequest) {
+    event.preventDefault();
+    trinoteRequestNativePaste('url');
+    return true;
+  }
+
+  const cd = event.clipboardData;
+  if (!cd) return false;
+
+  const imageItem = trinoteClipboardHasImageFile(cd);
+  if (imageItem) {
+    event.preventDefault();
+    trinotePasteImageFileFromClipboard(imageItem);
+    return true;
+  }
+
+  // iOS WKWebView: read UIPasteboard on native (image bytes and/or text/html fallback).
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pasteImageRequest) {
+    event.preventDefault();
+    trinoteRequestNativePaste('embed');
+    return true;
+  }
+
+  return false;
+}
+
 const editor = new Editor({
   element: document.getElementById('editor'),
   extensions: editorExtensions,
   content: '',
+  editorProps: {
+    handlePaste(view, event) {
+      return trinoteHandleClipboardPaste(view, event);
+    },
+  },
   onUpdate({ editor }) {
     scheduleEditorTypingActivity();
     const mathNow = trinoteCountTriliumMathNodes(editor);
@@ -1352,6 +1426,15 @@ editor.on('selectionUpdate', ({ editor }) => {
   const { from, to, empty } = editor.state.selection;
   if (!empty) editorSavedRange = { from, to };
 });
+
+(function trinoteInstallPasteCaptureListener() {
+  const root = document.getElementById('editor');
+  if (!root) return;
+  root.addEventListener('paste', function (e) {
+    if (e.defaultPrevented) return;
+    trinoteHandleClipboardPaste(editor.view, e);
+  }, true);
+})();
 
 // iOS: while the swatch panel is open, blur refocuses the editor so the keyboard can stay up.
 // IMPORTANT: Do not refocus on a timer/hold — that runs when tapping the color *button* (before the
@@ -3934,7 +4017,33 @@ window.editorBridge = {
     scheduleScrollCaretIntoViewAfterKeyboard();
   },
   insertHTML(html) { editor.commands.insertContent(html); },
-  insertImage(src) { editor.chain().focus().insertContent({ type: 'image', attrs: { src } }).run(); },
+  insertImage(src) { trinoteInsertImageFromDataUri(src); },
+  pasteImageURL() { trinoteRequestNativePaste('url'); },
+  pastePlainFallback(plain, html) {
+    const p = (plain != null) ? String(plain) : '';
+    const h = (html != null) ? String(html) : '';
+    if (h && h.trim()) {
+      try {
+        editor.chain().focus().insertContent(ckToTiptap(h) || h).run();
+      } catch (e) {
+        if (p) editor.chain().focus().insertContent(p).run();
+      }
+    } else if (p) {
+      editor.chain().focus().insertContent(p).run();
+    }
+    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+  },
+  insertPasteboardURL(url) {
+    const u = (url != null) ? String(url).trim() : '';
+    if (!u) return;
+    const { from, to, empty } = editor.state.selection;
+    if (!empty) {
+      editor.chain().focus().setTextSelection({ from, to }).setLink({ href: u }).run();
+    } else {
+      editor.chain().focus().insertContent(u).run();
+    }
+    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+  },
   scrollToFraction(fraction) {
     const ec = document.getElementById('editor-container');
     if (!ec) return;

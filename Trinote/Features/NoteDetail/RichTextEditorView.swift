@@ -2,6 +2,19 @@ import SwiftUI
 import WebKit
 import ObjectiveC
 
+// MARK: - WKWebView with “Paste URL” when clipboard has both image and URL
+
+final class TrinoteEditorWebView: WKWebView {
+    var onAugmentEditMenu: ((UIMenuBuilder) -> Void)?
+
+    override func buildMenu(with builder: UIMenuBuilder) {
+        super.buildMenu(with: builder)
+        if #available(iOS 16.0, *) {
+            onAugmentEditMenu?(builder)
+        }
+    }
+}
+
 enum RichTextEditorBridgeRequest: Equatable {
     case pickIncludeNote
     case resolveNoteTitle(noteId: String)
@@ -58,12 +71,16 @@ struct RichTextEditorView: UIViewRepresentable {
         contentController.add(coordinator, name: "requestSave")
         contentController.add(coordinator, name: "editorRequest")
         contentController.add(coordinator, name: "debugLog")
+        contentController.add(coordinator, name: "pasteImageRequest")
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = TrinoteEditorWebView(frame: .zero, configuration: config)
+        webView.onAugmentEditMenu = { [weak coordinator] builder in
+            coordinator?.augmentEditorMenu(builder)
+        }
         webView.navigationDelegate = coordinator
         Self.applyEditorSurfaceColors(to: webView)
         webView.clipsToBounds = false
@@ -148,6 +165,7 @@ struct RichTextEditorView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "requestSave")
         uc.removeScriptMessageHandler(forName: "editorRequest")
         uc.removeScriptMessageHandler(forName: "debugLog")
+        uc.removeScriptMessageHandler(forName: "pasteImageRequest")
     }
 
     // MARK: - Remove iOS form navigation bar (up/down/done)
@@ -318,6 +336,18 @@ struct RichTextEditorView: UIViewRepresentable {
                     Log.ui.debug("[EDITOR-JS] \(msg, privacy: .public)")
                 }
 
+            case "pasteImageRequest":
+                let mode: String
+                if let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                   let m = dict["mode"] as? String {
+                    mode = m
+                } else {
+                    mode = "embed"
+                }
+                DispatchQueue.main.async { [weak self] in
+                    self?.handlePasteFromPasteboard(mode: mode)
+                }
+
             case "editorRequest":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
                       let action = dict["action"] as? String else { break }
@@ -392,6 +422,61 @@ struct RichTextEditorView: UIViewRepresentable {
             webView.evaluateJavaScript("window.editorBridge.insertImage('\(escaped)');") { _, error in
                 if let error { Log.api.error("Failed to insert image: \(error)") }
             }
+        }
+
+        func handlePasteFromPasteboard(mode: String) {
+            switch mode {
+            case "url":
+                guard let url = EditorPasteboardImage.pasteboardURLString() else { return }
+                insertPasteboardURL(url)
+            default:
+                if let payload = EditorPasteboardImage.loadPasteboardImageData() {
+                    let uri = "data:\(payload.mime);base64,\(payload.data.base64EncodedString())"
+                    insertImage(uri)
+                } else {
+                    pastePlainFallbackFromPasteboard()
+                }
+            }
+        }
+
+        func insertPasteboardURL(_ url: String) {
+            guard editorReady, let webView else { return }
+            let script = "window.editorBridge.insertPasteboardURL(\(Self.jsJSONString(url)));"
+            webView.evaluateJavaScript(script) { _, error in
+                if let error { Log.api.error("insertPasteboardURL failed: \(error)") }
+            }
+        }
+
+        func pastePlainFallbackFromPasteboard() {
+            guard editorReady, let webView else { return }
+            let plain = EditorPasteboardImage.pasteboardPlainText() ?? ""
+            let html = EditorPasteboardImage.pasteboardHTML() ?? ""
+            let script = "window.editorBridge.pastePlainFallback(\(Self.jsJSONString(plain)), \(Self.jsJSONString(html)));"
+            webView.evaluateJavaScript(script) { _, error in
+                if let error { Log.api.error("pastePlainFallback failed: \(error)") }
+            }
+        }
+
+        @available(iOS 16.0, *)
+        fileprivate func augmentEditorMenu(_ builder: UIMenuBuilder) {
+            guard builder.system == .main else { return }
+            guard EditorPasteboardImage.pasteboardHasAmbiguousImageAndURL() else { return }
+            let title = String(localized: "Paste URL", comment: "Edit menu: paste image URL string instead of embedding bitmap")
+            let action = UIAction(title: title) { [weak self] _ in
+                self?.handlePasteFromPasteboard(mode: "url")
+            }
+            builder.insertChild(
+                UIMenu(title: "", options: .displayInline, children: [action]),
+                atEndOfMenu: .standardEdit
+            )
+        }
+
+        private static func jsJSONString(_ value: String) -> String {
+            guard let data = try? JSONSerialization.data(withJSONObject: value),
+                  let encoded = String(data: data, encoding: .utf8) else {
+                return "''"
+            }
+            return encoded
         }
 
         func getContent(completion: @escaping (String?) -> Void) {

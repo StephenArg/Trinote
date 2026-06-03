@@ -25,6 +25,7 @@ final class PersistenceTests: XCTestCase {
                 PendingAttachmentImport.self,
                 SyncStatus.self,
                 CachedImageData.self,
+                CacheExcludedRootNote.self,
             ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try! ModelContainer(for: schema, configurations: [config])
@@ -385,5 +386,47 @@ final class PersistenceTests: XCTestCase {
         let pending = try persistence.fetchPendingNoteCreations(serverProfileId: "s1")
         XCTAssertEqual(pending.count, 1)
         XCTAssertEqual(pending[0].localNoteId, noteId)
+    }
+
+    func testPurgeCachedSubtreeSkipsWhenRootNotCached() throws {
+        try persistence.cacheNote(
+            from: TestFixtures.noteResponse(id: "child", title: "Child", parentNoteIds: ["rootA"]),
+            serverProfileId: "s1"
+        )
+        try persistence.commitBatch()
+        try persistence.purgeCachedSubtreeIfRootCached(rootNoteId: "rootA", serverProfileId: "s1")
+        XCTAssertNotNil(try persistence.fetchCachedNote(id: "child", serverProfileId: "s1"))
+    }
+
+    func testPurgeCachedSubtreeRemovesDescendantsAndReferencedImages() throws {
+        let html = #"<img src="api/attachments/att99/file">"#
+        try persistence.cacheNote(
+            from: TestFixtures.noteResponse(
+                id: "rootA",
+                title: "Root",
+                parentNoteIds: ["root"],
+                childNoteIds: ["child"]
+            ),
+            serverProfileId: "s1"
+        )
+        try persistence.cacheNote(
+            from: TestFixtures.noteResponse(id: "child", title: "Child", parentNoteIds: ["rootA"]),
+            serverProfileId: "s1"
+        )
+        try persistence.cacheNoteContent("child", content: Data(html.utf8), serverProfileId: "s1")
+        try persistence.cacheImage(
+            entityId: "att99",
+            entityType: "attachments",
+            data: Data([0x89, 0x50, 0x4E, 0x47]),
+            mime: "image/png",
+            serverProfileId: "s1"
+        )
+        try persistence.commitBatch()
+
+        try persistence.purgeCachedSubtreeIfRootCached(rootNoteId: "rootA", serverProfileId: "s1")
+
+        XCTAssertNil(try persistence.fetchCachedNote(id: "rootA", serverProfileId: "s1"))
+        XCTAssertNil(try persistence.fetchCachedNote(id: "child", serverProfileId: "s1"))
+        XCTAssertNil(try persistence.fetchCachedImage(entityId: "att99", entityType: "attachments", serverProfileId: "s1"))
     }
 }
