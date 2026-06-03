@@ -1034,6 +1034,71 @@ final class AppState {
         startRealtimeIfPossible()
     }
 
+    func loginWithBrowserSession(
+        profile: ServerProfile,
+        cloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
+        cookieArchive: Data
+    ) async throws {
+        guard let profileURL = profile.url else { throw APIError.invalidURL }
+
+        let loginLog = """
+        loginWithBrowserSession: profile=\(profile.name) url=\(profileURL.absoluteString)
+        \(OpenIDAuthDiagnostics.describeArchive("loginWithBrowserSession.archive", data: cookieArchive, baseURL: profileURL))
+        cloudflareHeaders=\(cloudflareAccessCredentials?.isComplete == true)
+        """
+        Log.openID.info("\(loginLog, privacy: .public)")
+
+        try await keychain.clearServerAuthArtifacts(forServer: profile.id)
+        let newClient = await makeTriliumClient(
+            baseURL: profile.url!,
+            profileId: profile.id,
+            persistedCookieData: cookieArchive,
+            pendingCloudflareAccessCredentials: cloudflareAccessCredentials
+        )
+        do {
+            try await restoreSessionWithTimeout(client: newClient, seconds: 12)
+        } catch {
+            Log.openID.error("loginWithBrowserSession: restoreSession failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+
+        if activeProfile?.id != profile.id {
+            NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
+            tabNavigationResetGeneration += 1
+            serverAppInfo = nil
+            await Task.yield()
+        }
+
+        let exportedLogin = await newClient.exportSessionCookieData()
+        if let exportedLogin {
+            Log.openID.info("\(OpenIDAuthDiagnostics.describeArchive("loginWithBrowserSession.exported", data: exportedLogin, baseURL: profileURL), privacy: .public)")
+        } else {
+            Log.openID.warning("loginWithBrowserSession: exportSessionCookieData returned nil")
+        }
+        try? await keychain.saveSessionCookies(exportedLogin, forServer: profile.id)
+        _ = try await triliumInstanceId(for: profile)
+
+        try persistence.saveProfile(profile)
+        if let cloudflareAccessCredentials {
+            try await keychain.saveCloudflareAccessCredentials(cloudflareAccessCredentials, forServer: profile.id)
+        }
+
+        self.client = newClient
+        self.activeProfile = profile
+        self.protectedSessionActive = false
+        self.isAuthenticated = true
+        self.connectionError = nil
+        self.lastRefreshed = .now
+        self.serverAppInfo = await newClient.lastFetchedAppInfo
+        try persistence.setActiveProfile(profile)
+        Log.auth.info("Logged in to \(profile.name) (OpenID browser session)")
+        syncManager.restoreSyncState(profileId: profile.id)
+        _ = try await triliumInstanceId(for: profile)
+        await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
+        await runIncrementalSync(maxWaitSeconds: 30)
+        startRealtimeIfPossible()
+    }
+
     func logout() async {
         await clearLocalSessionState(notifyServer: true)
         Log.auth.info("Logged out")

@@ -17,6 +17,10 @@ enum APIError: LocalizedError, Sendable {
     case totpInvalid
     /// No valid Trilium session (replaces legacy ETAPI "no token").
     case noToken
+    /// OpenID browser login completed but session cookies could not be imported or validated.
+    case browserLoginFailed(String)
+    /// Server does not have Trilium OpenID/OAuth MFA enabled.
+    case openIDNotEnabled
     case connectionRefused
     case cancelled
     case unknown(String)
@@ -50,6 +54,10 @@ enum APIError: LocalizedError, Sendable {
             return "TOTP code is incorrect. Please try again."
         case .noToken:
             return "Not signed in. Please log in with your Trilium password."
+        case .browserLoginFailed(let detail):
+            return detail
+        case .openIDNotEnabled:
+            return "This server does not have OpenID sign-in enabled. Use password login instead."
         case .connectionRefused:
             return "Connection refused. Check the server address and ensure Trilium is running."
         case .cancelled:

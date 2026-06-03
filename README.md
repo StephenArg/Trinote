@@ -58,7 +58,8 @@ Select an iOS 17+ simulator or device and press **Cmd+R**.
 1. Enter your server URL (same origin you use in the browser)
 2. Enter your Trilium **password** (same as the web UI)
 3. Optional: **Remember me** — matches Trilium’s longer-lived session cookie
-4. **TOTP / SSO**: complete login in the browser first if your server requires it
+4. **TOTP**: enter your authenticator code when prompted after Connect
+5. **OpenID/OAuth**: expand **Advanced** → **Sign in with OpenID (browser)** for servers with OAuth MFA (Google, Authentik, PocketID, etc.)
 
 ### Self-signed certificates
 

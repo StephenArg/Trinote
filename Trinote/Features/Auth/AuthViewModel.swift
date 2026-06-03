@@ -26,6 +26,12 @@ final class AuthViewModel {
     /// Stashed profile used when retrying login with a TOTP code.
     private var pendingTotpProfile: ServerProfile?
 
+    /// OpenID browser login
+    var showOpenIDBrowserLogin = false
+    var openIDBrowserAttempt = 0
+    var openIDProviderLabel: String?
+    private var pendingOpenIDProfile: ServerProfile?
+
     private let persistence = PersistenceManager.shared
 
     enum URLScheme: String, CaseIterable {
@@ -48,6 +54,10 @@ final class AuthViewModel {
     var canSubmit: Bool {
         let hasServer = !serverURL.trimmingCharacters(in: .whitespaces).isEmpty
         return hasServer && !password.isEmpty
+    }
+
+    var canBeginOpenIDLogin: Bool {
+        !serverURL.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     func loadProfiles() {
@@ -175,6 +185,116 @@ final class AuthViewModel {
         totpCode = ""
     }
 
+    func beginOpenIDLogin(appState: AppState, rejectIfServerAlreadyAdded: Bool = false) async {
+        didFinishSuccessfulLogin = false
+        isLoading = true
+        errorMessage = nil
+        openIDProviderLabel = nil
+        defer { isLoading = false }
+
+        let displayName = serverName.nilIfEmpty ?? serverURL
+        let normalizedInput = ServerProfile(name: displayName, baseURL: fullServerURL).normalizedBaseURL
+
+        if rejectIfServerAlreadyAdded {
+            loadProfiles()
+            if profiles.contains(where: { $0.normalizedBaseURL == normalizedInput }) {
+                errorMessage = String(
+                    localized: "You are already signed in to this server. Switch to it under Settings → Instances, or sign it out there before adding it again.",
+                    comment: "Error when Add Instance URL matches an existing profile"
+                )
+                showError = true
+                return
+            }
+        }
+
+        if let validationError = CloudflareAccessValidation.errorMessage(
+            clientId: cloudflareClientId,
+            clientSecret: cloudflareClientSecret
+        ) {
+            errorMessage = validationError
+            showError = true
+            return
+        }
+
+        guard let serverURL = URL(string: fullServerURL) else {
+            errorMessage = APIError.invalidURL.localizedDescription
+            showError = true
+            return
+        }
+
+        let cfCredentials = cloudflareCredentialsFromForm()
+
+        do {
+            let status = try await TriliumOAuthStatusClient.fetch(
+                baseURL: serverURL,
+                cloudflareAccessCredentials: cfCredentials
+            )
+            guard status.success, status.enabled else {
+                throw APIError.openIDNotEnabled
+            }
+            if let name = status.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                openIDProviderLabel = name
+            }
+        } catch let error as APIError where error == .openIDNotEnabled {
+            errorMessage = error.localizedDescription
+            showError = true
+            return
+        } catch {
+            Log.auth.warning("OpenID status check failed, continuing to browser login: \(error)")
+        }
+
+        let profile = findOrCreateProfile(name: displayName, url: fullServerURL)
+        pendingOpenIDProfile = profile
+        openIDBrowserAttempt += 1
+        showOpenIDBrowserLogin = true
+    }
+
+    func completeOpenIDLogin(appState: AppState, cookieArchive: Data) async {
+        guard let profile = pendingOpenIDProfile, let serverURL = profile.url else { return }
+        didFinishSuccessfulLogin = false
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        let completeLog = """
+        completeOpenIDLogin: server=\(serverURL.absoluteString)
+        \(OpenIDAuthDiagnostics.describeArchive("completeOpenIDLogin", data: cookieArchive, baseURL: serverURL))
+        """
+        Log.openID.info("\(completeLog, privacy: .public)")
+
+        do {
+            try await appState.loginWithBrowserSession(
+                profile: profile,
+                cloudflareAccessCredentials: cloudflareCredentialsFromForm(),
+                cookieArchive: cookieArchive
+            )
+            pendingOpenIDProfile = nil
+            showOpenIDBrowserLogin = false
+            cloudflareClientSecret = ""
+            loadProfiles()
+            didFinishSuccessfulLogin = true
+        } catch let pe as PersistenceError {
+            errorMessage = pe.localizedDescription
+            showError = true
+            openIDBrowserAttempt += 1
+        } catch let error as KeychainError {
+            errorMessage = error.localizedDescription
+            showError = true
+            openIDBrowserAttempt += 1
+        } catch {
+            errorMessage = APIError.from(error).localizedDescription
+            showError = true
+            openIDBrowserAttempt += 1
+            Log.auth.error("OpenID browser login failed for \(serverURL.absoluteString): \(error)")
+            Log.openID.error("completeOpenIDLogin failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    func cancelOpenIDLogin() {
+        showOpenIDBrowserLogin = false
+        pendingOpenIDProfile = nil
+    }
+
     func connectToProfile(_ profile: ServerProfile, appState: AppState) async {
         isLoading = true
         errorMessage = nil
@@ -208,6 +328,10 @@ final class AuthViewModel {
         guard !id.isEmpty, !secret.isEmpty else { return nil }
         return CloudflareAccessCredentials(clientId: id, clientSecret: secret)
     }
+
+    func cloudflareCredentialsForOpenIDLogin() -> CloudflareAccessCredentials? {
+        cloudflareCredentialsFromForm()
+    }
 }
 
 private extension APIError {
@@ -215,6 +339,7 @@ private extension APIError {
         switch (lhs, rhs) {
         case (.totpRequired, .totpRequired): return true
         case (.totpInvalid, .totpInvalid): return true
+        case (.openIDNotEnabled, .openIDNotEnabled): return true
         default: return false
         }
     }

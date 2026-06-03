@@ -15,6 +15,56 @@ enum Log {
     static let geoMap = Logger(subsystem: subsystem, category: "GeoMap")
     /// Verbose note read/create diagnostics (`getNote`, blob policy, offline queue, flush). Filter: category NoteDiag.
     static let noteDiag = Logger(subsystem: subsystem, category: "NoteDiag")
+    /// OpenID / OAuth in-app web sign-in flow (filter Console: category OpenID).
+    static let openID = Logger(subsystem: subsystem, category: "OpenID")
+}
+
+// MARK: - OpenID diagnostics (Log.openID)
+
+enum OpenIDAuthDiagnostics {
+    static func describeConfig(baseURL: URL, callbackPath: String, usesCloudflarePreflight: Bool) -> String {
+        """
+        OpenID config baseURL=\(baseURL.absoluteString) host=\(baseURL.host ?? "nil") callbackPath=\(callbackPath) cloudflarePreflight=\(usesCloudflarePreflight)
+        """
+    }
+
+    static func describeURL(_ label: String, url: URL?) -> String {
+        guard let url else { return "OpenID \(label): nil" }
+        let query = url.query ?? ""
+        let hasQuery = !query.isEmpty
+        let hasCode = query.contains("code=")
+        let hasState = query.contains("state=")
+        return """
+        OpenID \(label): \(url.absoluteString) host=\(url.host ?? "nil") path=\(url.path) hasQuery=\(hasQuery) hasCode=\(hasCode) hasState=\(hasState)
+        """
+    }
+
+    static func describeCookies(_ label: String, cookies: [HTTPCookie], matchingHost host: String) -> String {
+        let matched = cookies.filter { TriliumSessionCookieImporter.cookieDomainMatchesHost($0.domain, host: host) }
+        if matched.isEmpty {
+            return "OpenID \(label): no cookies for host=\(host) (total jar=\(cookies.count))"
+        }
+        let lines = matched.map { cookie in
+            let secure = (cookie.isSecure) ? " secure" : ""
+            let path = cookie.path.isEmpty ? "/" : cookie.path
+            let valueLen = cookie.value.count
+            return "  \(cookie.name) domain=\(cookie.domain) path=\(path)\(secure) valueLen=\(valueLen)"
+        }
+        let hasSid = matched.contains { $0.name == "trilium.sid" }
+        let hasCsrf = matched.contains { $0.name == "_csrf" || $0.name.lowercased() == "csrf-token" }
+        return """
+        OpenID \(label): host=\(host) count=\(matched.count) hasTriliumSid=\(hasSid) hasCsrf=\(hasCsrf)
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    static func describeArchive(_ label: String, data: Data, baseURL: URL) -> String {
+        guard let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return "OpenID \(label): archive bytes=\(data.count) (invalid JSON)"
+        }
+        let names = raw.compactMap { $0[HTTPCookiePropertyKey.name.rawValue] as? String }
+        return "OpenID \(label): archive bytes=\(data.count) cookieCount=\(raw.count) names=[\(names.joined(separator: ", "))] baseURL=\(baseURL.absoluteString)"
+    }
 }
 
 // MARK: - Note diagnostics (Log.noteDiag)

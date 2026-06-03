@@ -36,6 +36,26 @@ struct LoginFormContent: View {
         .sheet(isPresented: $viewModel.showTotpEntry) {
             TotpEntrySheet(viewModel: viewModel, appState: appState)
         }
+        .sheet(isPresented: $viewModel.showOpenIDBrowserLogin, onDismiss: {
+            if !viewModel.didFinishSuccessfulLogin {
+                viewModel.cancelOpenIDLogin()
+            }
+        }) {
+            if let baseURL = URL(string: viewModel.fullServerURL) {
+                OpenIDBrowserLoginView(
+                    baseURL: baseURL,
+                    cloudflareAccessCredentials: viewModel.cloudflareCredentialsForOpenIDLogin(),
+                    onComplete: { cookieArchive in
+                        Task { await viewModel.completeOpenIDLogin(appState: appState, cookieArchive: cookieArchive) }
+                    },
+                    onFailure: { message in
+                        viewModel.errorMessage = message
+                        viewModel.showError = true
+                    }
+                )
+                .id(viewModel.openIDBrowserAttempt)
+            }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -130,7 +150,7 @@ struct LoginFormContent: View {
             Toggle(String(localized: "Stay signed in (Remember me)", comment: "Login toggle"), isOn: $viewModel.rememberMe)
                 .font(.subheadline)
 
-            Text(String(localized: "TOTP is supported. SSO must be completed in the browser.", comment: "Login hint"))
+            Text(String(localized: "TOTP is supported in-app. For OpenID/OAuth servers, use Advanced → Sign in with OpenID.", comment: "Login hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -161,6 +181,50 @@ struct LoginFormContent: View {
                 .autocorrectionDisabled()
                 .focused($focusedField, equals: .cloudflareClientSecret)
                 .accessibilityLabel(String(localized: "Cloudflare Access Client Secret", comment: "VoiceOver"))
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                Text(String(localized: "For Trilium servers with OpenID/OAuth MFA enabled (Google, Authentik, etc.).", comment: "OpenID login hint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    focusedField = nil
+                    Task { await viewModel.beginOpenIDLogin(appState: appState, rejectIfServerAlreadyAdded: rejectIfServerAlreadyAdded) }
+                } label: {
+                    Group {
+                        if viewModel.isLoading {
+                            ProgressView()
+                        } else {
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(String(localized: "Sign in with OpenID/OAuth", comment: "OpenID login button"))
+                                    if let label = viewModel.openIDProviderLabel {
+                                        Text(label)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            } icon: {
+                                Image(systemName: "person.badge.key")
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 6)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!viewModel.canBeginOpenIDLogin || viewModel.isLoading)
+                .accessibilityLabel(String(localized: "Sign in with OpenID or OAuth", comment: "VoiceOver"))
+
+                Text(String(
+                    localized: "Passkeys aren't supported in the in-app sign-in window. Use your provider password (plus an authenticator/SMS code if prompted) instead.",
+                    comment: "OpenID passkey limitation hint"
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             .padding(.top, 4)
         }

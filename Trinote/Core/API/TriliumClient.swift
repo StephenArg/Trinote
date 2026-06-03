@@ -78,7 +78,11 @@ protocol TriliumClientProtocol: Actor, Sendable {
 
 enum TriliumCookieArchive {
     static func load(into storage: HTTPCookieStorage, data: Data, defaultURL: URL) {
-        guard let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+        guard let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            Log.openID.error("\(OpenIDAuthDiagnostics.describeArchive("cookieArchive.load.invalidJSON", data: data, baseURL: defaultURL), privacy: .public)")
+            return
+        }
+        var loaded = 0
         for dict in raw {
             var props: [HTTPCookiePropertyKey: Any] = [:]
             for (k, v) in dict {
@@ -87,7 +91,10 @@ enum TriliumCookieArchive {
             }
             guard let cookie = HTTPCookie(properties: props) else { continue }
             storage.setCookie(cookie)
+            loaded += 1
         }
+        Log.openID.info("cookieArchive.load: set \(loaded)/\(raw.count) cookies for \(defaultURL.host ?? "?", privacy: .public)")
+        Log.openID.debug("\(OpenIDAuthDiagnostics.describeCookies("cookieArchive.load.jar", cookies: storage.cookies ?? [], matchingHost: defaultURL.host?.lowercased() ?? ""), privacy: .public)")
     }
 
     static func export(from storage: HTTPCookieStorage, for url: URL) -> Data? {
@@ -403,9 +410,13 @@ actor TriliumClient: TriliumClientProtocol {
     private(set) var lastFetchedAppInfo: AppInfoResponse?
 
     func restoreSession() async throws {
+        Log.openID.info("restoreSession: start \(self.baseURL.absoluteString, privacy: .public)")
+        Log.openID.debug("\(OpenIDAuthDiagnostics.describeCookies("restoreSession.beforeCsrf", cookies: self.httpCookieStorage.cookies ?? [], matchingHost: self.baseURL.host?.lowercased() ?? ""), privacy: .public)")
         try await refreshCsrf()
+        Log.openID.info("restoreSession: CSRF acquired")
         lastFetchedAppInfo = try await getAppInfo()
         isSessionValid = true
+        Log.openID.info("restoreSession: success appVersion=\(self.lastFetchedAppInfo?.appVersion ?? "nil", privacy: .public)")
     }
 
     func logout() async throws {
@@ -499,6 +510,8 @@ actor TriliumClient: TriliumClientProtocol {
                 return true
             }
 
+            let preview = String(data: data.prefix(200), encoding: .utf8) ?? "<non-utf8 \(data.count) bytes>"
+            Log.openID.notice("fetchCsrfFromBootstrap: 200 but no csrfToken; bodyPreview=\(preview, privacy: .public)")
             Log.auth.debug("fetchCsrfFromBootstrap: /bootstrap returned 200 but no csrfToken found")
             return false
         } catch {
@@ -534,12 +547,18 @@ actor TriliumClient: TriliumClientProtocol {
             || html.localizedCaseInsensitiveContains("login-form")
 
         if looksLikeLoginPage {
+            let loginDiag = """
+            refreshCsrf.loginPageDetected status=\(httpResponse.statusCode) htmlBytes=\(html.count)
+            \(OpenIDAuthDiagnostics.describeCookies("refreshCsrf.loginPage", cookies: httpCookieStorage.cookies ?? [], matchingHost: baseURL.host?.lowercased() ?? ""))
+            """
+            Log.openID.error("\(loginDiag, privacy: .public)")
             throw APIError.decodingFailed(
-                "The server still shows the login page \u{2014} the session cookie may not be sticking after sign-in. Confirm the password in Safari."
+                "The server still shows the login page \u{2014} the session cookie may not be sticking after sign-in. Try signing in again."
             )
         }
 
         Log.auth.warning("refreshCsrf: no CSRF token found in HTML or cookies")
+        Log.openID.warning("refreshCsrf: no CSRF token; htmlBytes=\(html.count) status=\(httpResponse.statusCode)")
     }
 
     /// Tries `/bootstrap` (v0.102+) then falls back to HTML parsing (v0.101 and earlier).
