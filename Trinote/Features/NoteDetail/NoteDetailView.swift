@@ -1834,7 +1834,16 @@ struct NoteDetailView: View {
             CameraPickerView(imageToInsert: $imageToInsert) { showEditorCamera = false }
         }
         .sheet(isPresented: $showIncludeNotePicker) {
-            NotePickerSheet(excludeNoteId: activeNoteId) { pickedId, pickedTitle in
+            NotePickerSheet(
+                excludeNoteId: activeNoteId,
+                navigationTitleOverride: String(
+                    localized: "Select a note to link to this note",
+                    comment: "Include/link note picker title"
+                ),
+                hidesEmbeddedTreeToolbar: true,
+                hidesEmbeddedTreeRootHeader: true,
+                hidesEmbeddedTreeTabsBar: true
+            ) { pickedId, pickedTitle in
                 Self.insertIncludeNoteInEditor(webView: editorWebView, noteId: pickedId, title: pickedTitle, boxSize: "medium")
             }
             .environment(appState)

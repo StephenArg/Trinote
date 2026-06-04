@@ -52,17 +52,29 @@ struct TreeView: View {
     var onPickParent: ((String, String, String) -> Void)?
     /// Replaces the root **+** button in parent-picker mode (e.g. local transfer “Add as root note”).
     var rootPlacementButtonTitle: String?
+    /// When `false`, hides sync / overflow toolbar items (embedded note pickers).
+    var showsNavigationToolbar: Bool = true
+    /// When `false`, hides the large “Notes” header row at the tree root (embedded note pickers).
+    var showsRootNotebookHeader: Bool = true
+    /// When `false`, hides the open-note tab bar inset (embedded note pickers).
+    var showsNoteTabsBarInset: Bool = true
 
     init(
         parentNoteId: String = "root",
         parentTitle: String = "Notes",
         onPickParent: ((String, String, String) -> Void)? = nil,
-        rootPlacementButtonTitle: String? = nil
+        rootPlacementButtonTitle: String? = nil,
+        showsNavigationToolbar: Bool = true,
+        showsRootNotebookHeader: Bool = true,
+        showsNoteTabsBarInset: Bool = true
     ) {
         self.parentNoteId = parentNoteId
         self.parentTitle = parentTitle
         self.onPickParent = onPickParent
         self.rootPlacementButtonTitle = rootPlacementButtonTitle
+        self.showsNavigationToolbar = showsNavigationToolbar
+        self.showsRootNotebookHeader = showsRootNotebookHeader
+        self.showsNoteTabsBarInset = showsNoteTabsBarInset
     }
 
     @Environment(AppState.self) private var appState
@@ -287,9 +299,14 @@ struct TreeView: View {
             }
         }
         .background(treeChromeBackground)
-        .navigationTitle(parentNoteId == "root" ? "" : parentTitle)
-        .toolbarTitleDisplayMode(parentNoteId == "root" ? .inline : .automatic)
-        .toolbar { treeToolbarContent }
+        .modifier(TreeNavigationTitleModifier(
+            parentNoteId: parentNoteId,
+            parentTitle: parentTitle,
+            showsRootNotebookHeader: showsRootNotebookHeader
+        ))
+        .if(showsNavigationToolbar) { view in
+            view.toolbar { treeToolbarContent }
+        }
         .task {
             if viewModel == nil {
                 let vm = TreeViewModel(appState: appState, parentNoteId: parentNoteId)
@@ -321,7 +338,7 @@ struct TreeView: View {
             NoteDetailView(noteId: item.noteId, title: item.title, openTabId: item.openTabId)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if showNoteTabsBar {
+            if showNoteTabsBar, showsNoteTabsBarInset {
                 NoteTabsBar(
                     currentOpenTabId: lastActiveOpenTabIdForBar.isEmpty ? nil : lastActiveOpenTabIdForBar,
                     onSelect: { tab in
@@ -489,7 +506,14 @@ struct TreeView: View {
     }
 
     private func subtreeDestination(_ target: SubTreeTarget) -> some View {
-        TreeView(parentNoteId: target.noteId, parentTitle: target.title, onPickParent: onPickParent)
+        TreeView(
+            parentNoteId: target.noteId,
+            parentTitle: target.title,
+            onPickParent: onPickParent,
+            showsNavigationToolbar: showsNavigationToolbar,
+            showsRootNotebookHeader: showsRootNotebookHeader,
+            showsNoteTabsBarInset: showsNoteTabsBarInset
+        )
     }
 
     private func createChildNoteSheet(_ ctx: CreateNoteSheetContext) -> some View {
@@ -937,7 +961,7 @@ struct TreeView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.accentColor.opacity(0.08))
             }
-            if parentNoteId == "root" {
+            if parentNoteId == "root", showsRootNotebookHeader {
                 rootNotebookHeaderRow(viewModel: vm)
                     .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                     .listRowSeparator(.hidden)
@@ -1307,6 +1331,23 @@ private struct CreateChildNoteFromTreeSheet: View {
         dismiss()
         if let noteId {
             onNoteCreated?(noteId, title)
+        }
+    }
+}
+
+/// Applies tree-local navigation titles without clearing an embedded picker sheet title at root.
+private struct TreeNavigationTitleModifier: ViewModifier {
+    let parentNoteId: String
+    let parentTitle: String
+    let showsRootNotebookHeader: Bool
+
+    func body(content: Content) -> some View {
+        if parentNoteId == "root", !showsRootNotebookHeader {
+            content
+        } else {
+            content
+                .navigationTitle(parentNoteId == "root" ? "" : parentTitle)
+                .toolbarTitleDisplayMode(parentNoteId == "root" ? .inline : .automatic)
         }
     }
 }

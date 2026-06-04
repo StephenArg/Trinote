@@ -10,6 +10,12 @@ struct NotePickerSheet: View {
     var excludeNoteId: String?
     /// If non-nil, overrides the default “Include note” title (e.g. add open tab from the bar).
     var navigationTitleOverride: String? = nil
+    /// Hides sync / overflow toolbar on the embedded tree (link-note picker).
+    var hidesEmbeddedTreeToolbar: Bool = false
+    /// Hides the large “Notes” header row on the embedded tree root (link-note picker).
+    var hidesEmbeddedTreeRootHeader: Bool = false
+    /// Hides the open-note tab bar on the embedded tree (link-note picker).
+    var hidesEmbeddedTreeTabsBar: Bool = false
     let onPick: (_ noteId: String, _ title: String) -> Void
 
     @AppStorage("notePickerMode") private var modeRaw: String = PickerMode.search.rawValue
@@ -69,6 +75,7 @@ struct NotePickerSheet: View {
                     Button(String(localized: "Cancel", comment: "Dismiss sheet")) { dismiss() }
                 }
             }
+            .toolbar(hidesEmbeddedTreeTabsBar ? .hidden : .visible, for: .tabBar)
         }
         .task(id: modeRaw) {
             if PickerMode(rawValue: modeRaw) == .search, searchViewModel == nil {
@@ -86,7 +93,10 @@ struct NotePickerSheet: View {
                 guard noteId != excludeNoteId else { return }
                 onPick(noteId, title)
                 dismiss()
-            }
+            },
+            showsNavigationToolbar: !hidesEmbeddedTreeToolbar,
+            showsRootNotebookHeader: !hidesEmbeddedTreeRootHeader,
+            showsNoteTabsBarInset: !hidesEmbeddedTreeTabsBar
         )
     }
 
