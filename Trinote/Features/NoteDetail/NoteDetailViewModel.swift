@@ -84,6 +84,8 @@ final class NoteDetailViewModel {
     private var serverContentHash: Int?
     /// The server's utcDateModified for the current note, set during metadata fetch.
     private var serverUtcDateModified: String?
+    /// Blob id from the latest `getNote` response (used to skip redundant `getNoteContent` for empty notes).
+    private var serverBlobId: String?
 
     init(noteId: String, appState: AppState, seedChildSummaries: [ChildNoteSummary]? = nil) {
         self.noteId = noteId
@@ -268,21 +270,6 @@ final class NoteDetailViewModel {
         // stays nil until `loadContent()` runs (after this method returns).
         loadContentFromCache()
 
-        if let n = self.note {
-            Log.noteDiag.info("\(NoteDiagnostics.describeNoteItem(n, phase: "load.afterCacheMeta"))")
-        } else {
-            Log.noteDiag.info("NoteDiag READ phase=load.afterCacheMeta noteId=\(nid) cachedMeta=nil")
-        }
-        let trimmedAfterCache = (self.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let afterCacheContentLog = NoteDiagnostics.describeContentState(
-            phase: "load.afterCacheContent",
-            noteId: nid,
-            contentBytes: self.content?.count,
-            trimmedBodyEmpty: trimmedAfterCache.isEmpty,
-            previewSource: self.rawContentString
-        )
-        Log.noteDiag.info("\(afterCacheContentLog)")
-
         if let note, let profileId = self.serverProfileId {
             try? self.persistence.recordRecentNote(
                 noteId: nid, title: note.title,
@@ -294,13 +281,11 @@ final class NoteDetailViewModel {
 
         // Pending local creates are not on the server yet — same stall as offline when interface is “up”.
         if nid.isOfflineLocalNoteId {
-            Log.noteDiag.info("NoteDiag READ phase=load.skipServer noteId=\(nid) reason=offlineLocalPlaceholder")
             return
         }
 
         // Do not await getNote while offline — same long URLSession stall as bootstrap “Connecting…”.
         if !appState.isOnline {
-            Log.noteDiag.info("NoteDiag READ phase=load.skipServer noteId=\(nid) reason=offline")
             return
         }
 
@@ -316,10 +301,10 @@ final class NoteDetailViewModel {
                 handleServerDeletedNote(noteId: nid)
                 return
             }
-            Log.noteDiag.info("\(NoteDiagnostics.describeNoteResponse(response, phase: "load.getNote.success"))")
             let fresh = NoteItem(from: response)
             self.note = fresh
             self.serverUtcDateModified = response.utcDateModified
+            self.serverBlobId = response.blobId
             self.serverVerified = true
             await updateSharedPublicState(client: client)
 
@@ -342,7 +327,6 @@ final class NoteDetailViewModel {
                 return
             }
             Log.api.error("Failed to load note: \(error)")
-            Log.noteDiag.error("NoteDiag READ phase=load.getNote.failed noteId=\(nid) error=\(String(describing: apiError))")
             if !hadCachedNote {
                 self.error = apiError.localizedDescription
             }
@@ -377,7 +361,6 @@ final class NoteDetailViewModel {
         await ensureNoteMetadataIfNeeded()
 
         guard let note = self.note else {
-            Log.noteDiag.info("NoteDiag CONTENT phase=loadContent.noNote noteId=\(self.noteId)")
             return
         }
 
@@ -391,58 +374,41 @@ final class NoteDetailViewModel {
         self.checkForDraft()
 
         if nid.isOfflineLocalNoteId {
-            let trimmed = (self.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let offlineLocalLog = NoteDiagnostics.describeContentState(
-                phase: "loadContent.skipServer.offlineLocalPlaceholder",
-                noteId: nid,
-                contentBytes: self.content?.count,
-                trimmedBodyEmpty: trimmed.isEmpty,
-                previewSource: self.rawContentString
-            )
-            Log.noteDiag.info("\(offlineLocalLog)")
             await applyIncludeNoteResolutionIfNeeded()
             return
         }
 
         // When offline, rely on SwiftData only; avoid getNoteContent timeouts and a stuck loading state.
         if !appState.isOnline {
-            let trimmed = (self.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let offlineContentLog = NoteDiagnostics.describeContentState(
-                phase: "loadContent.skipServer.offline",
-                noteId: nid,
-                contentBytes: self.content?.count,
-                trimmedBodyEmpty: trimmed.isEmpty,
-                previewSource: self.rawContentString
-            )
-            Log.noteDiag.info("\(offlineContentLog)")
             await applyIncludeNoteResolutionIfNeeded()
             return
         }
 
         guard let client else {
-            Log.noteDiag.info("NoteDiag CONTENT phase=loadContent.noClient noteId=\(nid)")
             return
         }
         let profileId = self.serverProfileId ?? ""
-        let cachedDate = (try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId))?.utcDateModified
-
-        let trimmedBody = (self.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasUsableBody = !trimmedBody.isEmpty
+        let cachedNote = try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId)
+        let cachedDate = cachedNote?.utcDateModified
         let childIdsForBlobPolicy = resolvedChildNoteIdsForDetail()
-        // Trilium often has no/empty blob for `book`; geo maps mis-typed as `book` still store viewport JSON.
-        // If we skip `getNoteContent` because metadata looks fresh, we never load that JSON.
-        let shouldFetchBlobDespiteFreshMeta = !hasUsableBody && (
-            note.isSemanticGeoMap
-            || ((note.type == .book || note.type == .collection) && !childIdsForBlobPolicy.isEmpty)
+        let hasUsableBody = hasUsableDisplayedBodyContent()
+        let shouldFetchBlobDespiteFreshMeta = TriliumNoteBodyPolicy.shouldFetchBodyDespiteFreshMeta(
+            note: note,
+            hasUsableBody: hasUsableBody,
+            childNoteIds: childIdsForBlobPolicy
         )
-
         let forceFetchProtected = note.isProtected && !appState.protectedSessionActive
-        // Metadata can be cached without a body (e.g. cache-excluded subtree). Do not skip the network fetch when there is no usable local body.
-        if let serverDate = self.serverUtcDateModified,
-           let cachedDate,
-           serverDate <= cachedDate,
-           !forceFetchProtected,
-           hasUsableBody {
+
+        if TriliumNoteBodyPolicy.shouldSkipGetNoteContentWhenMetaIsFresh(
+            serverUtc: self.serverUtcDateModified,
+            cachedUtc: cachedDate,
+            serverBlobId: self.serverBlobId,
+            cachedContent: cachedNote?.content,
+            contentFetchedAt: cachedNote?.contentFetchedAt,
+            hasUsableBody: hasUsableBody,
+            shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
+            forceFetchProtected: forceFetchProtected
+        ) {
             self.serverVerified = true
             if note.isProtected {
                 self.needsProtectedSession = false
@@ -450,68 +416,17 @@ final class NoteDetailViewModel {
                     await resyncNoteTitlesWithProtectedSession()
                 }
             }
-            if !shouldFetchBlobDespiteFreshMeta {
-                let blobPolicyLog = NoteDiagnostics.describeBlobFetchDecision(
-                    noteId: nid,
-                    isSemanticGeoMap: note.isSemanticGeoMap,
-                    noteTypeBook: note.type == .book || note.type == .collection,
-                    childCountForPolicy: childIdsForBlobPolicy.count,
-                    hasUsableBody: hasUsableBody,
-                    shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
-                    serverUtc: serverDate,
-                    cachedUtc: cachedDate,
-                    forceFetchProtected: forceFetchProtected,
-                    earlyExitReason: "skip_getNoteContent_meta_not_newer"
-                )
-                Log.noteDiag.info("\(blobPolicyLog)")
-                await applyIncludeNoteResolutionIfNeeded()
-                return
-            }
-            let blobOverrideLog = NoteDiagnostics.describeBlobFetchDecision(
-                noteId: nid,
-                isSemanticGeoMap: note.isSemanticGeoMap,
-                    noteTypeBook: note.type == .book || note.type == .collection,
-                    childCountForPolicy: childIdsForBlobPolicy.count,
-                    hasUsableBody: hasUsableBody,
-                    shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
-                    serverUtc: serverDate,
-                    cachedUtc: cachedDate,
-                    forceFetchProtected: forceFetchProtected,
-                    earlyExitReason: "override_fetch_empty_body_geo_or_book_children"
-            )
-            Log.noteDiag.info("\(blobOverrideLog)")
-        } else {
-            let blobFetchLog = NoteDiagnostics.describeBlobFetchDecision(
-                noteId: nid,
-                isSemanticGeoMap: note.isSemanticGeoMap,
-                noteTypeBook: note.type == .book || note.type == .collection,
-                childCountForPolicy: childIdsForBlobPolicy.count,
-                hasUsableBody: hasUsableBody,
-                shouldFetchDespiteFreshMeta: shouldFetchBlobDespiteFreshMeta,
-                serverUtc: self.serverUtcDateModified,
-                cachedUtc: cachedDate,
-                forceFetchProtected: forceFetchProtected,
-                earlyExitReason: "will_fetch_meta_newer_or_uncached_or_protected_gate"
-            )
-            Log.noteDiag.info("\(blobFetchLog)")
+            await applyIncludeNoteResolutionIfNeeded()
+            return
         }
 
-        let hadCachedContent = self.contentString != nil
-        if !hadCachedContent { isLoadingContent = true }
-        defer { if !hadCachedContent { isLoadingContent = false } }
+        let needsContentSpinner = self.contentString == nil
+        if needsContentSpinner { isLoadingContent = true }
+        defer { if needsContentSpinner { isLoadingContent = false } }
 
         do {
-            Log.noteDiag.info("NoteDiag CONTENT phase=loadContent.beginGetNoteContent noteId=\(nid) hadCachedContentString=\(hadCachedContent)")
             let data = try await client.getNoteContent(nid)
             let htmlString = String(data: data, encoding: .utf8)
-            let blobOkLog = NoteDiagnostics.describeContentState(
-                phase: "loadContent.getNoteContent.success",
-                noteId: nid,
-                contentBytes: data.count,
-                trimmedBodyEmpty: (htmlString ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                previewSource: htmlString
-            )
-            Log.noteDiag.info("\(blobOkLog)")
 
             self.content = data
             self.serverContentHash = htmlString?.hashValue
@@ -552,7 +467,6 @@ final class NoteDetailViewModel {
                 return
             }
             Log.api.error("Failed to load note content")
-            Log.noteDiag.error("NoteDiag CONTENT phase=loadContent.getNoteContent.failed noteId=\(nid) error=\(String(describing: apiError))")
 
             if note.isProtected {
                 if Self.protectedSessionLikelyEnded(error) {
@@ -734,9 +648,6 @@ final class NoteDetailViewModel {
                 if let source, let svg = await MermaidRenderer.shared.render(source: source) {
                     bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--mermaid\">\(svg)</div>"
                 } else {
-                    Log.noteDiag.error(
-                        "NoteDiag IMG-LINK-CARD phase=wrap.applyMermaidFallback noteId=\(noteId, privacy: .public)"
-                    )
                     bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--image\">\(cleaned)</div>"
                 }
             } else if meta.type == .canvas {
@@ -752,9 +663,6 @@ final class NoteDetailViewModel {
                     let imgTag = "<img class=\"trinote-include__img\" src=\"\(escSrc)\" alt=\"\" />"
                     bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--image\">\(imgTag)</div>"
                 } else {
-                    Log.noteDiag.error(
-                        "NoteDiag IMG-LINK-CARD phase=wrap.applyCanvasFallback noteId=\(noteId, privacy: .public) — canvas-export.svg unavailable; using original <img> (likely broken)."
-                    )
                     bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--image\">\(cleaned)</div>"
                 }
             } else {
@@ -785,7 +693,6 @@ final class NoteDetailViewModel {
         isOnline: Bool
     ) async -> String? {
         guard let profileId, !profileId.isEmpty else {
-            Log.noteDiag.error("NoteDiag IMG-LINK-CARD mermaid.loadSource noteId=\(noteId, privacy: .public) result=nil reason=noProfileId")
             return nil
         }
         if let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId),
@@ -794,7 +701,6 @@ final class NoteDetailViewModel {
             return IncludeNoteResolver.normalizedMermaidSource(str)
         }
         guard isOnline, let client else {
-            Log.noteDiag.error("NoteDiag IMG-LINK-CARD mermaid.loadSource noteId=\(noteId, privacy: .public) result=nil reason=offlineOrNoClient online=\(isOnline, privacy: .public) clientNil=\(client == nil, privacy: .public)")
             return nil
         }
         do {
@@ -812,10 +718,8 @@ final class NoteDetailViewModel {
             if let str = String(data: data, encoding: .utf8) {
                 return IncludeNoteResolver.normalizedMermaidSource(str)
             }
-            Log.noteDiag.error("NoteDiag IMG-LINK-CARD mermaid.loadSource noteId=\(noteId, privacy: .public) result=nil reason=utf8DecodeFailed bytes=\(data.count, privacy: .public)")
             return nil
         } catch {
-            Log.noteDiag.error("NoteDiag IMG-LINK-CARD mermaid.loadSource noteId=\(noteId, privacy: .public) result=nil reason=netError error=\(String(describing: error), privacy: .public)")
             return nil
         }
     }
@@ -1280,7 +1184,7 @@ final class NoteDetailViewModel {
             }
             metaResponse = response
             serverDate = response.utcDateModified
-            Log.noteDiag.info("\(NoteDiagnostics.describeNoteResponse(response, phase: "refresh.getNote.success"))")
+            serverBlobId = response.blobId
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError {
@@ -1291,17 +1195,22 @@ final class NoteDetailViewModel {
                 return
             }
             Log.api.error("Note detail refresh: getNote failed — leaving UI unchanged")
-            Log.noteDiag.error("NoteDiag READ phase=refresh.getNote.failed noteId=\(nid) error=\(String(describing: apiError))")
         }
 
         // 2) Compare timestamps
-        let cachedDate = (try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId))?.utcDateModified
+        let cachedNote = try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId)
+        let cachedDate = cachedNote?.utcDateModified
         let serverIsNewer = serverDate != nil && (cachedDate == nil || serverDate! > cachedDate!)
 
         loadContentFromCache()
         let hasUsableBody = hasUsableDisplayedBodyContent()
+        let bodyConfirmedEmpty = TriliumNoteBodyPolicy.isBodyConfirmedEmpty(
+            serverBlobId: metaResponse?.blobId ?? serverBlobId,
+            cachedContent: cachedNote?.content,
+            contentFetchedAt: cachedNote?.contentFetchedAt
+        )
 
-        if !force, !serverIsNewer, hasUsableBody {
+        if !force, !serverIsNewer, hasUsableBody || bodyConfirmedEmpty {
             if let response = metaResponse {
                 self.note = NoteItem(from: response)
                 self.serverUtcDateModified = serverDate
@@ -1327,25 +1236,15 @@ final class NoteDetailViewModel {
         var fetchedHTML: String?
         var skipApplyingStaleMetaNote = false
         do {
-            Log.noteDiag.info("NoteDiag CONTENT phase=refresh.beginGetNoteContent noteId=\(nid)")
             let data = try await client.getNoteContent(nid)
             fetchedData = data
             fetchedHTML = String(data: data, encoding: .utf8)
-            let refreshBlobLog = NoteDiagnostics.describeContentState(
-                phase: "refresh.getNoteContent.success",
-                noteId: nid,
-                contentBytes: data.count,
-                trimmedBodyEmpty: (fetchedHTML ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                previewSource: fetchedHTML
-            )
-            Log.noteDiag.info("\(refreshBlobLog)")
         } catch {
             let apiError = APIError.from(error)
             if case .cancelled = apiError {
                 return
             }
             Log.api.error("Note detail refresh: getNoteContent failed — will apply meta only; content may stay stale or empty")
-            Log.noteDiag.error("NoteDiag CONTENT phase=refresh.getNoteContent.failed noteId=\(nid) error=\(String(describing: apiError))")
             if let meta = metaResponse, meta.isProtected, Self.protectedSessionLikelyEnded(error) {
                 self.appState.protectedSessionActive = false
                 self.needsProtectedSession = true
@@ -2504,44 +2403,19 @@ final class NoteDetailViewModel {
     /// When the parent is a semantic geo map (`geoMap` or `book` + `#viewType=geoMap`) with an empty body, child `#geolocation` may not be in SwiftData yet. Fetches a limited set of children so routing can recognize pins.
     /// Skips calendar roots — those are handled by CalendarNoteView.
     func prefetchChildNotesForGeoMapBookIfNeeded() async {
-        guard let note, note.isSemanticGeoMap, !note.isCalendarRoot else {
-            Log.noteDiag.debug(
-                "NoteDiag GEO_PREFETCH skip noteId=\(self.noteId) hasNote=\(self.note != nil) semanticGeo=\(self.note?.isSemanticGeoMap ?? false) calendarRoot=\(self.note?.isCalendarRoot ?? false)"
-            )
-            return
-        }
-        guard let client, isOnline, let profileId = serverProfileId else {
-            Log.noteDiag.debug(
-                "NoteDiag GEO_PREFETCH skip noteId=\(note.noteId) client=\(self.client != nil) online=\(self.isOnline) profile=\(self.serverProfileId != nil)"
-            )
-            return
-        }
+        guard let note, note.isSemanticGeoMap, !note.isCalendarRoot else { return }
+        guard let client, isOnline, let profileId = serverProfileId else { return }
         let body = (contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard body.isEmpty else {
-            Log.noteDiag.debug("NoteDiag GEO_PREFETCH skip noteId=\(note.noteId) reason=bodyNonEmpty len=\(body.count)")
-            return
-        }
+        guard body.isEmpty else { return }
         let childIds = resolvedChildNoteIdsForDetail()
         let hasGeoChild = cachedAnyChildHasGeolocationLabel()
-        guard !childIds.isEmpty, !hasGeoChild else {
-            Log.noteDiag.info(
-                "NoteDiag GEO_PREFETCH skip noteId=\(note.noteId) childIds.empty=\(childIds.isEmpty) cachedAnyChildHasGeolocation=\(hasGeoChild)"
-            )
-            return
-        }
+        guard !childIds.isEmpty, !hasGeoChild else { return }
 
-        Log.noteDiag.info(
-            "NoteDiag GEO_PREFETCH begin noteId=\(note.noteId) childCount=\(childIds.count) firstIds=\(childIds.prefix(8).joined(separator: ","))"
-        )
         for childId in childIds.prefix(16) {
             do {
                 let response = try await client.getNote(childId)
-                Log.noteDiag.info(
-                    "NoteDiag GEO_PREFETCH child noteId=\(childId) api.type=\(response.type) title=\(String(response.title.prefix(80))) attrCount=\(response.attributes.count)"
-                )
                 persistNoteResponse(response, profileId: profileId)
             } catch {
-                Log.noteDiag.warning("NoteDiag GEO_PREFETCH child failed noteId=\(childId) \(error.localizedDescription)")
             }
         }
         try? persistence.commitBatch()
@@ -2566,6 +2440,7 @@ final class NoteDetailViewModel {
             }
             note = NoteItem(from: response)
             serverUtcDateModified = response.utcDateModified
+            serverBlobId = response.blobId
             serverVerified = true
             if let profileId = serverProfileId {
                 persistNoteResponse(response, profileId: profileId)
@@ -2706,15 +2581,18 @@ final class NoteDetailViewModel {
     }
 
     private func loadContentFromCache() {
-        guard let profileId = self.serverProfileId else {
-            Log.noteDiag.debug("NoteDiag CONTENT phase=cache.skip noteId=\(self.noteId) reason=noServerProfileId")
+        guard let profileId = self.serverProfileId else { return }
+        let nid = self.noteId
+        if cacheExclusion.isNoteExcludedFromCache(
+            noteId: nid,
+            parentNoteIds: parentNoteIdsForCache(noteId: nid),
+            serverProfileId: profileId
+        ) {
             return
         }
-        let nid = self.noteId
         if let cached = try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId),
            let data = cached.content {
             if cached.isProtected, !appState.protectedSessionActive {
-                Log.noteDiag.info("NoteDiag CONTENT phase=cache.skipProtected noteId=\(nid) bytes=\(data.count)")
                 return
             }
             content = data
@@ -2733,17 +2611,6 @@ final class NoteDetailViewModel {
                 contentString = html
             }
             checkForDraft()
-            let trimmed = (html ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let cacheHitLog = NoteDiagnostics.describeContentState(
-                phase: "cache.hit",
-                noteId: nid,
-                contentBytes: data.count,
-                trimmedBodyEmpty: trimmed.isEmpty,
-                previewSource: html
-            )
-            Log.noteDiag.info("\(cacheHitLog)")
-        } else {
-            Log.noteDiag.info("NoteDiag CONTENT phase=cache.miss noteId=\(nid) (no cached row or empty content)")
         }
     }
 }

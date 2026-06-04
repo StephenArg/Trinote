@@ -118,37 +118,6 @@ enum NoteDiagnostics {
         return parts.joined(separator: "\n")
     }
 
-    static func describeContentState(
-        phase: String,
-        noteId: String,
-        contentBytes: Int?,
-        trimmedBodyEmpty: Bool,
-        previewSource: String?
-    ) -> String {
-        let bytes = contentBytes.map { "\($0)" } ?? "nil"
-        let preview = previewSource.map { trunc(escNewlines($0), 500) } ?? "nil"
-        return """
-        NoteDiag CONTENT phase=\(phase) noteId=\(noteId) contentBytes=\(bytes) trimmedBodyEmpty=\(trimmedBodyEmpty) preview=\(preview)
-        """
-    }
-
-    static func describeBlobFetchDecision(
-        noteId: String,
-        isSemanticGeoMap: Bool,
-        noteTypeBook: Bool,
-        childCountForPolicy: Int,
-        hasUsableBody: Bool,
-        shouldFetchDespiteFreshMeta: Bool,
-        serverUtc: String?,
-        cachedUtc: String?,
-        forceFetchProtected: Bool,
-        earlyExitReason: String?
-    ) -> String {
-        """
-        NoteDiag BLOB_POLICY noteId=\(noteId) semanticGeo=\(isSemanticGeoMap) typeBook=\(noteTypeBook) childIdsForPolicy=\(childCountForPolicy) hasUsableBody=\(hasUsableBody) shouldFetchDespiteFreshMeta=\(shouldFetchDespiteFreshMeta) serverUtc=\(serverUtc ?? "nil") cachedUtc=\(cachedUtc ?? "nil") forceFetchProtected=\(forceFetchProtected) earlyExit=\(earlyExitReason ?? "none")
-        """
-    }
-
     static func describeOfflineCreateQueued(
         parentNoteId: String,
         localNoteId: String,

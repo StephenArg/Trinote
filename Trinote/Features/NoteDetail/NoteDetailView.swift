@@ -734,7 +734,11 @@ struct NoteDetailView: View {
             let vm = NoteDetailViewModel(noteId: activeNoteId, appState: appState, seedChildSummaries: seedChildSummaries)
             viewModel = vm
             if showNoteTabsBar, retargetActiveOpenTab { eagerRetargetActiveOpenTabFromCache() }
-            await vm.load()
+            async let loadTask: () = vm.load()
+            async let contentTask: () = vm.loadContent()
+            async let attachTask: () = vm.loadAttachments()
+            async let childTask: () = vm.loadChildNotes()
+            await loadTask
             // Flip into edit mode as soon as `note` is available so SwiftUI never renders the read
             // layout for a frame before the editor takes over. Only the new-note flow sets
             // `startInEditMode` (TreeView.noteEditDestination), so `editableContent` being empty at
@@ -742,10 +746,7 @@ struct NoteDetailView: View {
             if startInEditMode, vm.note != nil {
                 vm.startEditing()
             }
-            async let contentTask: () = vm.loadContent()
-            async let attachTask: () = vm.loadAttachments()
-            await vm.loadChildNotes()
-            _ = await (contentTask, attachTask)
+            _ = await (contentTask, attachTask, childTask)
             await vm.prefetchChildNotesForGeoMapBookIfNeeded()
         }
         if showNoteTabsBar { reconcileOpenTabsAfterLoad() }
