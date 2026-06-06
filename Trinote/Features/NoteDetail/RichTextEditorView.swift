@@ -21,6 +21,8 @@ enum RichTextEditorBridgeRequest: Equatable {
     case openNote(noteId: String)
     /// Stable id from the TipTap NodeView; native resolves HTML and calls `applyIncludeNotePreviewJSON` for that host only.
     case includePreview(previewId: String, noteId: String, boxSize: String)
+    /// Long-press on an attachment chip in the editor; `pos` is the ProseMirror document position.
+    case renameAttachment(attachmentId: String, noteId: String, title: String, pos: Int)
 }
 
 struct RichTextEditorView: UIViewRepresentable {
@@ -38,6 +40,8 @@ struct RichTextEditorView: UIViewRepresentable {
     var onRequestSave: ((String?, CGFloat) -> Void)?
     /// Include-note toolbar / node view → native (picker, title resolution, open linked note).
     var onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)?
+    /// Non-image file pasted from clipboard → upload as attachment and insert link.
+    var onPasteFile: ((Data, String, String) -> Void)?
     @Binding var imageToInsert: String?
     /// Optional binding so the parent view can hold a reference to the underlying WKWebView
     /// (e.g. to call `evaluateJavaScript` for fetching fresh editor content before save).
@@ -55,6 +59,7 @@ struct RichTextEditorView: UIViewRepresentable {
             onTableToolsVisibilityChanged: onTableToolsVisibilityChanged,
             onRequestSave: onRequestSave,
             onEditorBridgeRequest: onEditorBridgeRequest,
+            onPasteFile: onPasteFile,
             initialScrollFraction: initialScrollFraction
         )
     }
@@ -125,6 +130,7 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.onTableToolsVisibilityChanged = onTableToolsVisibilityChanged
         coordinator.onRequestSave = onRequestSave
         coordinator.onEditorBridgeRequest = onEditorBridgeRequest
+        coordinator.onPasteFile = onPasteFile
         Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
@@ -206,6 +212,7 @@ struct RichTextEditorView: UIViewRepresentable {
         var onTableToolsVisibilityChanged: ((Bool) -> Void)?
         var onRequestSave: ((String?, CGFloat) -> Void)?
         var onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)?
+        var onPasteFile: ((Data, String, String) -> Void)?
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
@@ -227,6 +234,7 @@ struct RichTextEditorView: UIViewRepresentable {
             onTableToolsVisibilityChanged: ((Bool) -> Void)? = nil,
             onRequestSave: ((String?, CGFloat) -> Void)? = nil,
             onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)? = nil,
+            onPasteFile: ((Data, String, String) -> Void)? = nil,
             initialScrollFraction: CGFloat = 0
         ) {
             self.initialHTML = initialHTML
@@ -237,6 +245,7 @@ struct RichTextEditorView: UIViewRepresentable {
             self.onTableToolsVisibilityChanged = onTableToolsVisibilityChanged
             self.onRequestSave = onRequestSave
             self.onEditorBridgeRequest = onEditorBridgeRequest
+            self.onPasteFile = onPasteFile
             self.initialScrollFraction = initialScrollFraction
         }
 
@@ -372,6 +381,22 @@ struct RichTextEditorView: UIViewRepresentable {
                             callback?(.includePreview(previewId: previewId, noteId: nid, boxSize: boxSize))
                         }
                     }
+                case "renameAttachment":
+                    if let aid = dict["attachmentId"] as? String, !aid.isEmpty,
+                       let nid = dict["noteId"] as? String, !nid.isEmpty,
+                       let title = dict["title"] as? String {
+                        let pos: Int
+                        if let n = dict["pos"] as? Int {
+                            pos = n
+                        } else if let n = dict["pos"] as? NSNumber {
+                            pos = n.intValue
+                        } else {
+                            break
+                        }
+                        DispatchQueue.main.async {
+                            callback?(.renameAttachment(attachmentId: aid, noteId: nid, title: title, pos: pos))
+                        }
+                    }
                 default:
                     break
                 }
@@ -433,6 +458,8 @@ struct RichTextEditorView: UIViewRepresentable {
                 if let payload = EditorPasteboardImage.loadPasteboardImageData() {
                     let uri = "data:\(payload.mime);base64,\(payload.data.base64EncodedString())"
                     insertImage(uri)
+                } else if let file = EditorPasteboardImage.loadPasteboardFileData() {
+                    onPasteFile?(file.data, file.filename, file.mime)
                 } else {
                     pastePlainFallbackFromPasteboard()
                 }
@@ -472,7 +499,7 @@ struct RichTextEditorView: UIViewRepresentable {
         }
 
         private static func jsJSONString(_ value: String) -> String {
-            guard let data = try? JSONSerialization.data(withJSONObject: value),
+            guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
                   let encoded = String(data: data, encoding: .utf8) else {
                 return "''"
             }
@@ -537,14 +564,9 @@ struct RichTextEditorView: UIViewRepresentable {
             }
         }
 
-        /// Same rule as read-only `HTMLNoteView`: `#/<id>` or `#root/…/<id>` → last path segment.
+        /// Same rule as read-only `HTMLNoteView`: `#/<id>` or `#root/…/<id>` → last path segment (query stripped).
         private static func noteIdFromTriliumHashLink(url: URL) -> String? {
-            guard var frag = url.fragment, !frag.isEmpty else { return nil }
-            frag = frag.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            let parts = frag.split(separator: "/").map(String.init).filter { !$0.isEmpty }
-            guard let last = parts.last else { return nil }
-            if last == "root" { return nil }
-            return last
+            TriliumHashLinkNavigation.parse(url: url)?.noteId
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
@@ -562,8 +584,18 @@ struct RichTextEditorView: UIViewRepresentable {
                 }
             }
 
+            if let ref = TriliumAttachmentURLParser.entityReference(from: url),
+               ref.routeType == "attachments" {
+                return .cancel
+            }
+
             let urlString = url.absoluteString
             if urlString.contains("#/") || urlString.localizedCaseInsensitiveContains("#root/") {
+                if let parsed = TriliumHashLinkNavigation.parse(url: url),
+                   parsed.viewMode == "attachments",
+                   parsed.attachmentId != nil {
+                    return .cancel
+                }
                 if let noteId = Self.noteIdFromTriliumHashLink(url: url), !noteId.isEmpty {
                     let callback = onEditorBridgeRequest
                     DispatchQueue.main.async { callback?(.openNote(noteId: noteId)) }

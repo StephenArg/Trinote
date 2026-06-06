@@ -149,61 +149,87 @@ struct AttachmentRow: View {
     let attachment: AttachmentItem
     let viewModel: NoteDetailViewModel
 
-    @State private var isDownloading = false
+    @State private var isLoading = false
     @State private var showShareSheet = false
-    @State private var downloadedData: Data?
+    @State private var shareURL: URL?
+    @State private var previewItem: AttachmentPreviewItem?
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: attachment.isImage ? "photo" : "paperclip")
-                .foregroundStyle(.secondary)
-                .frame(width: 24)
-                .accessibilityHidden(true)
+        Button {
+            Task { await openPreview() }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: attachment.isImage ? "photo" : "paperclip")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(attachment.title)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                HStack(spacing: 8) {
-                    Text(attachment.mime)
-                    Text(attachment.humanReadableSize)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(attachment.title)
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                    HStack(spacing: 8) {
+                        Text(attachment.mime)
+                        Text(attachment.humanReadableSize)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
+                Spacer()
+
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
             }
-
-            Spacer()
-
-            if isDownloading {
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                Button {
-                    Task { await download() }
-                } label: {
-                    Image(systemName: "arrow.down.circle")
-                }
-                .accessibilityLabel("Download \(attachment.title)")
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal)
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .accessibilityLabel(attachment.title)
+        .accessibilityHint(String(localized: "Opens attachment preview", comment: "Attachment row tap hint"))
+        .contextMenu {
+            Button {
+                Task { await shareAttachment() }
+            } label: {
+                Label(String(localized: "Share", comment: "Share attachment"), systemImage: "square.and.arrow.up")
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal)
+        .fullScreenCover(item: $previewItem) { item in
+            AttachmentPreviewView(item: item) {
+                previewItem = nil
+            }
+        }
         .sheet(isPresented: $showShareSheet) {
-            if let data = downloadedData {
-                ShareSheet(items: [data])
+            if let shareURL {
+                ShareSheet(items: [shareURL])
             }
         }
     }
 
-    private func download() async {
-        isDownloading = true
-        defer { isDownloading = false }
-        if let (data, _) = await viewModel.downloadAttachment(attachment) {
-            downloadedData = data
-            showShareSheet = true
-        }
+    private func openPreview() async {
+        isLoading = true
+        defer { isLoading = false }
+        previewItem = await viewModel.prepareAttachmentPreview(for: attachment)
+    }
+
+    private func shareAttachment() async {
+        isLoading = true
+        defer { isLoading = false }
+        guard let (data, _) = await viewModel.downloadAttachment(attachment),
+              let url = try? AttachmentPreviewFileStore.write(data: data, filename: attachment.title) else { return }
+        shareURL = url
+        showShareSheet = true
     }
 }

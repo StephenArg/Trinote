@@ -315,6 +315,59 @@ struct AttachmentResponse: Decodable {
     let utcDateModified: String
     let utcDateScheduledForErasureSince: String?
     let contentLength: Int
+
+    enum CodingKeys: String, CodingKey {
+        case attachmentId, ownerId, role, mime, title, position, blobId
+        case dateModified, utcDateModified, utcDateScheduledForErasureSince, contentLength
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        attachmentId = try c.decode(String.self, forKey: .attachmentId)
+        ownerId = try c.decode(String.self, forKey: .ownerId)
+        role = try c.decode(String.self, forKey: .role)
+        mime = try c.decode(String.self, forKey: .mime)
+        title = try c.decode(String.self, forKey: .title)
+        position = try c.decodeIfPresent(Int.self, forKey: .position) ?? 0
+        blobId = try c.decodeIfPresent(String.self, forKey: .blobId)
+        dateModified = try c.decodeIfPresent(String.self, forKey: .dateModified) ?? ""
+        utcDateModified = try c.decodeIfPresent(String.self, forKey: .utcDateModified) ?? ""
+        utcDateScheduledForErasureSince = try c.decodeIfPresent(String.self, forKey: .utcDateScheduledForErasureSince)
+        contentLength = try c.decodeIfPresent(Int.self, forKey: .contentLength) ?? 0
+    }
+
+    init(
+        attachmentId: String,
+        ownerId: String,
+        role: String,
+        mime: String,
+        title: String,
+        position: Int,
+        blobId: String?,
+        dateModified: String,
+        utcDateModified: String,
+        utcDateScheduledForErasureSince: String?,
+        contentLength: Int
+    ) {
+        self.attachmentId = attachmentId
+        self.ownerId = ownerId
+        self.role = role
+        self.mime = mime
+        self.title = title
+        self.position = position
+        self.blobId = blobId
+        self.dateModified = dateModified
+        self.utcDateModified = utcDateModified
+        self.utcDateScheduledForErasureSince = utcDateScheduledForErasureSince
+        self.contentLength = contentLength
+    }
+}
+
+/// Response from `POST /api/notes/{noteId}/attachments/upload`.
+struct UploadAttachmentResponse: Decodable {
+    let uploaded: Bool
+    let url: String?
+    let message: String?
 }
 
 struct CreateAttachmentRequest: Encodable {

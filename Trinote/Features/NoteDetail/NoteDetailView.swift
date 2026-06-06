@@ -2,6 +2,7 @@ import Combine
 import SwiftUI
 import PhotosUI
 import UIKit
+import UniformTypeIdentifiers
 import WebKit
 
 /// Which ⋯ menu command to mirror on the trailing toolbar; stored in `UserDefaults` via `@AppStorage`.
@@ -30,6 +31,12 @@ private struct MoveNoteDetailConfirm {
 private struct NoteEditTarget: Hashable {
     let noteId: String
     let title: String
+}
+
+private struct EditorAttachmentRenameContext {
+    let attachmentId: String
+    let nodePos: Int
+    let fileExtension: String
 }
 
 struct NoteDetailView: View {
@@ -92,8 +99,11 @@ struct NoteDetailView: View {
     @State private var showEditorImageSourceDialog = false
     @State private var showEditorImagePicker = false
     @State private var showEditorCamera = false
+    @State private var showEditorFilePicker = false
     @State private var editorImageItem: PhotosPickerItem?
     @State private var imageToInsert: String?
+    @State private var attachmentRenameContext: EditorAttachmentRenameContext?
+    @State private var attachmentRenameBasename = ""
     @State private var protectedDocumentPassword = ""
     @State private var favoriteNoteIds: Set<String> = []
     @State private var findControl = FindOnPageControl()
@@ -533,6 +543,43 @@ struct NoteDetailView: View {
               let json = String(data: data, encoding: .utf8) else { return }
         let escaped = javaScriptTemplateLiteralContent(json)
         webView.evaluateJavaScript("window.editorBridge.applyIncludeNotePreviewJSON(`\(escaped)`);", completionHandler: nil)
+    }
+
+    private static func insertAttachmentLinkInEditor(webView: WKWebView?, noteId: String, attachmentId: String, title: String) {
+        guard let webView else { return }
+        guard let noteIdData = try? JSONSerialization.data(withJSONObject: noteId, options: [.fragmentsAllowed]),
+              let attachmentIdData = try? JSONSerialization.data(withJSONObject: attachmentId, options: [.fragmentsAllowed]),
+              let titleData = try? JSONSerialization.data(withJSONObject: title, options: [.fragmentsAllowed]),
+              let noteIdJSON = String(data: noteIdData, encoding: .utf8),
+              let attachmentIdJSON = String(data: attachmentIdData, encoding: .utf8),
+              let titleJSON = String(data: titleData, encoding: .utf8) else { return }
+        webView.evaluateJavaScript(
+            "window.editorBridge.insertAttachmentLink(\(noteIdJSON), \(attachmentIdJSON), \(titleJSON));",
+            completionHandler: nil
+        )
+    }
+
+    private static func updateAttachmentReferenceTitleInEditor(webView: WKWebView?, pos: Int, title: String) {
+        guard let webView else { return }
+        guard let titleData = try? JSONSerialization.data(withJSONObject: title, options: [.fragmentsAllowed]),
+              let titleJSON = String(data: titleData, encoding: .utf8) else { return }
+        webView.evaluateJavaScript(
+            "window.editorBridge.updateAttachmentReferenceTitle(\(pos), \(titleJSON));",
+            completionHandler: nil
+        )
+    }
+
+    private func applyAttachmentRename() {
+        guard let ctx = attachmentRenameContext else { return }
+        let trimmed = attachmentRenameBasename.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let newTitle = AttachmentFilename.join(basename: trimmed, ext: ctx.fileExtension)
+        attachmentRenameContext = nil
+        Self.updateAttachmentReferenceTitleInEditor(webView: editorWebView, pos: ctx.nodePos, title: newTitle)
+        Task { @MainActor in
+            guard let vm = viewModel else { return }
+            await vm.renameAttachmentTitle(attachmentId: ctx.attachmentId, title: newTitle)
+        }
     }
 
     /// Leaves the rich-text editor and restores read-only scroll to the editor's current position.
@@ -1252,6 +1299,29 @@ struct NoteDetailView: View {
             } message: {
                 Text(vm.saveError ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
             }
+            .alert(
+                String(localized: "Rename Attachment", comment: "Rename attachment alert title"),
+                isPresented: Binding(
+                    get: { attachmentRenameContext != nil },
+                    set: { if !$0 { attachmentRenameContext = nil } }
+                )
+            ) {
+                TextField(
+                    String(localized: "Filename", comment: "Attachment rename basename field"),
+                    text: $attachmentRenameBasename
+                )
+                Button(String(localized: "Cancel", comment: "Cancel"), role: .cancel) {
+                    attachmentRenameContext = nil
+                }
+                Button(String(localized: "Rename", comment: "Rename attachment confirm")) {
+                    applyAttachmentRename()
+                }
+                .disabled(attachmentRenameBasename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } message: {
+                if let ext = attachmentRenameContext?.fileExtension, !ext.isEmpty {
+                    Text(String(localized: "Extension: .\(ext)", comment: "Attachment rename extension hint"))
+                }
+            }
             .sheet(isPresented: $vm.showCreateChild) {
                 CreateChildNoteSheet(viewModel: vm) { noteId, title in
                     navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
@@ -1614,6 +1684,12 @@ struct NoteDetailView: View {
                     onCheckboxToggled: { index, checked in
                         vm.toggleCheckbox(index: index, checked: checked)
                     },
+                    loadAttachmentPreview: { attachmentId in
+                        if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
+                            return await vm.prepareAttachmentPreview(for: attachment)
+                        }
+                        return await vm.prepareAttachmentPreview(attachmentId: attachmentId)
+                    },
                     findControl: findControl
                 )
             }
@@ -1784,6 +1860,26 @@ struct NoteDetailView: View {
                             let html = await vm.resolvedIncludePreviewHTML(noteId: nid, boxSize: box)
                             Self.pushIncludeNotePreviewToEditor(webView: editorWebView, previewId: previewId, html: html)
                         }
+                    case .renameAttachment(let attachmentId, _, let title, let pos):
+                        let split = AttachmentFilename.split(title)
+                        attachmentRenameBasename = split.basename
+                        attachmentRenameContext = EditorAttachmentRenameContext(
+                            attachmentId: attachmentId,
+                            nodePos: pos,
+                            fileExtension: split.ext
+                        )
+                    }
+                },
+                onPasteFile: { data, filename, mime in
+                    Task { @MainActor in
+                        if let attachment = await vm.uploadAttachment(data: data, filename: filename, mime: mime) {
+                            Self.insertAttachmentLinkInEditor(
+                                webView: editorWebView,
+                                noteId: vm.noteId,
+                                attachmentId: attachment.attachmentId,
+                                title: attachment.title
+                            )
+                        }
                     }
                 },
                 imageToInsert: $imageToInsert,
@@ -1801,7 +1897,31 @@ struct NoteDetailView: View {
                     .transition(.scale(scale: 0.88).combined(with: .opacity))
                     .zIndex(2)
             }
+
+            if showEditorImageSourceDialog {
+                EditorInsertMediaDialog(
+                    showsCamera: UIImagePickerController.isSourceTypeAvailable(.camera),
+                    onPhotoLibrary: {
+                        showEditorImageSourceDialog = false
+                        showEditorImagePicker = true
+                    },
+                    onCamera: {
+                        showEditorImageSourceDialog = false
+                        showEditorCamera = true
+                    },
+                    onChooseFile: {
+                        showEditorImageSourceDialog = false
+                        showEditorFilePicker = true
+                    },
+                    onCancel: {
+                        showEditorImageSourceDialog = false
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                .zIndex(50)
+            }
         }
+        .animation(.easeOut(duration: 0.2), value: showEditorImageSourceDialog)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
         .animation(.easeInOut(duration: 0.15), value: editorTableToolsVisible)
@@ -1817,19 +1937,17 @@ struct NoteDetailView: View {
         .onDisappear {
             cancelEditorSaveChipIdleShowTask()
         }
-        .confirmationDialog(String(localized: "Add Image", comment: "Editor image dialog title"), isPresented: $showEditorImageSourceDialog) {
-            Button(String(localized: "Photo Library", comment: "Image source")) { showEditorImagePicker = true }
-            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button(String(localized: "Camera", comment: "Image source")) { showEditorCamera = true }
-            }
-            Button(String(localized: "Cancel", comment: "Image dialog"), role: .cancel) {}
-        } message: {
-            Text(String(localized: "Choose a source for the image", comment: "Editor image dialog"))
-        }
         .photosPicker(isPresented: $showEditorImagePicker, selection: $editorImageItem, matching: .images)
         .onChange(of: editorImageItem) { _, item in
             guard let item else { return }
             Task { await handleEditorImagePick(item) }
+        }
+        .fileImporter(
+            isPresented: $showEditorFilePicker,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: false
+        ) { result in
+            Task { await handleEditorFilePick(result, vm: vm) }
         }
         .fullScreenCover(isPresented: $showEditorCamera) {
             CameraPickerView(imageToInsert: $imageToInsert) { showEditorCamera = false }
@@ -2446,6 +2564,42 @@ struct NoteDetailView: View {
 
         let base64 = imageData.base64EncodedString()
         imageToInsert = "data:\(imageMime);base64,\(base64)"
+    }
+
+    private func handleEditorFilePick(_ result: Result<[URL], Error>, vm: NoteDetailViewModel) async {
+        do {
+            let urls = try result.get()
+            guard let url = urls.first else { return }
+
+            guard url.startAccessingSecurityScopedResource() else { return }
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            let data = try Data(contentsOf: url)
+            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            let filename = url.lastPathComponent.isEmpty ? "attachment" : url.lastPathComponent
+
+            if mime.hasPrefix("image/") {
+                let imageData: Data
+                let imageMime: String
+                if let uiImage = UIImage(data: data), let jpeg = uiImage.jpegData(compressionQuality: 0.8) {
+                    imageData = jpeg
+                    imageMime = "image/jpeg"
+                } else {
+                    imageData = data
+                    imageMime = mime
+                }
+                imageToInsert = "data:\(imageMime);base64,\(imageData.base64EncodedString())"
+            } else if let attachment = await vm.uploadAttachment(data: data, filename: filename, mime: mime) {
+                Self.insertAttachmentLinkInEditor(
+                    webView: editorWebView,
+                    noteId: vm.noteId,
+                    attachmentId: attachment.attachmentId,
+                    title: attachment.title
+                )
+            }
+        } catch {
+            Log.ui.error("Editor file pick failed: \(error.localizedDescription)")
+        }
     }
 
     @ViewBuilder

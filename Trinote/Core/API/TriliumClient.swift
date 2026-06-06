@@ -65,7 +65,9 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func getAttachment(_ attachmentId: String) async throws -> AttachmentResponse
     func getAttachmentContent(_ attachmentId: String) async throws -> Data
     func uploadAttachmentContent(_ attachmentId: String, data: Data, contentType: String) async throws
+    func uploadNoteAttachment(noteId: String, data: Data, filename: String, contentType: String) async throws -> String
     func createAttachment(_ request: CreateAttachmentRequest) async throws -> AttachmentResponse
+    func renameAttachment(attachmentId: String, title: String) async throws
     func deleteAttachment(_ attachmentId: String) async throws
 
     // MARK: Sync — documented protocol (POST /api/sync/*)
@@ -1208,19 +1210,54 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     func uploadAttachmentContent(_ attachmentId: String, data: Data, contentType: String) async throws {
+        try await uploadMultipartAttachment(
+            path: "/api/attachments/\(attachmentId)/file",
+            method: "PUT",
+            data: data,
+            filename: "upload.bin",
+            contentType: contentType
+        )
+    }
+
+    func uploadNoteAttachment(noteId: String, data: Data, filename: String, contentType: String) async throws -> String {
+        let respData = try await uploadMultipartAttachment(
+            path: "/api/notes/\(noteId)/attachments/upload",
+            method: "POST",
+            data: data,
+            filename: filename,
+            contentType: contentType
+        )
+        let result = try decoder.decode(UploadAttachmentResponse.self, from: respData)
+        guard result.uploaded else {
+            throw APIError.serverError(statusCode: 200, message: result.message ?? "Attachment upload failed.")
+        }
+        guard let attachmentId = TriliumAttachmentURLParser.attachmentId(fromUploadResultURL: result.url) else {
+            throw APIError.unknown("Upload succeeded but attachment ID was missing from server response.")
+        }
+        return attachmentId
+    }
+
+    private func uploadMultipartAttachment(
+        path: String,
+        method: String,
+        data: Data,
+        filename: String,
+        contentType: String
+    ) async throws -> Data {
         let boundary = "Boundary-\(UUID().uuidString)"
         var body = Data()
         func append(_ s: String) { body.append(Data(s.utf8)) }
 
+        let safeFilename = filename.replacingOccurrences(of: "\"", with: "_")
         append("--\(boundary)\r\n")
-        append("Content-Disposition: form-data; name=\"upload\"; filename=\"upload.bin\"\r\n")
+        append("Content-Disposition: form-data; name=\"upload\"; filename=\"\(safeFilename)\"\r\n")
         append("Content-Type: \(contentType)\r\n\r\n")
         body.append(data)
         append("\r\n--\(boundary)--\r\n")
 
-        let url = try Self.makeURL(baseURL: baseURL, path: "/api/attachments/\(attachmentId)/file", queryParams: nil)
+        let url = try Self.makeURL(baseURL: baseURL, path: path, queryParams: nil)
         var req = URLRequest(url: url)
-        req.httpMethod = "PUT"
+        req.httpMethod = method
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         if let csrf = csrfToken {
             req.setValue(csrf, forHTTPHeaderField: TriliumHTTP.csrfHeader)
@@ -1230,6 +1267,7 @@ actor TriliumClient: TriliumClientProtocol {
 
         let (respData, response) = try await session.data(for: req)
         try validateResponse(response, data: respData)
+        return respData
     }
 
     func createAttachment(_ request: CreateAttachmentRequest) async throws -> AttachmentResponse {
@@ -1247,7 +1285,44 @@ actor TriliumClient: TriliumClientProtocol {
             content: request.content,
             position: request.position
         )
-        return try await postJSON("/api/notes/\(request.ownerId)/attachments", body: body, csrf: true)
+        var req = try buildRequest(
+            path: "/api/notes/\(request.ownerId)/attachments",
+            method: "POST",
+            queryParams: nil,
+            csrf: true,
+            jsonBody: true
+        )
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try encoder.encode(body)
+        let (data, response) = try await session.data(for: req)
+        try validateResponse(response, data: data)
+
+        // Trilium returns 204 No Content for saveAttachment — no JSON body to decode.
+        if !data.isEmpty, let decoded = try? decoder.decode(AttachmentResponse.self, from: data) {
+            return decoded
+        }
+        return try await resolveAttachmentAfterCreate(
+            ownerId: request.ownerId,
+            title: request.title,
+            mime: request.mime
+        )
+    }
+
+    private func resolveAttachmentAfterCreate(ownerId: String, title: String, mime: String) async throws -> AttachmentResponse {
+        let attachments = try await getNoteAttachments(ownerId)
+        let matches = attachments.filter { $0.title == title && $0.mime == mime }
+        if let best = matches.max(by: { $0.utcDateModified < $1.utcDateModified }) {
+            return best
+        }
+        if let byTitle = attachments.last(where: { $0.title == title }) {
+            return byTitle
+        }
+        throw APIError.unknown("Attachment was created but could not be located.")
+    }
+
+    func renameAttachment(attachmentId: String, title: String) async throws {
+        struct Body: Encodable { let title: String }
+        try await putJSONVoid("/api/attachments/\(attachmentId)/rename", body: Body(title: title), csrf: true)
     }
 
     func deleteAttachment(_ attachmentId: String) async throws {

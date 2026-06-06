@@ -71,8 +71,8 @@ struct AttachmentUploadButton: View {
                 let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
                 let filename = "attachment.\(ext)"
 
-                let success = await viewModel.uploadAttachment(data: data, filename: filename, mime: mime)
-                if !success {
+                let attachment = await viewModel.uploadAttachment(data: data, filename: filename, mime: mime)
+                if attachment == nil {
                     uploadError = viewModel.saveError
                 }
             }
@@ -99,8 +99,8 @@ struct AttachmentUploadButton: View {
             let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
             let filename = url.lastPathComponent
 
-            let success = await viewModel.uploadAttachment(data: data, filename: filename, mime: mime)
-            if !success {
+            let attachment = await viewModel.uploadAttachment(data: data, filename: filename, mime: mime)
+            if attachment == nil {
                 uploadError = viewModel.saveError
             }
         } catch {

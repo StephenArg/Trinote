@@ -6,11 +6,14 @@ struct HTMLNoteView: View {
     let baseURL: URL?
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+    /// Loads preview content for a tapped `api/attachments/{id}/…` link.
+    var loadAttachmentPreview: ((String) async -> AttachmentPreviewItem?)?
     /// When set, the web view registers for in-page find (read-only).
     var findControl: FindOnPageControl?
 
     @State private var contentHeight: CGFloat = 200
     @State private var fullScreenImage: FullScreenImagePayload?
+    @State private var attachmentPreview: AttachmentPreviewItem?
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
     @AppStorage("useCustomTextColor") private var useCustomTextColor: Bool = false
     @AppStorage("customLightTextColor") private var customLightTextColor: String = "#1c1c1e"
@@ -42,6 +45,12 @@ struct HTMLNoteView: View {
             themeColors: themeColors,
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
+            onAttachmentLinkTapped: { attachmentId in
+                guard let loadAttachmentPreview else { return }
+                Task { @MainActor in
+                    attachmentPreview = await loadAttachmentPreview(attachmentId)
+                }
+            },
             findControl: findControl,
             onHeightChanged: { contentHeight = $0 },
             onImagePreview: { payload in fullScreenImage = payload }
@@ -50,6 +59,11 @@ struct HTMLNoteView: View {
         .fullScreenCover(item: $fullScreenImage) { payload in
             FullScreenImageViewer(image: payload.image, title: payload.title) {
                 fullScreenImage = nil
+            }
+        }
+        .fullScreenCover(item: $attachmentPreview) { item in
+            AttachmentPreviewView(item: item) {
+                attachmentPreview = nil
             }
         }
     }
@@ -76,6 +90,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     let themeColors: HTMLThemeColors
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+    var onAttachmentLinkTapped: ((String) -> Void)?
     var findControl: FindOnPageControl?
     var onHeightChanged: ((CGFloat) -> Void)?
     var onImagePreview: ((FullScreenImagePayload) -> Void)?
@@ -84,6 +99,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         Coordinator(
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
+            onAttachmentLinkTapped: onAttachmentLinkTapped,
             onHeightChanged: onHeightChanged,
             onImagePreview: onImagePreview
         )
@@ -94,6 +110,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let contentController = WKUserContentController()
         contentController.add(handler, name: "heightUpdate")
         contentController.add(handler, name: "noteLink")
+        contentController.add(handler, name: "attachmentLink")
         contentController.add(handler, name: "checkboxToggle")
         contentController.add(handler, name: "debugLog")
         contentController.add(handler, name: "imagePreview")
@@ -133,6 +150,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.findControl = findControl
         coordinator.onNoteLinkTapped = onNoteLinkTapped
         coordinator.onCheckboxToggled = onCheckboxToggled
+        coordinator.onAttachmentLinkTapped = onAttachmentLinkTapped
         coordinator.onHeightChanged = onHeightChanged
         coordinator.onImagePreview = onImagePreview
         findControl?.registerHTMLWebView(webView)
@@ -149,6 +167,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let uc = webView.configuration.userContentController
         uc.removeScriptMessageHandler(forName: "heightUpdate")
         uc.removeScriptMessageHandler(forName: "noteLink")
+        uc.removeScriptMessageHandler(forName: "attachmentLink")
         uc.removeScriptMessageHandler(forName: "checkboxToggle")
         uc.removeScriptMessageHandler(forName: "debugLog")
         uc.removeScriptMessageHandler(forName: "imagePreview")
@@ -177,11 +196,54 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             :root { --text-color: \(theme.darkText); --code-bg: rgba(255,255,255,0.06); --border: rgba(255,255,255,0.15); }
             body { color: \(theme.darkText); }
             a { color: \(theme.darkLink); }
+            a.reference-link,
+            a[href*="api/attachments/"][href*="/open"] {
+              color: \(theme.darkLink);
+              background: rgba(10, 132, 255, 0.16);
+              border-color: rgba(10, 132, 255, 0.28);
+            }
+            a.reference-link::before,
+            a[href*="api/attachments/"][href*="/open"]::before {
+              background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230a84ff'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 2l5 5h-5V4z'/%3E%3C/svg%3E");
+            }
+            a.reference-link[href^="#root"]:not([href*="viewMode=attachments"]):not([href*="attachmentId="])::before {
+              background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230a84ff'%3E%3Cpath d='M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm7 1.5L18.5 9H13V3.5z'/%3E%3C/svg%3E");
+            }
         }
         @media (prefers-color-scheme: light) {
             :root { --text-color: \(theme.lightText); --code-bg: rgba(0,0,0,0.04); --border: rgba(0,0,0,0.12); }
             body { color: \(theme.lightText); }
             a { color: \(theme.lightLink); }
+        }
+        /* Trilium reference links — internal note / attachment chips */
+        a.reference-link,
+        a[href*="api/attachments/"][href*="/open"] {
+          text-decoration: none;
+          color: \(theme.lightLink);
+          background: rgba(0, 122, 255, 0.10);
+          border: 1px solid rgba(0, 122, 255, 0.22);
+          border-radius: 6px;
+          padding: 1px 8px 1px 6px;
+          display: inline;
+          box-decoration-break: clone;
+          -webkit-box-decoration-break: clone;
+          cursor: pointer;
+          font-weight: 500;
+          touch-action: manipulation;
+          -webkit-tap-highlight-color: rgba(0, 122, 255, 0.12);
+        }
+        a.reference-link::before,
+        a[href*="api/attachments/"][href*="/open"]::before {
+          content: "";
+          display: inline-block;
+          width: 0.95em;
+          height: 0.95em;
+          margin-right: 0.35em;
+          vertical-align: -0.12em;
+          background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23007aff'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 2l5 5h-5V4z'/%3E%3C/svg%3E") center / contain no-repeat;
+        }
+        a.reference-link[href^="#root"]:not([href*="viewMode=attachments"]):not([href*="attachmentId="])::before {
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23007aff'%3E%3Cpath d='M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm7 1.5L18.5 9H13V3.5z'/%3E%3C/svg%3E");
         }
         img { max-width: 100%; height: auto; border-radius: 6px; }
         /* Inline images open a full-screen viewer when tapped; linked image notes navigate.
@@ -538,11 +600,57 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         function trinoteSendDebug(msg) {
             try { window.webkit.messageHandlers.debugLog.postMessage(String(msg)); } catch (e) {}
         }
-        function trinoteOpenNoteFromLink(href) {
-            var raw = href.replace(/^#\\/?/, '');
-            var segs = raw.split('/').filter(function(s) { return s.length > 0; });
-            var noteId = segs.length ? segs[segs.length - 1] : '';
-            if (noteId && noteId !== 'root') window.webkit.messageHandlers.noteLink.postMessage(noteId);
+        function trinoteParseHashLink(href) {
+            var h = (href || '').trim();
+            if (!h) return { noteId: '', viewMode: '', attachmentId: '' };
+            if (h.charAt(0) === '#') h = h.slice(1);
+            var qIdx = h.indexOf('?');
+            var pathPart = qIdx >= 0 ? h.slice(0, qIdx) : h;
+            var queryPart = qIdx >= 0 ? h.slice(qIdx + 1) : '';
+            var parts = pathPart.replace(/^\\/?/, '').split('/').filter(function(s) { return s.length > 0; });
+            var noteId = parts.length ? parts[parts.length - 1] : '';
+            if (noteId === 'root') noteId = '';
+            var viewMode = '';
+            var attachmentId = '';
+            if (queryPart) {
+                queryPart.split('&').forEach(function(pair) {
+                    var eq = pair.indexOf('=');
+                    if (eq < 0) return;
+                    var k = decodeURIComponent(pair.slice(0, eq));
+                    var v = decodeURIComponent(pair.slice(eq + 1));
+                    if (k === 'viewMode') viewMode = v;
+                    if (k === 'attachmentId') attachmentId = v;
+                });
+            }
+            return { noteId: noteId, viewMode: viewMode, attachmentId: attachmentId };
+        }
+        function trinoteAttachmentIdFromApiHref(href) {
+            var m = (href || '').match(/api\\/attachments\\/([a-zA-Z0-9_-]+)/i);
+            return m ? m[1] : '';
+        }
+        function trinoteHandleLinkClick(e, anchor) {
+            var href = (anchor.getAttribute('href') || '').trim();
+            if (!href) return false;
+            var apiId = trinoteAttachmentIdFromApiHref(href);
+            if (apiId) {
+                e.preventDefault();
+                window.webkit.messageHandlers.attachmentLink.postMessage(apiId);
+                return true;
+            }
+            if (href.indexOf('#/') === 0 || href.indexOf('#root') === 0) {
+                var parsed = trinoteParseHashLink(href);
+                if (parsed.viewMode === 'attachments' && parsed.attachmentId) {
+                    e.preventDefault();
+                    window.webkit.messageHandlers.attachmentLink.postMessage(parsed.attachmentId);
+                    return true;
+                }
+                if (parsed.noteId) {
+                    e.preventDefault();
+                    window.webkit.messageHandlers.noteLink.postMessage(parsed.noteId);
+                    return true;
+                }
+            }
+            return false;
         }
         var trinoteLastIncludeNavMs = 0;
         var trinoteLastIncludeNavId = '';
@@ -583,12 +691,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 // Internal `#/noteId` links anywhere in the card take precedence.
                 var a = e.target.closest('a');
                 if (a && inc.contains(a)) {
-                    var href = a.getAttribute('href') || '';
-                    if (href.startsWith('#/') || href.startsWith('#root/')) {
-                        e.preventDefault();
-                        trinoteOpenNoteFromLink(href);
-                        return;
-                    }
+                    if (trinoteHandleLinkClick(e, a)) return;
                 }
                 // Only the explicit "Open" button opens the linked note (not the title row).
                 var openBtn = e.target.closest('button.trinote-include__open');
@@ -607,12 +710,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             }
             var anchor = e.target.closest('a');
             if (anchor) {
-                var h = anchor.getAttribute('href') || '';
-                if (h.startsWith('#/') || h.startsWith('#root/')) {
-                    e.preventDefault();
-                    trinoteOpenNoteFromLink(h);
-                }
-                return;
+                trinoteHandleLinkClick(e, anchor);
             }
         }, true);
 
@@ -962,12 +1060,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
     /// Trilium internal links use `#/<id>` or `#root/…/<id>`; the note id is always the last path segment.
     private static func noteIdFromTriliumHashLink(url: URL) -> String? {
-        guard var frag = url.fragment, !frag.isEmpty else { return nil }
-        frag = frag.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let parts = frag.split(separator: "/").map(String.init).filter { !$0.isEmpty }
-        guard let last = parts.last else { return nil }
-        if last == "root" { return nil }
-        return last
+        TriliumHashLinkNavigation.parse(url: url)?.noteId
     }
 
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -977,17 +1070,20 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         weak var findControl: FindOnPageControl?
         var onNoteLinkTapped: ((String) -> Void)?
         var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+        var onAttachmentLinkTapped: ((String) -> Void)?
         var onHeightChanged: ((CGFloat) -> Void)?
         var onImagePreview: ((FullScreenImagePayload) -> Void)?
 
         init(
             onNoteLinkTapped: ((String) -> Void)?,
             onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?,
+            onAttachmentLinkTapped: ((String) -> Void)?,
             onHeightChanged: ((CGFloat) -> Void)?,
             onImagePreview: ((FullScreenImagePayload) -> Void)?
         ) {
             self.onNoteLinkTapped = onNoteLinkTapped
             self.onCheckboxToggled = onCheckboxToggled
+            self.onAttachmentLinkTapped = onAttachmentLinkTapped
             self.onHeightChanged = onHeightChanged
             self.onImagePreview = onImagePreview
         }
@@ -1001,6 +1097,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             case "noteLink":
                 if let noteId = message.body as? String {
                     onNoteLinkTapped?(noteId)
+                }
+            case "attachmentLink":
+                if let attachmentId = message.body as? String, !attachmentId.isEmpty {
+                    onAttachmentLinkTapped?(attachmentId)
                 }
             case "debugLog":
                 if let s = message.body as? String {
@@ -1093,6 +1193,13 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
                 let urlString = url.absoluteString
                 if urlString.contains("#/") || urlString.localizedCaseInsensitiveContains("#root/") {
+                    if let parsed = TriliumHashLinkNavigation.parse(url: url),
+                       parsed.viewMode == "attachments",
+                       let attachmentId = parsed.attachmentId,
+                       !attachmentId.isEmpty {
+                        onAttachmentLinkTapped?(attachmentId)
+                        return .cancel
+                    }
                     if let noteId = HTMLNoteWebView.noteIdFromTriliumHashLink(url: url), !noteId.isEmpty {
                         onNoteLinkTapped?(noteId)
                         return .cancel
@@ -1107,6 +1214,12 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                    !fragment.isEmpty,
                    HTMLNoteAnchorRouting.urlIsFragmentOnly(url, against: webView.url) {
                     scrollToAnchor(fragment, in: webView)
+                    return .cancel
+                }
+
+                if let ref = TriliumAttachmentURLParser.entityReference(from: url),
+                   ref.routeType == "attachments" {
+                    onAttachmentLinkTapped?(ref.entityId)
                     return .cancel
                 }
 

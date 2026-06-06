@@ -23,6 +23,11 @@
   --popup-shadow: rgba(0,0,0,0.15);
   --table-border: #d1d1d6;
   --icon-filter: brightness(0);
+  --ref-link-bg: rgba(0, 122, 255, 0.10);
+  --ref-link-border: rgba(0, 122, 255, 0.22);
+  --ref-link-fg: #007aff;
+  --ref-link-file-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 2l5 5h-5V4z'/%3E%3C/svg%3E");
+  --ref-link-note-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'%3E%3Cpath d='M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm7 1.5L18.5 9H13V3.5z'/%3E%3C/svg%3E");
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -39,6 +44,9 @@
     --popup-shadow: rgba(0,0,0,0.4);
     --table-border: #48484a;
     --icon-filter: brightness(0) invert(0.67);
+    --ref-link-bg: rgba(10, 132, 255, 0.16);
+    --ref-link-border: rgba(10, 132, 255, 0.28);
+    --ref-link-fg: #0a84ff;
   }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -532,6 +540,62 @@ body { display: flex; flex-direction: column; }
 
 .tiptap hr { border: none; border-top: 2px solid var(--border); margin: 1em 0; clear: both; }
 .tiptap a { color: var(--btn-active); text-decoration: underline; }
+/* Trilium reference links — internal note / attachment chips (read-only note links still use <a>) */
+.tiptap a.reference-link,
+.tiptap a[href*="api/attachments/"][href*="/open"] {
+  text-decoration: none;
+  color: var(--ref-link-fg);
+  background: var(--ref-link-bg);
+  border: 1px solid var(--ref-link-border);
+  border-radius: 6px;
+  padding: 1px 8px 1px 6px;
+  display: inline;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  cursor: default;
+  font-weight: 500;
+  white-space: break-spaces;
+  -webkit-tap-highlight-color: transparent;
+}
+.tiptap .tn-attachment-ref {
+  display: inline;
+  vertical-align: baseline;
+}
+.tiptap .tn-attachment-ref__chip {
+  text-decoration: none;
+  color: var(--ref-link-fg);
+  background: var(--ref-link-bg);
+  border: 1px solid var(--ref-link-border);
+  border-radius: 6px;
+  padding: 1px 8px 1px 6px;
+  display: inline;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  cursor: default;
+  font-weight: 500;
+  white-space: nowrap;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.tiptap .tn-attachment-ref.ProseMirror-selectednode .tn-attachment-ref__chip {
+  outline: 2px solid var(--btn-active);
+  outline-offset: 1px;
+}
+.tiptap a.reference-link::before,
+.tiptap a[href*="api/attachments/"][href*="/open"]::before,
+.tiptap .tn-attachment-ref__chip::before {
+  content: "";
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  margin-right: 0.35em;
+  vertical-align: -0.12em;
+  background: var(--ref-link-file-icon) center / contain no-repeat;
+}
+.tiptap a.reference-link[href^="#root"]:not([href*="viewMode=attachments"]):not([href*="attachmentId="])::before {
+  background-image: var(--ref-link-note-icon);
+}
 /* TipTap Highlight → <mark>; ensure multicolor backgrounds paint (esp. WebKit / line wraps) */
 .tiptap mark {
   -webkit-box-decoration-break: clone;
@@ -1284,6 +1348,180 @@ const CustomTable = Table.extend({
   },
 }).configure({ resizable: false });
 
+function trinoteParseEditorHashLink(href) {
+  var h = (href || '').trim();
+  if (!h) return { noteId: '', viewMode: '', attachmentId: '' };
+  if (h.charAt(0) === '#') h = h.slice(1);
+  var qIdx = h.indexOf('?');
+  var pathPart = qIdx >= 0 ? h.slice(0, qIdx) : h;
+  var queryPart = qIdx >= 0 ? h.slice(qIdx + 1) : '';
+  var parts = pathPart.replace(/^\/?/, '').split('/').filter(function(s) { return s.length > 0; });
+  var noteId = parts.length ? parts[parts.length - 1] : '';
+  if (noteId === 'root') noteId = '';
+  var viewMode = '';
+  var attachmentId = '';
+  if (queryPart) {
+    queryPart.split('&').forEach(function(pair) {
+      var eq = pair.indexOf('=');
+      if (eq < 0) return;
+      var k = decodeURIComponent(pair.slice(0, eq));
+      var v = decodeURIComponent(pair.slice(eq + 1));
+      if (k === 'viewMode') viewMode = v;
+      if (k === 'attachmentId') attachmentId = v;
+    });
+  }
+  return { noteId: noteId, viewMode: viewMode, attachmentId: attachmentId };
+}
+
+function trinoteAttachmentHref(noteId, attachmentId) {
+  var nid = (noteId != null) ? String(noteId).trim() : '';
+  var aid = (attachmentId != null) ? String(attachmentId).trim() : '';
+  if (nid && aid) {
+    return '#root/' + nid + '?viewMode=attachments&attachmentId=' + encodeURIComponent(aid);
+  }
+  if (aid) return 'api/attachments/' + aid + '/open';
+  return '';
+}
+
+function trinoteParseAttachmentLinkElement(el) {
+  var href = (el.getAttribute('href') || '').trim();
+  if (!href) return null;
+  var apiMatch = href.match(/api\/attachments\/([a-zA-Z0-9_-]+)/i);
+  if (apiMatch && apiMatch[1]) {
+    return {
+      noteId: '',
+      attachmentId: apiMatch[1],
+      title: (el.textContent || '').trim() || apiMatch[1],
+    };
+  }
+  if (href.indexOf('#/') === 0 || href.indexOf('#root') === 0) {
+    var parsed = trinoteParseEditorHashLink(href);
+    if (parsed.viewMode === 'attachments' && parsed.attachmentId) {
+      return {
+        noteId: parsed.noteId || '',
+        attachmentId: parsed.attachmentId,
+        title: (el.textContent || '').trim() || parsed.attachmentId,
+      };
+    }
+  }
+  return null;
+}
+
+/* Trilium attachment reference links — inline atom: select/delete as one unit, not editable. */
+const AttachmentReference = Image.extend({
+  name: 'attachmentReference',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  draggable: false,
+  selectable: true,
+  marks: '',
+  addAttributes() {
+    return {
+      noteId: { default: '' },
+      attachmentId: { default: '' },
+      title: { default: '' },
+    };
+  },
+  parseHTML() {
+    return [{
+      tag: 'a',
+      priority: 100,
+      getAttrs: (el) => {
+        if (!el.classList || !el.classList.contains('reference-link')) return false;
+        var parsed = trinoteParseAttachmentLinkElement(el);
+        return parsed || false;
+      },
+    }, {
+      tag: 'a[href*="api/attachments/"]',
+      priority: 100,
+      getAttrs: (el) => {
+        var parsed = trinoteParseAttachmentLinkElement(el);
+        return parsed || false;
+      },
+    }];
+  },
+  renderHTML({ node }) {
+    var href = trinoteAttachmentHref(node.attrs.noteId, node.attrs.attachmentId);
+    var title = (node.attrs.title && String(node.attrs.title).trim()) || node.attrs.attachmentId || '';
+    return ['a', { class: 'reference-link', href: href }, title];
+  },
+  addNodeView() {
+    return ({ node, editor, getPos }) => {
+      var dom = document.createElement('span');
+      dom.className = 'tn-attachment-ref';
+      dom.contentEditable = 'false';
+      var chip = document.createElement('span');
+      chip.className = 'tn-attachment-ref__chip';
+      chip.textContent = (node.attrs.title && String(node.attrs.title).trim()) || node.attrs.attachmentId || 'Attachment';
+      dom.appendChild(chip);
+      var selectNode = function(e) {
+        var pos = typeof getPos === 'function' ? getPos() : null;
+        if (pos == null) return;
+        e.preventDefault();
+        editor.chain().focus().setNodeSelection(pos).run();
+      };
+      var longPressMs = 550;
+      var pressTimer = null;
+      var clearPressTimer = function() {
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      };
+      var requestRename = function(e) {
+        if (e) e.preventDefault();
+        clearPressTimer();
+        var pos = typeof getPos === 'function' ? getPos() : null;
+        if (pos == null) return;
+        var current = editor.state.doc.nodeAt(pos);
+        if (!current || current.type.name !== 'attachmentReference') return;
+        try {
+          window.webkit.messageHandlers.editorRequest.postMessage({
+            action: 'renameAttachment',
+            attachmentId: current.attrs.attachmentId,
+            noteId: current.attrs.noteId,
+            title: current.attrs.title,
+            pos: pos,
+          });
+        } catch (err) {}
+      };
+      dom.addEventListener('mousedown', selectNode);
+      dom.addEventListener('click', function(e) { e.preventDefault(); });
+      dom.addEventListener('contextmenu', requestRename);
+      dom.addEventListener('touchstart', function() {
+        clearPressTimer();
+        pressTimer = setTimeout(requestRename, longPressMs);
+      }, { passive: true });
+      dom.addEventListener('touchend', clearPressTimer);
+      dom.addEventListener('touchmove', clearPressTimer);
+      dom.addEventListener('touchcancel', clearPressTimer);
+      return {
+        dom: dom,
+        update: function(updated) {
+          if (updated.type.name !== 'attachmentReference') return false;
+          chip.textContent = (updated.attrs.title && String(updated.attrs.title).trim()) || updated.attrs.attachmentId || 'Attachment';
+          return true;
+        },
+      };
+    };
+  },
+});
+
+/* Preserve Trilium `class="reference-link"` on internal note links (attachment refs use AttachmentReference). */
+const CustomLink = Link.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      class: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('class'),
+        renderHTML: (attributes) => {
+          if (!attributes.class) return {};
+          return { class: attributes.class };
+        },
+      },
+    };
+  },
+});
+
 const editorExtensions = [
   StarterKit.configure({
     heading: { levels: [1,2,3,4,5,6] },
@@ -1298,7 +1536,8 @@ const editorExtensions = [
   TableRow,
   CustomTableCell,
   CustomTableHeader,
-  Link.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
+  AttachmentReference,
+  CustomLink.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
   IncludeNote,
   TriliumAnchor,
   TriliumMath,
@@ -1340,11 +1579,11 @@ function trinoteRequestNativePaste(mode) {
   } catch (e) {}
 }
 
-function trinoteClipboardHasImageFile(cd) {
-  if (!cd || !cd.items) return false;
+function trinoteClipboardHasFileItem(cd) {
+  if (!cd || !cd.items) return null;
   for (let i = 0; i < cd.items.length; i++) {
     const item = cd.items[i];
-    if (item.kind === 'file' && item.type && item.type.indexOf('image/') === 0) return item;
+    if (item.kind === 'file') return item;
   }
   return null;
 }
@@ -1377,10 +1616,14 @@ function trinoteHandleClipboardPaste(view, event) {
   const cd = event.clipboardData;
   if (!cd) return false;
 
-  const imageItem = trinoteClipboardHasImageFile(cd);
-  if (imageItem) {
+  const fileItem = trinoteClipboardHasFileItem(cd);
+  if (fileItem) {
     event.preventDefault();
-    trinotePasteImageFileFromClipboard(imageItem);
+    if (fileItem.type && fileItem.type.indexOf('image/') === 0) {
+      trinotePasteImageFileFromClipboard(fileItem);
+    } else {
+      trinoteRequestNativePaste('embed');
+    }
     return true;
   }
 
@@ -1426,15 +1669,6 @@ editor.on('selectionUpdate', ({ editor }) => {
   const { from, to, empty } = editor.state.selection;
   if (!empty) editorSavedRange = { from, to };
 });
-
-(function trinoteInstallPasteCaptureListener() {
-  const root = document.getElementById('editor');
-  if (!root) return;
-  root.addEventListener('paste', function (e) {
-    if (e.defaultPrevented) return;
-    trinoteHandleClipboardPaste(editor.view, e);
-  }, true);
-})();
 
 // iOS: while the swatch panel is open, blur refocuses the editor so the keyboard can stay up.
 // IMPORTANT: Do not refocus on a timer/hold — that runs when tapping the color *button* (before the
@@ -4042,6 +4276,29 @@ window.editorBridge = {
     } else {
       editor.chain().focus().insertContent(u).run();
     }
+    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+  },
+  insertAttachmentLink(noteId, attachmentId, title) {
+    const nid = (noteId != null) ? String(noteId).trim() : '';
+    const aid = (attachmentId != null) ? String(attachmentId).trim() : '';
+    const t = (title != null && String(title).trim()) ? String(title).trim() : aid;
+    if (!nid || !aid) return;
+    editor.chain().focus().insertContent({
+      type: 'attachmentReference',
+      attrs: { noteId: nid, attachmentId: aid, title: t },
+    }).run();
+    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+  },
+  updateAttachmentReferenceTitle(pos, title) {
+    const p = Number(pos);
+    if (!Number.isFinite(p)) return;
+    const node = editor.state.doc.nodeAt(p);
+    if (!node || node.type.name !== 'attachmentReference') return;
+    const label = (title != null && String(title).trim()) ? String(title).trim() : node.attrs.attachmentId;
+    editor.chain().focus().setNodeSelection(p).command(({ tr }) => {
+      tr.setNodeMarkup(p, undefined, { ...node.attrs, title: label });
+      return true;
+    }).run();
     try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
   },
   scrollToFraction(fraction) {

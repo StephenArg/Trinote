@@ -2102,33 +2102,62 @@ final class NoteDetailViewModel {
         }
     }
 
-    func uploadAttachment(data: Data, filename: String, mime: String) async -> Bool {
+    func prepareAttachmentPreview(for attachment: AttachmentItem) async -> AttachmentPreviewItem? {
+        guard let (data, _) = await downloadAttachment(attachment) else { return nil }
+        return AttachmentPreviewItem.make(title: attachment.title, mime: attachment.mime, data: data)
+    }
+
+    func prepareAttachmentPreview(attachmentId: String) async -> AttachmentPreviewItem? {
+        guard let client else { return nil }
+        do {
+            let meta = try await client.getAttachment(attachmentId)
+            let data = try await client.getAttachmentContent(attachmentId)
+            let attachment = AttachmentItem(from: meta)
+            return AttachmentPreviewItem.make(title: attachment.title, mime: attachment.mime, data: data)
+        } catch {
+            Log.api.error("Failed to prepare attachment preview")
+            return nil
+        }
+    }
+
+    func renameAttachmentTitle(attachmentId: String, title: String) async {
+        guard let client else { return }
+        do {
+            try await client.renameAttachment(attachmentId: attachmentId, title: title)
+            await loadAttachments()
+        } catch {
+            self.saveError = APIError.from(error).localizedDescription
+            self.showSaveError = true
+        }
+    }
+
+    func uploadAttachment(data: Data, filename: String, mime: String) async -> AttachmentItem? {
         let nid = self.noteId
         guard let client else {
             self.saveError = "Cannot upload while offline."
             self.showSaveError = true
-            return false
+            return nil
         }
         self.isSaving = true
         defer { self.isSaving = false }
 
         do {
-            let base64 = data.base64EncodedString()
-            let request = CreateAttachmentRequest(
-                ownerId: nid,
-                role: "file",
-                mime: mime,
-                title: filename,
-                content: base64,
-                position: nil
+            let attachmentId = try await client.uploadNoteAttachment(
+                noteId: nid,
+                data: data,
+                filename: filename,
+                contentType: mime
             )
-            _ = try await client.createAttachment(request)
             await self.loadAttachments()
-            return true
+            if let refreshed = attachments.first(where: { $0.attachmentId == attachmentId }) {
+                return refreshed
+            }
+            let response = try await client.getAttachment(attachmentId)
+            return AttachmentItem(from: response)
         } catch {
             self.saveError = APIError.from(error).localizedDescription
             self.showSaveError = true
-            return false
+            return nil
         }
     }
 

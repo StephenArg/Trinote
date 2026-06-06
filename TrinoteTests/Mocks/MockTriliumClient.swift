@@ -318,10 +318,19 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func uploadAttachmentContent(_ attachmentId: String, data: Data, contentType: String) async throws {}
 
+    func uploadNoteAttachment(noteId: String, data: Data, filename: String, contentType: String) async throws -> String {
+        if let result = createAttachmentResult {
+            return try result.get().attachmentId
+        }
+        return TestFixtures.attachmentResponse(ownerId: noteId, title: filename).attachmentId
+    }
+
     func createAttachment(_ request: CreateAttachmentRequest) async throws -> AttachmentResponse {
         if let result = createAttachmentResult { return try result.get() }
         return TestFixtures.attachmentResponse(ownerId: request.ownerId, title: request.title)
     }
+
+    func renameAttachment(attachmentId: String, title: String) async throws {}
 
     func deleteAttachment(_ attachmentId: String) async throws {}
 }

@@ -676,17 +676,12 @@ final class AppState {
                 if stillPending { continue }
             }
             do {
-                let created = try await client.createAttachment(
-                    CreateAttachmentRequest(
-                        ownerId: row.noteId,
-                        role: row.role,
-                        mime: row.mime,
-                        title: row.title,
-                        content: "",
-                        position: row.position
-                    )
+                _ = try await client.uploadNoteAttachment(
+                    noteId: row.noteId,
+                    data: row.data,
+                    filename: row.title,
+                    contentType: row.mime
                 )
-                try await client.uploadAttachmentContent(created.attachmentId, data: row.data, contentType: row.mime)
                 try persistence.deletePendingAttachmentImport(id: row.id, serverProfileId: profileId)
                 Log.sync.info("Flushed local-transfer attachment for note \(row.noteId)")
             } catch {
