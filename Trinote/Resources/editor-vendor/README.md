@@ -33,3 +33,13 @@ cd Trinote/Resources/editor-vendor
 npm install
 npm run build:list-styles
 ```
+
+## `indent-extension.js`
+
+Built from `indent-entry.mjs` so paragraphs and headings can carry **block-level indentation** (CKEditor / Trilium emit `style="margin-left:40px"`). Adds `indent`/`outdent` commands used by the toolbar; list items are still indented via TipTap's `sinkListItem`/`liftListItem`.
+
+```bash
+cd Trinote/Resources/editor-vendor
+npm install
+npm run build:indent
+```

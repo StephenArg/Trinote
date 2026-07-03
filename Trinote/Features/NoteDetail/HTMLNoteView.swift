@@ -346,6 +346,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
           min-height: 1.5em;
         }
         ul.todo-list { list-style: none; padding-left: 0; }
+        /* Nested (indented) todo lists must keep their indentation, not collapse flat */
+        li ul.todo-list { padding-left: 24px; }
         ul.todo-list li { margin: 4px 0; }
         .todo-list__label { display: flex; align-items: flex-start; gap: 8px; cursor: default; }
         .todo-list__label input[type="checkbox"] {

@@ -11,6 +11,7 @@
   "scripts": {
     "build:callout": "esbuild callout-entry.mjs --bundle --format=iife --global-name=TipTapCallout --outfile=callout-extension.js --platform=browser",
     "build:font-size": "esbuild font-size-entry.mjs --bundle --format=iife --global-name=TipTapTriliumFontSize --outfile=font-size-extension.js --platform=browser",
-    "build:list-styles": "esbuild list-styles-entry.mjs --bundle --format=iife --global-name=TipTapListStyles --outfile=list-styles-extension.js --platform=browser"
+    "build:list-styles": "esbuild list-styles-entry.mjs --bundle --format=iife --global-name=TipTapListStyles --outfile=list-styles-extension.js --platform=browser",
+    "build:indent": "esbuild indent-entry.mjs --bundle --format=iife --global-name=TipTapIndent --outfile=indent-extension.js --platform=browser"
   }
 }

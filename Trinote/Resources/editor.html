@@ -320,6 +320,8 @@ body { display: flex; flex-direction: column; }
 .tiptap h6 { font-size: 1em; margin: 0.4em 0 0.2em; }
 .tiptap ul, .tiptap ol { padding-left: 24px; }
 .tiptap ul[data-type="taskList"] { list-style: none; padding-left: 4px; }
+/* Nested (indented) task lists must still show their indentation */
+.tiptap li ul[data-type="taskList"] { padding-left: 24px; }
 /* Use > li (not [data-type=taskItem]) so every task row keeps checkbox + text on one line */
 .tiptap ul[data-type="taskList"] > li {
   display: flex;
@@ -773,6 +775,7 @@ body { display: flex; flex-direction: column; }
 <script src="callout-extension.js"></script>
 <script src="font-size-extension.js"></script>
 <script src="list-styles-extension.js"></script>
+<script src="indent-extension.js"></script>
 <script src="vendor/mermaid.min.js"></script>
 <script>
 if (typeof TipTap === 'undefined') {
@@ -788,6 +791,8 @@ const ListStylesMod = (typeof TipTapListStyles !== 'undefined' && TipTapListStyl
 const TriliumBulletListExt = ListStylesMod && ListStylesMod.TriliumBulletList ? ListStylesMod.TriliumBulletList : null;
 const TriliumOrderedListExt = ListStylesMod && ListStylesMod.TriliumOrderedList ? ListStylesMod.TriliumOrderedList : null;
 const useTriliumListStyles = !!(TriliumBulletListExt && TriliumOrderedListExt);
+const IndentExt = (typeof TipTapIndent !== 'undefined' && TipTapIndent && TipTapIndent.Indent) ? TipTapIndent.Indent : null;
+const useIndentExt = !!IndentExt;
 
 // Runtime debug logging for table/caption issues.
 // Logs are routed to native Xcode console via webkit.messageHandlers.debugLog.
@@ -1553,6 +1558,9 @@ if (FontSizeExt) editorExtensions.push(FontSizeExt);
 if (useTriliumListStyles) {
   editorExtensions.push(TriliumBulletListExt);
   editorExtensions.push(TriliumOrderedListExt);
+}
+if (useIndentExt) {
+  editorExtensions.push(IndentExt);
 }
 
 let _typingActivityRaf = null;
@@ -3763,9 +3771,22 @@ btn('Right', ic('foundation--align-right.svg'), () => editor.chain().focus().set
 btn('Justify', ic('foundation--align-justify.svg'), () => editor.chain().focus().setTextAlign('justify').run(), () => editor.isActive({ textAlign:'justify' }));
 sep();
 
-// Indent
-btn('Outdent', ic('foundation--indent-less.svg'), () => { if(editor.isActive('bulletList')||editor.isActive('orderedList')||editor.isActive('taskList')) editor.chain().focus().liftListItem('listItem').run(); }, () => false);
-btn('Indent', ic('foundation--indent-more.svg'), () => { if(editor.isActive('bulletList')||editor.isActive('orderedList')||editor.isActive('taskList')) editor.chain().focus().sinkListItem('listItem').run(); }, () => false);
+// Indent — nest list items when inside a list, otherwise indent the block (paragraph/heading)
+function trinoteChangeIndent(direction) {
+  const chain = editor.chain().focus();
+  if (editor.isActive('taskList')) {
+    return direction > 0 ? chain.sinkListItem('taskItem').run() : chain.liftListItem('taskItem').run();
+  }
+  if (editor.isActive('bulletList') || editor.isActive('orderedList')) {
+    return direction > 0 ? chain.sinkListItem('listItem').run() : chain.liftListItem('listItem').run();
+  }
+  if (useIndentExt) {
+    return direction > 0 ? chain.indent().run() : chain.outdent().run();
+  }
+  return false;
+}
+btn('Outdent', ic('foundation--indent-less.svg'), () => { trinoteChangeIndent(-1); }, () => false);
+btn('Indent', ic('foundation--indent-more.svg'), () => { trinoteChangeIndent(1); }, () => false);
 sep();
 
 
@@ -4054,10 +4075,16 @@ function ckToTiptap(html) {
       const desc = li.querySelector('.todo-list__label__description');
       const textHTML = desc ? desc.innerHTML : '';
 
+      // Preserve nested sub-lists (indented items): CKEditor stores them as
+      // <ul>/<ol> children of the <li>, sibling to the label. TipTap expects the
+      // nested list to stay inside the taskItem, so re-attach it after the text.
+      const nestedLists = Array.from(li.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
+
       // Strip the entire CKEditor label; leave only plain inline text for TipTap to parse
       const label = li.querySelector('label.todo-list__label');
       if (label) label.remove();
       li.innerHTML = textHTML;
+      nestedLists.forEach(n => li.appendChild(n));
     });
   });
 
@@ -4094,13 +4121,21 @@ function tiptapToCk(html) {
       if (tiptapLabel) tiptapLabel.remove();
 
       let textHTML = '';
+      // Nested sub-lists (indented items) must survive the round-trip. TipTap renders
+      // taskItem content inside a <div>, so nested lists live there; capture them and
+      // re-attach as direct children of the <li> (CKEditor / Trilium structure).
+      let nestedLists = [];
       const contentDiv = li.querySelector(':scope > div');
       if (contentDiv) {
-        const p = contentDiv.querySelector('p');
-        textHTML = p ? p.innerHTML : contentDiv.innerHTML;
+        const p = contentDiv.querySelector(':scope > p');
+        textHTML = p ? p.innerHTML : '';
+        nestedLists = Array.from(contentDiv.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
+        if (!p && !nestedLists.length) textHTML = contentDiv.innerHTML;
       } else {
         const p = li.querySelector(':scope > p');
-        textHTML = p ? p.innerHTML : li.innerHTML;
+        nestedLists = Array.from(li.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
+        if (p) textHTML = p.innerHTML;
+        else if (!nestedLists.length) textHTML = li.innerHTML;
       }
 
       const label = doc.createElement('label');
@@ -4119,6 +4154,7 @@ function tiptapToCk(html) {
       label.appendChild(span);
       li.innerHTML = '';
       li.appendChild(label);
+      nestedLists.forEach(n => li.appendChild(n));
     });
   });
 
