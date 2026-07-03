@@ -121,6 +121,8 @@ struct NoteDetailView: View {
     @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
     /// When `true`, hide the floating edit FAB and instead require a 1.5-second hold on the read-only view to start editing. Mirrors `SettingsView`'s toggle of the same key.
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
+    /// When `true`, Image–Code block tools appear in a top toolbar below the nav header instead of the bottom bar.
+    @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
     @State private var activeOpenTabId: String?
     @State private var openNoteTabListNonEmpty: Bool = false
     @State private var isTabBarReordering = false
@@ -1884,7 +1886,9 @@ struct NoteDetailView: View {
                 },
                 imageToInsert: $imageToInsert,
                 webViewBinding: $editorWebView,
-                initialScrollFraction: readOnlyScrollFraction
+                initialScrollFraction: readOnlyScrollFraction,
+                insertToolsAtTop: noteEditorInsertToolsAtTop,
+                onInsertToolsAtTopChanged: { noteEditorInsertToolsAtTop = $0 }
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
             // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).

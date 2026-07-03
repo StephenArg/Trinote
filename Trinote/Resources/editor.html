@@ -90,6 +90,14 @@ body { display: flex; flex-direction: column; }
 .toolbar button:active { opacity: 0.6; }
 .toolbar button.active { color: var(--btn-active); background: var(--btn-active-bg); }
 .toolbar button svg { width: 21px; height: 21px; fill: currentColor; }
+/* Stroke-based toolbar glyphs (swap arrows) must not inherit fill on open paths */
+.toolbar button svg.toolbar-swap-icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 /* Small dropdown hint next to icon (lists, colors, callout) */
 .toolbar button svg.toolbar-btn-chevron {
   width: 11px;
@@ -131,6 +139,21 @@ body { display: flex; flex-direction: column; }
   user-select: none;
 }
 .toolbar .sep { width: 1px; height: 22px; background: var(--toolbar-border); margin: 0 3px; flex-shrink: 0; }
+.toolbar .sep.is-hidden { display: none; }
+/* Top insert toolbar — below nav header */
+.toolbar-top-wrap {
+  border-top: none;
+  border-bottom: 1px solid var(--toolbar-border);
+  padding-top: 0;
+  padding-bottom: 2px;
+}
+/* Insert tools wrapper — holds Image…Code block when pinned to top toolbar */
+.toolbar-insert-tools {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 1px;
+}
 /* Heading popup (same positioning model as callout/font-size popups) */
 .heading-popup {
   display: none; position: fixed; left: 0; top: 0; z-index: 10000;
@@ -763,12 +786,15 @@ body { display: flex; flex-direction: column; }
 </head>
 <body>
 
+<div class="toolbar-wrap toolbar-top-wrap" id="toolbar-top-wrap" style="display:none">
+  <div class="toolbar" id="toolbar-insert-mount"></div>
+</div>
 <div id="editor-container">
   <div id="loading">Loading editor…</div>
   <div id="editor" style="display:none"></div>
 </div>
 <div class="toolbar-wrap" id="toolbar-wrap" style="display:none">
-<div class="toolbar" id="toolbar"></div>
+  <div class="toolbar" id="toolbar"></div>
 </div>
 
 <script src="tiptap-bundle.min.js"></script>
@@ -1699,7 +1725,43 @@ editor.view.dom.addEventListener('blur', refocusEditorIfNeeded);
 
 // --- Toolbar Setup ---
 const toolbar = document.getElementById('toolbar');
+let _toolbarMount = toolbar;
+function setToolbarMount(el) { _toolbarMount = el; }
+function appendToToolbarMount(el) {
+  _toolbarMount.appendChild(el);
+  if (_insertToolsEl && _toolbarMount === _insertToolsEl) {
+    el.dataset.toolbarInsert = '1';
+  }
+}
+function insertToolNodesInToolbar() {
+  return Array.from(toolbar.querySelectorAll(':scope > [data-toolbar-insert]'));
+}
+function collectInsertToolsIntoWrapper() {
+  if (!_insertToolsEl) return;
+  insertToolNodesInToolbar().forEach((node) => _insertToolsEl.appendChild(node));
+}
+function unwrapInsertToolsIntoToolbar() {
+  if (!_insertToolsEl || !_sepAfterInsert) return;
+  while (_insertToolsEl.firstChild) {
+    toolbar.insertBefore(_insertToolsEl.firstChild, _sepAfterInsert);
+  }
+}
+let _insertToolsAtTop = false;
+let _sepBeforeInsert = null;
+let _sepAfterInsert = null;
+let _insertToolsEl = null;
+let _toolbarSwapBtn = null;
+/* Horizontal swap arrows (top ← / bottom →) — stroke glyph; open paths must not receive toolbar svg fill */
+const TOOLBAR_SWAP_SVG = '<svg class="toolbar-swap-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">'
+  + '<line x1="20" y1="8" x2="5" y2="8"/>'
+  + '<polyline points="9.5,3.5 5,8 9.5,12.5"/>'
+  + '<line x1="4" y1="16" x2="19" y2="16"/>'
+  + '<polyline points="14.5,11.5 19,16 14.5,20.5"/>'
+  + '</svg>';
 toolbar.addEventListener('mousedown', function(e) {
+  e.preventDefault();
+});
+document.getElementById('toolbar-insert-mount').addEventListener('mousedown', function(e) {
   e.preventDefault();
 });
 document.addEventListener('mousedown', function(e) {
@@ -1770,7 +1832,7 @@ function btn(title, icon, action, isActive) {
   b.title = title; b.innerHTML = icon;
   b.addEventListener('click', (e) => { e.preventDefault(); action(); });
   b._isActive = isActive || (() => false);
-  toolbar.appendChild(b);
+  appendToToolbarMount(b);
   return b;
 }
 function btnWithChevron(title, iconHtml, action, isActive) {
@@ -1781,10 +1843,15 @@ function btnWithChevron(title, iconHtml, action, isActive) {
   b.innerHTML = iconHtml + TOOLBAR_CHEVRON_SVG;
   b.addEventListener('click', (e) => { e.preventDefault(); action(); });
   b._isActive = isActive || (() => false);
-  toolbar.appendChild(b);
+  appendToToolbarMount(b);
   return b;
 }
-function sep() { const s = document.createElement('div'); s.className='sep'; toolbar.appendChild(s); }
+function sep() {
+  const s = document.createElement('div');
+  s.className = 'sep';
+  _toolbarMount.appendChild(s);
+  return s;
+}
 const HEADING_TOOLBAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 4v16h2v-7h10v7h2V4h-2v7H7V4H5z"/></svg>';
 const HEADING_KINDS = [
   { id: 0, label: 'Paragraph', tag: 'p', fontSize: '1em' },
@@ -1868,7 +1935,7 @@ function makeHeadingToolbar() {
     }
   });
   wrapper.appendChild(b);
-  toolbar.appendChild(wrapper);
+  appendToToolbarMount(wrapper);
   b._isActive = () => editor.isActive('heading');
   document.addEventListener('click', (e) => {
     if (!popup.classList.contains('visible')) return;
@@ -2716,7 +2783,7 @@ function makeColorPicker(title, icon, applyRangeFn, clearRangeFn) {
     }
   });
   wrapper.appendChild(b);
-  toolbar.appendChild(wrapper);
+  appendToToolbarMount(wrapper);
   document.addEventListener('click', (e) => {
     if (!popup.classList.contains('visible')) return;
     if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
@@ -2948,7 +3015,7 @@ function makeCalloutToolbar() {
     }
   });
   wrapper.appendChild(b);
-  toolbar.appendChild(wrapper);
+  appendToToolbarMount(wrapper);
   b._isActive = () => editor.isActive('callout');
   document.addEventListener('click', (e) => {
     if (!popup.classList.contains('visible')) return;
@@ -3057,7 +3124,7 @@ function makeBulletListToolbar() {
     }
   });
   wrapper.appendChild(b);
-  toolbar.appendChild(wrapper);
+  appendToToolbarMount(wrapper);
   b._isActive = () => editor.isActive('bulletList');
   document.addEventListener('click', (e) => {
     if (!popup.classList.contains('visible')) return;
@@ -3136,7 +3203,7 @@ function makeOrderedListToolbar() {
     }
   });
   wrapper.appendChild(b);
-  toolbar.appendChild(wrapper);
+  appendToToolbarMount(wrapper);
   b._isActive = () => editor.isActive('orderedList');
   document.addEventListener('click', (e) => {
     if (!popup.classList.contains('visible')) return;
@@ -3220,7 +3287,7 @@ function makeFontSizeToolbar() {
     }
   });
   wrapper.appendChild(b);
-  toolbar.appendChild(wrapper);
+  appendToToolbarMount(wrapper);
   b._isActive = () => editor.isActive('triliumFontSize');
   document.addEventListener('click', (e) => {
     if (!popup.classList.contains('visible')) return;
@@ -3393,7 +3460,7 @@ function makeLinkToolbar() {
   });
 
   wrapper.appendChild(b);
-  toolbar.appendChild(wrapper);
+  appendToToolbarMount(wrapper);
   b._isActive = () => editor.isActive('link');
 
   document.addEventListener('click', (e) => {
@@ -3725,7 +3792,7 @@ function makeMathToolbar() {
   };
 
   wrapper.appendChild(b);
-  toolbar.appendChild(wrapper);
+  appendToToolbarMount(wrapper);
   b._isActive = () => getTriliumMathNodeAtSelection() !== null;
 
   document.addEventListener('click', (e) => {
@@ -3760,7 +3827,12 @@ makeColorPicker('Background', ic('foundation--background-color.svg'),
       editor.chain().focus().setTextSelection({ from, to }).unsetHighlight().run();
     });
   });
-sep();
+_sepBeforeInsert = sep();
+
+_insertToolsEl = document.createElement('div');
+_insertToolsEl.id = 'toolbar-insert';
+_insertToolsEl.className = 'toolbar-insert-tools';
+setToolbarMount(_insertToolsEl);
 
 // Insert
 btn('Image', ic('foundation--photo.svg'), () => {
@@ -3779,7 +3851,61 @@ btn('Date/time', DATETIME_TOOLBAR_SVG, () => insertTrinoteDateTimeStamp(), () =>
 btn('Code', codeInlineGlyph(), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
 
 btn('Code block', ic('brackets-curly-fill-svgrepo-com.svg'), () => editor.chain().focus().toggleCodeBlock().run(), () => editor.isActive('codeBlock'));
-sep();
+
+setToolbarMount(toolbar);
+_sepAfterInsert = sep();
+unwrapInsertToolsIntoToolbar();
+
+function applyInsertToolsPlacement(atTop) {
+  const topWrap = document.getElementById('toolbar-top-wrap');
+  const topMount = document.getElementById('toolbar-insert-mount');
+  if (!_insertToolsEl || !topWrap || !topMount || !_sepAfterInsert) return;
+  _insertToolsAtTop = !!atTop;
+  if (_insertToolsAtTop) {
+    collectInsertToolsIntoWrapper();
+    topMount.appendChild(_insertToolsEl);
+    topWrap.style.display = 'block';
+    if (_sepBeforeInsert) _sepBeforeInsert.classList.add('is-hidden');
+    if (_sepAfterInsert) _sepAfterInsert.classList.add('is-hidden');
+    if (_toolbarSwapBtn) {
+      _toolbarSwapBtn.classList.add('active');
+      _toolbarSwapBtn.title = 'Move insert tools to bottom';
+    }
+  } else {
+    unwrapInsertToolsIntoToolbar();
+    if (_insertToolsEl.parentNode) _insertToolsEl.parentNode.removeChild(_insertToolsEl);
+    topWrap.style.display = 'none';
+    if (_sepBeforeInsert) _sepBeforeInsert.classList.remove('is-hidden');
+    if (_sepAfterInsert) _sepAfterInsert.classList.remove('is-hidden');
+    if (_toolbarSwapBtn) {
+      _toolbarSwapBtn.classList.remove('active');
+      _toolbarSwapBtn.title = 'Move insert tools to top';
+    }
+  }
+}
+
+function toggleInsertToolsAtTop() {
+  applyInsertToolsPlacement(!_insertToolsAtTop);
+  try {
+    window.webkit.messageHandlers.insertToolsAtTopChanged.postMessage(_insertToolsAtTop);
+  } catch (e) {}
+}
+
+function initToolbarSwapButton() {
+  if (_toolbarSwapBtn) return;
+  sep();
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.id = 'toolbar-swap';
+  b.title = 'Move insert tools to top';
+  b.innerHTML = TOOLBAR_SWAP_SVG;
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    toggleInsertToolsAtTop();
+  });
+  toolbar.appendChild(b);
+  _toolbarSwapBtn = b;
+}
 
 // Alignment
 btn('Left', ic('foundation--align-left.svg'), () => editor.chain().focus().setTextAlign('left').run(), () => editor.isActive({ textAlign:'left' }));
@@ -3820,7 +3946,7 @@ function scheduleToolbarUpdate() {
 }
 
 function updateToolbarState() {
-  toolbar.querySelectorAll('button').forEach(b => {
+  document.querySelectorAll('#toolbar button, #toolbar-insert button').forEach(b => {
     if (b._isActive) b.classList.toggle('active', b._isActive());
   });
 }
@@ -4209,6 +4335,9 @@ function trinoteRunMermaidInSlot(slot) {
 // --- Bridge ---
 window.editorBridge = {
   setKeyboardToolbarGap(px) {},
+  setInsertToolsAtTop(atTop) {
+    applyInsertToolsPlacement(!!atTop);
+  },
   setFloatingChipScrollClearance(px) {
     const n = Math.max(0, Number(px) || 0);
     document.documentElement.style.setProperty('--editor-floating-chip-clearance', n + 'px');
@@ -4451,6 +4580,7 @@ window.editorBridge = {
 document.getElementById('loading').style.display = 'none';
 document.getElementById('editor').style.display = 'block';
 document.getElementById('toolbar-wrap').style.display = 'block';
+initToolbarSwapButton();
 updateToolbarState();
 
 function editorDocumentHasFocus() {
@@ -4708,7 +4838,7 @@ function makeTableGridPicker() {
     }
   });
   wrapper.appendChild(b);
-  toolbar.appendChild(wrapper);
+  appendToToolbarMount(wrapper);
   document.addEventListener('click', (e) => {
     if (!popup.classList.contains('visible')) return;
     if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;

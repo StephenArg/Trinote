@@ -48,6 +48,9 @@ struct RichTextEditorView: UIViewRepresentable {
     var webViewBinding: Binding<WKWebView?>?
     /// Fraction (0–1) the read-only view was scrolled; the editor scrolls to this position after loading.
     var initialScrollFraction: CGFloat = 0
+    /// When `true`, Image–Code block tools live in the top toolbar below the nav header.
+    var insertToolsAtTop: Bool = false
+    var onInsertToolsAtTopChanged: ((Bool) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -60,7 +63,8 @@ struct RichTextEditorView: UIViewRepresentable {
             onRequestSave: onRequestSave,
             onEditorBridgeRequest: onEditorBridgeRequest,
             onPasteFile: onPasteFile,
-            initialScrollFraction: initialScrollFraction
+            initialScrollFraction: initialScrollFraction,
+            insertToolsAtTop: insertToolsAtTop
         )
     }
 
@@ -77,6 +81,7 @@ struct RichTextEditorView: UIViewRepresentable {
         contentController.add(coordinator, name: "editorRequest")
         contentController.add(coordinator, name: "debugLog")
         contentController.add(coordinator, name: "pasteImageRequest")
+        contentController.add(coordinator, name: "insertToolsAtTopChanged")
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
@@ -131,6 +136,8 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.onRequestSave = onRequestSave
         coordinator.onEditorBridgeRequest = onEditorBridgeRequest
         coordinator.onPasteFile = onPasteFile
+        coordinator.onInsertToolsAtTopChanged = onInsertToolsAtTopChanged
+        coordinator.syncInsertToolsAtTop(insertToolsAtTop)
         Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
@@ -172,6 +179,7 @@ struct RichTextEditorView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "editorRequest")
         uc.removeScriptMessageHandler(forName: "debugLog")
         uc.removeScriptMessageHandler(forName: "pasteImageRequest")
+        uc.removeScriptMessageHandler(forName: "insertToolsAtTopChanged")
     }
 
     // MARK: - Remove iOS form navigation bar (up/down/done)
@@ -213,12 +221,15 @@ struct RichTextEditorView: UIViewRepresentable {
         var onRequestSave: ((String?, CGFloat) -> Void)?
         var onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)?
         var onPasteFile: ((Data, String, String) -> Void)?
+        var onInsertToolsAtTopChanged: ((Bool) -> Void)?
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
         private var keyboardToolbarGapObservers: [NSObjectProtocol] = []
         private var pendingKeyboardToolbarGapPoints: CGFloat?
         private let initialScrollFraction: CGFloat
+        private var insertToolsAtTop = false
+        private var appliedInsertToolsAtTop: Bool?
 
         /// Visual gap between HTML formatting toolbar and keyboard (CSS px ≈ points in WKWebView).
         private static let keyboardToolbarGapPoints: CGFloat = 10
@@ -235,7 +246,8 @@ struct RichTextEditorView: UIViewRepresentable {
             onRequestSave: ((String?, CGFloat) -> Void)? = nil,
             onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)? = nil,
             onPasteFile: ((Data, String, String) -> Void)? = nil,
-            initialScrollFraction: CGFloat = 0
+            initialScrollFraction: CGFloat = 0,
+            insertToolsAtTop: Bool = false
         ) {
             self.initialHTML = initialHTML
             self.onContentChanged = onContentChanged
@@ -247,6 +259,13 @@ struct RichTextEditorView: UIViewRepresentable {
             self.onEditorBridgeRequest = onEditorBridgeRequest
             self.onPasteFile = onPasteFile
             self.initialScrollFraction = initialScrollFraction
+            self.insertToolsAtTop = insertToolsAtTop
+        }
+
+        func syncInsertToolsAtTop(_ atTop: Bool) {
+            insertToolsAtTop = atTop
+            guard appliedInsertToolsAtTop != atTop else { return }
+            setInsertToolsAtTop(atTop)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -264,6 +283,7 @@ struct RichTextEditorView: UIViewRepresentable {
                 if initialScrollFraction > 0 {
                     scrollToFraction(initialScrollFraction)
                 }
+                setInsertToolsAtTop(insertToolsAtTop)
 
             case "contentChanged":
                 if let html = message.body as? String {
@@ -355,6 +375,22 @@ struct RichTextEditorView: UIViewRepresentable {
                 }
                 DispatchQueue.main.async { [weak self] in
                     self?.handlePasteFromPasteboard(mode: mode)
+                }
+
+            case "insertToolsAtTopChanged":
+                let atTop: Bool
+                if let b = message.body as? Bool {
+                    atTop = b
+                } else if let n = message.body as? NSNumber {
+                    atTop = n.boolValue
+                } else {
+                    break
+                }
+                insertToolsAtTop = atTop
+                appliedInsertToolsAtTop = atTop
+                let placementCallback = onInsertToolsAtTopChanged
+                DispatchQueue.main.async {
+                    placementCallback?(atTop)
                 }
 
             case "editorRequest":
@@ -561,6 +597,15 @@ struct RichTextEditorView: UIViewRepresentable {
             guard editorReady, let webView else { return }
             webView.evaluateJavaScript("window.editorBridge.setFloatingChipScrollClearance(\(px))") { _, error in
                 if let error { Log.api.error("setFloatingChipScrollClearance failed: \(error)") }
+            }
+        }
+
+        private func setInsertToolsAtTop(_ atTop: Bool) {
+            appliedInsertToolsAtTop = atTop
+            guard editorReady, let webView else { return }
+            let js = atTop ? "true" : "false"
+            webView.evaluateJavaScript("window.editorBridge.setInsertToolsAtTop(\(js))") { _, error in
+                if let error { Log.api.error("setInsertToolsAtTop failed: \(error)") }
             }
         }
 
