@@ -138,6 +138,9 @@ struct NoteDetailView: View {
     @State private var showFloatingEditButton = false
     @State private var lastScrollContentOffsetY: CGFloat = 0
     @State private var floatingEditScrollBaselineReady = false
+    /// While true, ignore scroll-direction hide/show (layout + scroll restoration during note open).
+    @State private var floatingEditIgnoreDirectionalScroll = true
+    @State private var floatingEditSettlingEndWorkItem: DispatchWorkItem?
     /// Scroll fraction (0–1) of the read-only ScrollView, used to restore position in the editor.
     @State private var readOnlyScrollFraction: CGFloat = 0
     /// After save leaves the rich-text editor, applied once to the read-only `ScrollView` (same fraction as the web editor).
@@ -231,6 +234,74 @@ struct NoteDetailView: View {
 
     /// `contentOffset` / `scrollTop` at or below this (including small negative bounce) counts as “at top of content” — always show the floating edit (read mode) and save (editing) chips; typing does not hide the save chip in this range.
     private static let noteDetailFloatingChipsAtTopY: CGFloat = 8
+    /// Delay before treating scroll deltas as user-driven when no read-only scroll restoration runs.
+    private static let floatingEditSettlingDuration: TimeInterval = 0.4
+
+    private func floatingEditFABEligible(vm: NoteDetailViewModel, note: NoteItem) -> Bool {
+        !noteEditorLongPressToEdit && note.type.isEditable && !vm.needsProtectedSession && !vm.isEditing
+    }
+
+    /// Always show the edit FAB when a note opens; suppress directional hide until layout / scroll restore settles.
+    private func presentFloatingEditOnNoteOpen(vm: NoteDetailViewModel, note: NoteItem) {
+        floatingEditSettlingEndWorkItem?.cancel()
+        floatingEditSettlingEndWorkItem = nil
+        floatingEditScrollBaselineReady = false
+        lastScrollContentOffsetY = 0
+        floatingEditIgnoreDirectionalScroll = true
+        guard floatingEditFABEligible(vm: vm, note: note) else {
+            if showFloatingEditButton {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = false
+                }
+            }
+            return
+        }
+        if !showFloatingEditButton {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                showFloatingEditButton = true
+            }
+        }
+    }
+
+    private func scheduleFloatingEditScrollSettlingEndIfNeeded() {
+        guard readOnlyScrollFractionPendingRestore == nil else { return }
+        floatingEditSettlingEndWorkItem?.cancel()
+        let work = DispatchWorkItem {
+            floatingEditIgnoreDirectionalScroll = false
+            floatingEditScrollBaselineReady = false
+            floatingEditSettlingEndWorkItem = nil
+        }
+        floatingEditSettlingEndWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.floatingEditSettlingDuration, execute: work)
+    }
+
+    /// Same note, different open tab — `onAppear` does not run; reset FAB like a fresh open.
+    private func presentFloatingEditOnOpenTabSwitch() {
+        guard let vm = viewModel, let note = vm.note else { return }
+        presentFloatingEditOnNoteOpen(vm: vm, note: note)
+        scheduleFloatingEditScrollSettlingEndIfNeeded()
+    }
+
+    private func finishFloatingEditScrollSettling(vm: NoteDetailViewModel, note: NoteItem) {
+        floatingEditSettlingEndWorkItem?.cancel()
+        floatingEditSettlingEndWorkItem = nil
+        floatingEditIgnoreDirectionalScroll = false
+        floatingEditScrollBaselineReady = false
+        lastScrollContentOffsetY = 0
+        guard floatingEditFABEligible(vm: vm, note: note) else {
+            if showFloatingEditButton {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = false
+                }
+            }
+            return
+        }
+        if !showFloatingEditButton {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                showFloatingEditButton = true
+            }
+        }
+    }
 
     /// Uses `UIScrollView.contentOffset.y` (via `NoteDetailScrollOffsetReader`): increases when scrolling **down**, decreases when scrolling **up**.
     private func updateFloatingEditVisibility(contentOffsetY: CGFloat, vm: NoteDetailViewModel, note: NoteItem) {
@@ -242,6 +313,20 @@ struct NoteDetailView: View {
             }
             lastScrollContentOffsetY = contentOffsetY
             floatingEditScrollBaselineReady = false
+            floatingEditIgnoreDirectionalScroll = true
+            return
+        }
+
+        if floatingEditIgnoreDirectionalScroll {
+            if !floatingEditScrollBaselineReady {
+                floatingEditScrollBaselineReady = true
+            }
+            lastScrollContentOffsetY = contentOffsetY
+            if !showFloatingEditButton {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = true
+                }
+            }
             return
         }
 
@@ -261,6 +346,11 @@ struct NoteDetailView: View {
         if !floatingEditScrollBaselineReady {
             floatingEditScrollBaselineReady = true
             lastScrollContentOffsetY = contentOffsetY
+            if !showFloatingEditButton {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = true
+                }
+            }
             return
         }
 
@@ -399,17 +489,15 @@ struct NoteDetailView: View {
     /// editability changes. Keeps the FAB in sync when the user flips the toggle while a note
     /// is on screen, without waiting for the next scroll event.
     private func refreshFloatingEditVisibility(vm: NoteDetailViewModel, note: NoteItem) {
-        let shouldShow = !noteEditorLongPressToEdit
-            && note.type.isEditable
-            && !vm.needsProtectedSession
-            && !vm.isEditing
-        if shouldShow != showFloatingEditButton {
+        if floatingEditFABEligible(vm: vm, note: note) {
+            presentFloatingEditOnNoteOpen(vm: vm, note: note)
+            scheduleFloatingEditScrollSettlingEndIfNeeded()
+        } else if showFloatingEditButton {
             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                showFloatingEditButton = shouldShow
+                showFloatingEditButton = false
             }
-        }
-        if !shouldShow {
             floatingEditScrollBaselineReady = false
+            floatingEditIgnoreDirectionalScroll = true
         }
     }
 
@@ -976,6 +1064,7 @@ struct NoteDetailView: View {
             if tab.id == activeOpenTabId { return }
             activeOpenTabId = tab.id
             applyReadScrollStateFromStoreForOpenTabId(tab.id)
+            presentFloatingEditOnOpenTabSwitch()
             return
         }
         activeOpenTabId = tab.id
@@ -1198,6 +1287,7 @@ struct NoteDetailView: View {
                                                 isReadOnlyScrollRevealPending = false
                                             }
                                         }
+                                        finishFloatingEditScrollSettling(vm: vm, note: note)
                                     }
                                 }
                                 .frame(width: 0, height: 0)
@@ -1232,47 +1322,42 @@ struct NoteDetailView: View {
                         }
                     }
                     .onAppear {
-                        floatingEditScrollBaselineReady = false
-                        lastScrollContentOffsetY = 0
-                        let eligible = !noteEditorLongPressToEdit
-                            && note.type.isEditable
-                            && !vm.needsProtectedSession
-                            && !vm.isEditing
-                        if eligible {
-                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                                showFloatingEditButton = true
-                            }
-                        } else {
-                            showFloatingEditButton = false
-                        }
+                        presentFloatingEditOnNoteOpen(vm: vm, note: note)
+                        scheduleFloatingEditScrollSettlingEndIfNeeded()
+                    }
+                    .onChange(of: note.noteId) { _, _ in
+                        presentFloatingEditOnNoteOpen(vm: vm, note: note)
+                        scheduleFloatingEditScrollSettlingEndIfNeeded()
                     }
                     .onChange(of: vm.isEditing) { _, editing in
                         if editing {
                             readOnlyScrollFractionPendingRestore = nil
                             isReadOnlyScrollRevealPending = false
                             findControl.close()
+                            floatingEditSettlingEndWorkItem?.cancel()
+                            floatingEditSettlingEndWorkItem = nil
                             floatingEditScrollBaselineReady = false
+                            floatingEditIgnoreDirectionalScroll = true
                             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                                 showFloatingEditButton = false
                             }
-                        } else if !noteEditorLongPressToEdit && note.type.isEditable && !vm.needsProtectedSession {
-                            floatingEditScrollBaselineReady = false
-                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                                showFloatingEditButton = true
-                            }
+                        } else if floatingEditFABEligible(vm: vm, note: note) {
+                            presentFloatingEditOnNoteOpen(vm: vm, note: note)
+                            scheduleFloatingEditScrollSettlingEndIfNeeded()
                         }
                     }
                     .onChange(of: vm.needsProtectedSession) { _, needs in
                         if needs {
+                            floatingEditSettlingEndWorkItem?.cancel()
+                            floatingEditSettlingEndWorkItem = nil
                             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                                 showFloatingEditButton = false
                             }
                             floatingEditScrollBaselineReady = false
-                        } else if !noteEditorLongPressToEdit && note.type.isEditable && !vm.isEditing {
-                            floatingEditScrollBaselineReady = false
-                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                                showFloatingEditButton = true
-                            }
+                            floatingEditIgnoreDirectionalScroll = true
+                        } else if floatingEditFABEligible(vm: vm, note: note) {
+                            presentFloatingEditOnNoteOpen(vm: vm, note: note)
+                            scheduleFloatingEditScrollSettlingEndIfNeeded()
                         }
                     }
                     .onChange(of: noteEditorLongPressToEdit) { _, _ in
@@ -2186,25 +2271,19 @@ struct NoteDetailView: View {
             }
         }
         .onAppear {
-            let eligible = !noteEditorLongPressToEdit
-                && note.type.isEditable
-                && !vm.needsProtectedSession
-                && !vm.isEditing
-            if eligible {
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                    showFloatingEditButton = true
-                }
-            }
+            presentFloatingEditOnNoteOpen(vm: vm, note: note)
+            scheduleFloatingEditScrollSettlingEndIfNeeded()
         }
         .onChange(of: vm.isEditing) { _, editing in
             if editing {
+                floatingEditSettlingEndWorkItem?.cancel()
+                floatingEditSettlingEndWorkItem = nil
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                     showFloatingEditButton = false
                 }
-            } else if !noteEditorLongPressToEdit && note.type.isEditable && !vm.needsProtectedSession {
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                    showFloatingEditButton = true
-                }
+            } else if floatingEditFABEligible(vm: vm, note: note) {
+                presentFloatingEditOnNoteOpen(vm: vm, note: note)
+                scheduleFloatingEditScrollSettlingEndIfNeeded()
             }
         }
         .onChange(of: noteEditorLongPressToEdit) { _, _ in

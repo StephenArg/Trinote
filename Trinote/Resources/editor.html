@@ -5974,6 +5974,24 @@ document.addEventListener('click', (e) => {
 // END TABLE FEATURES
 // ═══════════════════════════════════════════════════════════════
 
+// iOS/WKWebView: horizontal toolbar swipes can synthesize a click on #editor-container
+// padding below short notes, triggering focus('end') and scrolling to the document bottom.
+// Passive pointer listeners on the toolbar claim the gesture so that stray click does not fire.
+(function installToolbarPointerCaptureFix() {
+  const tb = document.getElementById('toolbar');
+  const tw = document.getElementById('toolbar-wrap');
+  function attachToolbarPointerCapture(el) {
+    if (!el) return;
+    el.addEventListener('pointerdown', function () {}, { passive: true });
+    el.addEventListener('pointermove', function () {}, { passive: true });
+    el.addEventListener('pointerup', function () {}, { passive: true });
+    el.addEventListener('scroll', function () {}, { passive: true });
+    el.addEventListener('click', function () {}, true);
+  }
+  attachToolbarPointerCapture(tb);
+  attachToolbarPointerCapture(tw);
+})();
+
 try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch(e) {}
 try {
   const _ecScroll = document.getElementById('editor-container');
