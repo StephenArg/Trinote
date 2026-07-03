@@ -3238,6 +3238,17 @@ function normalizeLinkUrl(raw) {
   return t;
 }
 
+function looksLikeUrl(raw) {
+  const t = (raw || '').trim();
+  if (!t || /\s/.test(t)) return false;
+  if (/^https?:\/\/.+/i.test(t)) return true;
+  if (/^mailto:.+/i.test(t)) return true;
+  if (/^tel:.+/i.test(t)) return true;
+  if (/^\/\S+$/.test(t)) return true;
+  if (/^[\w.-]+\.[a-z]{2,}([\/?#][^\s]*)?$/i.test(t)) return true;
+  return false;
+}
+
 function makeLinkToolbar() {
   const wrapper = document.createElement('div');
   wrapper.style.display = 'inline-flex';
@@ -3356,6 +3367,12 @@ function makeLinkToolbar() {
           const s = editor.state.selection;
           wrapper._rangeAtOpen = { from: s.from, to: s.to };
         } catch (err) {}
+      } else {
+        const r = wrapper._rangeAtOpen;
+        if (r && r.from !== r.to) {
+          const selected = editor.state.doc.textBetween(r.from, r.to, '');
+          if (looksLikeUrl(selected)) href = normalizeLinkUrl(selected);
+        }
       }
       input.value = href;
       requestAnimationFrame(() => {
