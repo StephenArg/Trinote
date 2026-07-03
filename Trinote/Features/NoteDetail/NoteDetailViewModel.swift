@@ -84,6 +84,9 @@ final class NoteDetailViewModel {
     private var serverContentHash: Int?
     /// The server's utcDateModified for the current note, set during metadata fetch.
     private var serverUtcDateModified: String?
+    /// Shared, memoized task for the background metadata refresh so `load()` and `loadContent()`
+    /// coordinate on a single `getNote` and both see a populated `serverUtcDateModified`.
+    @ObservationIgnored private var metadataRefreshTask: Task<Void, Never>?
     /// Blob id from the latest `getNote` response (used to skip redundant `getNoteContent` for empty notes).
     private var serverBlobId: String?
 
@@ -290,6 +293,29 @@ final class NoteDetailViewModel {
         }
 
         // Background server refresh
+        guard client != nil else { return }
+        await startOrGetMetadataRefresh().value
+    }
+
+    /// Returns the in-flight metadata-refresh task, starting one if none is running. Both `load()`
+    /// and `loadContent()` await the same task so only one `getNote` runs and the body-skip decision
+    /// in `loadContent()` always sees a populated `serverUtcDateModified` (fixes a slow-connection
+    /// race that caused a redundant `getNoteContent` and loader on unchanged notes). The reference
+    /// clears when the refresh finishes so later `load()` calls (e.g. after a move, or Retry) still
+    /// re-fetch instead of reusing a stale completed task.
+    private func startOrGetMetadataRefresh() -> Task<Void, Never> {
+        if let existing = metadataRefreshTask { return existing }
+        let task = Task { [weak self] in
+            await self?.refreshMetadataFromServer()
+            self?.metadataRefreshTask = nil
+        }
+        metadataRefreshTask = task
+        return task
+    }
+
+    /// Fetches note metadata from the server and updates published state, cache, and breadcrumbs.
+    private func refreshMetadataFromServer() async {
+        let nid = self.noteId
         guard let client else { return }
         let hadCachedNote = self.note != nil
         if !hadCachedNote { isLoading = true; error = nil }
@@ -387,6 +413,13 @@ final class NoteDetailViewModel {
         guard let client else {
             return
         }
+
+        // Wait for the shared metadata refresh so `serverUtcDateModified` is populated before the
+        // skip-policy check below. Otherwise, on slow connections `getNote` may still be in flight,
+        // `serverUtcDateModified` is nil, and the policy forces a redundant `getNoteContent` (with a
+        // loader + re-render) on notes that have not actually changed.
+        await startOrGetMetadataRefresh().value
+
         let profileId = self.serverProfileId ?? ""
         let cachedNote = try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId)
         let cachedDate = cachedNote?.utcDateModified
@@ -2458,26 +2491,12 @@ final class NoteDetailViewModel {
     }
 
     /// Fetches note metadata when `load()` has not run yet but we need to download the body.
+    /// Routes through the shared metadata-refresh task so only one `getNote` runs even when
+    /// `load()` and `loadContent()` race on an uncached note.
     private func ensureNoteMetadataIfNeeded() async {
         guard note == nil else { return }
-        guard !noteId.isOfflineLocalNoteId, appState.isOnline, let client else { return }
-        do {
-            let response = try await client.getNote(noteId)
-            if response.isDeleted {
-                handleServerDeletedNote(noteId: noteId)
-                return
-            }
-            note = NoteItem(from: response)
-            serverUtcDateModified = response.utcDateModified
-            serverBlobId = response.blobId
-            serverVerified = true
-            if let profileId = serverProfileId {
-                persistNoteResponse(response, profileId: profileId)
-                try? persistence.commitBatch()
-            }
-        } catch {
-            Log.api.error("ensureNoteMetadataIfNeeded failed: \(error)")
-        }
+        guard !noteId.isOfflineLocalNoteId, appState.isOnline, client != nil else { return }
+        await startOrGetMetadataRefresh().value
     }
 
     private func loadFromCache() {
