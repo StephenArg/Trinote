@@ -831,6 +831,7 @@ struct NoteDetailView: View {
                 ProgressView()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationBarBackButtonHidden(viewModel?.isEditing == true)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
