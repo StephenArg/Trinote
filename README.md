@@ -111,12 +111,7 @@ Tests cover:
 - Error classification (auth, network, server errors)
 
 ## Known Limitations
-
-- **Text editing** includes many toolbar options mirroring the desktop and browser applications
-- **Canvas/Mermaid/GeoMap** notes show a placeholder image of the diagram.
-- **Spreadsheet notes** (Trilium v0.103+, Univer Sheets) are read-only — the Univer editor is not bundled on iOS. The cell grid renders for preview; use the desktop or web client to edit.
 - **Protected notes** are able to be read (when password is entered) but not generated on this client
-- **Background sync** — data refreshes in the background and on pull-to-refresh. When starting out manually do a full-sync.
 - **Search is server-side only** — no offline full-text search. Can jump to text references
 
 ---
