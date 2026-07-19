@@ -266,8 +266,8 @@ actor TriliumClient: TriliumClientProtocol {
         stripSameSiteFromCookies()
 
         if redirectStopHTTP.statusCode == 401 {
-            let html = String(data: redirectStopData, encoding: .utf8) ?? ""
-            let totpError = Self.detectTotpFromLoginResponse(html: html)
+            let submittedTotp = totpToken.map { !$0.isEmpty } ?? false
+            let totpError = Self.detectLoginFailure(from: redirectStopData, submittedTotpToken: submittedTotp)
             switch totpError {
             case .required: throw APIError.totpRequired
             case .invalid:  throw APIError.totpInvalid
@@ -363,7 +363,28 @@ actor TriliumClient: TriliumClientProtocol {
 
     enum TotpDetectionResult { case required, invalid, none }
 
-    /// Inspects the 401 HTML returned by POST /login for TOTP indicators.
+    /// Classifies a failed `POST /login` 401 body.
+    ///
+    /// - Trilium **v0.104+** returns JSON `{ "success": false, "factor": "password"|"totp" }`.
+    /// - Older servers (≤ v0.103) return the rendered login HTML with `wrongTotp` / `totpEnabled`.
+    private nonisolated static func detectLoginFailure(from data: Data, submittedTotpToken: Bool) -> TotpDetectionResult {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let factor = json["factor"] as? String {
+            switch factor.lowercased() {
+            case "totp":
+                return submittedTotpToken ? .invalid : .required
+            case "password":
+                return .none
+            default:
+                break
+            }
+        }
+
+        let html = String(data: data, encoding: .utf8) ?? ""
+        return detectTotpFromLoginResponse(html: html)
+    }
+
+    /// Inspects the 401 HTML returned by POST /login for TOTP indicators (≤ v0.103).
     /// Trilium renders wrongTotp and totpEnabled variables into the login template.
     private nonisolated static func detectTotpFromLoginResponse(html: String) -> TotpDetectionResult {
         let lower = html.lowercased()
@@ -718,11 +739,18 @@ actor TriliumClient: TriliumClientProtocol {
         try await get("/api/sync/check", csrf: false)
     }
 
+    /// Blob content larger than this is stubbed out in `/api/sync/changed` responses
+    /// (v0.104+ `maxBlobContentSize`). Trinote refreshes bodies via `/api/notes/:id/open`
+    /// when a blob change arrives, so stubbing large payloads is safe. Older servers ignore
+    /// the unknown query param.
+    private static let syncPullMaxBlobContentSize = 65_536
+
     func syncPull(instanceId: String, lastEntityChangeId: Int64) async throws -> SyncPullResponse {
         let params: [String: String] = [
             "instanceId": instanceId,
             "lastEntityChangeId": String(lastEntityChangeId),
-            "logMarkerId": String(UUID().uuidString.prefix(10))
+            "logMarkerId": String(UUID().uuidString.prefix(10)),
+            "maxBlobContentSize": String(Self.syncPullMaxBlobContentSize)
         ]
         let data: Data = try await getRaw("/api/sync/changed", queryParams: params, csrf: false)
         return try SyncPullResponse.parseFromChanged(jsonData: data)

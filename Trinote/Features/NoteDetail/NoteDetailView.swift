@@ -1809,7 +1809,20 @@ struct NoteDetailView: View {
             }
         case .code:
             if let code = vm.contentString {
-                CodeNoteView(content: code, mime: note.mime, findControl: findControl)
+                CodeNoteView(
+                    content: code,
+                    mime: note.mime,
+                    findControl: findControl,
+                    onNoteLinkTapped: { linkedNoteId in
+                        navigateToNoteId = linkedNoteId
+                    },
+                    loadAttachmentPreview: { attachmentId in
+                        if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
+                            return await vm.prepareAttachmentPreview(for: attachment)
+                        }
+                        return await vm.prepareAttachmentPreview(attachmentId: attachmentId)
+                    }
+                )
             }
         case .image:
             if let data = vm.content {

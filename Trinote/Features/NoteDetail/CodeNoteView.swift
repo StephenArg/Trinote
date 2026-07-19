@@ -12,9 +12,14 @@ struct CodeNoteView: View {
     let content: String
     let mime: String
     var findControl: FindOnPageControl?
+    /// Opens a Trilium note when a rendered Markdown internal hash link is tapped.
+    var onNoteLinkTapped: ((String) -> Void)?
+    /// Loads attachment bytes for Markdown hash links that target `viewMode=attachments`.
+    var loadAttachmentPreview: ((String) async -> AttachmentPreviewItem?)?
 
     @State private var bodyWidth: CGFloat = 0
     @State private var viewportHeight: CGFloat = 160
+    @State private var attachmentPreview: AttachmentPreviewItem?
     /// Trilium v0.103+ treats Markdown as a first-class code variant with preview. Mirror the
     /// rendered/source toggle on iOS for `text/markdown` notes; defaults to rendered since
     /// reading is the primary use case in the mobile reader.
@@ -61,7 +66,16 @@ struct CodeNoteView: View {
             .padding(.vertical, 8)
 
             if isMarkdown && !markdownShowSource {
-                MarkdownPreviewView(source: content)
+                MarkdownPreviewView(
+                    source: content,
+                    onNoteLinkTapped: onNoteLinkTapped,
+                    onAttachmentLinkTapped: { attachmentId in
+                        guard let loadAttachmentPreview else { return }
+                        Task { @MainActor in
+                            attachmentPreview = await loadAttachmentPreview(attachmentId)
+                        }
+                    }
+                )
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 12)
@@ -87,6 +101,11 @@ struct CodeNoteView: View {
         }
         .onChange(of: content) { _, new in
             viewportHeight = CodeNoteView.naturalCodeBodyHeight(text: new, availableWidth: bodyWidth)
+        }
+        .fullScreenCover(item: $attachmentPreview) { item in
+            AttachmentPreviewView(item: item) {
+                attachmentPreview = nil
+            }
         }
     }
 
@@ -194,12 +213,18 @@ private struct CodeReadonlyTextView: UIViewRepresentable {
 /// Lightweight block-level Markdown viewer for `text/markdown` code notes.
 ///
 /// Trilium v0.103+ ships first-class Markdown notes with preview / sync-scrolling on the
-/// desktop. iOS doesn't bundle markdown-it, so we use Apple's `AttributedString(markdown:)`
-/// for inline formatting (bold, italic, links, inline code) and apply a small block parser
+/// desktop. iOS doesn't bundle markdown-it, so we use Apple's markdown → attributed-string
+/// path for inline formatting (bold, italic, links, inline code) and a small block parser
 /// for headings, lists, blockquotes, fenced code, and horizontal rules. Anything we don't
 /// recognise falls through as a plain paragraph — the user can always flip to **Source**.
+///
+/// Inline runs are rendered in a selectable `UITextView` so text selection and link taps
+/// both work. External `http(s)` / `mailto` links open in Safari via `UIApplication.open`
+/// (same as HTML notes); Trilium `#root/…` hashes navigate in-app.
 struct MarkdownPreviewView: View {
     let source: String
+    var onNoteLinkTapped: ((String) -> Void)?
+    var onAttachmentLinkTapped: ((String) -> Void)?
 
     private var blocks: [MarkdownBlock] {
         MarkdownBlock.parse(source)
@@ -217,25 +242,33 @@ struct MarkdownPreviewView: View {
     private func render(_ block: MarkdownBlock) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(inlineAttributed(text))
-                .font(Self.headingFont(for: level))
-                .fontWeight(level <= 3 ? .bold : .semibold)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            MarkdownSelectableText(
+                markdown: text,
+                font: Self.headingUIFont(for: level),
+                textColor: .label,
+                onNoteLinkTapped: onNoteLinkTapped,
+                onAttachmentLinkTapped: onAttachmentLinkTapped
+            )
         case .paragraph(let text):
-            Text(inlineAttributed(text))
-                .font(.body)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            MarkdownSelectableText(
+                markdown: text,
+                font: .preferredFont(forTextStyle: .body),
+                textColor: .label,
+                onNoteLinkTapped: onNoteLinkTapped,
+                onAttachmentLinkTapped: onAttachmentLinkTapped
+            )
         case .bulletList(let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("\u{2022}").foregroundStyle(.secondary)
-                        Text(inlineAttributed(item))
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                        MarkdownSelectableText(
+                            markdown: item,
+                            font: .preferredFont(forTextStyle: .body),
+                            textColor: .label,
+                            onNoteLinkTapped: onNoteLinkTapped,
+                            onAttachmentLinkTapped: onAttachmentLinkTapped
+                        )
                     }
                 }
             }
@@ -244,22 +277,30 @@ struct MarkdownPreviewView: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("\(idx + 1).").foregroundStyle(.secondary)
-                        Text(inlineAttributed(item))
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                        MarkdownSelectableText(
+                            markdown: item,
+                            font: .preferredFont(forTextStyle: .body),
+                            textColor: .label,
+                            onNoteLinkTapped: onNoteLinkTapped,
+                            onAttachmentLinkTapped: onAttachmentLinkTapped
+                        )
                     }
                 }
             }
         case .blockquote(let text):
             HStack(spacing: 0) {
                 Rectangle().fill(Color.secondary.opacity(0.4)).frame(width: 3)
-                Text(inlineAttributed(text))
-                    .font(.body.italic())
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 10)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                MarkdownSelectableText(
+                    markdown: text,
+                    font: {
+                        let base = UIFont.preferredFont(forTextStyle: .body)
+                        return UIFont(descriptor: base.fontDescriptor.withSymbolicTraits(.traitItalic) ?? base.fontDescriptor, size: base.pointSize)
+                    }(),
+                    textColor: .secondaryLabel,
+                    onNoteLinkTapped: onNoteLinkTapped,
+                    onAttachmentLinkTapped: onAttachmentLinkTapped
+                )
+                .padding(.leading, 10)
                 Spacer(minLength: 0)
             }
         case .fencedCode(let language, let code):
@@ -286,28 +327,346 @@ struct MarkdownPreviewView: View {
         }
     }
 
-    private func inlineAttributed(_ markdown: String) -> AttributedString {
-        // `.full` keeps inline emphasis, links, and code spans; falls back to the raw text if the
-        // input doesn't parse (e.g. when a literal `*` is intended as a list bullet on a stray line).
+    private static func headingUIFont(for level: Int) -> UIFont {
+        let style: UIFont.TextStyle
+        let weight: UIFont.Weight
+        switch level {
+        case 1: style = .largeTitle; weight = .bold
+        case 2: style = .title1; weight = .bold
+        case 3: style = .title2; weight = .bold
+        case 4: style = .title3; weight = .semibold
+        case 5: style = .headline; weight = .semibold
+        default: style = .subheadline; weight = .semibold
+        }
+        let base = UIFont.preferredFont(forTextStyle: style)
+        return UIFont.systemFont(ofSize: base.pointSize, weight: weight)
+    }
+}
+
+/// Selectable UITextView that keeps text selection and opens Markdown links (Safari for
+/// http(s), in-app for Trilium `#root/…` hashes).
+///
+/// Uses an explicit tap recognizer in addition to `UITextViewDelegate` link handling —
+/// SwiftUI `ScrollView` often swallows the built-in link gesture, so taps never reach Safari.
+private struct MarkdownSelectableText: UIViewRepresentable {
+    let markdown: String
+    let font: UIFont
+    let textColor: UIColor
+    var onNoteLinkTapped: ((String) -> Void)?
+    var onAttachmentLinkTapped: ((String) -> Void)?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            onNoteLinkTapped: onNoteLinkTapped,
+            onAttachmentLinkTapped: onAttachmentLinkTapped
+        )
+    }
+
+    func makeUIView(context: Context) -> IntrinsicHeightTextView {
+        let tv = IntrinsicHeightTextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.isScrollEnabled = false
+        tv.isUserInteractionEnabled = true
+        tv.backgroundColor = .clear
+        tv.textContainerInset = .zero
+        tv.textContainer.lineFragmentPadding = 0
+        tv.dataDetectorTypes = []
+        tv.font = font
+        tv.textColor = textColor
+        tv.linkTextAttributes = [
+            .foregroundColor: UIColor.link,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+        tv.delegate = context.coordinator
+        tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        tv.setContentHuggingPriority(.required, for: .vertical)
+
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        tap.numberOfTapsRequired = 1
+        tap.cancelsTouchesInView = false
+        tap.delegate = context.coordinator
+        tv.addGestureRecognizer(tap)
+        context.coordinator.tapRecognizer = tap
+        context.coordinator.textView = tv
+
+        tv.attributedText = Self.attributedMarkdown(markdown, font: font, textColor: textColor)
+        context.coordinator.lastMarkdown = markdown
+        context.coordinator.lastFontName = font.fontName
+        context.coordinator.lastFontSize = font.pointSize
+        return tv
+    }
+
+    func updateUIView(_ uiView: IntrinsicHeightTextView, context: Context) {
+        context.coordinator.onNoteLinkTapped = onNoteLinkTapped
+        context.coordinator.onAttachmentLinkTapped = onAttachmentLinkTapped
+        context.coordinator.textView = uiView
+        if markdown != context.coordinator.lastMarkdown
+            || font.fontName != context.coordinator.lastFontName
+            || abs(font.pointSize - context.coordinator.lastFontSize) > 0.01 {
+            context.coordinator.lastMarkdown = markdown
+            context.coordinator.lastFontName = font.fontName
+            context.coordinator.lastFontSize = font.pointSize
+            uiView.font = font
+            uiView.textColor = textColor
+            uiView.attributedText = Self.attributedMarkdown(markdown, font: font, textColor: textColor)
+            uiView.invalidateIntrinsicContentSize()
+        }
+    }
+
+    /// Parses inline Markdown, then forces a real `UIFont` on every run.
+    /// SwiftUI `Font` → `NSAttributedString` often drops the font, leaving UITextView's 12pt default.
+    static func attributedMarkdown(_ markdown: String, font: UIFont, textColor: UIColor) -> NSAttributedString {
         var opts = AttributedString.MarkdownParsingOptions()
         opts.allowsExtendedAttributes = true
         opts.interpretedSyntax = .inlineOnlyPreservingWhitespace
         opts.failurePolicy = .returnPartiallyParsedIfPossible
-        if let parsed = try? AttributedString(markdown: markdown, options: opts) {
-            return parsed
+
+        let parsed = (try? AttributedString(markdown: markdown, options: opts)) ?? AttributedString(markdown)
+        let mutable = NSMutableAttributedString(attributedString: NSAttributedString(parsed))
+        let full = NSRange(location: 0, length: mutable.length)
+        guard full.length > 0 else {
+            return NSAttributedString(string: markdown, attributes: [
+                .font: font,
+                .foregroundColor: textColor
+            ])
         }
-        return AttributedString(markdown)
+
+        mutable.enumerateAttributes(in: full) { attrs, range, _ in
+            var traits = font.fontDescriptor.symbolicTraits
+            if let existing = attrs[.font] as? UIFont {
+                let existingTraits = existing.fontDescriptor.symbolicTraits
+                if existingTraits.contains(.traitBold) { traits.insert(.traitBold) }
+                if existingTraits.contains(.traitItalic) { traits.insert(.traitItalic) }
+            }
+            // Inline code from Markdown often uses a monospaced font — keep that family at our size.
+            let baseDescriptor: UIFontDescriptor
+            if let existing = attrs[.font] as? UIFont,
+               existing.fontDescriptor.symbolicTraits.contains(.traitMonoSpace) {
+                baseDescriptor = UIFont.monospacedSystemFont(ofSize: font.pointSize, weight: .regular).fontDescriptor
+            } else {
+                baseDescriptor = font.fontDescriptor
+            }
+            let applied: UIFont
+            if let withTraits = baseDescriptor.withSymbolicTraits(traits) {
+                applied = UIFont(descriptor: withTraits, size: font.pointSize)
+            } else {
+                applied = UIFont(descriptor: baseDescriptor, size: font.pointSize)
+            }
+            mutable.addAttribute(.font, value: applied, range: range)
+
+            let hasLink = attrs[.link] != nil
+            if !hasLink {
+                mutable.addAttribute(.foregroundColor, value: textColor, range: range)
+            }
+
+            // Normalize link values to absolute `URL`s so UITextView + our tap handler agree.
+            if let linkValue = attrs[.link] {
+                if let url = MarkdownLinkOpening.normalizedURL(from: linkValue) {
+                    mutable.addAttribute(.link, value: url, range: range)
+                }
+            }
+        }
+
+        return mutable
     }
 
-    private static func headingFont(for level: Int) -> Font {
-        switch level {
-        case 1: return .largeTitle
-        case 2: return .title
-        case 3: return .title2
-        case 4: return .title3
-        case 5: return .headline
-        default: return .subheadline
+    final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
+        var onNoteLinkTapped: ((String) -> Void)?
+        var onAttachmentLinkTapped: ((String) -> Void)?
+        var lastMarkdown: String = ""
+        var lastFontName: String = ""
+        var lastFontSize: CGFloat = 0
+        weak var textView: UITextView?
+        weak var tapRecognizer: UITapGestureRecognizer?
+
+        init(
+            onNoteLinkTapped: ((String) -> Void)?,
+            onAttachmentLinkTapped: ((String) -> Void)?
+        ) {
+            self.onNoteLinkTapped = onNoteLinkTapped
+            self.onAttachmentLinkTapped = onAttachmentLinkTapped
         }
+
+        func textView(
+            _ textView: UITextView,
+            shouldInteractWith url: URL,
+            in characterRange: NSRange,
+            interaction: UITextItemInteraction
+        ) -> Bool {
+            guard interaction == .invokeDefaultAction else { return false }
+            open(url)
+            return false
+        }
+
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended, let textView else { return }
+            let point = gesture.location(in: textView)
+            guard let url = Self.linkURL(at: point, in: textView) else { return }
+            open(url)
+        }
+
+        private func open(_ url: URL) {
+            MarkdownLinkOpening.handle(
+                url: url,
+                onNoteLinkTapped: onNoteLinkTapped,
+                onAttachmentLinkTapped: onAttachmentLinkTapped
+            )
+        }
+
+        /// Character-index hit test that accounts for textContainer insets.
+        static func linkURL(at point: CGPoint, in textView: UITextView) -> URL? {
+            var location = point
+            location.x -= textView.textContainerInset.left
+            location.y -= textView.textContainerInset.top
+            guard textView.bounds.contains(point), textView.textStorage.length > 0 else { return nil }
+
+            let index = textView.layoutManager.characterIndex(
+                for: location,
+                in: textView.textContainer,
+                fractionOfDistanceBetweenInsertionPoints: nil
+            )
+            guard index < textView.textStorage.length else { return nil }
+
+            var effective = NSRange(location: 0, length: 0)
+            let value = textView.textStorage.attribute(.link, at: index, effectiveRange: &effective)
+            return MarkdownLinkOpening.normalizedURL(from: value)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldReceive touch: UITouch
+        ) -> Bool {
+            guard gestureRecognizer === tapRecognizer, let textView else { return true }
+            let point = touch.location(in: textView)
+            // Only claim the tap when it lands on a link — leave other taps for selection / scroll.
+            return Self.linkURL(at: point, in: textView) != nil
+        }
+    }
+}
+
+/// Non-scrolling UITextView that reports its natural height to Auto Layout / SwiftUI.
+private final class IntrinsicHeightTextView: UITextView {
+    override var intrinsicContentSize: CGSize {
+        let targetWidth = bounds.width > 1 ? bounds.width : UIScreen.main.bounds.width - 64
+        let fitted = sizeThatFits(CGSize(width: targetWidth, height: .greatestFiniteMagnitude))
+        return CGSize(width: UIView.noIntrinsicMetric, height: max(ceil(fitted.height), font?.lineHeight ?? 17))
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        invalidateIntrinsicContentSize()
+    }
+}
+
+/// Resolves taps on links inside `MarkdownPreviewView`.
+enum MarkdownLinkOpening {
+    enum Outcome: Equatable {
+        /// External URL was handed to Safari / the system browser.
+        case openedInBrowser
+        /// Trilium note / attachment handled in-app.
+        case handledInternally
+        case discarded
+    }
+
+    /// Coerces Markdown / UIKit `.link` attribute values into an absolute `URL`.
+    /// Adds `https://` when the destination looks like a host without a scheme (`example.com/…`).
+    static func normalizedURL(from value: Any?) -> URL? {
+        guard let value else { return nil }
+        if let url = value as? URL {
+            return ensureScheme(url)
+        }
+        if let s = value as? String {
+            return ensureScheme(URL(string: s.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        if let s = value as? NSString {
+            return ensureScheme(URL(string: s as String))
+        }
+        return nil
+    }
+
+    private static func ensureScheme(_ url: URL?) -> URL? {
+        guard let url else { return nil }
+        let absolute = url.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !absolute.isEmpty else { return nil }
+
+        if let scheme = url.scheme?.lowercased(), !scheme.isEmpty {
+            return url
+        }
+        // Hash-only Trilium / in-note anchors — leave as-is for the hash parser.
+        if absolute.hasPrefix("#") {
+            return url
+        }
+        // Bare host / path → assume https.
+        return URL(string: "https://\(absolute)")
+    }
+
+    /// Opens `http` / `https` / `mailto` in Safari via `UIApplication.open`.
+    /// Trilium `#root/…` hashes call the in-app callbacks.
+    @MainActor
+    @discardableResult
+    static func handle(
+        url: URL,
+        onNoteLinkTapped: ((String) -> Void)?,
+        onAttachmentLinkTapped: ((String) -> Void)?
+    ) -> Outcome {
+        let resolved = normalizedURL(from: url) ?? url
+        let absolute = resolved.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let looksLikeTriliumHash =
+            absolute.hasPrefix("#")
+            || absolute.contains("#/")
+            || absolute.localizedCaseInsensitiveContains("#root")
+            || (resolved.fragment?.hasPrefix("/") == true)
+            || (resolved.fragment?.localizedCaseInsensitiveContains("root/") == true)
+
+        if looksLikeTriliumHash {
+            if let parsed = TriliumHashLinkNavigation.parse(url: resolved)
+                ?? TriliumHashLinkNavigation.parse(href: absolute) {
+                if parsed.viewMode == "attachments",
+                   let attachmentId = parsed.attachmentId,
+                   !attachmentId.isEmpty {
+                    if let onAttachmentLinkTapped {
+                        onAttachmentLinkTapped(attachmentId)
+                        return .handledInternally
+                    }
+                    return .discarded
+                }
+                if let noteId = parsed.noteId, !noteId.isEmpty {
+                    onNoteLinkTapped?(noteId)
+                    return .handledInternally
+                }
+            }
+            // Bare `#fragment` (in-note anchor) — nothing to open on iOS preview.
+            return .discarded
+        }
+
+        guard let scheme = resolved.scheme?.lowercased(), !scheme.isEmpty else {
+            return .discarded
+        }
+
+        // Prefer Safari for web links; `universalLinksOnly: false` avoids silent failure when
+        // another app claims the domain via Universal Links.
+        if scheme == "http" || scheme == "https" {
+            UIApplication.shared.open(
+                resolved,
+                options: [.universalLinksOnly: false],
+                completionHandler: nil
+            )
+            return .openedInBrowser
+        }
+        if scheme == "mailto" {
+            UIApplication.shared.open(resolved, options: [:], completionHandler: nil)
+            return .openedInBrowser
+        }
+        UIApplication.shared.open(resolved, options: [:], completionHandler: nil)
+        return .openedInBrowser
     }
 }
 

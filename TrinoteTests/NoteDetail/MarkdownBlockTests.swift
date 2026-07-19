@@ -85,4 +85,64 @@ final class MarkdownBlockTests: XCTestCase {
         XCTAssertEqual(blocks.count, 3)
         if case .horizontalRule = blocks[1] {} else { XCTFail("Expected hr in middle") }
     }
+
+    @MainActor
+    func testMarkdownLinkOpeningExternalHTTPSOpensInBrowser() {
+        let url = URL(string: "https://example.com/path")!
+        let result = MarkdownLinkOpening.handle(
+            url: url,
+            onNoteLinkTapped: { _ in XCTFail("External link should not open a note") },
+            onAttachmentLinkTapped: { _ in XCTFail("External link should not open an attachment") }
+        )
+        XCTAssertEqual(result, .openedInBrowser)
+    }
+
+    func testMarkdownLinkNormalizedURLAddsHTTPSForBareHost() {
+        let url = MarkdownLinkOpening.normalizedURL(from: "example.com/foo")
+        XCTAssertEqual(url?.absoluteString, "https://example.com/foo")
+    }
+
+    func testMarkdownLinkNormalizedURLPreservesHTTPS() {
+        let url = MarkdownLinkOpening.normalizedURL(from: URL(string: "https://example.com/x")!)
+        XCTAssertEqual(url?.absoluteString, "https://example.com/x")
+    }
+
+    @MainActor
+    func testMarkdownLinkOpeningInternalNoteHashCallsCallback() {
+        var opened: String?
+        let url = URL(string: "https://trilium.local/#root/parent/childNote")!
+        let result = MarkdownLinkOpening.handle(
+            url: url,
+            onNoteLinkTapped: { opened = $0 },
+            onAttachmentLinkTapped: nil
+        )
+        XCTAssertEqual(result, .handledInternally)
+        XCTAssertEqual(opened, "childNote")
+    }
+
+    @MainActor
+    func testMarkdownLinkOpeningAttachmentHashCallsCallback() {
+        var opened: String?
+        let url = URL(string: "https://trilium.local/#root/n1?viewMode=attachments&attachmentId=att42")!
+        let result = MarkdownLinkOpening.handle(
+            url: url,
+            onNoteLinkTapped: { _ in XCTFail("Attachment link should not open a note") },
+            onAttachmentLinkTapped: { opened = $0 }
+        )
+        XCTAssertEqual(result, .handledInternally)
+        XCTAssertEqual(opened, "att42")
+    }
+
+    @MainActor
+    func testMarkdownLinkOpeningBareHashRootURL() {
+        var opened: String?
+        let url = URL(string: "#root/abcNote")!
+        let result = MarkdownLinkOpening.handle(
+            url: url,
+            onNoteLinkTapped: { opened = $0 },
+            onAttachmentLinkTapped: nil
+        )
+        XCTAssertEqual(result, .handledInternally)
+        XCTAssertEqual(opened, "abcNote")
+    }
 }
