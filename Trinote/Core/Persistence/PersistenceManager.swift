@@ -687,6 +687,103 @@ final class PersistenceManager {
         serverProfileId: String,
         protectedSessionActive: Bool
     ) -> String {
+        cachedNotePathSegments(
+            noteId: noteId,
+            leafTitle: leafTitle,
+            leafIsProtected: leafIsProtected,
+            serverProfileId: serverProfileId,
+            protectedSessionActive: protectedSessionActive
+        ).joined(separator: " -> ")
+    }
+
+    /// Slash-style path under root: `/Parent/…/note` (no `Root` segment).
+    func cachedNoteSlashPathDisplay(
+        noteId: String,
+        leafTitle: String = "",
+        leafIsProtected: Bool = false,
+        serverProfileId: String,
+        protectedSessionActive: Bool
+    ) -> String {
+        let segments = cachedNotePathSegments(
+            noteId: noteId,
+            leafTitle: leafTitle,
+            leafIsProtected: leafIsProtected,
+            serverProfileId: serverProfileId,
+            protectedSessionActive: protectedSessionActive
+        )
+        guard !segments.isEmpty else { return "/\(noteId)" }
+        return "/" + segments.joined(separator: "/")
+    }
+
+    /// Slash paths for `selectedNoteIds` and every cached descendant, sorted lexicographically.
+    func slashPathsForNotesAndDescendants(
+        selectedNoteIds: Set<String>,
+        serverProfileId: String,
+        protectedSessionActive: Bool
+    ) -> [String] {
+        var allIds = Set<String>()
+        for id in selectedNoteIds where id != "root" {
+            allIds.formUnion(cachedDescendantNoteIds(rootNoteId: id, serverProfileId: serverProfileId))
+        }
+        return allIds
+            .map {
+                cachedNoteSlashPathDisplay(
+                    noteId: $0,
+                    serverProfileId: serverProfileId,
+                    protectedSessionActive: protectedSessionActive
+                )
+            }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    /// Selected note IDs whose ancestors are not also selected (safe roots for cascade delete).
+    func maximalSelectedAncestorNoteIds(
+        selectedNoteIds: Set<String>,
+        serverProfileId: String
+    ) -> [String] {
+        selectedNoteIds.filter { id in
+            guard id != "root" else { return false }
+            return !hasSelectedAncestor(
+                noteId: id,
+                selectedNoteIds: selectedNoteIds,
+                serverProfileId: serverProfileId
+            )
+        }
+        .sorted()
+    }
+
+    private func hasSelectedAncestor(
+        noteId: String,
+        selectedNoteIds: Set<String>,
+        serverProfileId: String
+    ) -> Bool {
+        var currentId = noteId
+        var visited = Set<String>()
+        while currentId != "root", !visited.contains(currentId) {
+            visited.insert(currentId)
+            guard let cached = try? fetchCachedNote(id: currentId, serverProfileId: serverProfileId),
+                  let parentId = parentNoteIdForTreeWalk(
+                    noteId: currentId,
+                    serverProfileId: serverProfileId,
+                    cached: cached
+                  ),
+                  !parentId.isEmpty
+            else { return false }
+            if parentId != "root", selectedNoteIds.contains(parentId) {
+                return true
+            }
+            currentId = parentId
+        }
+        return false
+    }
+
+    private func cachedNotePathSegments(
+        noteId: String,
+        leafTitle: String,
+        leafIsProtected: Bool,
+        serverProfileId: String,
+        protectedSessionActive: Bool
+    ) -> [String] {
         let maskProtected = !protectedSessionActive
         let placeholder = NoteItem.protectedTitlePlaceholder
         var segments: [String] = []
@@ -725,7 +822,7 @@ final class PersistenceManager {
             currentId = parentId
         }
 
-        return segments.joined(separator: " -> ")
+        return segments
     }
 
     /// SF Symbol for the **note itself** (its own `iconClass` label, then its type).

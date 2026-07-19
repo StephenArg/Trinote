@@ -99,6 +99,12 @@ struct TreeView: View {
     /// Mirrors `LastActiveOpenTabStore` for the active profile so the tab bar updates when the store changes.
     @State private var lastActiveOpenTabIdForBar: String = ""
 
+    @State private var isSelectMode = false
+    @State private var selectedIds: Set<String> = []
+    @State private var showBulkDeleteConfirm = false
+    @State private var isBulkDeleting = false
+    @State private var bulkDeleteError: String?
+
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
@@ -225,6 +231,133 @@ struct TreeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .trinoteWillSwitchServerProfile)) { _ in
                 resetNavigationStackBeforeServerProfileChange()
             }
+            .sheet(isPresented: $showBulkDeleteConfirm) {
+                treeBulkDeleteConfirmSheet
+            }
+            .alert(
+                String(localized: "Delete Failed", comment: "Tree bulk delete error"),
+                isPresented: bulkDeleteErrorBinding,
+                actions: {
+                    Button(String(localized: "OK", comment: "Dismiss"), role: .cancel) { bulkDeleteError = nil }
+                },
+                message: {
+                    if let bulkDeleteError {
+                        Text(bulkDeleteError)
+                    }
+                }
+            )
+    }
+
+    private var bulkDeleteErrorBinding: Binding<Bool> {
+        Binding(
+            get: { bulkDeleteError != nil },
+            set: { if !$0 { bulkDeleteError = nil } }
+        )
+    }
+
+    private var bulkDeleteConfirmPaths: [String] {
+        guard let profileId = appState.activeProfile?.id else { return [] }
+        return PersistenceManager.shared.slashPathsForNotesAndDescendants(
+            selectedNoteIds: selectedIds,
+            serverProfileId: profileId,
+            protectedSessionActive: appState.protectedSessionActive
+        )
+    }
+
+    private var treeBulkDeleteConfirmSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(bulkDeleteConfirmPaths, id: \.self) { path in
+                        Text(path)
+                            .font(.body.monospaced())
+                            .textSelection(.enabled)
+                    }
+                } header: {
+                    Text(
+                        String(
+                            localized: "The following notes will be permanently deleted. This cannot be undone.",
+                            comment: "Tree bulk delete sheet header"
+                        )
+                    )
+                    .textCase(nil)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle(String(localized: "Delete Notes?", comment: "Tree bulk delete sheet title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(String(localized: "Cancel", comment: "Tree bulk delete cancel")) {
+                        showBulkDeleteConfirm = false
+                    }
+                    .disabled(isBulkDeleting)
+                }
+                ToolbarItem(placement: .destructiveAction) {
+                    Button(String(localized: "Delete", comment: "Tree bulk delete confirm"), role: .destructive) {
+                        Task { await performBulkDeleteSelectedNotes() }
+                    }
+                    .disabled(isBulkDeleting || selectedIds.isEmpty)
+                }
+            }
+            .interactiveDismissDisabled(isBulkDeleting)
+            .overlay {
+                if isBulkDeleting {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.ultraThinMaterial)
+                }
+            }
+        }
+    }
+
+    private func exitSelectMode() {
+        isSelectMode = false
+        selectedIds.removeAll()
+        showBulkDeleteConfirm = false
+    }
+
+    private func toggleNoteSelection(_ noteId: String) {
+        guard noteId != "root" else { return }
+        if selectedIds.contains(noteId) {
+            selectedIds.remove(noteId)
+        } else {
+            selectedIds.insert(noteId)
+        }
+    }
+
+    private func performBulkDeleteSelectedNotes() async {
+        guard let vm = viewModel else { return }
+        isBulkDeleting = true
+        defer { isBulkDeleting = false }
+
+        let profileId = appState.activeProfile?.id
+        let idsToDelete: [String]
+        if let profileId {
+            idsToDelete = PersistenceManager.shared.maximalSelectedAncestorNoteIds(
+                selectedNoteIds: selectedIds,
+                serverProfileId: profileId
+            )
+        } else {
+            idsToDelete = selectedIds.filter { $0 != "root" }.sorted()
+        }
+
+        var failures = 0
+        for noteId in idsToDelete {
+            let ok = await vm.deleteNoteAndSubnotes(noteId: noteId)
+            if !ok { failures += 1 }
+        }
+
+        showBulkDeleteConfirm = false
+        exitSelectMode()
+
+        if failures > 0 {
+            bulkDeleteError = String(
+                localized: "Could not delete \(failures) note(s). Try again when online.",
+                comment: "Tree bulk delete partial failure"
+            )
+        }
     }
 
     private var localTransferOfferAlertBinding: Binding<Bool> {
@@ -372,7 +505,32 @@ struct TreeView: View {
 
     @ToolbarContentBuilder
     private var treeToolbarContent: some ToolbarContent {
-        if parentNoteId == "root", viewModel != nil {
+        if isSelectMode, parentNoteId == "root", onPickParent == nil {
+            ToolbarItem(placement: .cancellationAction) {
+                Button(String(localized: "Done", comment: "Tree select mode done")) {
+                    exitSelectMode()
+                }
+                .disabled(isBulkDeleting)
+            }
+            ToolbarItem(placement: .principal) {
+                Text(
+                    String(
+                        format: String(localized: "%d selected", comment: "Tree select mode selected count"),
+                        selectedIds.count
+                    )
+                )
+                .font(.headline)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showBulkDeleteConfirm = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(selectedIds.isEmpty || isBulkDeleting)
+                .accessibilityLabel(String(localized: "Delete selected notes", comment: "Tree select mode delete"))
+            }
+        } else if parentNoteId == "root", viewModel != nil {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     triggerSyncAndReload()
@@ -387,6 +545,18 @@ struct TreeView: View {
                 )
 
                 Menu {
+                    if onPickParent == nil {
+                        Button {
+                            isSelectMode = true
+                            selectedIds.removeAll()
+                        } label: {
+                            Label(
+                                String(localized: "Select", comment: "Tree menu: enter multi-select mode"),
+                                systemImage: "checkmark.circle"
+                            )
+                        }
+                    }
+
                     Button {
                         let enabled = !appState.localTransfer.receiveModeEnabled
                         appState.localTransfer.setReceiveMode(enabled)
@@ -714,6 +884,7 @@ struct TreeView: View {
         treeShareSheetPayload = nil
         noteToDelete = nil
         showSharedNotesManagement = false
+        exitSelectMode()
         appState.localTransfer.cancelStagedIncomingOffer()
         appState.localTransfer.setReceiveMode(false)
     }
@@ -1020,7 +1191,7 @@ struct TreeView: View {
             ForEach(vm.visibleNodes) { flat in
                 treeNodeRow(flat: flat, vm: vm, favoriteNoteIds: favoriteNoteIds, onFavoriteChanged: loadFavoriteIds)
             }
-            .if(onPickParent == nil) { view in
+            .if(onPickParent == nil && !isSelectMode) { view in
                 view.onMove(perform: vm.handleMove)
             }
         }
@@ -1042,13 +1213,19 @@ struct TreeView: View {
     }
 
     private func buildTreeNodeRow(node: TreeNode, depth: Int, vm: TreeViewModel) -> TreeNodeRow {
-        TreeNodeRow(
+        let noteId = node.note.noteId
+        return TreeNodeRow(
             node: node,
             depth: depth,
             viewModel: vm,
             resolvedTitleColor: resolvedTreeTitleColor(for: node.note),
+            isSelectMode: isSelectMode,
+            isSelected: selectedIds.contains(noteId),
+            forceInlineExpand: isSelectMode,
             onSelect: { note, parentBranchId in
-                if let pick = onPickParent {
+                if isSelectMode {
+                    toggleNoteSelection(note.noteId)
+                } else if let pick = onPickParent {
                     pick(note.noteId, note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive), parentBranchId)
                 } else {
                     navigateToNote = note
@@ -1105,7 +1282,7 @@ struct TreeView: View {
         let row = buildTreeNodeRow(node: flat.node, depth: flat.depth, vm: vm)
 
         return Group {
-            if onPickParent == nil {
+            if onPickParent == nil, !isSelectMode {
                 TreeListRowUIKitContextMenu(
                     model: treeRowContextMenuModel(flat: flat, vm: vm, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
                 ) {
@@ -1185,11 +1362,15 @@ struct TreeNodeRow: View {
     let depth: Int
     let viewModel: TreeViewModel
     var resolvedTitleColor: Color
+    var isSelectMode: Bool = false
+    var isSelected: Bool = false
+    /// When true, expand/collapse inline even past `maxInlineDepth` (used by tree multi-select).
+    var forceInlineExpand: Bool = false
     let onSelect: (NoteItem, String) -> Void
     let onDrillDown: (String, String) -> Void
 
     private var isExpanded: Bool { node.children != nil }
-    private var shouldDrillDown: Bool { depth >= Self.maxInlineDepth }
+    private var shouldDrillDown: Bool { !forceInlineExpand && depth >= Self.maxInlineDepth }
     private var titleForegroundColor: Color {
         if node.note.isProtected, !appState.protectedSessionActive { return .secondary }
         return resolvedTitleColor
@@ -1197,6 +1378,14 @@ struct TreeNodeRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            if isSelectMode {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .font(.body)
+                    .frame(width: 28, alignment: .leading)
+                    .accessibilityHidden(true)
+            }
+
             expandChevron
 
             noteLabel
@@ -1304,14 +1493,20 @@ struct TreeNodeRow: View {
                 }
                 .frame(width: Self.badgeTrayWidth, height: Self.badgeTrayHeight, alignment: .center)
 
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(.quaternary)
+                if !isSelectMode {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        .accessibilityLabel("\(displayTitle), \(node.note.uiNoteTypeDisplayName) note")
+        .accessibilityLabel(
+            isSelectMode
+                ? "\(displayTitle), \(isSelected ? "selected" : "not selected")"
+                : "\(displayTitle), \(node.note.uiNoteTypeDisplayName) note"
+        )
     }
 }
 
