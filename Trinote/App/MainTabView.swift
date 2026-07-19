@@ -40,6 +40,9 @@ struct MainTabView: View {
     }
 
     var body: some View {
+        // Observe share-import activation so we can switch to Notes when a share arrives.
+        let _ = appState.shareImport.activationToken
+
         TabView(selection: $selectedTab) {
             ForEach(Tab.allCases, id: \.self) { tab in
                 tabContent(for: tab)
@@ -64,6 +67,11 @@ struct MainTabView: View {
                 let refreshed = await appState.refreshTriliumSession()
                 await appState.flushPendingLocalChangesIfPossible(assumeSessionIsReady: refreshed)
                 await appState.runIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
+            }
+        }
+        .onChange(of: appState.shareImport.activationToken) { _, _ in
+            if appState.shareImport.phase != .idle {
+                selectedTab = .notes
             }
         }
     }

@@ -25,6 +25,13 @@ enum RichTextEditorBridgeRequest: Equatable {
     case renameAttachment(attachmentId: String, noteId: String, title: String, pos: Int)
 }
 
+/// Pending toolbar-style attachment chip to insert once the TipTap bridge is ready.
+struct EditorAttachmentInsert: Equatable, Sendable {
+    let noteId: String
+    let attachmentId: String
+    let title: String
+}
+
 struct RichTextEditorView: UIViewRepresentable {
     let initialHTML: String
     var onContentChanged: ((String) -> Void)?
@@ -43,6 +50,8 @@ struct RichTextEditorView: UIViewRepresentable {
     /// Non-image file pasted from clipboard → upload as attachment and insert link.
     var onPasteFile: ((Data, String, String) -> Void)?
     @Binding var imageToInsert: String?
+    /// When set, inserts an attachment reference chip once the editor is ready (share-import / deferred upload).
+    @Binding var attachmentToInsert: EditorAttachmentInsert?
     /// Optional binding so the parent view can hold a reference to the underlying WKWebView
     /// (e.g. to call `evaluateJavaScript` for fetching fresh editor content before save).
     var webViewBinding: Binding<WKWebView?>?
@@ -152,6 +161,14 @@ struct RichTextEditorView: UIViewRepresentable {
             coordinator.insertImage(dataUri)
             DispatchQueue.main.async { self.imageToInsert = nil }
         }
+        if let attachment = attachmentToInsert {
+            coordinator.insertAttachmentLink(
+                noteId: attachment.noteId,
+                attachmentId: attachment.attachmentId,
+                title: attachment.title
+            )
+            DispatchQueue.main.async { self.attachmentToInsert = nil }
+        }
     }
 
     /// Pixel-match `editor.html` :root `--bg` / `--editor-bg` (not `systemBackground`, which can differ
@@ -225,6 +242,7 @@ struct RichTextEditorView: UIViewRepresentable {
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
+        private var pendingAttachmentInsert: EditorAttachmentInsert?
         private var keyboardToolbarGapObservers: [NSObjectProtocol] = []
         private var pendingKeyboardToolbarGapPoints: CGFloat?
         private let initialScrollFraction: CGFloat
@@ -284,6 +302,14 @@ struct RichTextEditorView: UIViewRepresentable {
                     scrollToFraction(initialScrollFraction)
                 }
                 setInsertToolsAtTop(insertToolsAtTop)
+                if let pending = pendingAttachmentInsert {
+                    pendingAttachmentInsert = nil
+                    insertAttachmentLink(
+                        noteId: pending.noteId,
+                        attachmentId: pending.attachmentId,
+                        title: pending.title
+                    )
+                }
 
             case "contentChanged":
                 if let html = message.body as? String {
@@ -482,6 +508,29 @@ struct RichTextEditorView: UIViewRepresentable {
                 .replacingOccurrences(of: "'", with: "\\'")
             webView.evaluateJavaScript("window.editorBridge.insertImage('\(escaped)');") { _, error in
                 if let error { Log.api.error("Failed to insert image: \(error)") }
+            }
+        }
+
+        func insertAttachmentLink(noteId: String, attachmentId: String, title: String) {
+            guard editorReady, let webView else {
+                pendingAttachmentInsert = EditorAttachmentInsert(
+                    noteId: noteId,
+                    attachmentId: attachmentId,
+                    title: title
+                )
+                return
+            }
+            guard let noteIdData = try? JSONSerialization.data(withJSONObject: noteId, options: [.fragmentsAllowed]),
+                  let attachmentIdData = try? JSONSerialization.data(withJSONObject: attachmentId, options: [.fragmentsAllowed]),
+                  let titleData = try? JSONSerialization.data(withJSONObject: title, options: [.fragmentsAllowed]),
+                  let noteIdJSON = String(data: noteIdData, encoding: .utf8),
+                  let attachmentIdJSON = String(data: attachmentIdData, encoding: .utf8),
+                  let titleJSON = String(data: titleData, encoding: .utf8)
+            else { return }
+            webView.evaluateJavaScript(
+                "window.editorBridge.insertAttachmentLink(\(noteIdJSON), \(attachmentIdJSON), \(titleJSON));"
+            ) { _, error in
+                if let error { Log.api.error("Failed to insert attachment link: \(error)") }
             }
         }
 

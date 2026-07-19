@@ -23,6 +23,7 @@ final class AppState {
     let syncManager = SyncManager()
     let imageCachePrefetcher = ImageCachePrefetcher()
     let localTransfer = LocalNoteTransferService()
+    let shareImport = ShareImportCoordinator()
     private let persistence = PersistenceManager.shared
     private let cacheExclusion = CacheExclusionPolicy()
     private let keychain = KeychainManager.shared
@@ -695,6 +696,7 @@ final class AppState {
         isLoading = true
         defer { isLoading = false }
         localTransfer.configure(appState: self)
+        shareImport.configure(appState: self)
 
         do {
             if let profile = try persistence.activeProfile() {
@@ -706,6 +708,7 @@ final class AppState {
             Log.auth.error("Bootstrap failed: \(error)")
             connectionError = error.localizedDescription
         }
+        shareImport.checkForPendingPayload()
     }
 
     private func triliumInstanceId(for profile: ServerProfile) async throws -> String {
@@ -1111,6 +1114,7 @@ final class AppState {
     /// Called when app returns to foreground
     func onForegroundResume() async {
         syncManager.endBackgroundTimeExtension()
+        shareImport.checkForPendingPayload()
         guard isAuthenticated, let client, let profile = activeProfile else { return }
         guard networkMonitor.isConnected else { return }
         do {
@@ -1131,6 +1135,11 @@ final class AppState {
         } catch {
             connectionError = APIError.from(error).localizedDescription
         }
+    }
+
+    /// Handles `trinote://` URLs opened by the Share Extension (or elsewhere).
+    func handleIncomingURL(_ url: URL) {
+        shareImport.handleOpenURL(url)
     }
 
     // MARK: - Offline flush helpers

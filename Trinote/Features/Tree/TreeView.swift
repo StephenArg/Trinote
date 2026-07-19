@@ -9,6 +9,8 @@ private struct SubTreeTarget: Hashable {
 private struct NoteEditTarget: Hashable {
     let noteId: String
     let title: String
+    var attachmentIdToInsert: String? = nil
+    var attachmentTitleToInsert: String? = nil
 }
 
 private struct CreateNoteSheetContext: Identifiable {
@@ -171,6 +173,16 @@ struct TreeView: View {
                     )
                     .sheet(isPresented: localTransferParentPickerBinding) {
                         localTransferParentPickerSheet
+                    }
+                    .onChange(of: appState.shareImport.pendingOpenNote) { _, pending in
+                        guard let pending else { return }
+                        openSharedImportNote(
+                            noteId: pending.noteId,
+                            title: pending.title,
+                            attachmentIdToInsert: pending.attachmentIdToInsert,
+                            attachmentTitleToInsert: pending.attachmentTitleToInsert
+                        )
+                        appState.shareImport.consumePendingOpenNote()
                     }
             } else {
                 treeViewCommonSheetsAndAlerts
@@ -502,7 +514,13 @@ struct TreeView: View {
     }
 
     private func noteEditDestination(_ target: NoteEditTarget) -> some View {
-        NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
+        NoteDetailView(
+            noteId: target.noteId,
+            title: target.title,
+            startInEditMode: true,
+            attachmentIdToInsert: target.attachmentIdToInsert,
+            attachmentTitleToInsert: target.attachmentTitleToInsert
+        )
     }
 
     private func subtreeDestination(_ target: SubTreeTarget) -> some View {
@@ -941,6 +959,38 @@ struct TreeView: View {
             childBranchIds: [],
             attributes: []
         )
+    }
+
+    private func openSharedImportNote(
+        noteId: String,
+        title: String,
+        attachmentIdToInsert: String? = nil,
+        attachmentTitleToInsert: String? = nil
+    ) {
+        viewModel?.reloadFromCache()
+        let target = NoteEditTarget(
+            noteId: noteId,
+            title: title,
+            attachmentIdToInsert: attachmentIdToInsert,
+            attachmentTitleToInsert: attachmentTitleToInsert
+        )
+        // Pop any open note / subtree / tab destination first. Setting `navigateToNoteForEdit`
+        // while another destination is already pushed leaves the user on the old note.
+        let hadExistingDestination = navigateToNote != nil
+            || navigateToNoteForEdit != nil
+            || drillDownTarget != nil
+            || tabsBarNav != nil
+        navigateToNote = nil
+        navigateToNoteForEdit = nil
+        drillDownTarget = nil
+        tabsBarNav = nil
+        if hadExistingDestination {
+            DispatchQueue.main.async {
+                navigateToNoteForEdit = target
+            }
+        } else {
+            navigateToNoteForEdit = target
+        }
     }
 
     private func treeList(_ vm: TreeViewModel) -> some View {

@@ -71,6 +71,8 @@ struct TrinoteApp: App {
     @State private var persistenceError: String?
     @State private var isAppLocked = false
     @State private var pinShake = false
+    /// URL opened before `appState` exists (cold start from Share Extension).
+    @State private var pendingIncomingURL: URL?
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearanceMode") private var appearanceMode: String = AppearanceMode.device.rawValue
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
@@ -104,7 +106,12 @@ struct TrinoteApp: App {
                                     .allowsHitTesting(false)
                                     .accessibilityHidden(true)
                             }
-                            .task { await appState.bootstrap() }
+                            .shareImportHost(appState: appState)
+                            .task {
+                                await appState.bootstrap()
+                                deliverPendingIncomingURLIfNeeded(to: appState)
+                                appState.shareImport.checkForPendingPayload()
+                            }
                             .onChange(of: appearanceMode) { _, _ in
                                 MermaidRenderer.shared.onAppearanceModeChanged()
                             }
@@ -139,6 +146,13 @@ struct TrinoteApp: App {
             .preferredColorScheme(resolvedColorScheme)
             .tint(resolvedAccentColor)
             .foregroundStyle(Color.appText)
+            .onOpenURL { url in
+                if let appState {
+                    appState.handleIncomingURL(url)
+                } else {
+                    pendingIncomingURL = url
+                }
+            }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active {
                     if let appState {
@@ -156,12 +170,20 @@ struct TrinoteApp: App {
                 if appPinEnabled { engageAppLock() }
                 do {
                     try await PersistenceManager.initializeShared()
-                    appState = AppState()
+                    let state = AppState()
+                    appState = state
+                    deliverPendingIncomingURLIfNeeded(to: state)
                 } catch {
                     persistenceError = error.localizedDescription
                 }
             }
         }
+    }
+
+    private func deliverPendingIncomingURLIfNeeded(to appState: AppState) {
+        guard let url = pendingIncomingURL else { return }
+        pendingIncomingURL = nil
+        appState.handleIncomingURL(url)
     }
 
     private var lockScreenBiometryKind: BiometricKind {
@@ -286,26 +308,6 @@ struct TrinoteApp: App {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
-    }
-}
-
-struct RootView: View {
-    @Environment(AppState.self) private var appState
-
-    var body: some View {
-        Group {
-            if appState.isLoading {
-                LaunchView()
-            } else if appState.isAuthenticated {
-                MainTabView()
-            } else {
-                LoginView()
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
-        .animation(.easeInOut(duration: 0.3), value: appState.isAuthenticated)
-        .animation(.easeInOut(duration: 0.3), value: appState.isLoading)
     }
 }
 

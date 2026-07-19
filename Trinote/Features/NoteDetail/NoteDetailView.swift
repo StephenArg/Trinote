@@ -52,6 +52,9 @@ struct NoteDetailView: View {
     var openTabId: String? = nil
     /// When `true` (default), the **last active** open tab (or a chosen row) is retargeted to the note you navigated to from the tree, search, etc. Set `false` for pushed in-note link destinations so the tab strip is not remapped.
     var retargetActiveOpenTab: Bool = true
+    /// Share-import file attachment to insert once the rich-text editor is ready (toolbar-equivalent chip).
+    var attachmentIdToInsert: String? = nil
+    var attachmentTitleToInsert: String? = nil
 
     init(
         noteId: String,
@@ -61,7 +64,9 @@ struct NoteDetailView: View {
         pendingFindQuery: String? = nil,
         pendingFindMatchIndex: Int? = nil,
         openTabId: String? = nil,
-        retargetActiveOpenTab: Bool = true
+        retargetActiveOpenTab: Bool = true,
+        attachmentIdToInsert: String? = nil,
+        attachmentTitleToInsert: String? = nil
     ) {
         self.noteId = noteId
         self.title = title
@@ -71,8 +76,21 @@ struct NoteDetailView: View {
         self.pendingFindMatchIndex = pendingFindMatchIndex
         self.openTabId = openTabId
         self.retargetActiveOpenTab = retargetActiveOpenTab
+        self.attachmentIdToInsert = attachmentIdToInsert
+        self.attachmentTitleToInsert = attachmentTitleToInsert
         _activeNoteId = State(initialValue: noteId)
         _activeOpenTabId = State(initialValue: openTabId)
+
+        if let aid = attachmentIdToInsert, !aid.isEmpty {
+            let titleForInsert = (attachmentTitleToInsert?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                ? attachmentTitleToInsert!
+                : "attachment"
+            _attachmentToInsert = State(initialValue: EditorAttachmentInsert(
+                noteId: noteId,
+                attachmentId: aid,
+                title: titleForInsert
+            ))
+        }
 
         // Seed scroll restoration before the first read-only render (avoids top-then-jump on launch / tab bar).
         if let id = openTabId, let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
@@ -102,6 +120,7 @@ struct NoteDetailView: View {
     @State private var showEditorFilePicker = false
     @State private var editorImageItem: PhotosPickerItem?
     @State private var imageToInsert: String?
+    @State private var attachmentToInsert: EditorAttachmentInsert?
     @State private var attachmentRenameContext: EditorAttachmentRenameContext?
     @State private var attachmentRenameBasename = ""
     @State private var protectedDocumentPassword = ""
@@ -1974,6 +1993,7 @@ struct NoteDetailView: View {
                     }
                 },
                 imageToInsert: $imageToInsert,
+                attachmentToInsert: $attachmentToInsert,
                 webViewBinding: $editorWebView,
                 initialScrollFraction: readOnlyScrollFraction,
                 insertToolsAtTop: noteEditorInsertToolsAtTop,
@@ -3205,6 +3225,8 @@ struct NoteDetailView: View {
 struct NewNoteTypePicker: View {
     @Binding var selection: NoteType
     var supportsSpreadsheet: Bool
+    /// When `false`, the picker stays on Text and cannot be changed (share-import flow).
+    var isEnabled: Bool = true
 
     var body: some View {
         Picker(String(localized: "Type", comment: "New note type"), selection: $selection) {
@@ -3219,8 +3241,14 @@ struct NewNoteTypePicker: View {
             Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
             Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
         }
+        .disabled(!isEnabled)
         .onChange(of: supportsSpreadsheet) { _, supported in
             if !supported, selection == .spreadsheet {
+                selection = .text
+            }
+        }
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled {
                 selection = .text
             }
         }

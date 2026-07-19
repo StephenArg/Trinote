@@ -51,6 +51,8 @@ targets:
           - "**/Resources/vendor/**"
           - "**/Resources/canvas-editor-assets/**"
           - "**/Resources/univer-editor-assets/**"
+          - "**/*.entitlements"
+      - path: TrinoteShared
       # Folder references: preserve directory structure in the bundle for HTML relative paths.
       - path: Trinote/Resources/vendor
         type: folder
@@ -69,14 +71,42 @@ targets:
       - path: Trinote/Resources/editor-vendor
         excludes:
           - "node_modules"
+    dependencies:
+      - target: TrinoteShare
+        embed: true
+        codeSign: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.trinote
         INFOPLIST_FILE: Trinote/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: false
+        CODE_SIGN_ENTITLEMENTS: Trinote/Trinote.entitlements
     scheme:
       testTargets:
         - TrinoteTests
+
+  TrinoteShare:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: TrinoteShare
+        excludes:
+          - "**/*.entitlements"
+          - "Info.plist"
+      - path: TrinoteShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.trinote.app.share
+        PRODUCT_NAME: TrinoteShare
+        INFOPLIST_FILE: TrinoteShare/Info.plist
+        GENERATE_INFOPLIST_FILE: false
+        CODE_SIGN_ENTITLEMENTS: TrinoteShare/TrinoteShare.entitlements
+        SKIP_INSTALL: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+          - "@executable_path/../../Frameworks"
 
   TrinoteTests:
     type: bundle.unit-test
