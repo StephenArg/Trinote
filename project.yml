@@ -97,7 +97,7 @@ targets:
       - path: TrinoteShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.trinote.app.share
+        PRODUCT_BUNDLE_IDENTIFIER: com.trinote.fileshare
         PRODUCT_NAME: TrinoteShare
         INFOPLIST_FILE: TrinoteShare/Info.plist
         GENERATE_INFOPLIST_FILE: false
