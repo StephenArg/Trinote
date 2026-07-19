@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 final class MindMapEditorBridge: ObservableObject {
-    fileprivate weak var coordinator: MindMapEditorView.Coordinator?
+    fileprivate weak var coordinator: MindMapEditorWebView.Coordinator?
 
     func getMapData(completion: @escaping (_ json: String) -> Void) {
         guard let coordinator else {
@@ -13,7 +13,20 @@ final class MindMapEditorBridge: ObservableObject {
     }
 }
 
-struct MindMapEditorView: UIViewRepresentable {
+struct MindMapEditorView: View {
+    let initialJSON: String
+    let bridge: MindMapEditorBridge
+    var onMapChanged: (() -> Void)?
+
+    var body: some View {
+        MindMapEditorWebView(initialJSON: initialJSON, bridge: bridge, onMapChanged: onMapChanged)
+            .background {
+                NavigationPopGestureBlocker(blocked: true, label: "MindMapEditor")
+            }
+    }
+}
+
+private struct MindMapEditorWebView: UIViewRepresentable {
     let initialJSON: String
     let bridge: MindMapEditorBridge
     var onMapChanged: (() -> Void)?
@@ -34,7 +47,7 @@ struct MindMapEditorView: UIViewRepresentable {
         config.userContentController = uc
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = PopGestureSuppressingWKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
@@ -42,6 +55,8 @@ struct MindMapEditorView: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.minimumZoomScale = 1.0
         webView.scrollView.maximumZoomScale = 1.0
+        webView.scrollView.bounces = false
+        webView.allowsBackForwardNavigationGestures = false
         if #available(iOS 16.4, *) {
             webView.isInspectable = true
         }
@@ -61,11 +76,12 @@ struct MindMapEditorView: UIViewRepresentable {
         let uc = webView.configuration.userContentController
         uc.removeScriptMessageHandler(forName: "mindmapEditorReady")
         uc.removeScriptMessageHandler(forName: "mindmapChanged")
+        (webView as? PopGestureSuppressingWKWebView)?.restoreNavigationPopGesture()
     }
 
     // MARK: - Coordinator
 
-    class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var onMapChanged: (() -> Void)?
         private let initialJSON: String

@@ -15,6 +15,8 @@ enum Log {
     static let geoMap = Logger(subsystem: subsystem, category: "GeoMap")
     /// Verbose note read/create diagnostics (`getNote`, blob policy, offline queue, flush). Filter: category NoteDiag.
     static let noteDiag = Logger(subsystem: subsystem, category: "NoteDiag")
+    /// TEMP: interactive-pop / mind-map swipe-back. Filter Console: subsystem `com.trinote`, category `PopGesture`.
+    static let popGesture = Logger(subsystem: subsystem, category: "PopGesture")
 }
 
 // MARK: - Note diagnostics (Log.noteDiag)
@@ -93,7 +95,7 @@ enum NoteDiagnostics {
         parts.append("  utcDateModified=\(r.utcDateModified)")
         parts.append("  childNoteIds=\(idListSummary(r.childNoteIds))")
         parts.append("  parentNoteIds=\(idListSummary(r.parentNoteIds))")
-        parts.append("  semantic: isSemanticGeoMap=\(item.isSemanticGeoMap) viewType=\(item.viewTypeLabelValue ?? "nil") template=\(item.templateRelationValue ?? "nil") calendarRoot=\(item.isCalendarRoot) uiDisplayType=\(item.uiNoteTypeDisplayName)")
+        parts.append("  semantic: isSemanticGeoMap=\(item.isSemanticGeoMap) isSemanticKanban=\(item.isSemanticKanban) isSemanticPresentation=\(item.isSemanticPresentation) viewType=\(item.viewTypeLabelValue ?? "nil") template=\(item.templateRelationValue ?? "nil") calendarRoot=\(item.isCalendarRoot) uiDisplayType=\(item.uiNoteTypeDisplayName)")
         parts.append("  attributes.count=\(r.attributes.count)")
         if !r.attributes.isEmpty {
             parts.append(formatAttributeBlock(from: r.attributes))
@@ -110,7 +112,7 @@ enum NoteDiagnostics {
         parts.append("  type=\(n.type.rawValue) mime=\(n.mime) protected=\(n.isProtected)")
         parts.append("  childNoteIds=\(idListSummary(n.childNoteIds))")
         parts.append("  parentNoteIds=\(idListSummary(n.parentNoteIds))")
-        parts.append("  semantic: isSemanticGeoMap=\(n.isSemanticGeoMap) viewType=\(n.viewTypeLabelValue ?? "nil") template=\(n.templateRelationValue ?? "nil") calendarRoot=\(n.isCalendarRoot) uiDisplayType=\(n.uiNoteTypeDisplayName)")
+        parts.append("  semantic: isSemanticGeoMap=\(n.isSemanticGeoMap) isSemanticKanban=\(n.isSemanticKanban) isSemanticPresentation=\(n.isSemanticPresentation) viewType=\(n.viewTypeLabelValue ?? "nil") template=\(n.templateRelationValue ?? "nil") calendarRoot=\(n.isCalendarRoot) uiDisplayType=\(n.uiNoteTypeDisplayName)")
         parts.append("  attributes.count=\(n.attributes.count)")
         if !n.attributes.isEmpty {
             parts.append(formatAttributeBlock(from: n.attributes))

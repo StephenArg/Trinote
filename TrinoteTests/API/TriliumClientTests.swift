@@ -494,6 +494,50 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertTrue(TriliumServerCompatibility.supportsSpreadsheetNotes(newer))
     }
 
+    func testSupportsKanbanAndPresentationNotesVersionGates() {
+        XCTAssertFalse(TriliumServerCompatibility.supportsKanbanNotes(nil))
+        XCTAssertFalse(TriliumServerCompatibility.supportsPresentationNotes(nil))
+
+        let beforeKanban = AppInfoResponse(
+            appVersion: "0.97.1",
+            dbVersion: 230,
+            syncVersion: 36,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertFalse(TriliumServerCompatibility.supportsKanbanNotes(beforeKanban))
+        XCTAssertFalse(TriliumServerCompatibility.supportsPresentationNotes(beforeKanban))
+
+        let atKanban = AppInfoResponse(
+            appVersion: "0.97.2",
+            dbVersion: 230,
+            syncVersion: 36,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertTrue(TriliumServerCompatibility.supportsKanbanNotes(atKanban))
+        XCTAssertFalse(TriliumServerCompatibility.supportsPresentationNotes(atKanban))
+
+        let atPresentation = AppInfoResponse(
+            appVersion: "0.99.2",
+            dbVersion: 235,
+            syncVersion: 38,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertTrue(TriliumServerCompatibility.supportsKanbanNotes(atPresentation))
+        XCTAssertTrue(TriliumServerCompatibility.supportsPresentationNotes(atPresentation))
+    }
+
     func testCompareAppVersionsHandlesPrereleaseSuffix() {
         XCTAssertEqual(
             TriliumServerCompatibility.compareAppVersions("0.103.0-beta.1", "0.103.0"),

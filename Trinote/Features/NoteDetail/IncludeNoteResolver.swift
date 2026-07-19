@@ -236,7 +236,7 @@ struct IncludeNoteResolver {
             } else {
                 bodyHTML = Self.fallbackPreviewHTML(type: item.type)
             }
-        case .geoMap, .relationMap, .webView, .render, .shortcut, .launcher, .doc, .contentWidget, .search, .calendar, .spreadsheet:
+        case .geoMap, .relationMap, .webView, .render, .shortcut, .launcher, .doc, .contentWidget, .search, .calendar, .spreadsheet, .kanban, .presentation:
             bodyHTML = Self.fallbackPreviewHTML(type: item.type)
         }
         return Self.wrapCard(noteId: nid, boxSize: boxSize, noteType: typeStr, title: title, bodyHTML: bodyHTML)

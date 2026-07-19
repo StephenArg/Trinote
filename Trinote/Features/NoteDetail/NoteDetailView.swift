@@ -765,9 +765,27 @@ struct NoteDetailView: View {
         .accessibilityLabel(String(localized: "Save", comment: "Editor save chip"))
     }
 
+    /// Interactive back-swipe fights pan/zoom on full-bleed canvases (mind map, geo map) and edit surfaces.
+    private var shouldBlockNavigationPopGesture: Bool {
+        if isTabBarReordering { return true }
+        if viewModel?.isEditing == true { return true }
+        if isGeoMapNote(viewModel?.note, contentString: viewModel?.contentString, vm: viewModel) { return true }
+        // Mind map (read or edit): edge swipes are used to pan the diagram.
+        if viewModel?.note?.type == .mindMap { return true }
+        return false
+    }
+
     var body: some View {
         bodyCore
-            .background(NavigationPopGestureBlocker(blocked: viewModel?.isEditing == true || isGeoMapNote(viewModel?.note, contentString: viewModel?.contentString, vm: viewModel) || isTabBarReordering).frame(width: 0, height: 0))
+            // Full-size clear host — zero-frame backgrounds often never attach under NavigationStack.
+            .background {
+                NavigationPopGestureBlocker(blocked: shouldBlockNavigationPopGesture, label: "NoteDetail")
+            }
+            .onChange(of: shouldBlockNavigationPopGesture) { _, blocked in
+                // TEMP: mind-map swipe-back diagnosis
+                let type = viewModel?.note?.type.rawValue ?? "nil"
+                Log.popGesture.info("NoteDetail shouldBlock=\(blocked) noteType=\(type, privacy: .public) editing=\(viewModel?.isEditing == true)")
+            }
             .task(id: activeNoteId) { await initialLoad() }
             .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
                 NoteDetailView(noteId: linkedNoteId, title: "", startInEditMode: false)
@@ -1233,6 +1251,11 @@ struct NoteDetailView: View {
                     protectedNoteOverlay(vm, note: note)
                 } else if note.isCalendarRoot {
                     calendarDetailView(vm, note: note)
+                } else if isPresentationNote(note) {
+                    // Check presentation before kanban: both are book collections; viewType must win.
+                    presentationDetailView(vm, note: note)
+                } else if isKanbanNote(note) {
+                    kanbanDetailView(vm, note: note)
                 } else if isGeoMapNote(note, contentString: vm.contentString, vm: vm) {
                     geoMapDetailView(vm, note: note)
                 } else if vm.isEditing && note.type == .text {
@@ -1840,9 +1863,21 @@ struct NoteDetailView: View {
             SpreadsheetNoteView(json: vm.contentString)
         case .geoMap:
             GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
+        case .kanban:
+            KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                .frame(minHeight: 420)
+        case .presentation:
+            PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                .frame(minHeight: 420)
         case .book, .collection:
             if isGeoMapNote(note, contentString: vm.contentString, vm: vm) {
                 GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
+            } else if isPresentationNote(note) {
+                PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                    .frame(minHeight: 420)
+            } else if isKanbanNote(note) {
+                KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                    .frame(minHeight: 420)
             } else if note.isTriliumCollectionNote || note.type == .collection {
                 CollectionNoteLimitedSupportBanner(
                     noteId: note.noteId,
@@ -2400,6 +2435,50 @@ struct NoteDetailView: View {
             Divider()
             CalendarNoteView(calendarRootNote: note)
         }
+    }
+
+    // MARK: - Kanban Board
+
+    private func isKanbanNote(_ note: NoteItem?) -> Bool {
+        guard let note else { return false }
+        if note.isCalendarRoot { return false }
+        return note.isSemanticKanban
+    }
+
+    @ViewBuilder
+    private func kanbanDetailView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        VStack(spacing: 0) {
+            editorStatusBanner(vm)
+            draftBanner(vm)
+            breadcrumbsBar(vm)
+            titleSection(vm, note: note)
+            Divider()
+            KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Presentation
+
+    private func isPresentationNote(_ note: NoteItem?) -> Bool {
+        guard let note else { return false }
+        if note.isCalendarRoot { return false }
+        return note.isSemanticPresentation
+    }
+
+    @ViewBuilder
+    private func presentationDetailView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        VStack(spacing: 0) {
+            editorStatusBanner(vm)
+            draftBanner(vm)
+            breadcrumbsBar(vm)
+            titleSection(vm, note: note)
+            Divider()
+            PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Geo Map (map + scrollable sub-notes; long-press map to add pins)
@@ -3234,10 +3313,12 @@ struct NoteDetailView: View {
 
 // MARK: - Create Child Sheet
 
-/// Note types offered when creating a child note. Spreadsheet is omitted on servers before Trilium v0.103.0.
+/// Note types offered when creating a child note. Spreadsheet / Kanban / Presentation are gated by server version.
 struct NewNoteTypePicker: View {
     @Binding var selection: NoteType
     var supportsSpreadsheet: Bool
+    var supportsKanban: Bool = true
+    var supportsPresentation: Bool = true
     /// When `false`, the picker stays on Text and cannot be changed (share-import flow).
     var isEnabled: Bool = true
 
@@ -3253,10 +3334,26 @@ struct NewNoteTypePicker: View {
             }
             Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
             Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
+            if supportsKanban {
+                Text(String(localized: "Kanban Board", comment: "Note type")).tag(NoteType.kanban)
+            }
+            if supportsPresentation {
+                Text(String(localized: "Presentation", comment: "Note type")).tag(NoteType.presentation)
+            }
         }
         .disabled(!isEnabled)
         .onChange(of: supportsSpreadsheet) { _, supported in
             if !supported, selection == .spreadsheet {
+                selection = .text
+            }
+        }
+        .onChange(of: supportsKanban) { _, supported in
+            if !supported, selection == .kanban {
+                selection = .text
+            }
+        }
+        .onChange(of: supportsPresentation) { _, supported in
+            if !supported, selection == .presentation {
                 selection = .text
             }
         }
@@ -3278,6 +3375,14 @@ struct CreateChildNoteSheet: View {
         TriliumServerCompatibility.supportsSpreadsheetNotes(appState.serverAppInfo)
     }
 
+    private var supportsKanbanNoteType: Bool {
+        TriliumServerCompatibility.supportsKanbanNotes(appState.serverAppInfo)
+    }
+
+    private var supportsPresentationNoteType: Bool {
+        TriliumServerCompatibility.supportsPresentationNotes(appState.serverAppInfo)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -3289,7 +3394,9 @@ struct CreateChildNoteSheet: View {
 
                 NewNoteTypePicker(
                     selection: $viewModel.newNoteType,
-                    supportsSpreadsheet: supportsSpreadsheetNoteType
+                    supportsSpreadsheet: supportsSpreadsheetNoteType,
+                    supportsKanban: supportsKanbanNoteType,
+                    supportsPresentation: supportsPresentationNoteType
                 )
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))

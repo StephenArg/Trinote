@@ -300,6 +300,135 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.geoMap.displayName)
     }
 
+    /// Desktop Kanban: `book` + `#viewType=board`.
+    func testSemanticKanbanBookWithViewTypeLabel() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "a1", noteId: "kb1", type: "label", name: "viewType", value: "board",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+            AttributeResponse(
+                attributeId: "a2", noteId: "kb1", type: "label", name: "collection", value: "",
+                position: 10, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let response = TestFixtures.noteResponse(id: "kb1", title: "Board", type: "book", attributes: attrs)
+        let item = NoteItem(from: response)
+        XCTAssertTrue(item.isSemanticKanban)
+        XCTAssertFalse(item.isSemanticPresentation)
+        XCTAssertFalse(item.isTriliumCollectionNote)
+        XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.kanban.displayName)
+        XCTAssertEqual(item.resolvedIconName, NoteType.kanban.iconName)
+    }
+
+    func testSemanticKanbanViewTypeCaseInsensitive() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "a1", noteId: "kb2", type: "label", name: "viewType", value: "BOARD",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        XCTAssertTrue(NoteItem(from: TestFixtures.noteResponse(id: "kb2", title: "B", type: "book", attributes: attrs)).isSemanticKanban)
+    }
+
+    func testSemanticKanbanTemplateRelation() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "t1", noteId: "kb3", type: "relation", name: "template", value: "_template_board",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let item = NoteItem(from: TestFixtures.noteResponse(id: "kb3", title: "Kanban", type: "book", attributes: attrs))
+        XCTAssertTrue(item.isSemanticKanban)
+        XCTAssertFalse(item.isTriliumCollectionNote)
+    }
+
+    /// Desktop Presentation: `book` + `#viewType=presentation`.
+    func testSemanticPresentationBookWithViewTypeLabel() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "a1", noteId: "pr1", type: "label", name: "viewType", value: "presentation",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+            AttributeResponse(
+                attributeId: "a2", noteId: "pr1", type: "label", name: "collection", value: "",
+                position: 10, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let item = NoteItem(from: TestFixtures.noteResponse(id: "pr1", title: "Deck", type: "book", attributes: attrs))
+        XCTAssertTrue(item.isSemanticPresentation)
+        XCTAssertFalse(item.isSemanticKanban)
+        XCTAssertFalse(item.isTriliumCollectionNote)
+        XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.presentation.displayName)
+        XCTAssertEqual(item.resolvedIconName, NoteType.presentation.iconName)
+    }
+
+    func testSemanticPresentationTemplateRelation() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "t1", noteId: "pr2", type: "relation", name: "template", value: "_template_presentation",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let item = NoteItem(from: TestFixtures.noteResponse(id: "pr2", title: "Slides", type: "book", attributes: attrs))
+        XCTAssertTrue(item.isSemanticPresentation)
+        XCTAssertFalse(item.isTriliumCollectionNote)
+    }
+
+    func testKanbanAndPresentationCreationParameters() {
+        XCTAssertEqual(NoteType.kanban.triliumStorageType, "book")
+        XCTAssertEqual(NoteType.presentation.triliumStorageType, "book")
+        XCTAssertEqual(NoteType.kanban.creationMime, "")
+        XCTAssertEqual(NoteType.presentation.creationMime, "")
+        XCTAssertTrue(NoteType.kanban.isRenderable)
+        XCTAssertTrue(NoteType.presentation.isRenderable)
+        XCTAssertTrue(NoteType.kanban.isAdvanced)
+        XCTAssertTrue(NoteType.presentation.isAdvanced)
+
+        let kanbanAttrs = NoteType.kanban.creationInitialAttributes
+        XCTAssertTrue(kanbanAttrs.contains(NoteCreationAttribute(type: "relation", name: "template", value: "_template_board")))
+        XCTAssertTrue(kanbanAttrs.contains(NoteCreationAttribute(type: "label", name: "viewType", value: "board")))
+
+        let presentationAttrs = NoteType.presentation.creationInitialAttributes
+        XCTAssertTrue(presentationAttrs.contains(NoteCreationAttribute(type: "relation", name: "template", value: "_template_presentation")))
+        XCTAssertTrue(presentationAttrs.contains(NoteCreationAttribute(type: "label", name: "viewType", value: "presentation")))
+    }
+
+    /// `#viewType=presentation` must win even if a board template relation is also present.
+    func testPresentationViewTypeWinsOverBoardTemplateRelation() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "a1", noteId: "pr3", type: "label", name: "viewType", value: "presentation",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+            AttributeResponse(
+                attributeId: "t1", noteId: "pr3", type: "relation", name: "template", value: "_template_board",
+                position: 10, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let item = NoteItem(from: TestFixtures.noteResponse(id: "pr3", title: "Deck", type: "book", attributes: attrs))
+        XCTAssertTrue(item.isSemanticPresentation)
+        XCTAssertFalse(item.isSemanticKanban)
+        XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.presentation.displayName)
+    }
+
+    /// Non-board `#viewType` must not fall through to a board template relation.
+    func testListViewTypeIsNotKanbanEvenWithBoardTemplateRelation() {
+        let attrs = [
+            AttributeResponse(
+                attributeId: "a1", noteId: "list2", type: "label", name: "viewType", value: "list",
+                position: 0, isInheritable: false, utcDateModified: nil
+            ),
+            AttributeResponse(
+                attributeId: "t1", noteId: "list2", type: "relation", name: "template", value: "_template_board",
+                position: 10, isInheritable: false, utcDateModified: nil
+            ),
+        ]
+        let item = NoteItem(from: TestFixtures.noteResponse(id: "list2", title: "List", type: "book", attributes: attrs))
+        XCTAssertFalse(item.isSemanticKanban)
+        XCTAssertFalse(item.isSemanticPresentation)
+    }
+
     // MARK: - AttachmentItem
 
     func testAttachmentImageDetection() {

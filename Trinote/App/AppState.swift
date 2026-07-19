@@ -1201,6 +1201,24 @@ final class AppState {
     private static func resolveTemplateTitle(client: any TriliumClientProtocol, title: String) async -> String? {
         let raw = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = normalizeTemplateTitle(raw)
+
+        // Built-in template note ids are stable across locales — prefer them over title search.
+        if raw.hasPrefix("_template_"),
+           let note = try? await client.getNote(raw),
+           !note.isDeleted {
+            return note.noteId
+        }
+        if normalized == "kanbanboard" || normalized == "kanban" || normalized == "board",
+           let note = try? await client.getNote("_template_board"),
+           !note.isDeleted {
+            return note.noteId
+        }
+        if normalized == "presentation",
+           let note = try? await client.getNote("_template_presentation"),
+           !note.isDeleted {
+            return note.noteId
+        }
+
         var titlesToTry: [String] = [raw]
         var preferredType: String?
         if normalized == "geomap" {
@@ -1208,6 +1226,10 @@ final class AppState {
             preferredType = "geoMap"
         } else if normalized == "calendar" {
             titlesToTry = ["Calendar"]
+        } else if normalized == "kanbanboard" || normalized == "kanban" || normalized == "board" {
+            titlesToTry = ["Kanban Board", "Board", "Kanban"]
+        } else if normalized == "presentation" {
+            titlesToTry = ["Presentation"]
         }
 
         // 1) Fast search by title (cheap and usually enough).
@@ -1332,7 +1354,9 @@ final class AppState {
                 orderDirection: nil,
                 limit: 30
             )
-            return resp.results.first(where: { $0.title == title })?.noteId ?? resp.results.first?.noteId
+            // Require an exact (case-insensitive) title match — never fall back to an arbitrary hit
+            // (that previously could resolve "Presentation" to the wrong built-in template).
+            return resp.results.first(where: { $0.title.caseInsensitiveCompare(title) == .orderedSame })?.noteId
         } catch {
             return nil
         }

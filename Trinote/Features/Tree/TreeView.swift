@@ -1528,6 +1528,14 @@ private struct CreateChildNoteFromTreeSheet: View {
         TriliumServerCompatibility.supportsSpreadsheetNotes(appState.serverAppInfo)
     }
 
+    private var supportsKanbanNoteType: Bool {
+        TriliumServerCompatibility.supportsKanbanNotes(appState.serverAppInfo)
+    }
+
+    private var supportsPresentationNoteType: Bool {
+        TriliumServerCompatibility.supportsPresentationNotes(appState.serverAppInfo)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -1539,7 +1547,9 @@ private struct CreateChildNoteFromTreeSheet: View {
 
                 NewNoteTypePicker(
                     selection: $newNoteType,
-                    supportsSpreadsheet: supportsSpreadsheetNoteType
+                    supportsSpreadsheet: supportsSpreadsheetNoteType,
+                    supportsKanban: supportsKanbanNoteType,
+                    supportsPresentation: supportsPresentationNoteType
                 )
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))

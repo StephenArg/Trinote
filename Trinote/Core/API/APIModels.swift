@@ -35,10 +35,28 @@ enum TriliumServerCompatibility {
     /// Trilium release that introduced the `spreadsheet` note type (Univer Sheets).
     static let spreadsheetMinAppVersion = "0.103.0"
 
+    /// Trilium release that introduced the Kanban Board collection view (`#viewType=board`).
+    static let kanbanMinAppVersion = "0.97.2"
+
+    /// Trilium release that introduced the Presentation collection view (`#viewType=presentation`).
+    static let presentationMinAppVersion = "0.99.2"
+
     /// `true` when `/api/app-info` reports Trilium v0.103.0 or newer (spreadsheet note type).
     static func supportsSpreadsheetNotes(_ info: AppInfoResponse?) -> Bool {
         guard let info else { return false }
         return isAppVersion(info.appVersion, atLeast: spreadsheetMinAppVersion)
+    }
+
+    /// `true` when `/api/app-info` reports Trilium v0.97.2 or newer (Kanban Board view).
+    static func supportsKanbanNotes(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: kanbanMinAppVersion)
+    }
+
+    /// `true` when `/api/app-info` reports Trilium v0.99.2 or newer (Presentation view).
+    static func supportsPresentationNotes(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: presentationMinAppVersion)
     }
 
     /// Semantic compare for Trilium `appVersion` strings (`0.103.0`, `v0.102.1`, `0.103.0-beta.1`).

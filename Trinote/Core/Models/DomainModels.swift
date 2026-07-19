@@ -35,10 +35,12 @@ struct NoteItem: Identifiable, Hashable, Sendable {
         return t.isEmpty ? nil : t
     }
 
-    /// SF Symbol name: custom Trilium `#iconClass` if mapped; else semantic geo map uses map icon; else semantic collection uses grid icon; else note `type` default.
+    /// SF Symbol name: custom Trilium `#iconClass` if mapped; else semantic overlays; else note `type` default.
     var resolvedIconName: String {
         if let mapped = NoteIconMapper.sfSymbol(for: iconClass) { return mapped }
         if isSemanticGeoMap { return NoteType.geoMap.iconName }
+        if isSemanticPresentation { return NoteType.presentation.iconName }
+        if isSemanticKanban { return NoteType.kanban.iconName }
         if isTriliumCollectionNote { return NoteType.collection.iconName }
         return type.iconName
     }
@@ -92,18 +94,19 @@ struct NoteItem: Identifiable, Hashable, Sendable {
 
     /// True when `~template` targets a Trilium built-in **Note List** / collection presentation (list, grid, table, …).
     /// These notes are often `type: book` with **no** `#collection` label; the template relation is the reliable signal (e.g. `_template_list_view`).
+    /// Kanban (`_template_board`) and Presentation (`_template_presentation`) are excluded — they have dedicated semantic overlays.
     private var hasTriliumNoteListCollectionTemplateRelation: Bool {
         guard let raw = templateRelationValue else { return false }
         let v = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if v.isEmpty { return false }
         let lower = v.lowercased()
-        if lower == "_template_geo_map" { return false }
+        if lower == "_template_geo_map" || lower == "_template_board" || lower == "_template_presentation" {
+            return false
+        }
         let known: Set<String> = [
             "_template_list_view",
             "_template_grid_view",
             "_template_table",
-            "_template_kanban",
-            "_template_presentation",
         ]
         if known.contains(lower) { return true }
         // Forward-compatible: `_template_<name>_view` for note-list style templates (never geo: `_template_geo_map` ends with `_map`).
@@ -111,6 +114,18 @@ struct NoteItem: Identifiable, Hashable, Sendable {
             return true
         }
         return false
+    }
+
+    /// True when the `~template` relation points at the built-in Kanban Board template (`_template_board`).
+    private var hasKanbanTemplateRelation: Bool {
+        guard let v = templateRelationValue else { return false }
+        return v.caseInsensitiveCompare("_template_board") == .orderedSame
+    }
+
+    /// True when the `~template` relation points at the built-in Presentation template.
+    private var hasPresentationTemplateRelation: Bool {
+        guard let v = templateRelationValue else { return false }
+        return v.caseInsensitiveCompare("_template_presentation") == .orderedSame
     }
 
     /// True when this note should use geo map UI:
@@ -126,17 +141,59 @@ struct NoteItem: Identifiable, Hashable, Sendable {
         return hasGeoMapTemplateRelation
     }
 
+    /// True when this note should use Kanban Board UI:
+    /// - client-only `kanban` type, OR
+    /// - `book`/`collection` + `#viewType=board`, OR
+    /// - (no `#viewType`) `~template=_template_board`
+    ///
+    /// `#viewType` is authoritative: any other view type (including `presentation`) is never kanban,
+    /// even if a board template relation is somehow also present.
+    var isSemanticKanban: Bool {
+        if type == .kanban { return true }
+        if isCalendarRoot { return false }
+        if isSemanticGeoMap { return false }
+        guard type == .book || type == .collection else { return false }
+        if let v = viewTypeLabelValue {
+            return v.caseInsensitiveCompare("board") == .orderedSame
+        }
+        if hasPresentationTemplateRelation { return false }
+        return hasKanbanTemplateRelation
+    }
+
+    /// True when this note should use Presentation UI:
+    /// - client-only `presentation` type, OR
+    /// - `book`/`collection` + `#viewType=presentation`, OR
+    /// - (no `#viewType`) `~template=_template_presentation`
+    ///
+    /// `#viewType` is authoritative and checked independently of `isSemanticKanban` so a mistaken
+    /// board template relation cannot hide a presentation.
+    var isSemanticPresentation: Bool {
+        if type == .presentation { return true }
+        if isCalendarRoot { return false }
+        if isSemanticGeoMap { return false }
+        guard type == .book || type == .collection else { return false }
+        if let v = viewTypeLabelValue {
+            return v.caseInsensitiveCompare("presentation") == .orderedSame
+        }
+        if hasKanbanTemplateRelation { return false }
+        return hasPresentationTemplateRelation
+    }
+
     /// True when Trilium marks this note as a Collection container (`type: collection`, `#collection` on `book`, or built-in list/grid/table `~template` on `book`).
-    /// Excludes geo maps and journal calendar roots.
+    /// Excludes geo maps, journal calendar roots, kanban boards, and presentations (they have dedicated UIs).
     var isTriliumCollectionNote: Bool {
         if type == .collection {
             if isCalendarRoot { return false }
             if isSemanticGeoMap { return false }
+            if isSemanticKanban { return false }
+            if isSemanticPresentation { return false }
             return true
         }
         guard type == .book else { return false }
         if isCalendarRoot { return false }
         if isSemanticGeoMap { return false }
+        if isSemanticKanban { return false }
+        if isSemanticPresentation { return false }
         return hasTriliumCollectionAttributeLabel || hasTriliumNoteListCollectionTemplateRelation
     }
 
@@ -144,9 +201,11 @@ struct NoteItem: Identifiable, Hashable, Sendable {
         attributes.contains { $0.type == .label && $0.name.caseInsensitiveCompare("collection") == .orderedSame }
     }
 
-    /// User-facing type string for tree accessibility and metadata (maps semantic geo map and collection over raw `book`).
+    /// User-facing type string for tree accessibility and metadata (maps semantic overlays over raw `book`).
     var uiNoteTypeDisplayName: String {
         if isSemanticGeoMap { return NoteType.geoMap.displayName }
+        if isSemanticPresentation { return NoteType.presentation.displayName }
+        if isSemanticKanban { return NoteType.kanban.displayName }
         if isTriliumCollectionNote {
             return String(localized: "Collection", comment: "Note type: Trilium collection container")
         }

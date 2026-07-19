@@ -11,10 +11,19 @@ struct CanvasNoteView: View {
     @State private var isLoading = true
     @State private var useFallback = false
     @State private var errorMessage: String?
+    /// Intrinsic height of the fit-to-width canvas render (from the web view).
     @State private var contentHeight: CGFloat = 300
+    /// Visible height of the enclosing note `ScrollView` — used as the body min height so pinch-zoom has room.
+    @State private var viewportHeight: CGFloat = 0
 
     private var svgAttachment: AttachmentItem? {
         attachments.first { $0.title == "canvas-export.svg" && $0.mime == "image/svg+xml" }
+    }
+
+    /// At least the on-screen note viewport; grow if the fitted canvas is taller.
+    private var bodyHeight: CGFloat {
+        let minH = viewportHeight > 1 ? viewportHeight : contentHeight
+        return max(contentHeight, minH)
     }
 
     var body: some View {
@@ -25,10 +34,12 @@ struct CanvasNoteView: View {
                     .padding(.vertical, 40)
             } else if let svgData, !useFallback {
                 CanvasSVGWebView(svgData: svgData, onHeightChanged: { contentHeight = $0 })
-                    .frame(height: contentHeight)
+                    .frame(minHeight: bodyHeight)
+                    .frame(height: bodyHeight)
             } else if useFallback, let json = excalidrawJSON, !json.isEmpty {
                 ExcalidrawReadOnlyWebView(json: json, onHeightChanged: { contentHeight = $0 })
-                    .frame(height: contentHeight)
+                    .frame(minHeight: bodyHeight)
+                    .frame(height: bodyHeight)
             } else if let errorMessage {
                 ContentUnavailableView {
                     Label("Cannot Display Canvas", systemImage: "exclamationmark.triangle")
@@ -40,6 +51,13 @@ struct CanvasNoteView: View {
                     Label("No Preview Available", systemImage: "paintpalette")
                 } description: {
                     Text("This canvas note doesn't have a preview yet. Open it in the Trilium web or desktop app to generate one.")
+                }
+            }
+        }
+        .background {
+            EnclosingScrollViewportHeightReader { height in
+                if abs(height - viewportHeight) > 0.5 {
+                    viewportHeight = height
                 }
             }
         }
@@ -95,7 +113,9 @@ private struct CanvasSVGWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = false
+        // Allow panning once the user pinch-zooms; unzoomed content still fits width via CSS.
+        webView.scrollView.isScrollEnabled = true
+        webView.scrollView.bounces = false
         webView.scrollView.backgroundColor = .clear
         context.coordinator.onHeightChanged = onHeightChanged
         return webView
@@ -114,10 +134,10 @@ private struct CanvasSVGWebView: UIViewRepresentable {
         <html>
         <head>
         <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5, user-scalable=yes">
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            html, body { width: 100%; background: transparent; }
+            html, body { width: 100%; min-height: 100%; background: transparent; }
             body { padding: 16px; }
             svg { max-width: 100%; height: auto; display: block; }
             @media (prefers-color-scheme: dark) {
@@ -171,7 +191,8 @@ private struct ExcalidrawReadOnlyWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.isScrollEnabled = true
+        webView.scrollView.bounces = false
         webView.scrollView.backgroundColor = .clear
         context.coordinator.json = json
         context.coordinator.webView = webView

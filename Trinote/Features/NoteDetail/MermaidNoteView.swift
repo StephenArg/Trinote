@@ -5,10 +5,26 @@ struct MermaidNoteView: View {
     let source: String
 
     @State private var contentHeight: CGFloat = 200
+    /// Visible height of the enclosing note `ScrollView` — used as the body min height so pinch-zoom has room.
+    @State private var viewportHeight: CGFloat = 0
+
+    /// At least the on-screen note viewport; grow if the rendered diagram is taller.
+    private var bodyHeight: CGFloat {
+        let minH = viewportHeight > 1 ? viewportHeight : contentHeight
+        return max(contentHeight, minH)
+    }
 
     var body: some View {
         MermaidWebView(source: source, onHeightChanged: { contentHeight = $0 })
-            .frame(height: contentHeight)
+            .frame(minHeight: bodyHeight)
+            .frame(height: bodyHeight)
+            .background {
+                EnclosingScrollViewportHeightReader { height in
+                    if abs(height - viewportHeight) > 0.5 {
+                        viewportHeight = height
+                    }
+                }
+            }
     }
 }
 
@@ -25,7 +41,9 @@ private struct MermaidWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = false
+        // Allow panning once the user pinch-zooms; initial render still uses natural diagram size.
+        webView.scrollView.isScrollEnabled = true
+        webView.scrollView.bounces = false
         webView.scrollView.backgroundColor = .clear
         context.coordinator.source = source
         context.coordinator.onHeightChanged = onHeightChanged

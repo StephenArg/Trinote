@@ -41,6 +41,10 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     case spreadsheet
     /// Client-only: creates a Trilium `book` with `#calendarRoot` (journal / calendar widget root).
     case calendar
+    /// Client-only: creates a Trilium `book` Collection with `#viewType=board` (Kanban).
+    case kanban
+    /// Client-only: creates a Trilium `book` Collection with `#viewType=presentation`.
+    case presentation
 
     var displayName: String {
         switch self {
@@ -65,6 +69,8 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .mindMap: return "Mind Map"
         case .spreadsheet: return "Spreadsheet"
         case .calendar: return "Calendar"
+        case .kanban: return "Kanban Board"
+        case .presentation: return "Presentation"
         }
     }
 
@@ -89,6 +95,8 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .geoMap: return "map"
         case .spreadsheet: return "tablecells"
         case .calendar: return "calendar"
+        case .kanban: return "rectangle.split.3x1"
+        case .presentation: return "rectangle.on.rectangle"
         }
     }
 
@@ -101,14 +109,15 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
 
     var isRenderable: Bool {
         switch self {
-        case .text, .code, .image, .file, .book, .collection, .render, .mermaid, .mindMap, .geoMap, .spreadsheet, .calendar: return true
+        case .text, .code, .image, .file, .book, .collection, .render, .mermaid, .mindMap, .geoMap, .spreadsheet, .calendar, .kanban, .presentation:
+            return true
         default: return false
         }
     }
 
     var isAdvanced: Bool {
         switch self {
-        case .canvas, .collection, .noteMap, .relationMap, .webView, .contentWidget, .launcher, .mindMap, .geoMap, .spreadsheet, .calendar:
+        case .canvas, .collection, .noteMap, .relationMap, .webView, .contentWidget, .launcher, .mindMap, .geoMap, .spreadsheet, .calendar, .kanban, .presentation:
             return true
         default:
             return false
@@ -143,7 +152,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .code: return "text/plain"
         case .file: return "application/octet-stream"
         case .canvas, .mindMap, .spreadsheet: return "application/json"
-        case .geoMap: return ""
+        case .geoMap, .kanban, .presentation: return ""
         default: return "text/html"
         }
     }
@@ -163,10 +172,11 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     }
 
     /// Trilium/API `type` field and SwiftData `noteType`.
-    /// Calendar roots and geo maps are stored as `book` (matching Trilium desktop convention).
+    /// Calendar roots, geo maps, kanban boards, and presentations are stored as `book`
+    /// (matching Trilium desktop Collection convention).
     var triliumStorageType: String {
         switch self {
-        case .calendar, .geoMap: return NoteType.book.rawValue
+        case .calendar, .geoMap, .kanban, .presentation: return NoteType.book.rawValue
         default: return rawValue
         }
     }
@@ -174,6 +184,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     /// Attributes to create on the server after note creation (offline queue).
     /// Calendar roots match Trilium desktop journal: `#calendarRoot`, `#sorted`, `#iconClass`, `~template`, view labels.
     /// Geo maps match Trilium’s Geo Map template: collection, viewType, promoted geolocation schema, icon, subtree visibility, template relation.
+    /// Kanban / Presentation prefer `~template` so the server clones starter children; labels are fallbacks when the template is missing.
     var creationInitialAttributes: [NoteCreationAttribute] {
         switch self {
         case .calendar:
@@ -198,6 +209,22 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
                 NoteCreationAttribute(type: "relation", name: "template", value: "Geo Map"),
                 NoteCreationAttribute(type: "label", name: "label:geolocation", value: geolocationSchema, isInheritable: true),
                 NoteCreationAttribute(type: "label", name: "hidePromotedAttributes", value: ""),
+            ]
+        case .kanban:
+            return [
+                // Prefer the stable built-in note id so resolve/create does not depend on localized titles.
+                NoteCreationAttribute(type: "relation", name: "template", value: "_template_board"),
+                NoteCreationAttribute(type: "label", name: "collection", value: ""),
+                NoteCreationAttribute(type: "label", name: "viewType", value: "board"),
+                NoteCreationAttribute(type: "label", name: "hidePromotedAttributes", value: ""),
+                NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-columns"),
+            ]
+        case .presentation:
+            return [
+                NoteCreationAttribute(type: "relation", name: "template", value: "_template_presentation"),
+                NoteCreationAttribute(type: "label", name: "collection", value: ""),
+                NoteCreationAttribute(type: "label", name: "viewType", value: "presentation"),
+                NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-slideshow"),
             ]
         default:
             return []

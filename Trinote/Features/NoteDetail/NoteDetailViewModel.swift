@@ -2516,6 +2516,528 @@ final class NoteDetailViewModel {
         geoMapDetectionTick &+= 1
     }
 
+    // MARK: - Kanban Board
+
+    /// Group-by attribute name from `#board:groupBy` (default `status`).
+    func kanbanGroupByAttributeName(for note: NoteItem) -> String {
+        let raw = note.attributes.first(where: {
+            $0.type == .label && $0.name.caseInsensitiveCompare("board:groupBy") == .orderedSame
+        })?.value
+        return KanbanBoardModels.normalizedGroupByAttributeName(raw)
+    }
+
+    /// Loads Kanban cards + `board.json` columns.
+    /// When online, merges server children with cache so freshly queued offline cards (`ol_*`) still appear
+    /// before `backgroundSyncPendingChanges` finishes flushing them.
+    func loadKanbanBoard(for note: NoteItem) async -> (columns: [KanbanBoardModels.Column], groupBy: String) {
+        let groupBy = kanbanGroupByAttributeName(for: note)
+        let cacheCards = kanbanCardsFromCache(groupBy: groupBy)
+        let cards: [KanbanBoardModels.Card]
+        if client != nil, isOnline {
+            let serverCards = await fetchKanbanCardsFromServer(note: note, groupBy: groupBy)
+            var byId: [String: KanbanBoardModels.Card] = [:]
+            for card in serverCards { byId[card.noteId] = card }
+            for card in cacheCards where byId[card.noteId] == nil {
+                byId[card.noteId] = card
+            }
+            cards = Array(byId.values)
+        } else {
+            cards = cacheCards
+        }
+        let config = await loadBoardConfig(for: note)
+        return (KanbanBoardModels.buildColumns(config: config, cards: cards), groupBy)
+    }
+
+    func kanbanCardsFromCache(groupBy: String) -> [KanbanBoardModels.Card] {
+        guard let profileId = serverProfileId else { return [] }
+        var cards: [KanbanBoardModels.Card] = []
+        for childId in resolvedChildNoteIdsForDetail() {
+            guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
+            let attrs = ((try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []).map { a in
+                AttributeItem(
+                    attributeId: a.attributeId,
+                    noteId: a.noteId,
+                    type: AttributeItem.AttributeKind(rawValue: a.type) ?? .label,
+                    name: a.name,
+                    value: a.value,
+                    position: a.position,
+                    isInheritable: a.isInheritable
+                )
+            }
+            guard let column = KanbanBoardModels.columnValue(from: attrs, groupByName: groupBy) else { continue }
+            let branch = try? persistence.fetchCachedBranch(noteId: childId, parentNoteId: noteId, serverProfileId: profileId)
+            let branchId = branch?.branchId ?? ""
+            let position = branch?.notePosition ?? 0
+            let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            cards.append(KanbanBoardModels.Card(
+                noteId: childId,
+                branchId: branchId,
+                title: trimmedTitle.isEmpty ? childId : trimmedTitle,
+                columnValue: column,
+                notePosition: position
+            ))
+        }
+        return cards
+    }
+
+    func fetchKanbanCardsFromServer(note: NoteItem, groupBy: String) async -> [KanbanBoardModels.Card] {
+        guard let client, isOnline else { return [] }
+        var cards: [KanbanBoardModels.Card] = []
+        do {
+            let (parentResp, liveBranches) = try await client.getNoteWithBranches(note.noteId)
+            if let profileId = serverProfileId {
+                persistNoteResponse(parentResp, profileId: profileId)
+                for branch in liveBranches {
+                    try? persistence.cacheBranchIfAllowed(
+                        from: branch,
+                        parentNoteIdsForNote: [note.noteId],
+                        serverProfileId: profileId,
+                        policy: cacheExclusion
+                    )
+                }
+                try? persistence.commitBatch()
+            }
+            for branch in liveBranches.sorted(by: { $0.notePosition < $1.notePosition }) {
+                do {
+                    let childResp = try await client.getNote(branch.noteId)
+                    let childItem = NoteItem(from: childResp)
+                    if let profileId = serverProfileId {
+                        persistNoteResponse(childResp, profileId: profileId)
+                    }
+                    guard let column = KanbanBoardModels.columnValue(from: childItem.attributes, groupByName: groupBy) else {
+                        continue
+                    }
+                    cards.append(KanbanBoardModels.Card(
+                        noteId: childItem.noteId,
+                        branchId: branch.branchId,
+                        title: childItem.title,
+                        columnValue: column,
+                        notePosition: branch.notePosition
+                    ))
+                } catch {
+                    continue
+                }
+            }
+            try? persistence.commitBatch()
+        } catch {
+            Log.api.error("fetchKanbanCardsFromServer failed: \(error)")
+            return kanbanCardsFromCache(groupBy: groupBy)
+        }
+        return cards
+    }
+
+    func loadBoardConfig(for note: NoteItem) async -> KanbanBoardModels.BoardConfig? {
+        if let client, isOnline {
+            do {
+                let attachments = try await client.getNoteAttachments(note.noteId)
+                self.attachments = attachments.map(AttachmentItem.init)
+                if let att = attachments.first(where: { $0.title == KanbanBoardModels.boardConfigAttachmentTitle }) {
+                    let data = try await client.getAttachmentContent(att.attachmentId)
+                    return KanbanBoardModels.decodeBoardConfig(from: data)
+                }
+            } catch {
+                Log.api.debug("loadBoardConfig online failed: \(error)")
+            }
+        }
+        if let att = attachments.first(where: { $0.title == KanbanBoardModels.boardConfigAttachmentTitle }),
+           let client {
+            if let data = try? await client.getAttachmentContent(att.attachmentId) {
+                return KanbanBoardModels.decodeBoardConfig(from: data)
+            }
+        }
+        return nil
+    }
+
+    /// Persists `board.json` (create or replace content). Online-only.
+    @discardableResult
+    func saveBoardConfig(_ config: KanbanBoardModels.BoardConfig) async -> Bool {
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to edit board columns.", comment: "Kanban offline column edit")
+            showSaveError = true
+            return false
+        }
+        do {
+            let data = try KanbanBoardModels.encodeBoardConfig(config)
+            let existing = attachments.first {
+                $0.title == KanbanBoardModels.boardConfigAttachmentTitle && $0.mime == "application/json"
+            }
+            if let existing {
+                try await client.uploadAttachmentContent(existing.attachmentId, data: data, contentType: "application/json")
+            } else {
+                let request = CreateAttachmentRequest(
+                    ownerId: noteId,
+                    role: "viewConfig",
+                    mime: "application/json",
+                    title: KanbanBoardModels.boardConfigAttachmentTitle,
+                    content: data.base64EncodedString(),
+                    position: 0
+                )
+                _ = try await client.createAttachment(request)
+            }
+            await loadAttachments()
+            return true
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            Log.api.error("saveBoardConfig failed: \(error)")
+            return false
+        }
+    }
+
+    /// Moves a card to another column by rewriting its group-by label (delete + create). Online-only.
+    @discardableResult
+    func moveKanbanCard(noteId cardNoteId: String, toColumn: String, groupBy: String) async -> Bool {
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to move cards.", comment: "Kanban offline move")
+            showSaveError = true
+            return false
+        }
+        do {
+            let noteResp = try await client.getNote(cardNoteId)
+            let item = NoteItem(from: noteResp)
+            if let existing = item.attributes.first(where: {
+                $0.type == .label && $0.name.caseInsensitiveCompare(groupBy) == .orderedSame
+            }) {
+                try await client.deleteAttribute(noteId: cardNoteId, attributeId: existing.attributeId)
+            }
+            try await client.createAttribute(CreateAttributeRequest(
+                noteId: cardNoteId, type: "label", name: groupBy,
+                value: toColumn, isInheritable: nil, position: nil
+            ))
+            if let profileId = serverProfileId {
+                persistNoteResponse(try await client.getNote(cardNoteId), profileId: profileId)
+                try? persistence.commitBatch()
+            }
+            return true
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            Log.api.error("moveKanbanCard failed: \(error)")
+            return false
+        }
+    }
+
+    /// Reorders a card among siblings under this board note. Online-only.
+    @discardableResult
+    func reorderKanbanCard(branchId: String, orderedSiblingBranchIds: [String]) async -> Bool {
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to reorder cards.", comment: "Kanban offline reorder")
+            showSaveError = true
+            return false
+        }
+        do {
+            try await client.placeBranchInSiblingOrder(branchId, orderedSiblingBranchIds: orderedSiblingBranchIds)
+            await loadChildNotes()
+            return true
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            Log.api.error("reorderKanbanCard failed: \(error)")
+            return false
+        }
+    }
+
+    /// Creates a text card under this board with the group-by label set (offline-queued).
+    func createKanbanCard(title: String, column: String, groupBy: String) async -> String? {
+        guard let profileId = serverProfileId else { return nil }
+        guard appState.isAuthenticated else {
+            saveError = String(localized: "Sign in to create notes.", comment: "Error when creating child offline without session")
+            showSaveError = true
+            return nil
+        }
+        let resolvedTitle = NoteCreationTitle.resolved(from: title)
+        do {
+            let (newId, _) = try persistence.createOfflineChildNote(
+                parentNoteId: noteId,
+                title: resolvedTitle,
+                noteType: "text",
+                mime: "text/html",
+                initialContent: "",
+                serverProfileId: profileId,
+                initialAttributes: [
+                    NoteCreationAttribute(type: "label", name: groupBy, value: column),
+                ]
+            )
+            await loadChildNotes()
+            // Flush immediately when online so the card lands on the server before the next board pull.
+            if isOnline, client != nil {
+                await appState.flushPendingLocalChangesIfPossible()
+            } else {
+                appState.backgroundSyncPendingChanges()
+            }
+            return newId
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return nil
+        }
+    }
+
+    /// Renames a column in `board.json` and rewrites `#status` (or group-by) on cards. Online-only.
+    @discardableResult
+    func renameKanbanColumn(from oldValue: String, to newValue: String, groupBy: String, cards: [KanbanBoardModels.Card], configColumns: [String]) async -> Bool {
+        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != oldValue else { return false }
+        for card in cards where card.columnValue == oldValue {
+            let ok = await moveKanbanCard(noteId: card.noteId, toColumn: trimmed, groupBy: groupBy)
+            if !ok { return false }
+        }
+        let updated = configColumns.map { $0 == oldValue ? trimmed : $0 }
+        let config = KanbanBoardModels.BoardConfig(columns: updated.map { KanbanBoardModels.BoardColumn(value: $0) })
+        return await saveBoardConfig(config)
+    }
+
+    // MARK: - Presentation
+
+    /// Loads horizontal slides (and nested vertical slides) for a presentation note.
+    func loadPresentationSlides(for note: NoteItem) async -> (slides: [PresentationModels.Slide], theme: String) {
+        let theme = PresentationModels.normalizedTheme(
+            note.attributes.first(where: {
+                $0.type == .label && $0.name.caseInsensitiveCompare("presentation:theme") == .orderedSame
+            })?.value
+        )
+        if client != nil, isOnline {
+            let slides = await fetchPresentationSlidesFromServer(note: note)
+            return (slides, theme)
+        }
+        return (await presentationSlidesFromCache(), theme)
+    }
+
+    func presentationSlidesFromCache() async -> [PresentationModels.Slide] {
+        guard let profileId = serverProfileId else { return [] }
+        var horizontal: [(noteId: String, branchId: String, title: String, html: String, background: String?)] = []
+        var verticalByParent: [String: [(noteId: String, branchId: String, title: String, html: String, background: String?)]] = [:]
+
+        for childId in resolvedChildNoteIdsForDetail() {
+            guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
+            let attrs = ((try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []).map { a in
+                AttributeItem(
+                    attributeId: a.attributeId,
+                    noteId: a.noteId,
+                    type: AttributeItem.AttributeKind(rawValue: a.type) ?? .label,
+                    name: a.name,
+                    value: a.value,
+                    position: a.position,
+                    isInheritable: a.isInheritable
+                )
+            }
+            let background = attrs.first(where: {
+                $0.type == .label && $0.name.caseInsensitiveCompare("slide:background") == .orderedSame
+            })?.value
+            let branch = try? persistence.fetchCachedBranch(noteId: childId, parentNoteId: noteId, serverProfileId: profileId)
+            let html = cached.content.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            horizontal.append((
+                noteId: childId,
+                branchId: branch?.branchId ?? "",
+                title: trimmedTitle.isEmpty ? childId : trimmedTitle,
+                html: html,
+                background: background
+            ))
+
+            let grandIds = (try? persistence.fetchChildNoteIdsOrderedFromBranches(parentNoteId: childId, serverProfileId: profileId)) ?? []
+            var vertical: [(noteId: String, branchId: String, title: String, html: String, background: String?)] = []
+            for grandId in grandIds {
+                guard let gCached = try? persistence.fetchCachedNote(id: grandId, serverProfileId: profileId) else { continue }
+                let gAttrs = ((try? persistence.fetchCachedAttributes(noteId: grandId, serverProfileId: profileId)) ?? []).map { a in
+                    AttributeItem(
+                        attributeId: a.attributeId,
+                        noteId: a.noteId,
+                        type: AttributeItem.AttributeKind(rawValue: a.type) ?? .label,
+                        name: a.name,
+                        value: a.value,
+                        position: a.position,
+                        isInheritable: a.isInheritable
+                    )
+                }
+                let gBg = gAttrs.first(where: {
+                    $0.type == .label && $0.name.caseInsensitiveCompare("slide:background") == .orderedSame
+                })?.value
+                let gBranch = try? persistence.fetchCachedBranch(noteId: grandId, parentNoteId: childId, serverProfileId: profileId)
+                let gHtml = gCached.content.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                let gTitle = gCached.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                vertical.append((
+                    noteId: grandId,
+                    branchId: gBranch?.branchId ?? "",
+                    title: gTitle.isEmpty ? grandId : gTitle,
+                    html: gHtml,
+                    background: gBg
+                ))
+            }
+            if !vertical.isEmpty {
+                verticalByParent[childId] = vertical
+            }
+        }
+        return PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent)
+    }
+
+    func fetchPresentationSlidesFromServer(note: NoteItem) async -> [PresentationModels.Slide] {
+        guard let client, isOnline else { return await presentationSlidesFromCache() }
+        do {
+            let (parentResp, liveBranches) = try await client.getNoteWithBranches(note.noteId)
+            if let profileId = serverProfileId {
+                persistNoteResponse(parentResp, profileId: profileId)
+                for branch in liveBranches {
+                    try? persistence.cacheBranchIfAllowed(
+                        from: branch,
+                        parentNoteIdsForNote: [note.noteId],
+                        serverProfileId: profileId,
+                        policy: cacheExclusion
+                    )
+                }
+                try? persistence.commitBatch()
+            }
+
+            var horizontal: [(noteId: String, branchId: String, title: String, html: String, background: String?)] = []
+            var verticalByParent: [String: [(noteId: String, branchId: String, title: String, html: String, background: String?)]] = [:]
+
+            for branch in liveBranches.sorted(by: { $0.notePosition < $1.notePosition }) {
+                let childResp = try await client.getNote(branch.noteId)
+                let childItem = NoteItem(from: childResp)
+                if let profileId = serverProfileId {
+                    persistNoteResponse(childResp, profileId: profileId)
+                }
+                let htmlData = (try? await client.getNoteContent(branch.noteId)) ?? Data()
+                let html = String(data: htmlData, encoding: .utf8) ?? ""
+                if let profileId = serverProfileId, !htmlData.isEmpty {
+                    cacheNoteContentIfAllowed(branch.noteId, content: htmlData, profileId: profileId, utcDateModified: childResp.utcDateModified)
+                }
+                let background = childItem.attributes.first(where: {
+                    $0.type == .label && $0.name.caseInsensitiveCompare("slide:background") == .orderedSame
+                })?.value
+                horizontal.append((
+                    noteId: childItem.noteId,
+                    branchId: branch.branchId,
+                    title: childItem.title,
+                    html: html,
+                    background: background
+                ))
+
+                let (_, childBranches) = (try? await client.getNoteWithBranches(branch.noteId)) ?? (childResp, [])
+                var vertical: [(noteId: String, branchId: String, title: String, html: String, background: String?)] = []
+                for vBranch in childBranches.sorted(by: { $0.notePosition < $1.notePosition }) {
+                    let vResp = try await client.getNote(vBranch.noteId)
+                    let vItem = NoteItem(from: vResp)
+                    if let profileId = serverProfileId {
+                        persistNoteResponse(vResp, profileId: profileId)
+                        try? persistence.cacheBranchIfAllowed(
+                            from: vBranch,
+                            parentNoteIdsForNote: [branch.noteId],
+                            serverProfileId: profileId,
+                            policy: cacheExclusion
+                        )
+                    }
+                    let vData = (try? await client.getNoteContent(vBranch.noteId)) ?? Data()
+                    let vHtml = String(data: vData, encoding: .utf8) ?? ""
+                    if let profileId = serverProfileId, !vData.isEmpty {
+                        cacheNoteContentIfAllowed(vBranch.noteId, content: vData, profileId: profileId, utcDateModified: vResp.utcDateModified)
+                    }
+                    let vBg = vItem.attributes.first(where: {
+                        $0.type == .label && $0.name.caseInsensitiveCompare("slide:background") == .orderedSame
+                    })?.value
+                    vertical.append((
+                        noteId: vItem.noteId,
+                        branchId: vBranch.branchId,
+                        title: vItem.title,
+                        html: vHtml,
+                        background: vBg
+                    ))
+                }
+                if !vertical.isEmpty {
+                    verticalByParent[branch.noteId] = vertical
+                }
+            }
+            try? persistence.commitBatch()
+            return PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent)
+        } catch {
+            Log.api.error("fetchPresentationSlidesFromServer failed: \(error)")
+            return await presentationSlidesFromCache()
+        }
+    }
+
+    func createPresentationSlide(title: String) async -> String? {
+        guard let profileId = serverProfileId else { return nil }
+        guard appState.isAuthenticated else {
+            saveError = String(localized: "Sign in to create notes.", comment: "Error when creating child offline without session")
+            showSaveError = true
+            return nil
+        }
+        let resolvedTitle = NoteCreationTitle.resolved(from: title)
+        do {
+            let (newId, _) = try persistence.createOfflineChildNote(
+                parentNoteId: noteId,
+                title: resolvedTitle,
+                noteType: "text",
+                mime: "text/html",
+                initialContent: "<p></p>",
+                serverProfileId: profileId,
+                initialAttributes: [
+                    NoteCreationAttribute(type: "label", name: "slide", value: ""),
+                ]
+            )
+            await loadChildNotes()
+            appState.backgroundSyncPendingChanges()
+            return newId
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return nil
+        }
+    }
+
+    @discardableResult
+    func reorderPresentationSlide(branchId: String, orderedSiblingBranchIds: [String]) async -> Bool {
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to reorder slides.", comment: "Presentation offline reorder")
+            showSaveError = true
+            return false
+        }
+        do {
+            try await client.placeBranchInSiblingOrder(branchId, orderedSiblingBranchIds: orderedSiblingBranchIds)
+            await loadChildNotes()
+            return true
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return false
+        }
+    }
+
+    /// Sets or replaces a label on a note (delete + create). Online-only.
+    @discardableResult
+    func setNoteLabel(noteId targetNoteId: String, name: String, value: String) async -> Bool {
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to update this label.", comment: "Label edit offline")
+            showSaveError = true
+            return false
+        }
+        do {
+            let noteResp = try await client.getNote(targetNoteId)
+            let item = NoteItem(from: noteResp)
+            if let existing = item.attributes.first(where: {
+                $0.type == .label && $0.name.caseInsensitiveCompare(name) == .orderedSame
+            }) {
+                try await client.deleteAttribute(noteId: targetNoteId, attributeId: existing.attributeId)
+            }
+            try await client.createAttribute(CreateAttributeRequest(
+                noteId: targetNoteId, type: "label", name: name,
+                value: value, isInheritable: nil, position: nil
+            ))
+            if let profileId = serverProfileId {
+                persistNoteResponse(try await client.getNote(targetNoteId), profileId: profileId)
+                try? persistence.commitBatch()
+            }
+            if targetNoteId == noteId {
+                await load()
+            }
+            return true
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return false
+        }
+    }
+
     // MARK: - Cache Fallback
 
     private func hasUsableDisplayedBodyContent() -> Bool {
