@@ -1404,10 +1404,42 @@ final class NoteDetailViewModel {
             }
         }
 
-        saveCheckboxChange(newRaw)
+        saveNoteBodyChange(newRaw)
     }
 
-    private func saveCheckboxChange(_ html: String) {
+    // MARK: - List Item Reorder
+
+    /// Moves a list item (`ul`/`ol`/`todo-list`) among its siblings without entering the editor.
+    /// `beforeIndex` is the document-wide interactive list-item index to insert before, or `nil` to append.
+    func reorderListItem(fromIndex: Int, beforeIndex: Int?) {
+        guard let raw = rawContentString ?? contentString else { return }
+        guard let newRaw = HTMLTodoListReorder.movingListItem(
+            in: raw,
+            fromIndex: fromIndex,
+            beforeIndex: beforeIndex
+        ) else { return }
+
+        self.rawContentString = newRaw
+        self.serverContentHash = newRaw.hashValue
+
+        if let display = contentString,
+           let newDisplay = HTMLTodoListReorder.movingListItem(
+               in: display,
+               fromIndex: fromIndex,
+               beforeIndex: beforeIndex
+           ) {
+            self.contentString = newDisplay
+        }
+
+        saveNoteBodyChange(newRaw)
+    }
+
+    /// Backward-compatible name for todo-only call sites.
+    func reorderCheckbox(fromIndex: Int, beforeIndex: Int?) {
+        reorderListItem(fromIndex: fromIndex, beforeIndex: beforeIndex)
+    }
+
+    private func saveNoteBodyChange(_ html: String) {
         let nid = self.noteId
         let data = Data(html.utf8)
         let mime = note?.mime ?? "text/html"
@@ -1427,7 +1459,7 @@ final class NoteDetailViewModel {
             )
             self.content = data
         } catch {
-            Log.api.error("Failed to save checkbox state locally: \(error)")
+            Log.api.error("Failed to save note body change locally: \(error)")
         }
         appState.backgroundSyncPendingChanges()
     }

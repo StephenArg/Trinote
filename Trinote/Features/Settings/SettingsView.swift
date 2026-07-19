@@ -16,6 +16,9 @@ struct SettingsView: View {
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
 
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
+    @AppStorage("noteCheckboxReorderEnabled") private var noteCheckboxReorderEnabled: Bool = true
+    /// When true, Image–Code insert tools sit in a top bar below the nav header instead of the bottom formatting toolbar.
+    @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @State private var showClearCacheConfirm = false
     @State private var showClearAllInstancesCacheConfirm = false
@@ -234,13 +237,31 @@ struct SettingsView: View {
                 String(localized: "Long-Press to Edit", comment: "Settings toggle: replace the floating edit button with a long-press gesture"),
                 isOn: $noteEditorLongPressToEdit
             )
+            Toggle(
+                String(localized: "Reorder List Items", comment: "Settings toggle: show drag handles to reorder bullet, numbered, and checkbox list items in read-only notes"),
+                isOn: $noteCheckboxReorderEnabled
+            )
+            Toggle(
+                String(localized: "Split Editor Toolbar", comment: "Settings toggle: move insert tools to a top toolbar above the note"),
+                isOn: $noteEditorInsertToolsAtTop
+            )
         } header: {
             Text(String(localized: "Note Editor", comment: "Settings section header"))
         } footer: {
-            Text(String(
-                localized: "Hide the floating edit button on read-only notes. Press and hold the note for 1.5 seconds to start editing.",
-                comment: "Explains the long-press-to-edit option"
-            ))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(String(
+                    localized: "Long-Press to Edit hides the floating edit button. Press and hold the note for 1.5 seconds to start editing.",
+                    comment: "Settings footer: Long-Press to Edit"
+                ))
+                Text(String(
+                    localized: "Reorder List Items shows drag handles on bullet, numbered, and checkbox list rows so you can reorder them without opening the editor.",
+                    comment: "Settings footer: Reorder List Items"
+                ))
+                Text(String(
+                    localized: "Split Editor Toolbar moves insert tools (image, table, code, and similar) to a bar under the header—the same as the rightmost button on the formatting toolbar.",
+                    comment: "Settings footer: Split Editor Toolbar"
+                ))
+            }
         }
     }
 

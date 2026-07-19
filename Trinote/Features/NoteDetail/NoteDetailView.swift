@@ -1772,6 +1772,9 @@ struct NoteDetailView: View {
                     onCheckboxToggled: { index, checked in
                         vm.toggleCheckbox(index: index, checked: checked)
                     },
+                    onCheckboxReordered: { fromIndex, beforeIndex in
+                        vm.reorderListItem(fromIndex: fromIndex, beforeIndex: beforeIndex)
+                    },
                     loadAttachmentPreview: { attachmentId in
                         if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
                             return await vm.prepareAttachmentPreview(for: attachment)

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 
 struct HTMLNoteView: View {
@@ -6,6 +7,8 @@ struct HTMLNoteView: View {
     let baseURL: URL?
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+    /// Reorder a todo-list item among siblings. `beforeIndex` is nil when appending at end of the sibling group.
+    var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
     /// Loads preview content for a tapped `api/attachments/{id}/…` link.
     var loadAttachmentPreview: ((String) async -> AttachmentPreviewItem?)?
     /// When set, the web view registers for in-page find (read-only).
@@ -18,6 +21,7 @@ struct HTMLNoteView: View {
     @AppStorage("useCustomTextColor") private var useCustomTextColor: Bool = false
     @AppStorage("customLightTextColor") private var customLightTextColor: String = "#1c1c1e"
     @AppStorage("customDarkTextColor") private var customDarkTextColor: String = "#aaaaaa"
+    @AppStorage("noteCheckboxReorderEnabled") private var noteCheckboxReorderEnabled: Bool = true
 
     private var themeColors: HTMLThemeColors {
         let theme = ColorTheme(rawValue: colorTheme) ?? .default
@@ -43,8 +47,10 @@ struct HTMLNoteView: View {
             html: html,
             baseURL: baseURL,
             themeColors: themeColors,
+            checkboxReorderEnabled: noteCheckboxReorderEnabled,
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
+            onCheckboxReordered: onCheckboxReordered,
             onAttachmentLinkTapped: { attachmentId in
                 guard let loadAttachmentPreview else { return }
                 Task { @MainActor in
@@ -88,8 +94,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     let html: String
     let baseURL: URL?
     let themeColors: HTMLThemeColors
+    let checkboxReorderEnabled: Bool
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+    var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
     var onAttachmentLinkTapped: ((String) -> Void)?
     var findControl: FindOnPageControl?
     var onHeightChanged: ((CGFloat) -> Void)?
@@ -99,6 +107,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         Coordinator(
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
+            onCheckboxReordered: onCheckboxReordered,
             onAttachmentLinkTapped: onAttachmentLinkTapped,
             onHeightChanged: onHeightChanged,
             onImagePreview: onImagePreview
@@ -112,6 +121,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         contentController.add(handler, name: "noteLink")
         contentController.add(handler, name: "attachmentLink")
         contentController.add(handler, name: "checkboxToggle")
+        contentController.add(handler, name: "checkboxReorder")
+        contentController.add(handler, name: "checkboxDragScroll")
+        contentController.add(handler, name: "checkboxDragState")
         contentController.add(handler, name: "debugLog")
         contentController.add(handler, name: "imagePreview")
 
@@ -137,8 +149,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         handler.webView = webView
         handler.themeColors = themeColors
+        handler.checkboxReorderEnabled = checkboxReorderEnabled
         handler.findControl = findControl
-        let wrapped = Self.wrapHTML(html, theme: themeColors)
+        let wrapped = Self.wrapHTML(html, theme: themeColors, checkboxReorderEnabled: checkboxReorderEnabled)
         webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(wrapped: wrapped, canonicalBase: baseURL))
         handler.loadedHTML = html
 
@@ -150,30 +163,38 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.findControl = findControl
         coordinator.onNoteLinkTapped = onNoteLinkTapped
         coordinator.onCheckboxToggled = onCheckboxToggled
+        coordinator.onCheckboxReordered = onCheckboxReordered
         coordinator.onAttachmentLinkTapped = onAttachmentLinkTapped
         coordinator.onHeightChanged = onHeightChanged
         coordinator.onImagePreview = onImagePreview
         findControl?.registerHTMLWebView(webView)
 
-        let needsReload = html != coordinator.loadedHTML || themeColors != coordinator.themeColors
+        let needsReload = html != coordinator.loadedHTML
+            || themeColors != coordinator.themeColors
+            || checkboxReorderEnabled != coordinator.checkboxReorderEnabled
         guard needsReload else { return }
         coordinator.loadedHTML = html
         coordinator.themeColors = themeColors
-        let wrapped = Self.wrapHTML(html, theme: themeColors)
+        coordinator.checkboxReorderEnabled = checkboxReorderEnabled
+        let wrapped = Self.wrapHTML(html, theme: themeColors, checkboxReorderEnabled: checkboxReorderEnabled)
         webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(wrapped: wrapped, canonicalBase: baseURL))
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        coordinator.endCheckboxDrag()
         let uc = webView.configuration.userContentController
         uc.removeScriptMessageHandler(forName: "heightUpdate")
         uc.removeScriptMessageHandler(forName: "noteLink")
         uc.removeScriptMessageHandler(forName: "attachmentLink")
         uc.removeScriptMessageHandler(forName: "checkboxToggle")
+        uc.removeScriptMessageHandler(forName: "checkboxReorder")
+        uc.removeScriptMessageHandler(forName: "checkboxDragScroll")
+        uc.removeScriptMessageHandler(forName: "checkboxDragState")
         uc.removeScriptMessageHandler(forName: "debugLog")
         uc.removeScriptMessageHandler(forName: "imagePreview")
     }
 
-    static func wrapHTML(_ body: String, theme: HTMLThemeColors) -> String {
+    static func wrapHTML(_ body: String, theme: HTMLThemeColors, checkboxReorderEnabled: Bool = false) -> String {
         """
         <!DOCTYPE html>
         <html>
@@ -191,6 +212,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             word-wrap: break-word;
             overflow-wrap: break-word;
             background: transparent;
+            position: relative;
         }
         @media (prefers-color-scheme: dark) {
             :root { --text-color: \(theme.darkText); --code-bg: rgba(255,255,255,0.06); --border: rgba(255,255,255,0.15); }
@@ -363,8 +385,48 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         @media (prefers-color-scheme: dark) {
           .todo-list__label input[type="checkbox"] { accent-color: \(theme.darkLink); }
         }
-        .todo-list__label__description { flex: 1; transition: opacity 0.15s, text-decoration 0.15s; }
+        .todo-list__label__description { flex: 1; min-width: 0; transition: opacity 0.15s, text-decoration 0.15s; }
         .todo-list__label--checked .todo-list__label__description { text-decoration: line-through; opacity: 0.5; }
+        body.trinote-list-reorder ul > li,
+        body.trinote-list-reorder ol > li {
+          position: relative;
+          padding-right: 32px;
+        }
+        .trinote-todo-drag-handle {
+          position: absolute;
+          right: 0;
+          top: 2px;
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0.38;
+          -webkit-user-select: none;
+          user-select: none;
+          touch-action: none;
+          -webkit-touch-callout: none;
+          cursor: grab;
+          z-index: 2;
+        }
+        .trinote-todo-drag-handle svg { width: 18px; height: 18px; fill: currentColor; }
+        .trinote-todo-drag-handle:active { opacity: 0.7; }
+        li.trinote-todo-dragging { opacity: 0.4; }
+        .trinote-todo-insert-line {
+          position: absolute;
+          left: 16px;
+          right: 16px;
+          height: 3px;
+          border-radius: 2px;
+          background: \(theme.lightLink);
+          pointer-events: none;
+          z-index: 10000;
+          display: none;
+          box-shadow: 0 0 0 1px rgba(0,0,0,0.08);
+        }
+        @media (prefers-color-scheme: dark) {
+          .trinote-todo-insert-line { background: \(theme.darkLink); box-shadow: 0 0 0 1px rgba(255,255,255,0.12); }
+        }
         /* Trilium / CKEditor font-size spans */
         .text-tiny { font-size: 0.7em; }
         .text-small { font-size: 0.85em; }
@@ -825,14 +887,178 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             });
         })();
 
-        // Enable todo checkboxes for interactive toggling
+        // Enable todo checkboxes for interactive toggling (+ optional list-item reorder)
         (function() {
+            var reorderEnabled = \(checkboxReorderEnabled ? "true" : "false");
             function updateStrikethrough(cb) {
                 var label = cb.closest('.todo-list__label');
                 if (!label) return;
                 if (cb.checked) label.classList.add('todo-list__label--checked');
                 else label.classList.remove('todo-list__label--checked');
             }
+            function siblingLis(li) {
+                var parent = li.parentElement;
+                if (!parent) return [];
+                return Array.prototype.filter.call(parent.children, function(c) {
+                    return c.tagName === 'LI';
+                });
+            }
+            function listItemIndex(li) {
+                if (!li || li.dataset.liIndex == null) return null;
+                return parseInt(li.dataset.liIndex, 10);
+            }
+            function postDragState(active) {
+                try { window.webkit.messageHandlers.checkboxDragState.postMessage({ active: !!active }); } catch (e) {}
+            }
+            // Send document clientY; Swift converts through the WKWebView into window
+            // coordinates. (touch.screenY is unreliable in iOS WKWebView and often tracks
+            // document Y, which breaks edge detection once the outer ScrollView moves.)
+            function postDragScroll(clientY) {
+                try { window.webkit.messageHandlers.checkboxDragScroll.postMessage({ clientY: clientY }); } catch (e) {}
+            }
+            function postReorder(fromIndex, beforeIndex) {
+                try {
+                    window.webkit.messageHandlers.checkboxReorder.postMessage({
+                        fromIndex: fromIndex,
+                        beforeIndex: (beforeIndex == null ? null : beforeIndex)
+                    });
+                } catch (e) {}
+            }
+
+            var insertLine = document.createElement('div');
+            insertLine.className = 'trinote-todo-insert-line';
+            document.body.appendChild(insertLine);
+
+            var drag = null;
+
+            function hideInsertLine() {
+                insertLine.style.display = 'none';
+            }
+            function showInsertLineAt(y) {
+                insertLine.style.display = 'block';
+                insertLine.style.top = Math.max(0, y - 1) + 'px';
+            }
+            function updateInsertTarget(clientY) {
+                if (!drag) return;
+                var siblings = drag.siblings;
+                var beforeLi = null;
+                var lineY = null;
+                for (var i = 0; i < siblings.length; i++) {
+                    var s = siblings[i];
+                    if (s === drag.li) continue;
+                    var rect = s.getBoundingClientRect();
+                    var mid = rect.top + rect.height / 2;
+                    if (clientY < mid) {
+                        beforeLi = s;
+                        lineY = window.scrollY + rect.top;
+                        break;
+                    }
+                }
+                if (!beforeLi) {
+                    var last = null;
+                    for (var j = siblings.length - 1; j >= 0; j--) {
+                        if (siblings[j] !== drag.li) { last = siblings[j]; break; }
+                    }
+                    if (last) {
+                        var lastRect = last.getBoundingClientRect();
+                        lineY = window.scrollY + lastRect.bottom;
+                    } else {
+                        var selfRect = drag.li.getBoundingClientRect();
+                        lineY = window.scrollY + selfRect.bottom;
+                    }
+                }
+                drag.beforeLi = beforeLi;
+                if (lineY != null) showInsertLineAt(lineY);
+            }
+            function endDrag(commit) {
+                if (!drag) return;
+                var state = drag;
+                drag = null;
+                hideInsertLine();
+                state.li.classList.remove('trinote-todo-dragging');
+                postDragState(false);
+                if (state.usePointer) {
+                    document.removeEventListener('pointermove', onPointerMove, true);
+                    document.removeEventListener('pointerup', onPointerUp, true);
+                    document.removeEventListener('pointercancel', onPointerCancel, true);
+                } else {
+                    document.removeEventListener('touchmove', onTouchMove, { capture: true });
+                    document.removeEventListener('touchend', onTouchEnd, { capture: true });
+                    document.removeEventListener('touchcancel', onTouchCancel, { capture: true });
+                }
+                if (!commit) return;
+
+                var beforeIndex = state.beforeLi ? listItemIndex(state.beforeLi) : null;
+                // No-op when dropping in the original place.
+                var next = state.li.nextElementSibling;
+                while (next && next.tagName !== 'LI') next = next.nextElementSibling;
+                var alreadyThere = (state.beforeLi == null && next == null)
+                    || (state.beforeLi != null && next === state.beforeLi);
+                if (alreadyThere) return;
+                if (state.beforeLi) state.parent.insertBefore(state.li, state.beforeLi);
+                else state.parent.appendChild(state.li);
+                postReorder(state.fromIndex, beforeIndex);
+                try { if (typeof reportHeight === 'function') reportHeight(); } catch (e2) {}
+            }
+            function onTouchMove(e) {
+                if (!drag) return;
+                if (e.cancelable) e.preventDefault();
+                var t = e.touches[0];
+                if (!t) return;
+                updateInsertTarget(t.clientY);
+                postDragScroll(t.clientY);
+            }
+            function onTouchEnd(e) {
+                if (!drag) return;
+                if (e.cancelable) e.preventDefault();
+                endDrag(true);
+            }
+            function onTouchCancel() { endDrag(false); }
+            function onPointerMove(e) {
+                if (!drag || drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+                if (e.cancelable) e.preventDefault();
+                updateInsertTarget(e.clientY);
+                postDragScroll(e.clientY);
+            }
+            function onPointerUp(e) {
+                if (!drag || drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+                endDrag(true);
+            }
+            function onPointerCancel(e) {
+                if (!drag || drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+                endDrag(false);
+            }
+            function beginDrag(li, fromIndex, pointerId, usePointer) {
+                if (drag) return;
+                var parent = li.parentElement;
+                if (!parent) return;
+                var siblings = siblingLis(li);
+                if (siblings.length < 2) return;
+                drag = {
+                    li: li,
+                    parent: parent,
+                    siblings: siblings,
+                    fromIndex: fromIndex,
+                    beforeLi: null,
+                    pointerId: pointerId,
+                    usePointer: !!usePointer
+                };
+                li.classList.add('trinote-todo-dragging');
+                postDragState(true);
+                if (usePointer) {
+                    document.addEventListener('pointermove', onPointerMove, true);
+                    document.addEventListener('pointerup', onPointerUp, true);
+                    document.addEventListener('pointercancel', onPointerCancel, true);
+                } else {
+                    document.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+                    document.addEventListener('touchend', onTouchEnd, { capture: true, passive: false });
+                    document.addEventListener('touchcancel', onTouchCancel, { capture: true });
+                }
+            }
+
+            var handleSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+            var supportsPointer = typeof window.PointerEvent !== 'undefined';
+
             const boxes = document.querySelectorAll('input[type="checkbox"]');
             var idx = 0;
             boxes.forEach(function(cb) {
@@ -852,6 +1078,46 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                         checked: this.checked
                     });
                 });
+            });
+
+            if (!reorderEnabled) return;
+            document.body.classList.add('trinote-list-reorder');
+
+            var allLis = document.querySelectorAll('ul > li, ol > li');
+            var liIdx = 0;
+            allLis.forEach(function(li) {
+                if (li.closest('.trinote-include')) return;
+                if (li.querySelector(':scope > .trinote-todo-drag-handle')) return;
+                li.dataset.liIndex = String(liIdx);
+                var fromIndex = liIdx;
+                liIdx += 1;
+
+                var handle = document.createElement('span');
+                handle.className = 'trinote-todo-drag-handle';
+                handle.setAttribute('role', 'button');
+                handle.setAttribute('aria-label', 'Reorder');
+                handle.innerHTML = handleSvg;
+                li.appendChild(handle);
+
+                if (supportsPointer) {
+                    handle.addEventListener('pointerdown', function(e) {
+                        if (e.button != null && e.button !== 0) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        beginDrag(li, fromIndex, e.pointerId, true);
+                        updateInsertTarget(e.clientY);
+                        postDragScroll(e.clientY);
+                    }, true);
+                } else {
+                    handle.addEventListener('touchstart', function(e) {
+                        if (!e.touches || !e.touches[0]) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        beginDrag(li, fromIndex, null, false);
+                        updateInsertTarget(e.touches[0].clientY);
+                        postDragScroll(e.touches[0].clientY);
+                    }, { capture: true, passive: false });
+                }
             });
         })();
 
@@ -1069,22 +1335,39 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         weak var webView: WKWebView?
         var loadedHTML: String?
         var themeColors: HTMLThemeColors?
+        var checkboxReorderEnabled: Bool = false
         weak var findControl: FindOnPageControl?
         var onNoteLinkTapped: ((String) -> Void)?
         var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+        var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
         var onAttachmentLinkTapped: ((String) -> Void)?
         var onHeightChanged: ((CGFloat) -> Void)?
         var onImagePreview: ((FullScreenImagePayload) -> Void)?
 
+        private weak var enclosingScrollView: UIScrollView?
+        private var enclosingScrollWasEnabled: Bool?
+        private var dragScrollDisplayLink: CADisplayLink?
+        /// Finger Y in window coordinates (not document / screenY).
+        private var dragScrollWindowY: CGFloat?
+        /// -1 scroll up, 0 idle, +1 scroll down. Kept sticky with hysteresis so edge
+        /// autoscroll does not chatter or reverse from tiny coordinate jitter.
+        private var dragScrollDirection: Int = 0
+
+        private static let dragScrollEdgeBand: CGFloat = 72
+        private static let dragScrollExitSlop: CGFloat = 36
+        private static let dragScrollMaxStep: CGFloat = 16
+
         init(
             onNoteLinkTapped: ((String) -> Void)?,
             onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?,
+            onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?,
             onAttachmentLinkTapped: ((String) -> Void)?,
             onHeightChanged: ((CGFloat) -> Void)?,
             onImagePreview: ((FullScreenImagePayload) -> Void)?
         ) {
             self.onNoteLinkTapped = onNoteLinkTapped
             self.onCheckboxToggled = onCheckboxToggled
+            self.onCheckboxReordered = onCheckboxReordered
             self.onAttachmentLinkTapped = onAttachmentLinkTapped
             self.onHeightChanged = onHeightChanged
             self.onImagePreview = onImagePreview
@@ -1114,6 +1397,35 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                       let checked = Self.boolFromScriptValue(dict["checked"])
                 else { return }
                 onCheckboxToggled?(index, checked)
+            case "checkboxReorder":
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                      let fromIndex = Self.intFromScriptValue(dict["fromIndex"])
+                else { return }
+                let beforeIndex: Int?
+                if dict["beforeIndex"] == nil || dict["beforeIndex"] is NSNull {
+                    beforeIndex = nil
+                } else {
+                    beforeIndex = Self.intFromScriptValue(dict["beforeIndex"])
+                }
+                onCheckboxReordered?(fromIndex, beforeIndex)
+            case "checkboxDragState":
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                      let active = Self.boolFromScriptValue(dict["active"])
+                else { return }
+                if active {
+                    beginCheckboxDrag()
+                } else {
+                    endCheckboxDrag()
+                }
+            case "checkboxDragScroll":
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                      let clientY = Self.cgFloatFromScriptValue(dict["clientY"]),
+                      let webView
+                else { return }
+                // Map document clientY through the (full-height) web view into the window.
+                // This stays correct while the outer SwiftUI ScrollView moves under the finger.
+                let windowY = webView.convert(CGPoint(x: webView.bounds.midX, y: clientY), to: nil).y
+                dragScrollWindowY = windowY
             case "imagePreview":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
                       let dataURL = dict["dataURL"] as? String,
@@ -1123,6 +1435,102 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 onImagePreview?(FullScreenImagePayload(image: image, title: title))
             default:
                 break
+            }
+        }
+
+        func beginCheckboxDrag() {
+            guard let webView else { return }
+            // Always re-resolve: the representable can move in the hierarchy between drags.
+            enclosingScrollView = Self.findEnclosingScrollView(from: webView)
+            guard let scrollView = enclosingScrollView else { return }
+            dragScrollWindowY = nil
+            dragScrollDirection = 0
+            if enclosingScrollWasEnabled == nil {
+                enclosingScrollWasEnabled = scrollView.isScrollEnabled
+                scrollView.isScrollEnabled = false
+            }
+            if dragScrollDisplayLink == nil {
+                let link = CADisplayLink(target: self, selector: #selector(handleDragScrollTick))
+                link.add(to: .main, forMode: .common)
+                dragScrollDisplayLink = link
+            }
+        }
+
+        func endCheckboxDrag() {
+            dragScrollDisplayLink?.invalidate()
+            dragScrollDisplayLink = nil
+            dragScrollWindowY = nil
+            dragScrollDirection = 0
+            if let scrollView = enclosingScrollView, let wasEnabled = enclosingScrollWasEnabled {
+                scrollView.isScrollEnabled = wasEnabled
+            }
+            enclosingScrollWasEnabled = nil
+        }
+
+        @objc private func handleDragScrollTick() {
+            guard let scrollView = enclosingScrollView, let windowY = dragScrollWindowY else { return }
+
+            let window = webView?.window
+            let bounds = window?.bounds ?? UIScreen.main.bounds
+            let safe = window?.safeAreaInsets ?? .zero
+            let topEdge = bounds.minY + safe.top + Self.dragScrollEdgeBand
+            let bottomEdge = bounds.maxY - safe.bottom - Self.dragScrollEdgeBand
+            let topExit = topEdge + Self.dragScrollExitSlop
+            let bottomExit = bottomEdge - Self.dragScrollExitSlop
+
+            // Sticky direction with hysteresis: enter near the edge, leave only after
+            // moving clearly back into the middle so autoscroll does not reverse mid-drag.
+            var direction = dragScrollDirection
+            if direction == -1 {
+                if windowY > topExit { direction = 0 }
+            } else if direction == 1 {
+                if windowY < bottomExit { direction = 0 }
+            }
+            if direction == 0 {
+                if windowY < topEdge {
+                    direction = -1
+                } else if windowY > bottomEdge {
+                    direction = 1
+                }
+            }
+            dragScrollDirection = direction
+            guard direction != 0 else { return }
+
+            let intensity: CGFloat
+            if direction < 0 {
+                intensity = min(1, max(0.2, (topEdge - windowY) / Self.dragScrollEdgeBand))
+            } else {
+                intensity = min(1, max(0.2, (windowY - bottomEdge) / Self.dragScrollEdgeBand))
+            }
+            let dy = CGFloat(direction) * Self.dragScrollMaxStep * intensity
+
+            let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+            let newY = min(max(0, scrollView.contentOffset.y + dy), maxY)
+            if abs(newY - scrollView.contentOffset.y) > 0.5 {
+                scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: newY), animated: false)
+            }
+        }
+
+        private static func findEnclosingScrollView(from view: UIView) -> UIScrollView? {
+            var current: UIView? = view.superview
+            while let c = current {
+                // Prefer the outer SwiftUI ScrollView, not the WKWebView's own scroll view.
+                if let sv = c as? UIScrollView, sv !== (view as? WKWebView)?.scrollView {
+                    return sv
+                }
+                current = c.superview
+            }
+            return nil
+        }
+
+        private static func cgFloatFromScriptValue(_ value: Any?) -> CGFloat? {
+            switch value {
+            case let cg as CGFloat: return cg
+            case let d as Double: return CGFloat(d)
+            case let f as Float: return CGFloat(f)
+            case let n as NSNumber: return CGFloat(truncating: n)
+            case let i as Int: return CGFloat(i)
+            default: return nil
             }
         }
 
