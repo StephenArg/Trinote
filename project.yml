@@ -26,8 +26,8 @@ settings:
     TARGETED_DEVICE_FAMILY: "1"
     INFOPLIST_FILE: Trinote/Resources/Info.plist
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    DEVELOPMENT_TEAM: ""
-    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: R6WYB662P7
+    CODE_SIGN_STYLE: Automatic
     SWIFT_STRICT_CONCURRENCY: complete
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
@@ -83,6 +83,8 @@ targets:
         INFOPLIST_FILE: Trinote/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: false
         CODE_SIGN_ENTITLEMENTS: Trinote/Trinote.entitlements
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
     scheme:
       testTargets:
         - TrinoteTests
@@ -104,6 +106,8 @@ targets:
         INFOPLIST_FILE: TrinoteShare/Info.plist
         GENERATE_INFOPLIST_FILE: false
         CODE_SIGN_ENTITLEMENTS: TrinoteShare/TrinoteShare.entitlements
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"

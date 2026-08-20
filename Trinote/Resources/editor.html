@@ -1599,15 +1599,77 @@ function scheduleEditorTypingActivity() {
 }
 
 // --- Clipboard image paste (iOS WKWebView often exposes file:// URLs instead of image bytes) ---
-function trinoteInsertImageFromDataUri(src) {
-  if (!src) return;
+/**
+ * Where to put media after the native Image picker.
+ * iOS often blurs the editor on toolbar touch *before* the click handler runs, which collapses
+ * TipTap’s selection to the start of the doc. We keep the last caret seen while focused and
+ * freeze it when Image is pressed (pointerdown), then insert with insertContentAt.
+ */
+let lastFocusedInsertPos = null;
+let pendingMediaInsertPos = null;
+
+function capturePendingMediaInsertPos() {
   try {
-    editor.chain().focus().insertContent({ type: 'image', attrs: { src } }).run();
+    if (editor.view.hasFocus()) {
+      const { from, to } = editor.state.selection;
+      pendingMediaInsertPos = { from, to };
+      lastFocusedInsertPos = pendingMediaInsertPos;
+      return;
+    }
+  } catch (e) {}
+  if (lastFocusedInsertPos && typeof lastFocusedInsertPos.from === 'number') {
+    pendingMediaInsertPos = { from: lastFocusedInsertPos.from, to: lastFocusedInsertPos.to };
+  } else {
+    pendingMediaInsertPos = null;
+  }
+}
+
+/** @deprecated use capturePendingMediaInsertPos */
+function capturePendingImageInsertPos() {
+  capturePendingMediaInsertPos();
+}
+
+function clampInsertPos(pos, max) {
+  if (typeof pos !== 'number' || !Number.isFinite(pos)) return 0;
+  return Math.max(0, Math.min(pos, max));
+}
+
+/**
+ * Insert TipTap content at the pending media caret (or end / current selection).
+ * Prefer insertContentAt so we never rely on focus() restoring a selection that blur wiped.
+ */
+function insertContentAtPendingPos(content) {
+  const saved = pendingMediaInsertPos;
+  pendingMediaInsertPos = null;
+  try {
+    const max = editor.state.doc.content.size;
+    if (saved && typeof saved.from === 'number') {
+      const from = clampInsertPos(saved.from, max);
+      const to = clampInsertPos(typeof saved.to === 'number' ? saved.to : from, max);
+      const a = Math.min(from, to);
+      const b = Math.max(from, to);
+      if (a !== b) {
+        editor.chain().focus().insertContentAt({ from: a, to: b }, content).run();
+      } else {
+        editor.chain().focus().insertContentAt(a, content).run();
+      }
+    } else if (editor.view.hasFocus()) {
+      editor.chain().focus().insertContent(content).run();
+    } else {
+      editor.chain().focus('end').insertContent(content).run();
+    }
     try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+    try { scheduleScrollCaretIntoViewAfterKeyboard(); } catch (e) {}
   } catch (e) {}
 }
 
+function trinoteInsertImageFromDataUri(src) {
+  if (!src) return;
+  insertContentAtPendingPos({ type: 'image', attrs: { src } });
+}
+
 function trinoteRequestNativePaste(mode) {
+  pendingMediaInsertPos = null; // native paste should use the live caret, not an Image-button snapshot
   try {
     window.webkit.messageHandlers.pasteImageRequest.postMessage({ mode: mode || 'embed' });
   } catch (e) {}
@@ -1631,7 +1693,10 @@ function trinotePasteImageFileFromClipboard(item) {
   const reader = new FileReader();
   reader.onload = function () {
     const src = reader.result;
-    if (typeof src === 'string') trinoteInsertImageFromDataUri(src);
+    if (typeof src === 'string') {
+      pendingMediaInsertPos = null; // paste uses live selection, not a prior Image-button snapshot
+      trinoteInsertImageFromDataUri(src);
+    }
   };
   reader.onerror = function () { trinoteRequestNativePaste('embed'); };
   reader.readAsDataURL(file);
@@ -1702,6 +1767,12 @@ let editorSavedRange = null;
 editor.on('selectionUpdate', ({ editor }) => {
   const { from, to, empty } = editor.state.selection;
   if (!empty) editorSavedRange = { from, to };
+  // Track caret for Image / file insert even after iOS blurs the editor on toolbar touch.
+  try {
+    if (editor.view.hasFocus()) {
+      lastFocusedInsertPos = { from, to };
+    }
+  } catch (e) {}
 });
 
 // iOS: while the swatch panel is open, blur refocuses the editor so the keyboard can stay up.
@@ -2366,7 +2437,10 @@ function updateImagePopupState() {
   const pos = imagePopup._targetPos;
   if (pos == null) return;
   const node = editor.state.doc.nodeAt(pos);
-  if (!node) return;
+  if (!node || node.type.name !== 'image') {
+    hideImagePopup();
+    return;
+  }
   const currentStyle = node.attrs.imageStyle || '';
   imagePopup.querySelectorAll('.image-popup-row[data-style]').forEach(r => {
     r.classList.toggle('active', (r.dataset.style || '') === currentStyle);
@@ -2397,7 +2471,47 @@ function showImagePopup(imgEl, pos) {
 function hideImagePopup() {
   imagePopup.classList.remove('visible');
   imagePopup._targetPos = null;
+  if (captionInput) captionInput.style.display = 'none';
 }
+
+/** Close the image controls when the target image is gone (keyboard delete, Remove, undo, etc.). */
+function syncImagePopupWithEditor(tr) {
+  if (!imagePopup.classList.contains('visible')) return;
+  let pos = imagePopup._targetPos;
+  if (pos == null) {
+    hideImagePopup();
+    return;
+  }
+  if (tr && tr.docChanged) {
+    try {
+      pos = tr.mapping.map(pos, -1);
+    } catch (e) {
+      hideImagePopup();
+      return;
+    }
+  }
+  let node = null;
+  try {
+    node = editor.state.doc.nodeAt(pos);
+  } catch (e) {
+    hideImagePopup();
+    return;
+  }
+  if (!node || node.type.name !== 'image') {
+    hideImagePopup();
+    return;
+  }
+  if (pos !== imagePopup._targetPos) {
+    imagePopup._targetPos = pos;
+  }
+}
+
+editor.on('transaction', ({ transaction }) => {
+  syncImagePopupWithEditor(transaction);
+});
+editor.on('selectionUpdate', () => {
+  syncImagePopupWithEditor(null);
+});
 
 function relayoutImagePopup() {
   const pos = imagePopup._targetPos;
@@ -3835,9 +3949,16 @@ _insertToolsEl.className = 'toolbar-insert-tools';
 setToolbarMount(_insertToolsEl);
 
 // Insert
-btn('Image', ic('foundation--photo.svg'), () => {
+const imageToolbarBtn = btn('Image', ic('foundation--photo.svg'), () => {
+  // Snapshot before native dialog / camera cover blurs the editor and collapses selection to the top.
+  capturePendingMediaInsertPos();
   try { window.webkit.messageHandlers.pickImage.postMessage('pick'); } catch(e) {}
 }, () => false);
+// iOS: touch blurs the editor before click — freeze the caret on pointerdown while it is still valid.
+imageToolbarBtn.addEventListener('pointerdown', (e) => {
+  if (e.isPrimary === false) return;
+  capturePendingMediaInsertPos();
+}, true);
 makeLinkToolbar();
 btn('Include', '<span style="font-weight:800;font-size:14px;line-height:1">⊕</span>', () => {
   try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'pickIncludeNote' }); } catch(e) {}
@@ -4434,6 +4555,7 @@ window.editorBridge = {
   },
   insertHTML(html) { editor.commands.insertContent(html); },
   insertImage(src) { trinoteInsertImageFromDataUri(src); },
+  clearPendingMediaInsert() { pendingMediaInsertPos = null; },
   pasteImageURL() { trinoteRequestNativePaste('url'); },
   pastePlainFallback(plain, html) {
     const p = (plain != null) ? String(plain) : '';
@@ -4465,11 +4587,10 @@ window.editorBridge = {
     const aid = (attachmentId != null) ? String(attachmentId).trim() : '';
     const t = (title != null && String(title).trim()) ? String(title).trim() : aid;
     if (!nid || !aid) return;
-    editor.chain().focus().insertContent({
+    insertContentAtPendingPos({
       type: 'attachmentReference',
       attrs: { noteId: nid, attachmentId: aid, title: t },
-    }).run();
-    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+    });
   },
   updateAttachmentReferenceTitle(pos, title) {
     const p = Number(pos);

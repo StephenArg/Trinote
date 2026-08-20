@@ -11,6 +11,8 @@ struct AttachmentUploadButton: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isUploading = false
     @State private var uploadError: String?
+    @State private var pendingUpload: PendingAttachmentUpload?
+    @State private var pendingBasename = ""
 
     private var showUploadError: Binding<Bool> {
         Binding(
@@ -51,6 +53,9 @@ struct AttachmentUploadButton: View {
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             Task { await handleFilePick(result) }
         }
+        .attachmentUploadNamePrompt(pending: $pendingUpload, basename: $pendingBasename) { item, basename in
+            Task { await uploadPending(item, basename: basename) }
+        }
         .alert("Upload Error", isPresented: showUploadError) {
             Button("OK") { uploadError = nil }
         } message: {
@@ -58,23 +63,30 @@ struct AttachmentUploadButton: View {
         }
     }
 
-    private func handlePhotoPick(_ item: PhotosPickerItem) async {
+    private func presentNamePrompt(data: Data, mime: String, filename: String) {
+        let pending = PendingAttachmentUpload(data: data, mime: mime, filename: filename)
+        pendingBasename = pending.suggestedBasename
+        pendingUpload = pending
+    }
+
+    private func uploadPending(_ item: PendingAttachmentUpload, basename: String) async {
         isUploading = true
-        defer {
-            isUploading = false
-            selectedPhoto = nil
+        defer { isUploading = false }
+        let filename = item.resolvedFilename(basename: basename)
+        let attachment = await viewModel.uploadAttachment(data: item.data, filename: filename, mime: item.mime)
+        if attachment == nil {
+            uploadError = viewModel.saveError
         }
+    }
+
+    private func handlePhotoPick(_ item: PhotosPickerItem) async {
+        defer { selectedPhoto = nil }
 
         do {
             if let data = try await item.loadTransferable(type: Data.self) {
                 let mime = item.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg"
                 let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
-                let filename = "attachment.\(ext)"
-
-                let attachment = await viewModel.uploadAttachment(data: data, filename: filename, mime: mime)
-                if attachment == nil {
-                    uploadError = viewModel.saveError
-                }
+                presentNamePrompt(data: data, mime: mime, filename: "attachment.\(ext)")
             }
         } catch {
             uploadError = error.localizedDescription
@@ -82,9 +94,6 @@ struct AttachmentUploadButton: View {
     }
 
     private func handleFilePick(_ result: Result<[URL], Error>) async {
-        isUploading = true
-        defer { isUploading = false }
-
         do {
             let urls = try result.get()
             guard let url = urls.first else { return }
@@ -97,12 +106,8 @@ struct AttachmentUploadButton: View {
 
             let data = try Data(contentsOf: url)
             let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            let filename = url.lastPathComponent
-
-            let attachment = await viewModel.uploadAttachment(data: data, filename: filename, mime: mime)
-            if attachment == nil {
-                uploadError = viewModel.saveError
-            }
+            let filename = url.lastPathComponent.isEmpty ? "attachment" : url.lastPathComponent
+            presentNamePrompt(data: data, mime: mime, filename: filename)
         } catch {
             uploadError = error.localizedDescription
         }

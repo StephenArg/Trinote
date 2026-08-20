@@ -23,7 +23,19 @@ enum NavigationControllerFinder {
             ?? (root as? UINavigationController)
     }
 
-    private static func topViewController(from root: UIViewController) -> UIViewController {
+    /// Foreground key-window topmost controller (presented / nav / tab).
+    @MainActor
+    static func topViewController() -> UIViewController? {
+        let window = AppDelegate.foregroundWindowScene?.keyWindow
+            ?? UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)
+        guard let root = window?.rootViewController else { return nil }
+        return topViewController(from: root)
+    }
+
+    static func topViewController(from root: UIViewController) -> UIViewController {
         if let presented = root.presentedViewController {
             return topViewController(from: presented)
         }

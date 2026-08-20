@@ -67,6 +67,7 @@ private struct AppLaunchLoadingPanel: View {
 
 @main
 struct TrinoteApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appState: AppState?
     @State private var persistenceError: String?
     @State private var isAppLocked = false

@@ -123,6 +123,8 @@ struct NoteDetailView: View {
     @State private var attachmentToInsert: EditorAttachmentInsert?
     @State private var attachmentRenameContext: EditorAttachmentRenameContext?
     @State private var attachmentRenameBasename = ""
+    @State private var pendingAttachmentUpload: PendingAttachmentUpload?
+    @State private var pendingAttachmentUploadBasename = ""
     @State private var protectedDocumentPassword = ""
     @State private var favoriteNoteIds: Set<String> = []
     @State private var findControl = FindOnPageControl()
@@ -688,6 +690,28 @@ struct NoteDetailView: View {
         Task { @MainActor in
             guard let vm = viewModel else { return }
             await vm.renameAttachmentTitle(attachmentId: ctx.attachmentId, title: newTitle)
+        }
+    }
+
+    private func presentAttachmentUploadNamePrompt(data: Data, mime: String, filename: String) {
+        let pending = PendingAttachmentUpload(data: data, mime: mime, filename: filename)
+        pendingAttachmentUploadBasename = pending.suggestedBasename
+        pendingAttachmentUpload = pending
+    }
+
+    private func confirmPendingAttachmentUpload(
+        _ item: PendingAttachmentUpload,
+        basename: String,
+        vm: NoteDetailViewModel
+    ) async {
+        let filename = item.resolvedFilename(basename: basename)
+        if let attachment = await vm.uploadAttachment(data: item.data, filename: filename, mime: item.mime) {
+            Self.insertAttachmentLinkInEditor(
+                webView: editorWebView,
+                noteId: vm.noteId,
+                attachmentId: attachment.attachmentId,
+                title: attachment.title
+            )
         }
     }
 
@@ -1452,6 +1476,15 @@ struct NoteDetailView: View {
                     Text(String(localized: "Extension: .\(ext)", comment: "Attachment rename extension hint"))
                 }
             }
+            .attachmentUploadNamePrompt(
+                pending: $pendingAttachmentUpload,
+                basename: $pendingAttachmentUploadBasename
+            ) { item, basename in
+                guard let vm = viewModel else { return }
+                Task { @MainActor in
+                    await confirmPendingAttachmentUpload(item, basename: basename, vm: vm)
+                }
+            }
             .sheet(isPresented: $vm.showCreateChild) {
                 CreateChildNoteSheet(viewModel: vm) { noteId, title in
                     navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
@@ -2029,16 +2062,7 @@ struct NoteDetailView: View {
                     }
                 },
                 onPasteFile: { data, filename, mime in
-                    Task { @MainActor in
-                        if let attachment = await vm.uploadAttachment(data: data, filename: filename, mime: mime) {
-                            Self.insertAttachmentLinkInEditor(
-                                webView: editorWebView,
-                                noteId: vm.noteId,
-                                attachmentId: attachment.attachmentId,
-                                title: attachment.title
-                            )
-                        }
-                    }
+                    presentAttachmentUploadNamePrompt(data: data, mime: mime, filename: filename)
                 },
                 imageToInsert: $imageToInsert,
                 attachmentToInsert: $attachmentToInsert,
@@ -2068,7 +2092,11 @@ struct NoteDetailView: View {
                     },
                     onCamera: {
                         showEditorImageSourceDialog = false
-                        showEditorCamera = true
+                        // Lock portrait first so the system camera gets upright bounds; present
+                        // via fullScreenCover (not UIKit present) so note @State survives.
+                        EditorCameraCapture.preparePortraitSession {
+                            showEditorCamera = true
+                        }
                     },
                     onChooseFile: {
                         showEditorImageSourceDialog = false
@@ -2076,6 +2104,10 @@ struct NoteDetailView: View {
                     },
                     onCancel: {
                         showEditorImageSourceDialog = false
+                        editorWebView?.evaluateJavaScript(
+                            "try{window.editorBridge.clearPendingMediaInsert()}catch(e){}",
+                            completionHandler: nil
+                        )
                     }
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
@@ -2108,10 +2140,15 @@ struct NoteDetailView: View {
             allowedContentTypes: [.item],
             allowsMultipleSelection: false
         ) { result in
-            Task { await handleEditorFilePick(result, vm: vm) }
+            Task { await handleEditorFilePick(result) }
         }
-        .fullScreenCover(isPresented: $showEditorCamera) {
-            CameraPickerView(imageToInsert: $imageToInsert) { showEditorCamera = false }
+        .fullScreenCover(isPresented: $showEditorCamera, onDismiss: {
+            EditorCameraCapture.endPortraitSession()
+        }) {
+            CameraPickerView(imageToInsert: $imageToInsert) {
+                showEditorCamera = false
+            }
+            .ignoresSafeArea()
         }
         .sheet(isPresented: $showIncludeNotePicker) {
             NotePickerSheet(
@@ -2765,7 +2802,7 @@ struct NoteDetailView: View {
         imageToInsert = "data:\(imageMime);base64,\(base64)"
     }
 
-    private func handleEditorFilePick(_ result: Result<[URL], Error>, vm: NoteDetailViewModel) async {
+    private func handleEditorFilePick(_ result: Result<[URL], Error>) async {
         do {
             let urls = try result.get()
             guard let url = urls.first else { return }
@@ -2788,13 +2825,8 @@ struct NoteDetailView: View {
                     imageMime = mime
                 }
                 imageToInsert = "data:\(imageMime);base64,\(imageData.base64EncodedString())"
-            } else if let attachment = await vm.uploadAttachment(data: data, filename: filename, mime: mime) {
-                Self.insertAttachmentLinkInEditor(
-                    webView: editorWebView,
-                    noteId: vm.noteId,
-                    attachmentId: attachment.attachmentId,
-                    title: attachment.title
-                )
+            } else {
+                presentAttachmentUploadNamePrompt(data: data, mime: mime, filename: filename)
             }
         } catch {
             Log.ui.error("Editor file pick failed: \(error.localizedDescription)")
@@ -3421,48 +3453,6 @@ struct CreateChildNoteSheet: View {
         if let noteId = await viewModel.createChildNote() {
             dismiss()
             onNoteCreated?(noteId, title)
-        }
-    }
-}
-
-// MARK: - Camera Picker
-
-struct CameraPickerView: UIViewControllerRepresentable {
-    @Binding var imageToInsert: String?
-    var onDismiss: () -> Void
-
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
-        picker.sourceType = .camera
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(imageToInsert: $imageToInsert, onDismiss: onDismiss)
-    }
-
-    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        @Binding var imageToInsert: String?
-        var onDismiss: () -> Void
-
-        init(imageToInsert: Binding<String?>, onDismiss: @escaping () -> Void) {
-            _imageToInsert = imageToInsert
-            self.onDismiss = onDismiss
-        }
-
-        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            if let image = info[.originalImage] as? UIImage,
-               let data = image.jpegData(compressionQuality: 0.8) {
-                imageToInsert = "data:image/jpeg;base64,\(data.base64EncodedString())"
-            }
-            onDismiss()
-        }
-
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            onDismiss()
         }
     }
 }

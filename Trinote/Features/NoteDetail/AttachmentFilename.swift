@@ -23,6 +23,7 @@ enum AttachmentFilename {
         let trimmedExt = ext.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty else { return trimmedExt.isEmpty ? "attachment" : "attachment.\(trimmedExt)" }
         guard !trimmedExt.isEmpty else { return base }
+        // If the user re-typed the locked extension, don't duplicate it.
         if base.lowercased().hasSuffix(".\(trimmedExt.lowercased())") { return base }
         return "\(base).\(trimmedExt)"
     }
