@@ -454,6 +454,83 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(item.value, "note123")
     }
 
+    // MARK: - TreeChildBatchLoader
+
+    func testTreeChildBatchLoader_fetchesParentAndChildrenInOneBatch() async throws {
+        let mock = MockTriliumClient()
+        let parent = NoteItem(
+            from: TestFixtures.noteResponse(
+                id: "parent",
+                title: "Parent",
+                childNoteIds: ["c1", "c2", "c3"],
+                childBranchIds: ["b1", "b2", "b3"]
+            )
+        )
+        await mock.setNoteResult(
+            "parent",
+            .success(
+                TestFixtures.noteResponse(
+                    id: "parent",
+                    title: "Parent",
+                    childNoteIds: ["c1", "c2", "c3"],
+                    childBranchIds: ["b1", "b2", "b3"]
+                )
+            )
+        )
+        await mock.setNoteResult("c1", .success(TestFixtures.noteResponse(id: "c1", title: "Child 1", parentNoteIds: ["parent"])))
+        await mock.setNoteResult("c2", .success(TestFixtures.noteResponse(id: "c2", title: "Child 2", parentNoteIds: ["parent"])))
+        await mock.setNoteResult("c3", .success(TestFixtures.noteResponse(id: "c3", title: "Child 3", parentNoteIds: ["parent"])))
+        await mock.setBranchResult("b1", .success(TestFixtures.branchResponse(branchId: "b1", noteId: "c1", parentNoteId: "parent")))
+        await mock.setBranchResult("b2", .success(TestFixtures.branchResponse(branchId: "b2", noteId: "c2", parentNoteId: "parent")))
+        await mock.setBranchResult("b3", .success(TestFixtures.branchResponse(branchId: "b3", noteId: "c3", parentNoteId: "parent")))
+
+        var branchCache: [String: BranchItem] = [:]
+        var noteCache: [String: NoteItem] = [:]
+
+        try await TreeChildBatchLoader.populateCachesIfNeeded(
+            parentNote: parent,
+            client: mock,
+            branchCache: &branchCache,
+            noteCache: &noteCache
+        )
+
+        let batchCalls = await mock.fullSyncFetchTreeBatchCalls
+        let branchCalls = await mock.getBranchCalls
+        XCTAssertEqual(batchCalls.count, 1)
+        XCTAssertEqual(batchCalls.first, ["parent", "c1", "c2", "c3"])
+        XCTAssertTrue(branchCalls.isEmpty)
+        XCTAssertEqual(Set(branchCache.keys), ["b1", "b2", "b3"])
+        XCTAssertEqual(Set(noteCache.keys), ["parent", "c1", "c2", "c3"])
+    }
+
+    func testTreeChildBatchLoader_skipsWhenFullyCached() async throws {
+        let mock = MockTriliumClient()
+        let parent = NoteItem(
+            from: TestFixtures.noteResponse(
+                id: "parent",
+                title: "Parent",
+                childNoteIds: ["c1"],
+                childBranchIds: ["b1"]
+            )
+        )
+        var branchCache: [String: BranchItem] = [
+            "b1": BranchItem(from: TestFixtures.branchResponse(branchId: "b1", noteId: "c1", parentNoteId: "parent")),
+        ]
+        var noteCache: [String: NoteItem] = [
+            "c1": NoteItem(from: TestFixtures.noteResponse(id: "c1", title: "Child 1", parentNoteIds: ["parent"])),
+        ]
+
+        try await TreeChildBatchLoader.populateCachesIfNeeded(
+            parentNote: parent,
+            client: mock,
+            branchCache: &branchCache,
+            noteCache: &noteCache
+        )
+
+        let batchCalls = await mock.fullSyncFetchTreeBatchCalls
+        XCTAssertTrue(batchCalls.isEmpty)
+    }
+
     // MARK: - TreePathReveal
 
     func testTreePathRevealNoteC3ExpandsC1AndC2() {

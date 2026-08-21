@@ -1028,17 +1028,8 @@ actor TriliumClient: TriliumClientProtocol {
 
         let max = limit ?? 50
         let slice = Array(ids.prefix(max))
-        var results: [NoteResponse] = []
-        results.reserveCapacity(slice.count)
-        try await withThrowingTaskGroup(of: NoteResponse.self) { group in
-            for id in slice {
-                group.addTask { try await self.getNote(id) }
-            }
-            for try await n in group {
-                results.append(n)
-            }
-        }
-        return SearchResponse(results: results, debugInfo: nil)
+        let entries = try await fullSyncFetchTreeBatch(noteIds: slice)
+        return SearchResponse(results: entries.map(\.note), debugInfo: nil)
     }
 
     /// Returns template note IDs from Trilium's built-in endpoint used by desktop/web clients.

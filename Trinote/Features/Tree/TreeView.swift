@@ -509,11 +509,8 @@ struct TreeView: View {
             guard newValue == nil, let old = oldValue else { return }
             revealPreviousNoteAfterPop(fallbackNoteId: old.noteId)
         }
-        .onChange(of: drillDownTarget) { oldValue, newValue in
-            // Returning from a nested tree page: re-reveal the active note on this page.
-            guard newValue == nil, let old = oldValue else { return }
-            revealPreviousNoteAfterPop(fallbackNoteId: old.noteId)
-        }
+        // Returning from a nested tree must not re-reveal / re-center: the user was browsing the
+        // tree and expects this page’s expand + scroll position to stay where they left it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if showNoteTabsBar, showsNoteTabsBarInset {
                 NoteTabsBar(
@@ -1249,8 +1246,8 @@ struct TreeView: View {
         }
     }
 
-    /// Expands ancestors toward the note the user just left so it (or the deepest inline ancestor) is visible.
-    /// Any other open paths are collapsed so only the active note’s path remains open.
+    /// After popping a **note** destination, expands ancestors toward that note (or the active tab)
+    /// and centers it. Not used when popping a nested tree — that should leave scroll/expand alone.
     private func revealPreviousNoteAfterPop(fallbackNoteId: String) {
         guard onPickParent == nil else { return }
         Task { @MainActor in

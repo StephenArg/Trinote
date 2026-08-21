@@ -17,12 +17,19 @@ struct FavoritesView: View {
     var onNoteDeleted: (() -> Void)?
 
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
+    @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
+    @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#F2F2F7"
+    @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
     @State private var favorites: [FavoriteNote] = []
     /// Same row chrome as Recents: path from cache, tree “notebook” icon, last-open time when known.
     @State private var pathByNoteId: [String: String] = [:]
     @State private var displayTitleByNoteId: [String: String] = [:]
     @State private var iconByNoteId: [String: String] = [:]
     @State private var lastAccessByNoteId: [String: Date] = [:]
+    /// Raw value of the leaf note's `#color` label (Trilium tree color), per note id.
+    @State private var colorLabelByNoteId: [String: String] = [:]
     @State private var navigateToNote: (String, String)?
     @State private var isEditMode = false
     @State private var selectedIds: Set<String> = []
@@ -47,6 +54,15 @@ struct FavoritesView: View {
     private var bulkDuplicateConfirmMessage: String {
         guard let p = duplicateTargetParent else { return "" }
         return String(localized: "Create \(selectedCount) duplicate(s) under “\(p.title)”?", comment: "Favorites bulk duplicate confirm")
+    }
+
+    private var treeBgColor: Color? {
+        guard useCustomTreeColors else { return nil }
+        return colorScheme == .dark ? Color(hex: treeDarkBgColor) : Color(hex: treeLightBgColor)
+    }
+
+    private var treeChromeBackground: Color {
+        treeBgColor ?? Color(.systemGroupedBackground)
     }
 
     private var groupedFavoriteSections: [FavoriteNotebookSection] {
@@ -195,35 +211,75 @@ struct FavoritesView: View {
             } description: {
                 Text(String(localized: "Long-press a note in the tree and choose “Add to Favorites” to add it here.", comment: "Favorites empty hint"))
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(treeChromeBackground)
         } else {
             favoritesList
         }
     }
 
     private var favoritesList: some View {
-        List {
-            ForEach(groupedFavoriteSections) { section in
+        let sections = groupedFavoriteSections
+        return List {
+            ForEach(Array(sections.enumerated()), id: \.element.id) { sectionIndex, section in
                 Section {
-                    ForEach(section.items, id: \.id) { fav in
+                    favoriteSectionBanner(section)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+
+                    ForEach(Array(section.items.enumerated()), id: \.element.id) { itemIndex, fav in
+                        let isLastInSection = itemIndex == section.items.count - 1
+                        let hasHeaderBelow = isLastInSection && sectionIndex < sections.count - 1
                         favoriteListItem(fav)
+                            .listRowBackground(treeBgColor ?? Color(.systemBackground))
+                            .listRowSeparator(hasHeaderBelow ? .hidden : .automatic, edges: .bottom)
                     }
-                } header: {
-                    HStack(spacing: 8) {
-                        Image(systemName: sectionHeaderIcon(for: section))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 22, alignment: .center)
-                            .accessibilityHidden(true)
-                        Text(section.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                    }
-                    .textCase(nil)
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
+        .listSectionSpacing(0)
+        .scrollContentBackground(.hidden)
+        .background(treeChromeBackground)
         .disabled(isBulkWorking)
+    }
+
+    private func favoriteSectionBanner(_ section: FavoriteNotebookSection) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: sectionHeaderIcon(for: section))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, alignment: .center)
+                .accessibilityHidden(true)
+            Text(section.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            ZStack {
+                (treeBgColor ?? Color(.systemBackground))
+                Color.accentColor.opacity(0.10)
+            }
+        }
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color(.separator))
+                .frame(height: 0.5)
+                .frame(maxWidth: .infinity)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color(.separator))
+                .frame(height: 0.5)
+                .frame(maxWidth: .infinity)
+        }
+        .accessibilityAddTraits(.isHeader)
     }
 
     private func sectionHeaderIcon(for section: FavoriteNotebookSection) -> String {
@@ -324,7 +380,7 @@ struct FavoritesView: View {
                     .foregroundStyle(selectedIds.contains(fav.noteId) ? Color.accentColor : Color.secondary)
             }
             Image(systemName: favoritesRowIcon(for: fav))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(resolvedIconColor(for: fav))
                 .frame(width: 24)
                 .accessibilityHidden(true)
 
@@ -332,14 +388,16 @@ struct FavoritesView: View {
                 Text(displayTitleByNoteId[fav.noteId] ?? fav.title)
                     .font(.body)
                     .lineLimit(2)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(resolvedTitleColor(for: fav))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .multilineTextAlignment(.leading)
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(favoritesAccessLabel(for: fav))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: true, vertical: false)
+                    if let accessLabel = favoritesAccessLabel(for: fav) {
+                        Text(accessLabel)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                     if let path = pathByNoteId[fav.noteId], !path.isEmpty {
                         Text(path)
                             .font(.caption)
@@ -368,11 +426,28 @@ struct FavoritesView: View {
         return (NoteType(rawValue: fav.noteType) ?? .text).iconName
     }
 
-    private func favoritesAccessLabel(for fav: FavoriteNote) -> String {
-        if let d = lastAccessByNoteId[fav.noteId] {
-            return d.relativeDisplay
+    private func favoritesAccessLabel(for fav: FavoriteNote) -> String? {
+        guard let d = lastAccessByNoteId[fav.noteId] else { return nil }
+        return d.relativeDisplay
+    }
+
+    private func triliumColor(for fav: FavoriteNote) -> Color? {
+        guard useTriliumNoteColors else { return nil }
+        if let profileId = appState.activeProfile?.id,
+           let cached = try? PersistenceManager.shared.fetchCachedNote(id: fav.noteId, serverProfileId: profileId),
+           cached.isProtected,
+           !appState.protectedSessionActive {
+            return nil
         }
-        return "Not opened recently"
+        return TriliumNoteColorMapper.swiftUIColor(for: colorLabelByNoteId[fav.noteId])
+    }
+
+    private func resolvedTitleColor(for fav: FavoriteNote) -> Color {
+        triliumColor(for: fav) ?? .primary
+    }
+
+    private func resolvedIconColor(for fav: FavoriteNote) -> Color {
+        triliumColor(for: fav) ?? .secondary
     }
 
     private func toggleSelection(_ noteId: String) {
@@ -390,6 +465,7 @@ struct FavoritesView: View {
             displayTitleByNoteId = [:]
             iconByNoteId = [:]
             lastAccessByNoteId = [:]
+            colorLabelByNoteId = [:]
             return
         }
         let pm = PersistenceManager.shared
@@ -399,6 +475,7 @@ struct FavoritesView: View {
             var titlesOut: [String: String] = [:]
             var icons: [String: String] = [:]
             var access: [String: Date] = [:]
+            var colors: [String: String] = [:]
             var visible: [FavoriteNote] = []
             visible.reserveCapacity(raw.count)
 
@@ -451,6 +528,9 @@ struct FavoritesView: View {
                         serverProfileId: profileId
                     )
                 }
+                if let colorRaw = pm.cachedNoteColorLabel(noteId: fav.noteId, serverProfileId: profileId) {
+                    colors[fav.noteId] = colorRaw
+                }
             }
 
             favorites = visible
@@ -458,6 +538,7 @@ struct FavoritesView: View {
             displayTitleByNoteId = titlesOut
             iconByNoteId = icons
             lastAccessByNoteId = access
+            colorLabelByNoteId = colors
         } catch {
             Log.persistence.error("Failed to load favorites: \(error)")
             favorites = []
@@ -465,6 +546,7 @@ struct FavoritesView: View {
             displayTitleByNoteId = [:]
             iconByNoteId = [:]
             lastAccessByNoteId = [:]
+            colorLabelByNoteId = [:]
         }
     }
 

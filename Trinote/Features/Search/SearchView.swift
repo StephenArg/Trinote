@@ -11,8 +11,26 @@ private struct SearchNoteDestination: Hashable {
 
 struct SearchView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
+    @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#F2F2F7"
+    @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
     @State private var viewModel: SearchViewModel?
     @State private var navigateTo: SearchNoteDestination?
+    @FocusState private var isSearchFieldFocused: Bool
+
+    private var treeBgColor: Color? {
+        guard useCustomTreeColors else { return nil }
+        return colorScheme == .dark ? Color(hex: treeDarkBgColor) : Color(hex: treeLightBgColor)
+    }
+
+    private var treeChromeBackground: Color {
+        treeBgColor ?? Color(.systemGroupedBackground)
+    }
+
+    private var listRowBackgroundColor: Color {
+        treeBgColor ?? Color(.systemBackground)
+    }
 
     var body: some View {
         Group {
@@ -22,6 +40,7 @@ struct SearchView: View {
                 ProgressView()
             }
         }
+        .background(treeChromeBackground)
         .navigationTitle(String(localized: "Search", comment: "Search tab title"))
         .task {
             if viewModel == nil {
@@ -73,6 +92,20 @@ struct SearchView: View {
                 recentSearchesList(vm)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(treeChromeBackground)
+    }
+
+    private var searchFieldBackground: Color {
+        colorScheme == .dark
+            ? Color(.tertiarySystemFill)
+            : Color.accentColor.opacity(0.12)
+    }
+
+    private var searchFieldBorder: Color {
+        colorScheme == .dark
+            ? Color(.separator)
+            : Color.accentColor.opacity(0.35)
     }
 
     private func searchBar(_ vm: SearchViewModel) -> some View {
@@ -83,19 +116,25 @@ struct SearchView: View {
                 TextField(String(localized: "Search notes…", comment: "Search field placeholder"), text: Binding(
                     get: { vm.query },
                     set: { newValue in
+                        let wasEmpty = vm.query.isEmpty
                         vm.query = newValue
                         vm.onQueryChanged()
+                        if !wasEmpty, newValue.isEmpty {
+                            isSearchFieldFocused = false
+                        }
                     }
                 ))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
+                .focused($isSearchFieldFocused)
                 .onSubmit { Task { await vm.performSearch() } }
                 .accessibilityLabel(String(localized: "Search notes", comment: "VoiceOver search field"))
 
                 if !vm.query.isEmpty {
                     Button {
                         vm.clearSearch()
+                        isSearchFieldFocused = false
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -104,10 +143,16 @@ struct SearchView: View {
                 }
             }
             .padding(10)
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .background(searchFieldBackground, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(searchFieldBorder, lineWidth: 1)
+            }
         }
-        .padding()
+        .padding(.horizontal)
+        .padding(.top)
+        .padding(.bottom, 4)
+        .background(treeChromeBackground)
     }
 
     private func openNote(_ note: NoteItem, findQuery: String?, matchIndex1Based: Int?) {
@@ -137,6 +182,7 @@ struct SearchView: View {
             Section {
                 ForEach(vm.results) { note in
                     searchResultSection(note: note, vm: vm)
+                        .listRowBackground(listRowBackgroundColor)
                 }
             } header: {
                 Text(
@@ -147,6 +193,8 @@ struct SearchView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(treeChromeBackground)
     }
 
     private static let maxVisibleMatches = 20
@@ -157,18 +205,23 @@ struct SearchView: View {
         let expanded = vm.expandedMatchNoteIds.contains(note.noteId)
 
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 if canExpand {
                     Button {
                         vm.toggleMatchExpansion(for: note)
                     } label: {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.body.weight(.semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 22, height: 28)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        expanded
+                            ? String(localized: "Hide matches", comment: "Search result expand")
+                            : String(localized: "Show matches", comment: "Search result expand")
+                    )
                 }
 
                 Button {
@@ -179,7 +232,6 @@ struct SearchView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.vertical, 4)
 
             if expanded && canExpand {
                 matchExpansionContent(note: note, vm: vm)
@@ -267,28 +319,67 @@ struct SearchView: View {
             Spacer()
         } else {
             List {
-                Section(String(localized: "Recent Searches", comment: "Search history section")) {
-                    ForEach(vm.recentSearches, id: \.id) { search in
-                        Button {
-                            vm.selectRecentSearch(search)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "clock")
-                                    .foregroundStyle(.secondary)
-                                VStack(alignment: .leading) {
-                                    Text(search.query)
-                                        .foregroundStyle(.primary)
-                                    Text(search.searchedAt.relativeDisplay)
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                }
+                ForEach(vm.recentSearches, id: \.id) { search in
+                    Button {
+                        vm.selectRecentSearch(search)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 24)
+                                .accessibilityHidden(true)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(search.query)
+                                    .font(.body)
+                                    .lineLimit(2)
+                                    .foregroundStyle(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .multilineTextAlignment(.leading)
+                                Text(search.searchedAt.relativeDisplay)
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.quaternary)
                         }
-                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .listRowBackground(listRowBackgroundColor)
+                }
+                .onDelete { offsets in
+                    vm.deleteRecentSearches(at: offsets)
                 }
             }
             .listStyle(.insetGrouped)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .scrollContentBackground(.hidden)
+            .background(treeChromeBackground)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack {
+                    Text(String(localized: "Recent Searches", comment: "Search history section"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(nil)
+                    Spacer()
+                    Button(String(localized: "Clear", comment: "Clear all recent searches")) {
+                        vm.clearRecentSearches()
+                    }
+                    .font(.subheadline)
+                    .accessibilityHint(String(localized: "Clears all recent searches", comment: "Clear recent searches accessibility hint"))
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 2)
+                .padding(.bottom, 4)
+                .frame(maxWidth: .infinity)
+                .background(treeChromeBackground)
+            }
         }
     }
 }
@@ -337,6 +428,7 @@ struct SearchResultRow: View {
     var showTrailingChevron: Bool = true
 
     @Environment(AppState.self) private var appState
+    @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
 
     private var displayTitle: String {
         note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
@@ -346,64 +438,78 @@ struct SearchResultRow: View {
         searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Breadcrumb under root (same as Recents); empty when it would only repeat the title.
+    private var pathDisplay: String {
+        guard let profileId = appState.activeProfile?.id else { return "" }
+        let pathFull = PersistenceManager.shared.cachedNotePathDisplay(
+            noteId: note.noteId,
+            leafTitle: note.title,
+            leafIsProtected: note.isProtected,
+            serverProfileId: profileId,
+            protectedSessionActive: appState.protectedSessionActive
+        )
+        return (pathFull == displayTitle) ? "" : pathFull
+    }
+
+    private var modifiedLabel: String? {
+        let raw = note.dateModified.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        return raw.triliumDate()?.relativeDisplay ?? raw
+    }
+
+    /// Trilium `#color` when enabled; suppressed for locked protected notes (matches Recents).
+    private var triliumColor: Color? {
+        guard useTriliumNoteColors else { return nil }
+        if note.isProtected, !appState.protectedSessionActive { return nil }
+        return TriliumNoteColorMapper.swiftUIColor(for: note.colorLabelValue)
+    }
+
     @ViewBuilder
     private var titleView: some View {
-        if titleHighlightQuery.isEmpty {
-            Text(displayTitle)
-                .font(.body)
-                .lineLimit(2)
-        } else {
-            Text(SearchQueryHighlight.attributedString(text: displayTitle, query: titleHighlightQuery))
-                .font(.body)
-                .lineLimit(2)
+        let color = triliumColor ?? Color.primary
+        Group {
+            if titleHighlightQuery.isEmpty {
+                Text(displayTitle)
+            } else {
+                Text(SearchQueryHighlight.attributedString(text: displayTitle, query: titleHighlightQuery))
+            }
         }
+        .font(.body)
+        .lineLimit(2)
+        .foregroundStyle(color)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .multilineTextAlignment(.leading)
     }
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: note.resolvedIconName)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(triliumColor ?? .secondary)
                 .frame(width: 24)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 titleView
 
-                if note.showsSharingBadge || note.showsMultiCloneBadge || note.isProtected {
-                    HStack(spacing: 8) {
-                        if note.isSharedWithMultipleTreePlacements {
-                            Label(String(localized: "Sharing", comment: "Search result badge"), systemImage: "scale.3d")
-                                .font(.caption2)
-                                .foregroundStyle(Color.green)
-                            Label(String(localized: "Cloned", comment: "Search result badge"), systemImage: "arrow.triangle.branch")
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                        } else if note.showsSharingBadge {
-                            Label(String(localized: "Sharing", comment: "Search result badge"), systemImage: "scale.3d")
-                                .font(.caption2)
-                                .foregroundStyle(Color.green)
-                        } else if note.showsMultiCloneBadge {
-                            Label(String(localized: "Cloned", comment: "Search result badge"), systemImage: "arrow.triangle.branch")
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                        }
-
-                        if note.isProtected {
-                            Label(String(localized: "Protected", comment: "Search result badge"), systemImage: "lock.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.yellow)
-                        }
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let modifiedLabel {
+                        Text(modifiedLabel)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    if !pathDisplay.isEmpty {
+                        Text(pathDisplay)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .minimumScaleFactor(0.85)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-
-                if !note.dateModified.isEmpty {
-                    Text(String(localized: "Modified \(note.dateModified.triliumDate()?.relativeDisplay ?? note.dateModified)", comment: "Search result date"))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
             }
-
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if showTrailingChevron {
                 Image(systemName: "chevron.right")
@@ -411,6 +517,7 @@ struct SearchResultRow: View {
                     .foregroundStyle(.quaternary)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel("\(displayTitle), \(note.uiNoteTypeDisplayName)")
     }
 }

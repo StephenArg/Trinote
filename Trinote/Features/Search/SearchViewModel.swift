@@ -330,6 +330,28 @@ final class SearchViewModel {
         Task { await performSearch() }
     }
 
+    func deleteRecentSearches(at offsets: IndexSet) {
+        let toDelete = offsets.compactMap { recentSearches.indices.contains($0) ? recentSearches[$0] : nil }
+        for search in toDelete {
+            do {
+                try persistence.deleteRecentSearch(id: search.id)
+            } catch {
+                Log.persistence.error("Failed to delete recent search: \(error)")
+            }
+        }
+        loadRecentSearches()
+    }
+
+    func clearRecentSearches() {
+        guard let profileId = serverProfileId else { return }
+        do {
+            try persistence.clearRecentSearches(serverProfileId: profileId)
+            recentSearches = []
+        } catch {
+            Log.persistence.error("Failed to clear recent searches: \(error)")
+        }
+    }
+
     func clearSearch() {
         query = ""
         results = []

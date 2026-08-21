@@ -8,6 +8,13 @@ final class SharedNotesSubtreeLoaderTests: XCTestCase {
         await mock.seedSharedNotesSubtreeDemo()
         let items = try await SharedNotesSubtreeLoader.loadAllSharedNotes(client: mock)
         XCTAssertEqual(items.map(\.noteId), ["n1"])
+
+        let batchCalls = await mock.fullSyncFetchTreeBatchCalls
+        let branchCalls = await mock.getBranchCalls
+        XCTAssertFalse(batchCalls.isEmpty)
+        XCTAssertTrue(branchCalls.isEmpty)
+        // First visit of `_share` batches parent + direct child `n1`.
+        XCTAssertEqual(batchCalls.first, ["_share", "n1"])
     }
 
     func testTriliumSharing_publicURLUsesAliasWhenPresent() {

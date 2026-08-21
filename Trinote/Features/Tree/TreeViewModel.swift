@@ -703,48 +703,16 @@ final class TreeViewModel {
     private func loadChildren(of note: NoteItem, client: any TriliumClientProtocol) async throws -> [TreeNode] {
         guard !note.childBranchIds.isEmpty else { return [] }
 
-        // Fetch branches we don't have cached
-        let missingBranchIds = note.childBranchIds.filter { branchCache[$0] == nil }
-        if !missingBranchIds.isEmpty {
-            let responses = try await withThrowingTaskGroup(of: BranchResponse.self) { group in
-                for branchId in missingBranchIds {
-                    group.addTask { try await client.getBranch(branchId, parentNoteId: note.noteId) }
-                }
-                var results: [BranchResponse] = []
-                for try await response in group { results.append(response) }
-                return results
-            }
-            for response in responses {
-                branchCache[response.branchId] = BranchItem(from: response)
-            }
-        }
-
-        // Determine which note IDs we need from the branches we now have
-        let childNoteIds = note.childBranchIds.compactMap { branchCache[$0]?.noteId }
-        let missingNoteIds = Set(childNoteIds).subtracting(noteCache.keys)
-
-        if !missingNoteIds.isEmpty {
-            let responses = try await withThrowingTaskGroup(of: NoteResponse?.self) { group in
-                for noteId in missingNoteIds {
-                    group.addTask {
-                        do {
-                            return try await client.getNote(noteId)
-                        } catch {
-                            return nil
-                        }
-                    }
-                }
-                var results: [NoteResponse] = []
-                for try await response in group {
-                    if let r = response { results.append(r) }
-                }
-                return results
-            }
-            for response in responses {
-                if response.isDeleted { continue }
-                noteCache[response.noteId] = NoteItem(from: response)
-            }
-        }
+        var localBranchCache = branchCache
+        var localNoteCache = noteCache
+        try await TreeChildBatchLoader.populateCachesIfNeeded(
+            parentNote: note,
+            client: client,
+            branchCache: &localBranchCache,
+            noteCache: &localNoteCache
+        )
+        branchCache = localBranchCache
+        noteCache = localNoteCache
 
         // Assemble tree nodes, preserving branch order.
         // Filter out ghost notes (server still lists them but their blobs are erased).

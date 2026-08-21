@@ -52,6 +52,14 @@ actor MockTriliumClient: TriliumClientProtocol {
         noteContentResults[noteId] = result
     }
 
+    func setNoteResult(_ noteId: String, _ result: Result<NoteResponse, Error>) {
+        noteResults[noteId] = result
+    }
+
+    func setBranchResult(_ branchId: String, _ result: Result<BranchResponse, Error>) {
+        branchResults[branchId] = result
+    }
+
     func setAttachmentContentResult(_ result: Result<Data, Error>) {
         attachmentContentResult = result
     }
@@ -137,6 +145,7 @@ actor MockTriliumClient: TriliumClientProtocol {
     }
 
     var batchTreeLoadCalls: [[String]] = []
+    var fullSyncFetchTreeBatchCalls: [[String]] = []
 
     func batchTreeLoad(noteIds: [String]) async throws -> TreeLoadResponse {
         batchTreeLoadCalls.append(noteIds)
@@ -144,6 +153,7 @@ actor MockTriliumClient: TriliumClientProtocol {
     }
 
     func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry] {
+        fullSyncFetchTreeBatchCalls.append(noteIds)
         var out: [FullSyncTreeBatchEntry] = []
         for id in noteIds {
             let (note, branches) = try await getNoteWithBranches(id)

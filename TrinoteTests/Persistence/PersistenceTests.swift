@@ -230,6 +230,25 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(recents[0].title, "New Title")
     }
 
+    // MARK: - Recent Searches
+
+    func testDeleteAndClearRecentSearches() throws {
+        try persistence.recordRecentSearch(query: "alpha", serverProfileId: "s1")
+        try persistence.recordRecentSearch(query: "beta", serverProfileId: "s1")
+        try persistence.recordRecentSearch(query: "gamma", serverProfileId: "s2")
+
+        var s1 = try persistence.fetchRecentSearches(serverProfileId: "s1")
+        XCTAssertEqual(Set(s1.map(\.query)), ["alpha", "beta"])
+
+        try persistence.deleteRecentSearch(id: s1.first(where: { $0.query == "alpha" })!.id)
+        s1 = try persistence.fetchRecentSearches(serverProfileId: "s1")
+        XCTAssertEqual(s1.map(\.query), ["beta"])
+
+        try persistence.clearRecentSearches(serverProfileId: "s1")
+        XCTAssertTrue(try persistence.fetchRecentSearches(serverProfileId: "s1").isEmpty)
+        XCTAssertEqual(try persistence.fetchRecentSearches(serverProfileId: "s2").map(\.query), ["gamma"])
+    }
+
     // MARK: - Cleanup
 
     func testDeleteCachedNotesPurgesAuxiliaryStores() throws {

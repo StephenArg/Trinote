@@ -1083,6 +1083,25 @@ final class PersistenceManager {
         return try context.fetch(descriptor)
     }
 
+    func deleteRecentSearch(id: String) throws {
+        var descriptor = FetchDescriptor<RecentSearch>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        guard let existing = try context.fetch(descriptor).first else { return }
+        context.delete(existing)
+        try context.save()
+    }
+
+    func clearRecentSearches(serverProfileId: String) throws {
+        let profileId = serverProfileId
+        let descriptor = FetchDescriptor<RecentSearch>(
+            predicate: #Predicate { $0.serverProfileId == profileId }
+        )
+        let rows = try context.fetch(descriptor)
+        guard !rows.isEmpty else { return }
+        rows.forEach { context.delete($0) }
+        try context.save()
+    }
+
     // MARK: - Drafts
 
     func saveDraft(noteId: String, content: String, serverProfileId: String) throws {
