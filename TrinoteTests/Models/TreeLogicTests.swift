@@ -454,6 +454,42 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(item.value, "note123")
     }
 
+    // MARK: - TreePathReveal
+
+    func testTreePathRevealNoteC3ExpandsC1AndC2() {
+        let path = ["C1", "C2", "C3"]
+        let result = TreePathReveal.ancestorsToExpandAndRevealNoteId(pathFromTreeChildrenToTarget: path)
+        XCTAssertEqual(result.expandNoteIds, ["C1", "C2"])
+        XCTAssertEqual(result.revealNoteId, "C3")
+    }
+
+    func testTreePathRevealNoteC5StopsAtC3() {
+        let path = ["C1", "C2", "C3", "C4", "C5"]
+        let result = TreePathReveal.ancestorsToExpandAndRevealNoteId(pathFromTreeChildrenToTarget: path)
+        XCTAssertEqual(result.expandNoteIds, ["C1", "C2"])
+        XCTAssertEqual(result.revealNoteId, "C3")
+    }
+
+    func testTreePathRevealNoteC1ExpandsNothing() {
+        let path = ["C1"]
+        let result = TreePathReveal.ancestorsToExpandAndRevealNoteId(pathFromTreeChildrenToTarget: path)
+        XCTAssertEqual(result.expandNoteIds, [])
+        XCTAssertEqual(result.revealNoteId, "C1")
+    }
+
+    func testTreePathRevealNoteC2ExpandsC1Only() {
+        let path = ["C1", "C2"]
+        let result = TreePathReveal.ancestorsToExpandAndRevealNoteId(pathFromTreeChildrenToTarget: path)
+        XCTAssertEqual(result.expandNoteIds, ["C1"])
+        XCTAssertEqual(result.revealNoteId, "C2")
+    }
+
+    func testTreePathRevealEmptyPath() {
+        let result = TreePathReveal.ancestorsToExpandAndRevealNoteId(pathFromTreeChildrenToTarget: [])
+        XCTAssertEqual(result.expandNoteIds, [])
+        XCTAssertNil(result.revealNoteId)
+    }
+
     // MARK: - APIError
 
     func testAPIErrorIsAuthError() {

@@ -901,6 +901,68 @@ final class PersistenceManager {
         return parentNoteIdFromFirstBranch(noteId: noteId, serverProfileId: serverProfileId)
     }
 
+    /// All known parent note ids for `noteId` (cached `parentNoteIds` plus every `CachedBranch` parent).
+    private func allParentNoteIdsForTreeWalk(noteId: String, serverProfileId: String, cached: CachedNote) -> [String] {
+        var ordered: [String] = []
+        var seen = Set<String>()
+        for p in cached.parentNoteIds where !p.isEmpty && seen.insert(p).inserted {
+            ordered.append(p)
+        }
+        let nid = noteId
+        let pid = serverProfileId
+        let branches = (try? context.fetch(
+            FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid },
+                sortBy: [SortDescriptor(\.branchId)]
+            )
+        )) ?? []
+        for b in branches where !b.parentNoteId.isEmpty && seen.insert(b.parentNoteId).inserted {
+            ordered.append(b.parentNoteId)
+        }
+        return ordered
+    }
+
+    /// Note ids from a direct child of `treeParentNoteId` down to `noteId` (inclusive).
+    /// When a note has multiple parents (clones), prefers the **longest** path that stays under `treeParentNoteId`
+    /// so a shallow clone under root does not hide the real nested tree placement.
+    /// Returns `[]` when `noteId` is not under `treeParentNoteId`, or when `noteId` equals `treeParentNoteId`.
+    func notePathUnderTreeParent(
+        noteId: String,
+        treeParentNoteId: String,
+        serverProfileId: String
+    ) -> [String] {
+        guard noteId != treeParentNoteId else { return [] }
+
+        func dfs(current: String, visited: Set<String>) -> [String]? {
+            if current == treeParentNoteId { return [] }
+            guard !visited.contains(current) else { return nil }
+
+            guard let cached = try? fetchCachedNote(id: current, serverProfileId: serverProfileId) else {
+                return nil
+            }
+            var nextVisited = visited
+            nextVisited.insert(current)
+
+            let parents = allParentNoteIdsForTreeWalk(
+                noteId: current,
+                serverProfileId: serverProfileId,
+                cached: cached
+            )
+            var best: [String]?
+            for parent in parents {
+                if let prefix = dfs(current: parent, visited: nextVisited) {
+                    let candidate = prefix + [current]
+                    if best == nil || candidate.count > best!.count {
+                        best = candidate
+                    }
+                }
+            }
+            return best
+        }
+
+        return dfs(current: noteId, visited: []) ?? []
+    }
+
     private func parentNoteIdFromFirstBranch(noteId: String, serverProfileId: String) -> String? {
         let nid = noteId
         let pid = serverProfileId

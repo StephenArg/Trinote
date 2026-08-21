@@ -25,6 +25,8 @@ final class TreeViewModel {
     private var branchCache: [String: BranchItem] = [:]
     private var expandedBranches: Set<String> = []
     private var _rootChildren: [TreeNode] = []
+    /// When true, `rootChildren` updates rebuild `visibleNodes` without animation (reveal-in-tree).
+    private var suppressVisibleNodeAnimation = false
 
     private let appState: AppState
     private let parentNoteId: String
@@ -43,7 +45,7 @@ final class TreeViewModel {
         get { _rootChildren }
         set {
             _rootChildren = newValue
-            rebuildVisibleNodes(animated: true)
+            rebuildVisibleNodes(animated: !suppressVisibleNodeAnimation)
         }
     }
 
@@ -414,6 +416,86 @@ final class TreeViewModel {
         }
     }
 
+    /// Expands `node` only if it is currently collapsed (does not collapse an already-open branch).
+    func expandIfCollapsed(_ node: TreeNode) async {
+        guard !expandedBranches.contains(node.branch.branchId) else { return }
+        await toggleExpand(node)
+    }
+
+    /// Collapses every expanded branch on this tree page.
+    private func collapseAllExpanded() {
+        guard !expandedBranches.isEmpty else { return }
+        expandedBranches = []
+        rootChildren = rootChildren.map {
+            TreeNode(branch: $0.branch, note: $0.note, children: nil, isLoading: false)
+        }
+    }
+
+    /// Reveals `noteId` on this tree page: collapses every other open path, then expands only this note’s
+    /// ancestors (up to `maxInlineDepth`), without drilling deeper.
+    /// Returns the branch id and note id of the deepest visible path row for scrolling / highlighting.
+    /// List updates are unanimated so returning from a note does not whip scroll top↔bottom.
+    @discardableResult
+    func expandAncestorsTowardNote(_ noteId: String) async -> (branchId: String, noteId: String)? {
+        let path = await resolvePathUnderThisTree(to: noteId)
+        let (expandNoteIds, revealNoteId) = TreePathReveal.ancestorsToExpandAndRevealNoteId(
+            pathFromTreeChildrenToTarget: path
+        )
+        guard revealNoteId != nil, !path.isEmpty else { return nil }
+
+        suppressVisibleNodeAnimation = true
+        defer { suppressVisibleNodeAnimation = false }
+
+        // Exclusive: only the active note’s path may stay open.
+        collapseAllExpanded()
+
+        // Expand level-by-level along the path (avoids expanding a shallow clone elsewhere in the tree).
+        var level = rootChildren
+        for ancestorId in expandNoteIds {
+            guard let node = level.first(where: { $0.note.noteId == ancestorId }) else { break }
+            await expandIfCollapsed(node)
+            level = Self.findTreeNode(noteId: ancestorId, in: rootChildren)?.children ?? []
+        }
+
+        // Deepest path note that is actually attached after expansion (C3 for deep notes, not C1).
+        let visiblePath = Array(path.prefix(min(path.count, TriliumTreeConstants.maxInlineDepth + 1)))
+        var deepest: TreeNode?
+        level = rootChildren
+        for id in visiblePath {
+            guard let node = level.first(where: { $0.note.noteId == id }) else { break }
+            deepest = node
+            level = node.children ?? []
+        }
+        guard let deepest else { return nil }
+        return (deepest.branch.branchId, deepest.note.noteId)
+    }
+
+    /// Path from this tree’s direct children down to `noteId`, using SwiftData first, then breadcrumbs when online.
+    private func resolvePathUnderThisTree(to noteId: String) async -> [String] {
+        if let profileId = serverProfileId {
+            let cached = persistence.notePathUnderTreeParent(
+                noteId: noteId,
+                treeParentNoteId: parentNoteId,
+                serverProfileId: profileId
+            )
+            if !cached.isEmpty { return cached }
+        }
+
+        guard client != nil else { return [] }
+        let crumbs = await breadcrumbs(for: noteId)
+        guard let parentIndex = crumbs.firstIndex(where: { $0.noteId == parentNoteId }) else {
+            // Root tree: breadcrumbs may start with Root; drop it. Or note may not be under this parent.
+            if parentNoteId == TriliumTreeConstants.rootNoteId,
+               let first = crumbs.first, first.noteId == TriliumTreeConstants.rootNoteId {
+                let withoutRoot = Array(crumbs.dropFirst()).map(\.noteId)
+                return withoutRoot
+            }
+            return []
+        }
+        let afterParent = crumbs.suffix(from: parentIndex + 1).map(\.noteId)
+        return Array(afterParent)
+    }
+
     /// Pull-to-refresh / toolbar after sync: always prefer a live server tree load when online.
     func refreshFromServerIfOnline() async {
         noteCache.removeAll()
@@ -701,11 +783,20 @@ final class TreeViewModel {
                 update(&result[i])
                 return result
             }
-            if let children = result[i].children {
+            if let children = result[i].children, Self.containsBranch(branchId, in: children) {
                 result[i].children = setNodeState(branchId: branchId, in: children, update: update)
+                return result
             }
         }
         return result
+    }
+
+    private static func containsBranch(_ branchId: String, in nodes: [TreeNode]) -> Bool {
+        for node in nodes {
+            if node.branch.branchId == branchId { return true }
+            if let kids = node.children, containsBranch(branchId, in: kids) { return true }
+        }
+        return false
     }
 
     private func collapseNode(branchId: String, in nodes: [TreeNode]) -> [TreeNode] {

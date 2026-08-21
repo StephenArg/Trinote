@@ -14,15 +14,21 @@ struct SettingsView: View {
     @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
     @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#ffffff"
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
+    /// Approx. system blue at 12% over white (matches prior accent wash).
+    @AppStorage("treeLightSelectedNoteColor") private var treeLightSelectedNoteColor: String = "#E0EFFF"
+    /// Approx. system blue at 12% over `#1c1c1e` (matches prior accent wash).
+    @AppStorage("treeDarkSelectedNoteColor") private var treeDarkSelectedNoteColor: String = "#192739"
 
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     @AppStorage("noteCheckboxReorderEnabled") private var noteCheckboxReorderEnabled: Bool = true
     /// When true, Image–Code insert tools sit in a top bar below the nav header instead of the bottom formatting toolbar.
     @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
+    @AppStorage("highlightCurrentNoteInTree") private var highlightCurrentNoteInTree: Bool = true
     @State private var showClearCacheConfirm = false
     @State private var showClearAllInstancesCacheConfirm = false
     @State private var showResetColorsConfirm = false
+    @State private var showResetTreeColorsConfirm = false
     @State private var appInfo: AppInfoResponse?
     @State private var isLoadingInfo = false
     @State private var cacheEntityCount = 0
@@ -167,6 +173,11 @@ struct SettingsView: View {
                 isOn: $showNoteTabsBar
             )
 
+            Toggle(
+                String(localized: "Highlight current note", comment: "Settings: highlight the current note row in the tree"),
+                isOn: $highlightCurrentNoteInTree
+            )
+
             Toggle(String(localized: "Use Trilium Note Colors", comment: "Settings: per-note colors from server"), isOn: $useTriliumNoteColors)
 
             Toggle(String(localized: "Custom Tree Colors", comment: "Settings"), isOn: $useCustomTreeColors)
@@ -199,7 +210,42 @@ struct SettingsView: View {
                     ColorPicker("", selection: treeDarkBgBinding)
                         .labelsHidden()
                 }
+
+                HStack {
+                    Text(String(localized: "Light Selected Note", comment: "Tree color row: highlighted note background in light mode"))
+                    Spacer()
+                    ColorPicker("", selection: treeLightSelectedNoteBinding)
+                        .labelsHidden()
+                }
+
+                HStack {
+                    Text(String(localized: "Dark Selected Note", comment: "Tree color row: highlighted note background in dark mode"))
+                    Spacer()
+                    ColorPicker("", selection: treeDarkSelectedNoteBinding)
+                        .labelsHidden()
+                }
+
+                Button(String(localized: "Reset Colors to Default", comment: "Settings: reset custom tree colors only")) {
+                    showResetTreeColorsConfirm = true
+                }
+                .foregroundStyle(.tint)
             }
+        }
+        .alert(
+            String(localized: "Reset Tree Colors to Default?", comment: "Settings alert title"),
+            isPresented: $showResetTreeColorsConfirm
+        ) {
+            Button(String(localized: "Cancel", comment: "Alert dismiss"), role: .cancel) {}
+            Button(String(localized: "Reset", comment: "Confirm reset tree colors")) {
+                resetCustomTreeColorsToDefaults()
+            }
+        } message: {
+            Text(
+                String(
+                    localized: "This restores the default text, background, and selected-note colors for the tree. Custom Tree Colors stays on.",
+                    comment: "Settings alert: reset custom tree colors"
+                )
+            )
         }
     }
 
@@ -228,6 +274,20 @@ struct SettingsView: View {
         Binding(
             get: { Color(hex: treeDarkBgColor) },
             set: { treeDarkBgColor = $0.hexString }
+        )
+    }
+
+    private var treeLightSelectedNoteBinding: Binding<Color> {
+        Binding(
+            get: { Color(hex: treeLightSelectedNoteColor) },
+            set: { treeLightSelectedNoteColor = $0.hexString }
+        )
+    }
+
+    private var treeDarkSelectedNoteBinding: Binding<Color> {
+        Binding(
+            get: { Color(hex: treeDarkSelectedNoteColor) },
+            set: { treeDarkSelectedNoteColor = $0.hexString }
         )
     }
 
@@ -855,10 +915,17 @@ struct SettingsView: View {
         customDarkTextColor = "#aaaaaa"
         useCustomTreeColors = false
         useTriliumNoteColors = true
+        resetCustomTreeColorsToDefaults()
+    }
+
+    /// Restores default custom tree color pickers only; leaves Custom Tree Colors enabled.
+    private func resetCustomTreeColorsToDefaults() {
         treeLightTextColor = "#1c1c1e"
         treeDarkTextColor = "#e5e5e7"
         treeLightBgColor = "#ffffff"
         treeDarkBgColor = "#1c1c1e"
+        treeLightSelectedNoteColor = "#E0EFFF"
+        treeDarkSelectedNoteColor = "#192739"
     }
 }
 

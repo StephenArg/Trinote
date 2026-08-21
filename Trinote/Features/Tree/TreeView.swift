@@ -98,6 +98,10 @@ struct TreeView: View {
     @State private var tabsBarNav: NoteNavItem?
     /// Mirrors `LastActiveOpenTabStore` for the active profile so the tab bar updates when the store changes.
     @State private var lastActiveOpenTabIdForBar: String = ""
+    /// Branch id to scroll into view after revealing a note’s ancestors.
+    @State private var pendingScrollBranchId: String?
+    /// Note id of the current note (or deepest visible ancestor) to lightly highlight in the list.
+    @State private var highlightedNoteId: String?
 
     @State private var isSelectMode = false
     @State private var selectedIds: Set<String> = []
@@ -106,12 +110,15 @@ struct TreeView: View {
     @State private var bulkDeleteError: String?
 
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
+    @AppStorage("highlightCurrentNoteInTree") private var highlightCurrentNoteInTree: Bool = true
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
     @AppStorage("treeDarkTextColor") private var treeDarkTextColor: String = "#e5e5e7"
     @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#ffffff"
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
+    @AppStorage("treeLightSelectedNoteColor") private var treeLightSelectedNoteColor: String = "#E0EFFF"
+    @AppStorage("treeDarkSelectedNoteColor") private var treeDarkSelectedNoteColor: String = "#192739"
 
     private var treeTextColor: Color? {
         guard useCustomTreeColors else { return nil }
@@ -121,6 +128,14 @@ struct TreeView: View {
     private var treeBgColor: Color? {
         guard useCustomTreeColors else { return nil }
         return colorScheme == .dark ? Color(hex: treeDarkBgColor) : Color(hex: treeLightBgColor)
+    }
+
+    /// Custom highlight fill when Custom Tree Colors is on; otherwise `nil` (accent wash is used).
+    private var treeSelectedNoteColor: Color? {
+        guard useCustomTreeColors else { return nil }
+        return colorScheme == .dark
+            ? Color(hex: treeDarkSelectedNoteColor)
+            : Color(hex: treeLightSelectedNoteColor)
     }
 
     /// Trilium `#color` label wins when enabled and recognized; else custom tree text color (if on); else `.primary`.
@@ -481,6 +496,23 @@ struct TreeView: View {
         .navigationDestination(item: $drillDownTarget, destination: subtreeDestination)
         .navigationDestination(item: $tabsBarNav) { item in
             NoteDetailView(noteId: item.noteId, title: item.title, openTabId: item.openTabId)
+        }
+        .onChange(of: navigateToNote) { oldValue, newValue in
+            guard newValue == nil, let old = oldValue else { return }
+            revealPreviousNoteAfterPop(fallbackNoteId: old.noteId)
+        }
+        .onChange(of: tabsBarNav) { oldValue, newValue in
+            guard newValue == nil, let old = oldValue else { return }
+            revealPreviousNoteAfterPop(fallbackNoteId: old.noteId)
+        }
+        .onChange(of: navigateToNoteForEdit) { oldValue, newValue in
+            guard newValue == nil, let old = oldValue else { return }
+            revealPreviousNoteAfterPop(fallbackNoteId: old.noteId)
+        }
+        .onChange(of: drillDownTarget) { oldValue, newValue in
+            // Returning from a nested tree page: re-reveal the active note on this page.
+            guard newValue == nil, let old = oldValue else { return }
+            revealPreviousNoteAfterPop(fallbackNoteId: old.noteId)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if showNoteTabsBar, showsNoteTabsBarInset {
@@ -878,6 +910,8 @@ struct TreeView: View {
         navigateToNoteForEdit = nil
         drillDownTarget = nil
         tabsBarNav = nil
+        pendingScrollBranchId = nil
+        highlightedNoteId = nil
         moveNoteSheetContext = nil
         moveNoteConfirmPayload = nil
         createSheetContext = nil
@@ -1166,39 +1200,94 @@ struct TreeView: View {
 
     private func treeList(_ vm: TreeViewModel) -> some View {
         let sync = appState.syncManager
-        return List {
-            if isLocalTransferUIHost, appState.localTransfer.receiveModeEnabled {
-                localTransferReceiveBanner
+        return ScrollViewReader { proxy in
+            List {
+                if isLocalTransferUIHost, appState.localTransfer.receiveModeEnabled {
+                    localTransferReceiveBanner
+                }
+                if let error = vm.error, !vm.rootChildren.isEmpty {
+                    errorBanner(error)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.red.opacity(0.08))
+                }
+                if sync.isSyncing, !sync.hasCompletedFullSync {
+                    fullSyncBanner(sync)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.accentColor.opacity(0.08))
+                }
+                if parentNoteId == "root", showsRootNotebookHeader {
+                    rootNotebookHeaderRow(viewModel: vm)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(treeBgColor ?? Color(.systemGroupedBackground))
+                }
+                ForEach(vm.visibleNodes) { flat in
+                    treeNodeRow(flat: flat, vm: vm, favoriteNoteIds: favoriteNoteIds, onFavoriteChanged: loadFavoriteIds)
+                        .id(flat.node.branch.branchId)
+                }
+                .if(onPickParent == nil && !isSelectMode) { view in
+                    view.onMove(perform: vm.handleMove)
+                }
             }
-            if let error = vm.error, !vm.rootChildren.isEmpty {
-                errorBanner(error)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.red.opacity(0.08))
-            }
-            if sync.isSyncing, !sync.hasCompletedFullSync {
-                fullSyncBanner(sync)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.accentColor.opacity(0.08))
-            }
-            if parentNoteId == "root", showsRootNotebookHeader {
-                rootNotebookHeaderRow(viewModel: vm)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(treeBgColor ?? Color(.systemGroupedBackground))
-            }
-            ForEach(vm.visibleNodes) { flat in
-                treeNodeRow(flat: flat, vm: vm, favoriteNoteIds: favoriteNoteIds, onFavoriteChanged: loadFavoriteIds)
-            }
-            .if(onPickParent == nil && !isSelectMode) { view in
-                view.onMove(perform: vm.handleMove)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .refreshable { await refreshWithSync() }
+            .background(treeChromeBackground)
+            .onChange(of: pendingScrollBranchId) { _, branchId in
+                guard let branchId else { return }
+                // Jump in place after unanimated expand — animated scrollTo fights List restore and
+                // reads as bottom → top → bottom.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(branchId, anchor: .center)
+                }
+                pendingScrollBranchId = nil
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .refreshable { await refreshWithSync() }
-        .background(treeChromeBackground)
+    }
+
+    /// Expands ancestors toward the note the user just left so it (or the deepest inline ancestor) is visible.
+    /// Any other open paths are collapsed so only the active note’s path remains open.
+    private func revealPreviousNoteAfterPop(fallbackNoteId: String) {
+        guard onPickParent == nil else { return }
+        Task { @MainActor in
+            // Destination swaps clear then push on the next turn; skip if something was pushed.
+            await Task.yield()
+            guard navigateToNote == nil,
+                  navigateToNoteForEdit == nil,
+                  tabsBarNav == nil,
+                  drillDownTarget == nil
+            else { return }
+
+            let noteId = resolveNoteIdForTreeReveal(fallbackNoteId: fallbackNoteId)
+            guard let vm = viewModel else { return }
+            if let target = await vm.expandAncestorsTowardNote(noteId) {
+                highlightedNoteId = target.noteId
+                // Let the list apply the unanimated expansion before scrolling.
+                await Task.yield()
+                pendingScrollBranchId = target.branchId
+            } else {
+                highlightedNoteId = nil
+            }
+        }
+    }
+
+    private func resolveNoteIdForTreeReveal(fallbackNoteId: String) -> String {
+        guard showNoteTabsBar, showsNoteTabsBarInset,
+              let profileId = appState.activeProfile?.id
+        else {
+            return fallbackNoteId
+        }
+        let tabId = LastActiveOpenTabStore.get(profileId: profileId)
+        guard !tabId.isEmpty,
+              let tab = try? PersistenceManager.shared.fetchOpenNoteTab(id: tabId, serverProfileId: profileId)
+        else {
+            return fallbackNoteId
+        }
+        return tab.noteId
     }
 
     /// Defers past UIKit context-menu dismissal and cold-launch window timing (`TrinoteDeferredSystemShareSheet`).
@@ -1279,6 +1368,8 @@ struct TreeView: View {
     private func treeNodeRow(flat: FlatTreeNode, vm: TreeViewModel, favoriteNoteIds: Set<String>, onFavoriteChanged: @escaping () -> Void) -> some View {
         let leading = CGFloat(flat.depth) * 20 + 16
         let isFav = favoriteNoteIds.contains(flat.node.note.noteId)
+        let isHighlighted = highlightCurrentNoteInTree
+            && highlightedNoteId == flat.node.note.noteId
         let row = buildTreeNodeRow(node: flat.node, depth: flat.depth, vm: vm)
 
         return Group {
@@ -1293,8 +1384,22 @@ struct TreeView: View {
             }
         }
         .listRowInsets(EdgeInsets(top: 8, leading: leading, bottom: 8, trailing: 16))
-        .listRowBackground(treeBgColor ?? Color(.systemBackground))
+        .listRowBackground(treeRowBackground(isHighlighted: isHighlighted))
         .listRowSeparatorTint(Color(.separator))
+        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
+    }
+
+    private func treeRowBackground(isHighlighted: Bool) -> some View {
+        ZStack {
+            treeBgColor ?? Color(.systemBackground)
+            if isHighlighted {
+                if let treeSelectedNoteColor {
+                    treeSelectedNoteColor
+                } else {
+                    Color.accentColor.opacity(0.12)
+                }
+            }
+        }
     }
 }
 
@@ -1351,7 +1456,6 @@ extension TreeViewModel {
 // MARK: - Tree Node Row
 
 struct TreeNodeRow: View {
-    static let maxInlineDepth = 2
     /// Reserves space so share/clone badges do not change row intrinsic size when they appear (avoids `List` self-sizing jumps).
     private static let badgeTrayWidth: CGFloat = 40
     private static let badgeTrayHeight: CGFloat = 18
@@ -1364,13 +1468,13 @@ struct TreeNodeRow: View {
     var resolvedTitleColor: Color
     var isSelectMode: Bool = false
     var isSelected: Bool = false
-    /// When true, expand/collapse inline even past `maxInlineDepth` (used by tree multi-select).
+    /// When true, expand/collapse inline even past `TriliumTreeConstants.maxInlineDepth` (used by tree multi-select).
     var forceInlineExpand: Bool = false
     let onSelect: (NoteItem, String) -> Void
     let onDrillDown: (String, String) -> Void
 
     private var isExpanded: Bool { node.children != nil }
-    private var shouldDrillDown: Bool { !forceInlineExpand && depth >= Self.maxInlineDepth }
+    private var shouldDrillDown: Bool { !forceInlineExpand && depth >= TriliumTreeConstants.maxInlineDepth }
     private var titleForegroundColor: Color {
         if node.note.isProtected, !appState.protectedSessionActive { return .secondary }
         return resolvedTitleColor

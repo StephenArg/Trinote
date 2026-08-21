@@ -390,4 +390,26 @@ enum TriliumTreeConstants {
     static let rootNoteId = "root"
     /// Branch id for the `root` note (top-level “Notes” container). Used as `move-to` parent for placing notes at top level.
     static let rootBranchId = "none_root"
+    /// Max 0-based depth for inline expand/collapse on a tree page. At this depth and below,
+    /// the chevron drills into a nested `TreeView` instead of expanding inline.
+    static let maxInlineDepth = 2
+}
+
+/// Pure path math for revealing a note on the current tree page (no drill-down).
+enum TreePathReveal {
+    /// Which ancestors to expand, and which path note to scroll into view, given a path from
+    /// this tree’s direct children down to the target (e.g. `[C1, C2, C3, C4]`).
+    static func ancestorsToExpandAndRevealNoteId(
+        pathFromTreeChildrenToTarget: [String],
+        maxInlineDepth: Int = TriliumTreeConstants.maxInlineDepth
+    ) -> (expandNoteIds: [String], revealNoteId: String?) {
+        guard !pathFromTreeChildrenToTarget.isEmpty else {
+            return ([], nil)
+        }
+        let expandCount = min(pathFromTreeChildrenToTarget.count - 1, maxInlineDepth)
+        let expandNoteIds = Array(pathFromTreeChildrenToTarget.prefix(expandCount))
+        let revealIndex = min(pathFromTreeChildrenToTarget.count, maxInlineDepth + 1) - 1
+        let revealNoteId = pathFromTreeChildrenToTarget[revealIndex]
+        return (expandNoteIds, revealNoteId)
+    }
 }
