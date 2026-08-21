@@ -52,6 +52,20 @@ final class MarkdownToNoteHTMLTests: XCTestCase {
         XCTAssertTrue(html.contains("quoted"))
     }
 
+    func testBlockquoteHardLineBreak() {
+        // Trailing two spaces after the first quote line → CommonMark hard break.
+        let md = "> Synthetic note for [Trinote #21](https://github.com/StephenArg/Trinote/issues/21).\u{0020}\u{0020}\n> No private servers, companies, or credentials."
+        let html = MarkdownToNoteHTML.convert(md, options: .preview)
+        XCTAssertTrue(html.contains("<blockquote>"), html)
+        XCTAssertTrue(html.contains("<br>"), "expected hard break between quote lines, got: \(html)")
+        XCTAssertTrue(html.contains("Trinote #21"), html)
+        XCTAssertTrue(html.contains("No private servers"), html)
+        // Soft-joined quotes without a hard break stay one line (space, not <br>).
+        let soft = MarkdownToNoteHTML.convert("> one\n> two")
+        XCTAssertFalse(soft.contains("<br>"), soft)
+        XCTAssertTrue(soft.contains("one two") || (soft.contains("one") && soft.contains("two")), soft)
+    }
+
     func testNestedBlockquote() {
         let md = """
         > outer
@@ -215,6 +229,142 @@ final class MarkdownToNoteHTMLTests: XCTestCase {
         XCTAssertTrue(html.contains("<ul>"))
         XCTAssertTrue(html.contains("parent"))
         XCTAssertTrue(html.contains("child"))
+        // Nested list must open a second `<ul>` inside the parent `<li>`, not flatten.
+        XCTAssertTrue(html.contains("<li>parent<ul>"), "expected nested ul inside parent li, got: \(html)")
+    }
+
+    func testNestedListThreeLevelsDeep() {
+        let md = """
+        - Infrastructure
+          - Kubernetes
+            - HPA
+            - Helm rollback
+        """
+        let html = MarkdownToNoteHTML.convert(md)
+        XCTAssertTrue(html.contains("<li>Infrastructure<ul>"), html)
+        XCTAssertTrue(html.contains("<li>Kubernetes<ul>"), html)
+        XCTAssertTrue(html.contains("<li>HPA</li>"), html)
+        XCTAssertTrue(html.contains("<li>Helm rollback</li>"), html)
+    }
+
+    func testPreviewMermaidFenceBecomesDiagramDiv() {
+        let md = """
+        ```mermaid
+        flowchart LR
+          A --> B
+        ```
+        """
+        let preview = MarkdownToNoteHTML.convert(md, options: .preview)
+        XCTAssertTrue(preview.contains("<div class=\"mermaid\">"), preview)
+        XCTAssertTrue(preview.contains("flowchart LR"), preview)
+        XCTAssertFalse(preview.contains("<pre><code"), preview)
+
+        let imported = MarkdownToNoteHTML.convert(md)
+        XCTAssertTrue(imported.contains("<pre><code class=\"language-mermaid\">"), imported)
+        XCTAssertFalse(imported.contains("<div class=\"mermaid\">"), imported)
+    }
+
+    func testPreviewTaskLists() {
+        let md = """
+        - [x] Define SLI
+        - [ ] Wire alerts to runbooks
+        - [/] Game day in progress
+        - [?] Maybe add chaos in Q3
+        - [-] Cancelled idea
+        """
+        let html = MarkdownToNoteHTML.convert(md, options: .preview)
+        XCTAssertTrue(html.contains("<ul class=\"todo-list\">"), html)
+        XCTAssertTrue(html.contains("todo-list__label--checked"), html)
+        XCTAssertTrue(html.contains("checked"), html)
+        XCTAssertTrue(html.contains("Define SLI"), html)
+        XCTAssertTrue(html.contains("Wire alerts to runbooks"), html)
+        XCTAssertTrue(html.contains("data-trilium-task-state=\"doing\""), html)
+        XCTAssertTrue(html.contains("data-trilium-task-state=\"maybe\""), html)
+        XCTAssertTrue(html.contains("data-trilium-task-state=\"cancelled\""), html)
+        XCTAssertTrue(html.contains("title=\"Doing\""), html)
+        XCTAssertTrue(html.contains("title=\"Maybe\""), html)
+        XCTAssertTrue(html.contains("Game day in progress"), html)
+        XCTAssertTrue(html.contains("Maybe add chaos in Q3"), html)
+        XCTAssertFalse(html.contains("[/]"), html)
+        XCTAssertFalse(html.contains("[?]"), html)
+        XCTAssertFalse(html.contains("[-] Cancelled"), html)
+    }
+
+    func testCyclingTaskStateOrder() {
+        var md = "- [ ] one"
+        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
+        XCTAssertEqual(md, "- [x] one")
+        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
+        XCTAssertEqual(md, "- [/] one")
+        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
+        XCTAssertEqual(md, "- [?] one")
+        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
+        XCTAssertEqual(md, "- [-] one")
+        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
+        XCTAssertEqual(md, "- [ ] one")
+    }
+
+    func testCyclingTaskStateByIndex() {
+        let md = """
+        - [ ] a
+        - [/] b
+        - [x] c
+        """
+        let next = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 1)
+        XCTAssertEqual(next, """
+        - [ ] a
+        - [?] b
+        - [x] c
+        """)
+        XCTAssertNil(MarkdownToNoteHTML.cyclingTaskState(in: md, at: 9))
+    }
+
+    func testEqualsIgnoringTaskMarkers() {
+        let a = "- [ ] one\n- [/] two"
+        let b = "- [x] one\n- [?] two"
+        XCTAssertTrue(MarkdownToNoteHTML.equalsIgnoringTaskMarkers(a, b))
+        XCTAssertFalse(MarkdownToNoteHTML.equalsIgnoringTaskMarkers(a, "- [ ] one\n- [/] changed"))
+    }
+
+    func testPreviewTaskListsOffByDefault() {
+        let md = """
+        - [x] Define SLI
+        - [ ] Wire alerts
+        """
+        let html = MarkdownToNoteHTML.convert(md)
+        XCTAssertFalse(html.contains("todo-list"), html)
+        XCTAssertTrue(html.contains("[x] Define SLI"), html)
+    }
+
+    func testPreviewMixedTableMermaidAndParagraph() {
+        let md = """
+        | Check | Pass |
+        |-------|------|
+        | Tables | ? |
+
+        ```mermaid
+        flowchart LR
+            OK[Rendered OK] --> SHIP[Ship fix]
+        ```
+
+        End of sample.
+        """
+        let html = MarkdownToNoteHTML.convert(md, options: .preview)
+        XCTAssertTrue(html.contains("<table>"), html)
+        XCTAssertTrue(html.contains("<th>Check</th>"), html)
+        XCTAssertTrue(html.contains("<div class=\"mermaid\">"), html)
+        XCTAssertTrue(html.contains("Rendered OK"), html)
+        XCTAssertTrue(html.contains("<p>End of sample.</p>"), html)
+    }
+
+    func testTableCellInlineCode() {
+        let md = """
+        | Component | First check |
+        |-----------|-------------|
+        | MySQL | `SHOW SLAVE STATUS` |
+        """
+        let html = MarkdownToNoteHTML.convert(md)
+        XCTAssertTrue(html.contains("<code>SHOW SLAVE STATUS</code>"), html)
     }
 
     func testEscapesHTMLInPlainText() {

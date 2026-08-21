@@ -197,7 +197,7 @@ struct IncludeNoteResolver {
             } else {
                 bodyHTML = Self.escapeHTML(String(localized: "Could not load image.", comment: "Include image failed"))
             }
-        case .code:
+        case .code, .markdown:
             if let src = await loadRawBodyString(noteId: nid) {
                 let langClass = mimeToLanguageClass(item.mime)
                 bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--code\"><pre><code class=\"\(langClass)\">\(Self.escapeHTML(src))</code></pre></div>"

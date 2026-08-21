@@ -7,7 +7,7 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     let noteId: String
     var title: String
     let type: NoteType
-    let mime: String
+    var mime: String
     let isProtected: Bool
     let dateCreated: String
     let dateModified: String

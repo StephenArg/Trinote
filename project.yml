@@ -32,6 +32,11 @@ settings:
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
 
+packages:
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    from: "2.2.0"
+
 targets:
   Trinote:
     type: application
@@ -74,6 +79,7 @@ targets:
         excludes:
           - "node_modules"
     dependencies:
+      - package: Highlightr
       - target: TrinoteShare
         embed: true
         codeSign: true

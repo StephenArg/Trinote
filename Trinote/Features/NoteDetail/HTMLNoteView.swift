@@ -9,6 +9,8 @@ struct HTMLNoteView: View {
     var checkboxOnlyRevision: Int = 0
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+    /// Cycles Markdown/Trilium multi-state todos (`[ ]`→`[x]`→`[/]`→`[?]`→`[-]`). Takes precedence over binary toggle.
+    var onTaskStateCycled: ((_ index: Int) -> Void)?
     /// Reorder a todo-list item among siblings. `beforeIndex` is nil when appending at end of the sibling group.
     var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
     /// Loads preview content for a tapped `api/attachments/{id}/…` link.
@@ -18,6 +20,12 @@ struct HTMLNoteView: View {
     var imageBytes: TriliumImageSchemeHandler.ByteProvider?
     /// When set, the web view registers for in-page find (read-only).
     var findControl: FindOnPageControl?
+    /// When false, todo checkboxes stay disabled (no toggle/reorder JS).
+    var listInteractionEnabled: Bool = true
+    /// When true with `listInteractionEnabled`, clicks cycle Trilium task states instead of binary toggle.
+    var taskStateCycleEnabled: Bool = false
+    /// When false, skip drag-reorder handles even if list interaction is on (Markdown preview).
+    var allowListReorder: Bool = true
 
     @State private var contentHeight: CGFloat = 200
     @State private var fullScreenImage: FullScreenImagePayload?
@@ -52,10 +60,13 @@ struct HTMLNoteView: View {
             html: html,
             baseURL: baseURL,
             themeColors: themeColors,
-            checkboxReorderEnabled: noteCheckboxReorderEnabled,
+            checkboxReorderEnabled: listInteractionEnabled && allowListReorder && noteCheckboxReorderEnabled,
+            listInteractionEnabled: listInteractionEnabled,
+            taskStateCycleEnabled: listInteractionEnabled && taskStateCycleEnabled,
             checkboxOnlyRevision: checkboxOnlyRevision,
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
+            onTaskStateCycled: onTaskStateCycled,
             onCheckboxReordered: onCheckboxReordered,
             onAttachmentLinkTapped: { attachmentId in
                 guard let loadAttachmentPreview else { return }
@@ -102,9 +113,12 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     let baseURL: URL?
     let themeColors: HTMLThemeColors
     let checkboxReorderEnabled: Bool
+    let listInteractionEnabled: Bool
+    let taskStateCycleEnabled: Bool
     let checkboxOnlyRevision: Int
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+    var onTaskStateCycled: ((_ index: Int) -> Void)?
     var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
     var onAttachmentLinkTapped: ((String) -> Void)?
     var imageBytes: TriliumImageSchemeHandler.ByteProvider?
@@ -116,6 +130,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         Coordinator(
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
+            onTaskStateCycled: onTaskStateCycled,
             onCheckboxReordered: onCheckboxReordered,
             onAttachmentLinkTapped: onAttachmentLinkTapped,
             imageBytes: imageBytes,
@@ -131,6 +146,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         contentController.add(handler, name: "noteLink")
         contentController.add(handler, name: "attachmentLink")
         contentController.add(handler, name: "checkboxToggle")
+        contentController.add(handler, name: "checkboxCycle")
         contentController.add(handler, name: "checkboxReorder")
         contentController.add(handler, name: "checkboxDragScroll")
         contentController.add(handler, name: "checkboxDragState")
@@ -168,12 +184,16 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         handler.webView = webView
         handler.themeColors = themeColors
         handler.checkboxReorderEnabled = checkboxReorderEnabled
+        handler.listInteractionEnabled = listInteractionEnabled
+        handler.taskStateCycleEnabled = taskStateCycleEnabled
         handler.checkboxOnlyRevision = checkboxOnlyRevision
         handler.findControl = findControl
         let wrapped = Self.wrapHTMLTimed(
             html,
             theme: themeColors,
             checkboxReorderEnabled: checkboxReorderEnabled,
+            listInteractionEnabled: listInteractionEnabled,
+            taskStateCycleEnabled: taskStateCycleEnabled,
             phase: "makeUIView"
         )
         handler.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
@@ -190,6 +210,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.findControl = findControl
         coordinator.onNoteLinkTapped = onNoteLinkTapped
         coordinator.onCheckboxToggled = onCheckboxToggled
+        coordinator.onTaskStateCycled = onTaskStateCycled
         coordinator.onCheckboxReordered = onCheckboxReordered
         coordinator.onAttachmentLinkTapped = onAttachmentLinkTapped
         coordinator.imageBytes = imageBytes
@@ -201,8 +222,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let htmlChanged = html != coordinator.loadedHTML
         let themeChanged = themeColors != coordinator.themeColors
         let reorderChanged = checkboxReorderEnabled != coordinator.checkboxReorderEnabled
+        let listInteractionChanged = listInteractionEnabled != coordinator.listInteractionEnabled
+        let cycleChanged = taskStateCycleEnabled != coordinator.taskStateCycleEnabled
         let compareMs = CheckboxPerf.ms(tCompare)
-        guard htmlChanged || themeChanged || reorderChanged else {
+        guard htmlChanged || themeChanged || reorderChanged || listInteractionChanged || cycleChanged else {
             if CheckboxPerf.lastToggleEndedAt > 0,
                CFAbsoluteTimeGetCurrent() - CheckboxPerf.lastToggleEndedAt < 5 {
                 CheckboxPerf.log(
@@ -212,13 +235,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             return
         }
 
-        // Checkbox taps already update the live DOM in JS. Reloading the whole note would collapse
-        // `.frame(height:)` while images decode again — the jump on image-heavy notes. The view model
-        // tells us when a change was a checkbox toggle and nothing else, so this stays O(1).
+        // Checkbox / Markdown task-state taps already update the live DOM in JS. Reloading the whole
+        // note would collapse `.frame(height:)` while images decode again. The view model bumps
+        // `checkboxOnlyRevision` for those patches so this stays O(1).
         let revisionChanged = checkboxOnlyRevision != coordinator.checkboxOnlyRevision
-        if htmlChanged, !themeChanged, !reorderChanged, revisionChanged,
+        if htmlChanged, !themeChanged, !reorderChanged, !listInteractionChanged, !cycleChanged, revisionChanged,
            let previous = coordinator.loadedHTML,
-           Self.lengthChangeFitsCheckboxToggle(previous: previous, incoming: html) {
+           // Binary checkbox patches are tiny; multi-state Markdown HTML can grow by more than that.
+           taskStateCycleEnabled || Self.lengthChangeFitsCheckboxToggle(previous: previous, incoming: html) {
             coordinator.loadedHTML = html
             coordinator.checkboxOnlyRevision = checkboxOnlyRevision
             CheckboxPerf.log(
@@ -233,11 +257,15 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.loadedHTML = html
         coordinator.themeColors = themeColors
         coordinator.checkboxReorderEnabled = checkboxReorderEnabled
+        coordinator.listInteractionEnabled = listInteractionEnabled
+        coordinator.taskStateCycleEnabled = taskStateCycleEnabled
         coordinator.checkboxOnlyRevision = checkboxOnlyRevision
         let wrapped = Self.wrapHTMLTimed(
             html,
             theme: themeColors,
             checkboxReorderEnabled: checkboxReorderEnabled,
+            listInteractionEnabled: listInteractionEnabled,
+            taskStateCycleEnabled: taskStateCycleEnabled,
             phase: "updateUIView-reload"
         )
         coordinator.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
@@ -254,6 +282,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "noteLink")
         uc.removeScriptMessageHandler(forName: "attachmentLink")
         uc.removeScriptMessageHandler(forName: "checkboxToggle")
+        uc.removeScriptMessageHandler(forName: "checkboxCycle")
         uc.removeScriptMessageHandler(forName: "checkboxReorder")
         uc.removeScriptMessageHandler(forName: "checkboxDragScroll")
         uc.removeScriptMessageHandler(forName: "checkboxDragState")
@@ -272,17 +301,31 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         _ body: String,
         theme: HTMLThemeColors,
         checkboxReorderEnabled: Bool,
+        listInteractionEnabled: Bool,
+        taskStateCycleEnabled: Bool,
         phase: String
     ) -> String {
         let t0 = CFAbsoluteTimeGetCurrent()
-        let wrapped = wrapHTML(body, theme: theme, checkboxReorderEnabled: checkboxReorderEnabled)
+        let wrapped = wrapHTML(
+            body,
+            theme: theme,
+            checkboxReorderEnabled: checkboxReorderEnabled,
+            listInteractionEnabled: listInteractionEnabled,
+            taskStateCycleEnabled: taskStateCycleEnabled
+        )
         CheckboxPerf.log(
             "wrapHTML phase=\(phase) bodyUtf16=\(body.utf16.count) wrappedUtf16=\(wrapped.utf16.count) ms=\(CheckboxPerf.ms(t0))"
         )
         return wrapped
     }
 
-    static func wrapHTML(_ body: String, theme: HTMLThemeColors, checkboxReorderEnabled: Bool = false) -> String {
+    static func wrapHTML(
+        _ body: String,
+        theme: HTMLThemeColors,
+        checkboxReorderEnabled: Bool = false,
+        listInteractionEnabled: Bool = true,
+        taskStateCycleEnabled: Bool = false
+    ) -> String {
         """
         <!DOCTYPE html>
         <html>
@@ -475,6 +518,53 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
         .todo-list__label__description { flex: 1; min-width: 0; transition: opacity 0.15s, text-decoration 0.15s; }
         .todo-list__label--checked .todo-list__label__description { text-decoration: line-through; opacity: 0.5; }
+        /* Trilium multi-state todos: [/]=doing, [?]=maybe, [-]=cancelled */
+        .tn-task-checkbox,
+        .todo-list__label input[type="checkbox"][data-trilium-task-state] {
+          display: inline-block;
+          box-sizing: border-box;
+          width: 18px;
+          height: 18px;
+          margin: 0;
+          margin-top: 6px;
+          flex-shrink: 0;
+          border: none;
+          border-radius: 4px;
+          background-repeat: no-repeat;
+          background-position: center;
+          background-size: 72% 72%;
+          -webkit-appearance: none;
+          appearance: none;
+          pointer-events: none;
+          opacity: 1;
+          vertical-align: top;
+        }
+        .tn-task-checkbox[data-trilium-task-state="doing"],
+        .todo-list__label input[type="checkbox"][data-trilium-task-state="doing"] {
+          background-color: #a68b5a;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='%23fff' transform='translate(12 12)'%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(45)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(90)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(135)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(180)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(225)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(270)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(315)'/%3E%3C/g%3E%3C/svg%3E");
+        }
+        .tn-task-checkbox[data-trilium-task-state="maybe"],
+        .todo-list__label input[type="checkbox"][data-trilium-task-state="maybe"] {
+          background-color: #6e6e6e;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ctext x='12' y='17.5' text-anchor='middle' fill='%23fff' font-size='15' font-weight='700' font-family='-apple-system,BlinkMacSystemFont,sans-serif'%3E%3F%3C/text%3E%3C/svg%3E");
+        }
+        .tn-task-checkbox[data-trilium-task-state="cancelled"],
+        .todo-list__label input[type="checkbox"][data-trilium-task-state="cancelled"] {
+          background-color: #c75a5a;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Cline x1='7' y1='7' x2='17' y2='17' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+        }
+        \(taskStateCycleEnabled ? """
+        .todo-list__label { cursor: pointer; }
+        .todo-list__label input[type="checkbox"][data-trilium-task-state] {
+          pointer-events: auto;
+          cursor: pointer;
+        }
+        """ : "")
+        \(listInteractionEnabled ? "" : """
+        /* Static preview: no write-back — match include-note disabled look */
+        .todo-list__label input[type="checkbox"]:not([data-trilium-task-state]) { pointer-events: none; opacity: 0.55; cursor: default; }
+        """)
         body.trinote-list-reorder ul > li,
         body.trinote-list-reorder ol > li {
           position: relative;
@@ -625,7 +715,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         .trinote-include__mindmap-children li { margin: 2px 0; }
         .trinote-include__filelink { font-weight: 600; }
         .trinote-include__filemeta { font-size: 0.82em; opacity: 0.7; margin-top: 4px; }
-        .trinote-include .todo-list__label input[type="checkbox"] { pointer-events: none; opacity: 0.55; }
+        .trinote-include .todo-list__label input[type="checkbox"]:not([data-trilium-task-state]) { pointer-events: none; opacity: 0.55; }
+        .trinote-include .todo-list__label input[type="checkbox"][data-trilium-task-state] { pointer-events: none; }
         /* Inline `<div class="mermaid">` blocks: same horizontal-scroll behavior as linked mermaid cards
            so wide diagrams stay readable instead of being scaled down to the column width. */
         .mermaid { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -985,12 +1076,49 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         // Enable todo checkboxes for interactive toggling (+ optional list-item reorder)
         (function() {
+            if (!\(listInteractionEnabled ? "true" : "false")) return;
             var reorderEnabled = \(checkboxReorderEnabled ? "true" : "false");
+            var cycleEnabled = \(taskStateCycleEnabled ? "true" : "false");
+            var CYCLE = ['none', 'done', 'doing', 'maybe', 'cancelled'];
+            var CYCLE_TITLE = { doing: 'Doing', maybe: 'Maybe', cancelled: 'Cancelled' };
             function updateStrikethrough(cb) {
                 var label = cb.closest('.todo-list__label');
                 if (!label) return;
-                if (cb.checked) label.classList.add('todo-list__label--checked');
-                else label.classList.remove('todo-list__label--checked');
+                if (cb.checked && !cb.getAttribute('data-trilium-task-state')) {
+                    label.classList.add('todo-list__label--checked');
+                } else {
+                    label.classList.remove('todo-list__label--checked');
+                }
+            }
+            function currentCycleState(cb) {
+                var custom = cb.getAttribute('data-trilium-task-state');
+                if (custom) return custom;
+                return cb.checked ? 'done' : 'none';
+            }
+            function applyCycleState(cb, state) {
+                var label = cb.closest('.todo-list__label');
+                var li = cb.closest('li');
+                cb.removeAttribute('data-trilium-task-state');
+                cb.checked = false;
+                if (label) {
+                    label.classList.remove('todo-list__label--checked');
+                    label.removeAttribute('title');
+                }
+                if (li) li.removeAttribute('data-trilium-task-state');
+                if (state === 'done') {
+                    cb.checked = true;
+                    if (label) label.classList.add('todo-list__label--checked');
+                } else if (state !== 'none') {
+                    cb.setAttribute('data-trilium-task-state', state);
+                    cb.checked = false;
+                    if (label && CYCLE_TITLE[state]) label.setAttribute('title', CYCLE_TITLE[state]);
+                    if (li) li.setAttribute('data-trilium-task-state', state);
+                }
+            }
+            function nextCycleState(state) {
+                var i = CYCLE.indexOf(state);
+                if (i < 0) i = 0;
+                return CYCLE[(i + 1) % CYCLE.length];
             }
             function siblingLis(li) {
                 var parent = li.parentElement;
@@ -1164,16 +1292,53 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     return;
                 }
                 cb.removeAttribute('disabled');
+                cb.disabled = false;
                 cb.dataset.cbIndex = String(idx);
                 idx += 1;
                 updateStrikethrough(cb);
-                cb.addEventListener('change', function() {
-                    updateStrikethrough(this);
-                    window.webkit.messageHandlers.checkboxToggle.postMessage({
-                        index: parseInt(this.dataset.cbIndex, 10),
-                        checked: this.checked
+                if (cycleEnabled) {
+                    var stateBeforeClick = null;
+                    function cycleFromState(state, e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var next = nextCycleState(state);
+                        function apply() {
+                            applyCycleState(cb, next);
+                            try {
+                                window.webkit.messageHandlers.checkboxCycle.postMessage({
+                                    index: parseInt(cb.dataset.cbIndex, 10)
+                                });
+                            } catch (err) {}
+                        }
+                        // WebKit may discard `checked` set in the same turn as preventDefault on the input.
+                        if (e.target === cb) requestAnimationFrame(apply);
+                        else apply();
+                    }
+                    // Snapshot before the native checkbox toggle flips `checked`.
+                    cb.addEventListener('pointerdown', function() {
+                        stateBeforeClick = currentCycleState(cb);
                     });
-                });
+                    cb.addEventListener('click', function(e) {
+                        var state = stateBeforeClick != null ? stateBeforeClick : currentCycleState(cb);
+                        stateBeforeClick = null;
+                        cycleFromState(state, e);
+                    });
+                    var label = cb.closest('.todo-list__label');
+                    if (label) {
+                        label.addEventListener('click', function(e) {
+                            if (e.target === cb) return;
+                            cycleFromState(currentCycleState(cb), e);
+                        });
+                    }
+                } else {
+                    cb.addEventListener('change', function() {
+                        updateStrikethrough(this);
+                        window.webkit.messageHandlers.checkboxToggle.postMessage({
+                            index: parseInt(this.dataset.cbIndex, 10),
+                            checked: this.checked
+                        });
+                    });
+                }
             });
 
             if (!reorderEnabled) return;
@@ -1440,10 +1605,13 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var loadHTMLStartedAt: CFAbsoluteTime?
         var themeColors: HTMLThemeColors?
         var checkboxReorderEnabled: Bool = false
+        var listInteractionEnabled: Bool = true
+        var taskStateCycleEnabled: Bool = false
         var checkboxOnlyRevision: Int = 0
         weak var findControl: FindOnPageControl?
         var onNoteLinkTapped: ((String) -> Void)?
         var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
+        var onTaskStateCycled: ((_ index: Int) -> Void)?
         var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
         var onAttachmentLinkTapped: ((String) -> Void)?
         var imageBytes: TriliumImageSchemeHandler.ByteProvider?
@@ -1468,6 +1636,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         init(
             onNoteLinkTapped: ((String) -> Void)?,
             onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?,
+            onTaskStateCycled: ((_ index: Int) -> Void)?,
             onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?,
             onAttachmentLinkTapped: ((String) -> Void)?,
             imageBytes: TriliumImageSchemeHandler.ByteProvider?,
@@ -1476,6 +1645,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         ) {
             self.onNoteLinkTapped = onNoteLinkTapped
             self.onCheckboxToggled = onCheckboxToggled
+            self.onTaskStateCycled = onTaskStateCycled
             self.onCheckboxReordered = onCheckboxReordered
             self.onAttachmentLinkTapped = onAttachmentLinkTapped
             self.imageBytes = imageBytes
@@ -1511,6 +1681,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 }
                 CheckboxPerf.log("js checkboxToggle index=\(index) checked=\(checked) (native toggleCheckbox next)")
                 onCheckboxToggled?(index, checked)
+            case "checkboxCycle":
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                      let index = Self.intFromScriptValue(dict["index"])
+                else {
+                    CheckboxPerf.log("js checkboxCycle parse-failed")
+                    return
+                }
+                onTaskStateCycled?(index)
             case "checkboxReorder":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
                       let fromIndex = Self.intFromScriptValue(dict["fromIndex"])

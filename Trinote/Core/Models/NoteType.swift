@@ -18,6 +18,8 @@ struct NoteCreationAttribute: Equatable, Sendable, Hashable {
 enum NoteType: String, Codable, CaseIterable, Sendable {
     case text
     case code
+    /// Client-only create option: a `code` note with Markdown MIME (`text/x-markdown`).
+    case markdown
     case file
     case image
     case search
@@ -50,6 +52,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         switch self {
         case .text: return "Text"
         case .code: return "Code"
+        case .markdown: return "Markdown"
         case .file: return "File"
         case .image: return "Image"
         case .search: return "Search"
@@ -78,6 +81,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         switch self {
         case .text: return "note.text"
         case .code: return "chevron.left.forwardslash.chevron.right"
+        case .markdown: return "doc.richtext"
         case .file: return "doc"
         case .image: return "photo"
         case .search: return "magnifyingglass"
@@ -102,14 +106,14 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
 
     var isEditable: Bool {
         switch self {
-        case .text, .code, .mermaid, .canvas, .mindMap, .spreadsheet: return true
+        case .text, .code, .markdown, .mermaid, .canvas, .mindMap, .spreadsheet: return true
         default: return false
         }
     }
 
     var isRenderable: Bool {
         switch self {
-        case .text, .code, .image, .file, .book, .collection, .render, .mermaid, .mindMap, .geoMap, .spreadsheet, .calendar, .kanban, .presentation:
+        case .text, .code, .markdown, .image, .file, .book, .collection, .render, .mermaid, .mindMap, .geoMap, .spreadsheet, .calendar, .kanban, .presentation:
             return true
         default: return false
         }
@@ -127,7 +131,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     /// Note types that support the in-page find bar while viewing (not editing).
     var supportsReadOnlyOnPageFind: Bool {
         switch self {
-        case .text, .code: return true
+        case .text, .code, .markdown: return true
         default: return false
         }
     }
@@ -150,6 +154,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     var creationMime: String {
         switch self {
         case .code: return "text/plain"
+        case .markdown: return "text/x-markdown"
         case .file: return "application/octet-stream"
         case .canvas, .mindMap, .spreadsheet: return "application/json"
         case .geoMap, .kanban, .presentation: return ""
@@ -174,9 +179,11 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     /// Trilium/API `type` field and SwiftData `noteType`.
     /// Calendar roots, geo maps, kanban boards, and presentations are stored as `book`
     /// (matching Trilium desktop Collection convention).
+    /// Markdown is stored as `code` with a Markdown MIME (Trilium v0.103+).
     var triliumStorageType: String {
         switch self {
         case .calendar, .geoMap, .kanban, .presentation: return NoteType.book.rawValue
+        case .markdown: return NoteType.code.rawValue
         default: return rawValue
         }
     }

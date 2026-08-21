@@ -23,9 +23,9 @@ final class NoteDetailViewModel {
     var note: NoteItem?
     var content: Data?
     var contentString: String?
-    /// Bumped only when `contentString` was patched by `toggleCheckbox`, i.e. the change is a checkbox
-    /// `checked` attribute and nothing else. The read-only WebView uses this to skip a `loadHTMLString`
-    /// it doesn't need — JS already toggled the live DOM.
+    /// Bumped when `contentString` was patched by a checkbox / Markdown task-state change only.
+    /// The read-only WebView uses this to skip a `loadHTMLString` it doesn't need — JS already
+    /// updated the live DOM.
     private(set) var checkboxOnlyContentRevision = 0
     private var rawContentString: String?
     var attachments: [AttachmentItem] = []
@@ -1486,6 +1486,20 @@ final class NoteDetailViewModel {
         CheckboxPerf.log("toggle #\(id) nativeDone ms=\(CheckboxPerf.ms(t0)) (SwiftUI updateUIView follows)")
     }
 
+    // MARK: - Markdown Task State Cycle
+
+    /// Cycles the `index`-th Markdown todo marker: `[ ]` → `[x]` → `[/]` → `[?]` → `[-]` → `[ ]`.
+    func cycleMarkdownTaskState(index: Int) {
+        guard let raw = contentString else { return }
+        guard let newRaw = MarkdownToNoteHTML.cyclingTaskState(in: raw, at: index) else { return }
+        // Bump before assigning content so the WebView can skip reload in the same update cycle.
+        self.checkboxOnlyContentRevision += 1
+        self.contentString = newRaw
+        self.rawContentString = newRaw
+        self.serverContentHash = newRaw.hashValue
+        saveNoteBodyChange(newRaw)
+    }
+
     // MARK: - List Item Reorder
 
     /// Moves a list item (`ul`/`ol`/`todo-list`) among its siblings without entering the editor.
@@ -1988,6 +2002,56 @@ final class NoteDetailViewModel {
             object: nil,
             userInfo: ["noteId": nid]
         )
+    }
+
+    /// Updates a code note’s MIME (language). Keeps `type` as `code` (Trilium’s model for Markdown too).
+    func updateCodeNoteMime(_ mime: String) async {
+        let nid = self.noteId
+        let trimmed = mime.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let note, note.type == .code || note.type == .markdown else { return }
+        guard note.mime != trimmed else { return }
+
+        self.isSaving = true
+        defer { self.isSaving = false }
+
+        if let client, isOnline {
+            do {
+                let updated = try await client.updateNote(
+                    nid,
+                    request: UpdateNoteRequest(title: nil, type: "code", mime: trimmed)
+                )
+                self.note = NoteItem(from: updated)
+                if let profileId = serverProfileId {
+                    persistNoteResponse(updated, profileId: profileId)
+                    try? persistence.commitBatch()
+                }
+                return
+            } catch {
+                self.saveError = APIError.from(error).localizedDescription
+                self.showSaveError = true
+                return
+            }
+        }
+
+        guard let profileId = serverProfileId else { return }
+        if let cached = try? persistence.fetchCachedNote(id: nid, serverProfileId: profileId) {
+            cached.mime = trimmed
+            try? persistence.commitBatch()
+        }
+        if var n = self.note {
+            n.mime = trimmed
+            self.note = n
+        }
+        let title = self.note?.title
+            ?? (try? persistence.fetchCachedNote(id: nid, serverProfileId: profileId)?.title)
+            ?? ""
+        try? persistence.upsertPendingNotePatch(
+            noteId: nid,
+            title: title,
+            mime: trimmed,
+            serverProfileId: profileId
+        )
+        appState.backgroundSyncPendingChanges()
     }
 
     /// Duplicate this note as a sibling under the same parent (first parent if cloned). Opens via navigation from the view.

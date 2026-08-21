@@ -1638,19 +1638,24 @@ final class PersistenceManager {
 
     // MARK: - Offline note title patch queue
 
-    /// Saves a pending title change. Upserts: last title wins per note.
-    func upsertPendingNotePatch(noteId: String, title: String, serverProfileId: String) throws {
+    /// Saves a pending title change (and optional MIME). Upserts: last values win per note.
+    /// Pass `mime` to queue a code-language change; omit it to leave any previously queued MIME alone.
+    func upsertPendingNotePatch(noteId: String, title: String, mime: String? = nil, serverProfileId: String) throws {
         let rowId = "\(serverProfileId):\(noteId)"
         var descriptor = FetchDescriptor<PendingNotePatch>(predicate: #Predicate { $0.id == rowId })
         descriptor.fetchLimit = 1
         if let existing = try context.fetch(descriptor).first {
             existing.title = title
+            if let mime {
+                existing.mime = mime
+            }
             existing.queuedAt = .now
         } else {
             let row = PendingNotePatch(
                 serverProfileId: serverProfileId,
                 noteId: noteId,
-                title: title
+                title: title,
+                mime: mime
             )
             context.insert(row)
         }

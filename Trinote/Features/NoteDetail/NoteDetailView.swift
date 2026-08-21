@@ -990,6 +990,9 @@ struct NoteDetailView: View {
 
     private func initialLoad() async {
         if viewModel == nil {
+            // Mask before the first content paint whenever we already know a mid-note scroll
+            // restore is coming — otherwise cached HTML flashes, then the spinner covers it.
+            seedReadScrollRevealBeforeContentPaint(for: activeNoteId)
             let vm = NoteDetailViewModel(noteId: activeNoteId, appState: appState, seedChildSummaries: seedChildSummaries)
             viewModel = vm
             if showNoteTabsBar, retargetActiveOpenTab { eagerRetargetActiveOpenTabFromCache() }
@@ -1009,6 +1012,26 @@ struct NoteDetailView: View {
             await vm.prefetchChildNotesForGeoMapBookIfNeeded()
         }
         if showNoteTabsBar { reconcileOpenTabsAfterLoad() }
+    }
+
+    /// Resolves the open-tab scroll fraction for `noteId` and arms the reveal mask *before*
+    /// `viewModel` publishes body HTML, so the first frame never paints mid-restore content.
+    private func seedReadScrollRevealBeforeContentPaint(for noteId: String) {
+        guard showNoteTabsBar, let p = appState.activeProfile?.id else { return }
+        let pm = PersistenceManager.shared
+        let tabId: String? = {
+            if let t = activeOpenTabId ?? openTabId,
+               (try? pm.fetchOpenNoteTab(id: t, serverProfileId: p)) != nil {
+                return t
+            }
+            if !persistedLastActiveOpenTabId.isEmpty,
+               (try? pm.fetchOpenNoteTab(id: persistedLastActiveOpenTabId, serverProfileId: p)) != nil {
+                return persistedLastActiveOpenTabId
+            }
+            return try? pm.findPreferredOpenTabId(for: noteId, serverProfileId: p)
+        }()
+        guard let tabId else { return }
+        applyReadScrollStateFromStoreForOpenTabId(tabId)
     }
 
     /// Synchronously retargets the active open tab to `activeNoteId` using cached metadata, so the tab strip updates immediately when navigating instead of waiting for the destination note's network/file load.
@@ -1381,11 +1404,9 @@ struct NoteDetailView: View {
             }
         }
         .overlay {
+            // Solid cover only — a ProgressView made opens feel like flash → spinner → content.
             if isReadOnlyScrollRevealPending {
-                ProgressView()
-                    .controlSize(.regular)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(uiColor: .systemBackground))
+                Color(uiColor: .systemBackground)
                     .transition(.opacity)
                     .allowsHitTesting(false)
             }
@@ -1484,7 +1505,7 @@ struct NoteDetailView: View {
                         }
                         .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
                     )
-                } else if vm.isEditing && note.type == .code {
+                } else if vm.isEditing && (note.type == .code || note.type == .markdown) {
                     AnyView(
                         VStack(spacing: 0) {
                             editorStatusBanner(vm)
@@ -1939,11 +1960,12 @@ struct NoteDetailView: View {
             if let source = vm.contentString {
                 MermaidNoteView(source: source)
             }
-        case .code:
+        case .code, .markdown:
             if let code = vm.contentString {
                 CodeNoteView(
                     content: code,
                     mime: note.mime,
+                    baseURL: vm.serverBaseURL,
                     findControl: findControl,
                     onNoteLinkTapped: { linkedNoteId in
                         navigateToNoteId = linkedNoteId
@@ -1953,7 +1975,14 @@ struct NoteDetailView: View {
                             return await vm.prepareAttachmentPreview(for: attachment)
                         }
                         return await vm.prepareAttachmentPreview(attachmentId: attachmentId)
-                    }
+                    },
+                    onMimeSelected: { mime in
+                        Task { await vm.updateCodeNoteMime(mime) }
+                    },
+                    onTaskStateCycled: { index in
+                        vm.cycleMarkdownTaskState(index: index)
+                    },
+                    checkboxOnlyRevision: vm.checkboxOnlyContentRevision
                 )
             }
         case .image:
@@ -2896,23 +2925,37 @@ struct NoteDetailView: View {
     private func codeEditingView(_ vm: NoteDetailViewModel) -> some View {
         @Bindable var vm = vm
         ZStack(alignment: .bottomTrailing) {
-            TextEditor(text: $vm.editableContent)
-                .font(.system(.body, design: .monospaced))
-                .padding(.horizontal, 8)
-                .scrollContentBackground(.hidden)
-                .contentMargins(
-                    .bottom,
-                    NoteDetailFloatingChipLayout.scrollClearance(findBarPresented: false, editing: true),
-                    for: .scrollContent
-                )
-                .background(Color(.systemGroupedBackground))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    NoteDetailScrollOffsetReader { y, verticallyScrollable, _ in
-                        updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
-                    }
-                    .frame(width: 0, height: 0)
-                )
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $vm.editableContent)
+                    .font(.system(.body, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .scrollContentBackground(.hidden)
+                    .contentMargins(
+                        .bottom,
+                        NoteDetailFloatingChipLayout.scrollClearance(findBarPresented: false, editing: true),
+                        for: .scrollContent
+                    )
+                    .background(Color(.systemGroupedBackground))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if vm.editableContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    // Match UITextView origin: TextEditor’s 8pt horizontal padding + 5pt
+                    // `lineFragmentPadding`, and the default 8pt top `textContainerInset`.
+                    Text(String(localized: "Start writing…", comment: "Empty code note editor placeholder"))
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(Color.primary.opacity(0.42))
+                        .padding(.leading, 13)
+                        .padding(.top, 8)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .background(
+                NoteDetailScrollOffsetReader { y, verticallyScrollable, _ in
+                    updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
+                }
+                .frame(width: 0, height: 0)
+            )
 
             if showEditorSaveCancelChip {
                 editorSaveChip(vm: vm)
@@ -3452,6 +3495,7 @@ struct NewNoteTypePicker: View {
         Picker(String(localized: "Type", comment: "New note type"), selection: $selection) {
             Text(String(localized: "Text", comment: "Note type")).tag(NoteType.text)
             Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
+            Text(String(localized: "Markdown", comment: "Note type: code note with Markdown MIME")).tag(NoteType.markdown)
             Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
             Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
             Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)

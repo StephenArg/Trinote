@@ -24,7 +24,7 @@ private enum SearchNoteMatchExtractor {
         switch noteType {
         case .text:
             plain = plainTextFromHTML(rawContent)
-        case .code:
+        case .code, .markdown:
             plain = rawContent
         default:
             return []

@@ -3,7 +3,64 @@ import Foundation
 /// Converts Markdown into TipTap/CK-friendly HTML for text notes.
 /// Coverage targets common markdown-it demo constructs that map cleanly to editor HTML.
 enum MarkdownToNoteHTML {
-    static func convert(_ markdown: String) -> String {
+    /// Controls preview-only extras that must not change share-import HTML.
+    struct Options: Equatable {
+        /// Turn ` ```mermaid ` fences into `<div class="mermaid">` for HTMLNoteView’s inline renderer.
+        var mermaidFencesAsDiagrams = false
+        /// Parse GFM / Trilium task items (`[ ]`/`[x]`/`[/]`/`[?]`/`[-]`) into `ul.todo-list` markup.
+        var taskLists = false
+
+        static let noteImport = Options()
+        static let preview = Options(mermaidFencesAsDiagrams: true, taskLists: true)
+    }
+
+    /// Cycle order for interactive Markdown todos: `[ ]` → `[x]` → `[/]` → `[?]` → `[-]` → `[ ]`.
+    static let taskStateCycleMarkers: [Character] = [" ", "x", "/", "?", "-"]
+
+    /// Advances the `index`-th unordered task marker (`- [ ]` / `- [x]` / …) one step in
+    /// ``taskStateCycleMarkers``. Returns `nil` when `index` is out of range.
+    static func cyclingTaskState(in markdown: String, at index: Int) -> String? {
+        guard index >= 0 else { return nil }
+        let pattern = try! NSRegularExpression(
+            pattern: #"(?m)^([ \t]*[-*+][ \t]+)\[([ Xx/\?-])\]"#
+        )
+        let ns = markdown as NSString
+        let matches = pattern.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
+        guard index < matches.count else { return nil }
+        let midRange = matches[index].range(at: 2)
+        guard midRange.location != NSNotFound, midRange.length == 1 else { return nil }
+        let current = ns.substring(with: midRange)
+        let next = nextTaskStateMarker(current)
+        return ns.replacingCharacters(in: midRange, with: String(next))
+    }
+
+    /// True when `a` and `b` are identical after normalizing GFM/Trilium task markers to `[ ]`.
+    /// Used to skip Markdown→HTML reconvert (and WebView reload) on checkbox state cycles.
+    static func equalsIgnoringTaskMarkers(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        return normalizingTaskMarkers(a) == normalizingTaskMarkers(b)
+    }
+
+    private static func normalizingTaskMarkers(_ markdown: String) -> String {
+        let pattern = try! NSRegularExpression(pattern: #"\[([ Xx/\?-])\]"#)
+        let ns = markdown as NSString
+        return pattern.stringByReplacingMatches(
+            in: markdown,
+            range: NSRange(location: 0, length: ns.length),
+            withTemplate: "[ ]"
+        )
+    }
+
+    private static func nextTaskStateMarker(_ current: String) -> Character {
+        let ch = current.first ?? " "
+        let normalized: Character = (ch == "X") ? "x" : ch
+        if let i = taskStateCycleMarkers.firstIndex(of: normalized) {
+            return taskStateCycleMarkers[(i + 1) % taskStateCycleMarkers.count]
+        }
+        return "x"
+    }
+
+    static func convert(_ markdown: String, options: Options = .noteImport) -> String {
         let normalized = markdown
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -22,8 +79,17 @@ enum MarkdownToNoteHTML {
 
         func flushParagraph() {
             guard !paragraphLines.isEmpty else { return }
-            let joined = paragraphLines.joined(separator: " ")
-            html.append("<p>\(renderInline(joined, ctx: ctx))</p>")
+            var rendered = ""
+            for i in 0..<paragraphLines.count {
+                let raw = paragraphLines[i]
+                let text = Self.paragraphLineContent(raw)
+                if i > 0 {
+                    // CommonMark hard break: previous line ended with two spaces or a backslash.
+                    rendered += Self.hasTrailingHardBreak(paragraphLines[i - 1]) ? "<br>" : " "
+                }
+                rendered += renderInline(text, ctx: ctx)
+            }
+            html.append("<p>\(rendered)</p>")
             paragraphLines.removeAll()
         }
 
@@ -36,6 +102,13 @@ enum MarkdownToNoteHTML {
 
         func flushAllLists() {
             closeLists(downTo: 0)
+        }
+
+        func openListMarkup(tag: String, startAttr: String, isTodoList: Bool) -> String {
+            if isTodoList {
+                return "<ul class=\"todo-list\">"
+            }
+            return "<\(tag)\(startAttr)>"
         }
 
         while i < lines.count {
@@ -58,7 +131,11 @@ enum MarkdownToNoteHTML {
                     i += 1
                 }
                 let code = codeLines.map(escapeHTML).joined(separator: "\n")
-                if lang.isEmpty {
+                let langKey = lang.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? lang
+                if options.mermaidFencesAsDiagrams, langKey.lowercased() == "mermaid" {
+                    // Exact class="mermaid" so HTMLNoteView’s detector injects vendor/mermaid.min.js.
+                    html.append("<div class=\"mermaid\">\(code)</div>")
+                } else if lang.isEmpty {
                     html.append("<pre><code>\(code)</code></pre>")
                 } else {
                     let safeLang = escapeAttribute(lang)
@@ -99,7 +176,7 @@ enum MarkdownToNoteHTML {
                     i += 1
                 }
                 if i < lines.count { i += 1 }
-                let inner = convert(bodyLines.joined(separator: "\n"))
+                let inner = convert(bodyLines.joined(separator: "\n"), options: options)
                 let cls = name.isEmpty ? "container" : escapeAttribute(name)
                 html.append("<blockquote class=\"markdown-container markdown-container-\(cls)\">\(inner)</blockquote>")
                 continue
@@ -167,7 +244,7 @@ enum MarkdownToNoteHTML {
                         break
                     }
                 }
-                let inner = convert(quoteLines.joined(separator: "\n"))
+                let inner = convert(quoteLines.joined(separator: "\n"), options: options)
                 html.append("<blockquote>\(inner)</blockquote>")
                 continue
             }
@@ -227,36 +304,44 @@ enum MarkdownToNoteHTML {
             }
 
             // Lists (ordered / unordered), including nested via indent
-            if let listItem = matchListItem(line) {
+            if var listItem = matchListItem(line) {
                 flushParagraph()
+                if options.taskLists, !listItem.ordered, let task = matchTaskListMarker(listItem.text) {
+                    listItem.taskState = task.state
+                    listItem.text = task.rest
+                }
                 let depth = listItem.depth
-                let tag = listItem.ordered ? "ol" : "ul"
+                let isTodoList = listItem.taskState != nil
+                // Todo items always live in `<ul class="todo-list">` (CKEditor/TipTap shape).
+                let tag = isTodoList ? "ul" : (listItem.ordered ? "ol" : "ul")
                 let startAttr: String = {
-                    guard listItem.ordered, let n = listItem.number, n != 1 else { return "" }
+                    guard listItem.ordered, !isTodoList, let n = listItem.number, n != 1 else { return "" }
                     return " start=\"\(n)\""
                 }()
+                let openMarkup = openListMarkup(tag: tag, startAttr: startAttr, isTodoList: isTodoList)
+                let liOpen = openListItemMarkup(taskState: listItem.taskState)
 
                 if openListStack.isEmpty {
-                    html.append("<\(tag)\(startAttr)><li>")
-                    openListStack.append(ListFrame(tag: tag, depth: depth))
+                    html.append("\(openMarkup)\(liOpen)")
+                    openListStack.append(ListFrame(tag: tag, depth: depth, isTodoList: isTodoList))
                 } else if depth > openListStack.last!.depth {
-                    html.append("<\(tag)\(startAttr)><li>")
-                    openListStack.append(ListFrame(tag: tag, depth: depth))
+                    html.append("\(openMarkup)\(liOpen)")
+                    openListStack.append(ListFrame(tag: tag, depth: depth, isTodoList: isTodoList))
                 } else {
                     while let last = openListStack.last, depth < last.depth {
                         html.append("</li></\(last.tag)>")
                         openListStack.removeLast()
                     }
                     if let last = openListStack.last {
-                        if last.tag != tag {
-                            html.append("</li></\(last.tag)><\(tag)\(startAttr)><li>")
-                            openListStack[openListStack.count - 1] = ListFrame(tag: tag, depth: depth)
+                        if last.tag != tag || last.isTodoList != isTodoList {
+                            html.append("</li></\(last.tag)>\(openMarkup)\(liOpen)")
+                            openListStack[openListStack.count - 1] = ListFrame(tag: tag, depth: depth, isTodoList: isTodoList)
                         } else {
-                            html.append("</li><li>")
+                            html.append("</li>\(liOpen)")
                         }
                     } else {
-                        html.append("<\(tag)\(startAttr)><li>")
-                        openListStack.append(ListFrame(tag: tag, depth: depth))
+                        html.append("\(openMarkup)\(liOpen)")
+                        openListStack.append(ListFrame(tag: tag, depth: depth, isTodoList: isTodoList))
                     }
                 }
 
@@ -267,7 +352,9 @@ enum MarkdownToNoteHTML {
                     let next = lines[i]
                     let nt = next.trimmingCharacters(in: .whitespaces)
                     if nt.isEmpty { break }
-                    if let nextItem = matchListItem(next), nextItem.depth <= depth {
+                    // Any list marker (sibling, nested, or outdent) belongs to the outer loop —
+                    // never fold nested `- child` lines into the parent item's text.
+                    if matchListItem(next) != nil {
                         break
                     }
                     if leadingWhitespaceCount(next) > listItem.markerColumn {
@@ -277,12 +364,18 @@ enum MarkdownToNoteHTML {
                     }
                     break
                 }
-                html.append(renderInline(itemText, ctx: ctx))
+                let rendered = renderInline(itemText, ctx: ctx)
+                if let state = listItem.taskState {
+                    html.append(renderTodoListLabel(state: state, descriptionHTML: rendered))
+                } else {
+                    html.append(rendered)
+                }
                 continue
             }
 
             flushAllLists()
-            paragraphLines.append(trimmed)
+            // Keep trailing spaces / `\` so CommonMark hard line breaks survive flushParagraph.
+            paragraphLines.append(Self.stripLeadingWhitespaceOnly(line))
             i += 1
         }
 
@@ -355,14 +448,71 @@ enum MarkdownToNoteHTML {
     private struct ListFrame {
         let tag: String
         let depth: Int
+        let isTodoList: Bool
+    }
+
+    /// Trilium/GFM task-list states. Custom states use `data-trilium-task-state`.
+    private enum TaskListState: Equatable {
+        case unchecked
+        case checked
+        case doing
+        case maybe
+        case cancelled
+
+        var dataAttributeValue: String? {
+            switch self {
+            case .doing: return "doing"
+            case .maybe: return "maybe"
+            case .cancelled: return "cancelled"
+            case .unchecked, .checked: return nil
+            }
+        }
+
+        var title: String? {
+            switch self {
+            case .doing: return "Doing"
+            case .maybe: return "Maybe"
+            case .cancelled: return "Cancelled"
+            case .unchecked, .checked: return nil
+            }
+        }
     }
 
     private struct ListItemMatch {
         let ordered: Bool
         let number: Int?
-        let text: String
+        var text: String
         let depth: Int
         let markerColumn: Int
+        /// `nil` = not a task item.
+        var taskState: TaskListState? = nil
+    }
+
+    private static func openListItemMarkup(taskState: TaskListState?) -> String {
+        if let name = taskState?.dataAttributeValue {
+            return "<li data-trilium-task-state=\"\(name)\">"
+        }
+        return "<li>"
+    }
+
+    private static func renderTodoListLabel(state: TaskListState, descriptionHTML: String) -> String {
+        switch state {
+        case .unchecked, .checked:
+            let checkedAttr = state == .checked ? " checked" : ""
+            let checkedClass = state == .checked ? " todo-list__label--checked" : ""
+            // `disabled` until interactive JS enables them (text notes / Markdown cycle mode).
+            return "<label class=\"todo-list__label\(checkedClass)\">"
+                + "<input type=\"checkbox\"\(checkedAttr) disabled>"
+                + "<span class=\"todo-list__label__description\">\(descriptionHTML)</span>"
+                + "</label>"
+        case .doing, .maybe, .cancelled:
+            let name = state.dataAttributeValue!
+            let title = state.title!
+            return "<label class=\"todo-list__label\" title=\"\(title)\">"
+                + "<input type=\"checkbox\" data-trilium-task-state=\"\(name)\" disabled title=\"\(title)\">"
+                + "<span class=\"todo-list__label__description\">\(descriptionHTML)</span>"
+                + "</label>"
+        }
     }
 
     private static func matchHeading(_ line: String) -> (level: Int, text: String)? {
@@ -393,6 +543,32 @@ enum MarkdownToNoteHTML {
         let t = line.replacingOccurrences(of: " ", with: "")
         guard t.count >= 3 else { return false }
         return t.allSatisfy({ $0 == "-" }) || t.allSatisfy({ $0 == "*" }) || t.allSatisfy({ $0 == "_" })
+    }
+
+    /// GFM / Trilium task-list marker: `[ ]` / `[x]` / `[/]` / `[?]` / `[-]`.
+    private static func matchTaskListMarker(_ text: String) -> (state: TaskListState, rest: String)? {
+        guard text.count >= 3 else { return nil }
+        var idx = text.startIndex
+        guard text[idx] == "[" else { return nil }
+        idx = text.index(after: idx)
+        guard idx < text.endIndex else { return nil }
+        let mid = text[idx]
+        idx = text.index(after: idx)
+        guard idx < text.endIndex, text[idx] == "]" else { return nil }
+        let state: TaskListState
+        switch mid {
+        case " ": state = .unchecked
+        case "x", "X": state = .checked
+        case "/": state = .doing
+        case "?": state = .maybe
+        case "-": state = .cancelled
+        default: return nil
+        }
+        idx = text.index(after: idx)
+        if idx < text.endIndex, text[idx] == " " {
+            idx = text.index(after: idx)
+        }
+        return (state, String(text[idx...]))
     }
 
     private static func matchListItem(_ line: String) -> ListItemMatch? {
@@ -458,6 +634,31 @@ enum MarkdownToNoteHTML {
             if s.hasPrefix(" ") { s = String(s.dropFirst()) }
         }
         return s
+    }
+
+    /// Leading indent only — trailing spaces must remain for hard-break detection.
+    private static func stripLeadingWhitespaceOnly(_ line: String) -> String {
+        String(line.drop(while: { $0 == " " || $0 == "\t" }))
+    }
+
+    /// CommonMark hard line break: two or more trailing spaces, or a trailing backslash.
+    private static func hasTrailingHardBreak(_ line: String) -> Bool {
+        if line.hasSuffix("\\") { return true }
+        var n = 0
+        for ch in line.reversed() {
+            if ch == " " { n += 1 } else { break }
+        }
+        return n >= 2
+    }
+
+    private static func paragraphLineContent(_ line: String) -> String {
+        var s = line
+        if s.hasSuffix("\\") {
+            s = String(s.dropLast())
+        } else {
+            while s.hasSuffix(" ") { s = String(s.dropLast()) }
+        }
+        return s.trimmingCharacters(in: .whitespaces)
     }
 
     private static func isIndentedCodeLine(_ line: String) -> Bool {

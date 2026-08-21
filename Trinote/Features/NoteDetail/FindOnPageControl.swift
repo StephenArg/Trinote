@@ -17,6 +17,8 @@ final class FindOnPageControl {
     private weak var htmlWebView: WKWebView?
     private weak var codeTextView: UITextView?
     private var codePlainText: String = ""
+    /// Syntax-highlighted (or plain) base text; find overlays only add background colors.
+    private var codeBaseAttributedText: NSAttributedString = NSAttributedString()
 
     private var htmlSearchTask: Task<Void, Never>?
     /// After search completes, activate this 1-based match (e.g. from search results deep link).
@@ -35,11 +37,13 @@ final class FindOnPageControl {
         htmlWebView = webView
         codeTextView = nil
         codePlainText = ""
+        codeBaseAttributedText = NSAttributedString()
     }
 
-    func registerCodeTextView(_ textView: UITextView, plainText: String) {
+    func registerCodeTextView(_ textView: UITextView, plainText: String, baseAttributedText: NSAttributedString) {
         codeTextView = textView
         codePlainText = plainText
+        codeBaseAttributedText = baseAttributedText
         htmlWebView = nil
         if !query.isEmpty {
             applyCodeQuery()
@@ -52,15 +56,12 @@ final class FindOnPageControl {
             wv.evaluateJavaScript("window.__trinoteFind && window.__trinoteFind.clear();", completionHandler: nil)
         }
         if let tv = codeTextView {
-            let font = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
-            tv.attributedText = NSAttributedString(
-                string: codePlainText,
-                attributes: [.font: font, .foregroundColor: UIColor.label]
-            )
+            tv.attributedText = codeBaseAttributedText
         }
         htmlWebView = nil
         codeTextView = nil
         codePlainText = ""
+        codeBaseAttributedText = NSAttributedString()
         matchCount = 0
         activeMatchIndex = 0
         query = ""
@@ -164,14 +165,15 @@ final class FindOnPageControl {
         }
         let full = codePlainText
         let q = query
-        let baseFont = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
-        let attr = NSMutableAttributedString(
-            string: full,
-            attributes: [
-                .font: baseFont,
-                .foregroundColor: UIColor.label
-            ]
-        )
+        let attr = NSMutableAttributedString(attributedString: codeBaseAttributedText)
+        // Ensure find works even if base attribution length drifted.
+        if attr.string != full {
+            let font = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
+            attr.setAttributedString(NSAttributedString(
+                string: full,
+                attributes: [.font: font, .foregroundColor: UIColor.label]
+            ))
+        }
         let highlight = UIColor.systemYellow.withAlphaComponent(0.45)
         let activeHighlight = UIColor.systemOrange.withAlphaComponent(0.65)
 
@@ -328,7 +330,6 @@ final class FindOnPageControl {
 
     private func stepCode(direction: Int) {
         guard let tv = codeTextView, !query.isEmpty else { return }
-        let full = codePlainText as NSString
         let lowerFull = (codePlainText.lowercased()) as NSString
         let lowerQ = query.lowercased()
         var ranges: [NSRange] = []
@@ -346,14 +347,14 @@ final class FindOnPageControl {
         let idx = next < 0 ? next + ranges.count : next
         activeMatchIndex = idx + 1
 
-        let baseFont = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
-        let attr = NSMutableAttributedString(
-            string: codePlainText,
-            attributes: [
-                .font: baseFont,
-                .foregroundColor: UIColor.label
-            ]
-        )
+        let attr = NSMutableAttributedString(attributedString: codeBaseAttributedText)
+        if attr.string != codePlainText {
+            let baseFont = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
+            attr.setAttributedString(NSAttributedString(
+                string: codePlainText,
+                attributes: [.font: baseFont, .foregroundColor: UIColor.label]
+            ))
+        }
         let highlight = UIColor.systemYellow.withAlphaComponent(0.45)
         let activeHighlight = UIColor.systemOrange.withAlphaComponent(0.65)
         for (i, r) in ranges.enumerated() {
@@ -411,14 +412,7 @@ final class FindOnPageControl {
             wv.evaluateJavaScript("window.__trinoteFind && window.__trinoteFind.clear();", completionHandler: nil)
         }
         if let tv = codeTextView {
-            let baseFont = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
-            tv.attributedText = NSAttributedString(
-                string: codePlainText,
-                attributes: [
-                    .font: baseFont,
-                    .foregroundColor: UIColor.label
-                ]
-            )
+            tv.attributedText = codeBaseAttributedText
             tv.selectedRange = NSRange(location: 0, length: 0)
         }
     }

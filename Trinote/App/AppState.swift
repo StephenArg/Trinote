@@ -77,6 +77,15 @@ final class AppState {
         await waitWhileSyncing(atMost: maxWaitSeconds)
     }
 
+    /// Vault-wide tree walk + body download (same as Settings → Full Sync). Used on cold launch.
+    func runFullSync(maxWaitSeconds: TimeInterval = 0) async {
+        guard networkMonitor.isConnected else { return }
+        guard let client, let profile = activeProfile else { return }
+        imageCachePrefetcher.cancel()
+        syncManager.fullSync(client: client, profileId: profile.id)
+        await waitWhileSyncing(atMost: maxWaitSeconds)
+    }
+
     /// Re-validates cookies (`/api/app-info`) and refreshes CSRF. Use after the network returns so the next API calls don’t use a stale session from when the device was offline.
     @discardableResult
     func refreshTriliumSession(timeoutSeconds: TimeInterval = 18) async -> Bool {
@@ -416,13 +425,21 @@ final class AppState {
         var didAny = false
         for row in pending {
             do {
-                let updated = try await client.updateNote(row.noteId, request: UpdateNoteRequest(title: row.title, type: nil, mime: nil))
+                let updated = try await client.updateNote(
+                    row.noteId,
+                    request: UpdateNoteRequest(
+                        title: row.title,
+                        type: row.mime != nil ? "code" : nil,
+                        mime: row.mime
+                    )
+                )
                 if let cached = try? persistence.fetchCachedNote(id: row.noteId, serverProfileId: profileId) {
                     cached.title = updated.title
+                    cached.mime = updated.mime
                 }
                 try persistence.deletePendingNotePatch(noteId: row.noteId, serverProfileId: profileId)
                 didAny = true
-                Log.sync.info("Flushed offline title patch for note \(row.noteId)")
+                Log.sync.info("Flushed offline note patch for note \(row.noteId)")
             } catch {
                 let apiErr = APIError.from(error)
                 if case .notFound = apiErr {
@@ -895,7 +912,7 @@ final class AppState {
             syncManager.restoreSyncState(profileId: profile.id)
             _ = try await triliumInstanceId(for: profile)
             await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
-            await runIncrementalSync(maxWaitSeconds: 0)
+            await runFullSync(maxWaitSeconds: 0)
             startRealtimeIfPossible()
         } catch {
             let apiError = APIError.from(error)

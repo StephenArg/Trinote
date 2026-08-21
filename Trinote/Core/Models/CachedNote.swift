@@ -264,25 +264,30 @@ final class PendingNoteBodyUpload {
     }
 }
 
-/// Title change queued while offline; flushed via `updateNote` when online. One row per note (latest title wins).
+/// Title (and optional MIME) change queued while offline; flushed via `updateNote` when online.
+/// One row per note (latest patch wins). `mime` is set when the code-note language was changed.
 @Model
 final class PendingNotePatch {
     @Attribute(.unique) var id: String
     var serverProfileId: String
     var noteId: String
     var title: String
+    /// When non-nil, flush also updates the note MIME (code-language change).
+    var mime: String?
     var queuedAt: Date
 
     init(
         serverProfileId: String,
         noteId: String,
         title: String,
+        mime: String? = nil,
         queuedAt: Date = .now
     ) {
         self.id = "\(serverProfileId):\(noteId)"
         self.serverProfileId = serverProfileId
         self.noteId = noteId
         self.title = title
+        self.mime = mime
         self.queuedAt = queuedAt
     }
 }
