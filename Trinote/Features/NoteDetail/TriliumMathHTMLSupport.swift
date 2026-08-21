@@ -4,7 +4,12 @@ import Foundation
 enum TriliumMathHTMLSupport {
     /// True when `html` likely contains Trilium math: `&lt;script type="math/tex"&gt;`, `span.math-tex`, or Trinote editor bridge spans.
     static func bodyContainsTriliumMathMarkers(_ html: String) -> Bool {
-        if html.contains("data-trinote-math-tex") { return true }
+        if html.containsASCII("data-trinote-math-tex") { return true }
+        // Neither pattern below can match without one of these substrings, and both regexes scan the whole
+        // body — several megabytes once image data URIs are inlined, on the main actor during render.
+        guard html.containsASCIICaseInsensitive("math-tex") || html.containsASCIICaseInsensitive("math/tex") else {
+            return false
+        }
         if htmlContainsMathTexClass(html) { return true }
         if htmlContainsMathTexScript(html) { return true }
         return false

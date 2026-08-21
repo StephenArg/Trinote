@@ -49,6 +49,8 @@ struct RichTextEditorView: UIViewRepresentable {
     var onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)?
     /// Non-image file pasted from clipboard → upload as attachment and insert link.
     var onPasteFile: ((Data, String, String) -> Void)?
+    /// Serves `trinote-img://` pictures the editor displays instead of inlined bytes.
+    var imageBytes: TriliumImageSchemeHandler.ByteProvider?
     @Binding var imageToInsert: String?
     /// When set, inserts an attachment reference chip once the editor is ready (share-import / deferred upload).
     @Binding var attachmentToInsert: EditorAttachmentInsert?
@@ -95,6 +97,12 @@ struct RichTextEditorView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        if let imageBytes {
+            config.setURLSchemeHandler(
+                TriliumImageSchemeHandler(provider: imageBytes),
+                forURLScheme: TriliumImageScheme.scheme
+            )
+        }
 
         let webView = TrinoteEditorWebView(frame: .zero, configuration: config)
         webView.onAugmentEditMenu = { [weak coordinator] builder in

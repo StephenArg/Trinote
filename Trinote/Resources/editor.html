@@ -520,6 +520,18 @@ body { display: flex; flex-direction: column; }
 .tiptap figure.image.image_resized { max-width: 100%; }
 .tiptap figure.image.image_resized img { width: 100%; }
 
+/* Reserved slot for a photo still uploading; replaced in place by the image when it arrives.
+   Selector has to outrank `.tiptap figure.image img`, which would otherwise collapse the box. */
+.tiptap img[data-trinote-photo-slot],
+.tiptap figure.image img[data-trinote-photo-slot] {
+  width: 220px; height: 150px; border-radius: 10px;
+  border: 1.5px dashed var(--border); background: rgba(128,128,128,0.08);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%238e8e93'%3E%3Cpath d='M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1 12h14l-4.5-6-3.5 4.5-2.5-3L5 17zm11.5-7a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: center; background-size: 34px 34px;
+  cursor: default; animation: trinotePhotoSlotPulse 1.4s ease-in-out infinite;
+}
+@keyframes trinotePhotoSlotPulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.85; } }
+
 /* Alignment: inline (default) — flows with text */
 .tiptap figure.image-style-inline { display: inline-block; margin: 0.3em 0.5em; vertical-align: bottom; }
 
@@ -899,9 +911,11 @@ const FigureImage = Image.extend({
       captionText:    { default: '' },
       // Preserved across TipTap parse/render so the native side can restore the original
       // server-relative URL (e.g. api/images/{noteId}/...) on save. The displayed `src` is
-      // a native-inlined data URI for canvas/mermaid/imageLink targets that the editor's
-      // bundle-loaded WKWebView cannot otherwise resolve.
+      // a `trinote-img://` reference (or a data URI for a photo that failed to upload).
       originalSrc:    { default: null },
+      // Set only while a picked photo is still uploading; `getContent()` strips these so a slot
+      // can never reach a draft or a save. Cleared when the real image replaces the slot.
+      photoSlot:      { default: null },
     };
   },
   parseHTML() {
@@ -928,6 +942,7 @@ const FigureImage = Image.extend({
             hasCaption: !!cap,
             captionText: cap ? cap.textContent : '',
             originalSrc: img.getAttribute('data-trinote-original-src'),
+            photoSlot: img.getAttribute('data-trinote-photo-slot'),
           };
         },
       },
@@ -939,6 +954,7 @@ const FigureImage = Image.extend({
             alt: dom.getAttribute('alt'),
             title: dom.getAttribute('title'),
             originalSrc: dom.getAttribute('data-trinote-original-src'),
+            photoSlot: dom.getAttribute('data-trinote-photo-slot'),
           };
         },
       },
@@ -954,6 +970,7 @@ const FigureImage = Image.extend({
     if (HTMLAttributes.alt) imgAttrs.alt = HTMLAttributes.alt;
     if (HTMLAttributes.title) imgAttrs.title = HTMLAttributes.title;
     if (HTMLAttributes.originalSrc) imgAttrs['data-trinote-original-src'] = HTMLAttributes.originalSrc;
+    if (HTMLAttributes.photoSlot) imgAttrs['data-trinote-photo-slot'] = HTMLAttributes.photoSlot;
     if (HTMLAttributes.hasCaption) {
       return ['figure', figAttrs, ['img', imgAttrs], ['figcaption', {}, HTMLAttributes.captionText || '']];
     }
@@ -1638,29 +1655,189 @@ function clampInsertPos(pos, max) {
  * Insert TipTap content at the pending media caret (or end / current selection).
  * Prefer insertContentAt so we never rely on focus() restoring a selection that blur wiped.
  */
-function insertContentAtPendingPos(content) {
-  const saved = pendingMediaInsertPos;
-  pendingMediaInsertPos = null;
-  try {
-    const max = editor.state.doc.content.size;
-    if (saved && typeof saved.from === 'number') {
-      const from = clampInsertPos(saved.from, max);
-      const to = clampInsertPos(typeof saved.to === 'number' ? saved.to : from, max);
-      const a = Math.min(from, to);
-      const b = Math.max(from, to);
-      if (a !== b) {
-        editor.chain().focus().insertContentAt({ from: a, to: b }, content).run();
-      } else {
-        editor.chain().focus().insertContentAt(a, content).run();
-      }
-    } else if (editor.view.hasFocus()) {
-      editor.chain().focus().insertContent(content).run();
+function placeContentAtPendingOrSelection(content, usePending) {
+  const saved = usePending ? pendingMediaInsertPos : null;
+  if (usePending) pendingMediaInsertPos = null;
+  const max = editor.state.doc.content.size;
+  if (saved && typeof saved.from === 'number') {
+    const from = clampInsertPos(saved.from, max);
+    const to = clampInsertPos(typeof saved.to === 'number' ? saved.to : from, max);
+    const a = Math.min(from, to);
+    const b = Math.max(from, to);
+    if (a !== b) {
+      editor.chain().focus().insertContentAt({ from: a, to: b }, content).run();
     } else {
-      editor.chain().focus('end').insertContent(content).run();
+      editor.chain().focus().insertContentAt(a, content).run();
     }
+  } else if (usePending && !(editor.view && typeof editor.view.hasFocus === 'function' && editor.view.hasFocus())) {
+    editor.chain().focus('end').insertContent(content).run();
+  } else {
+    editor.chain().focus().insertContent(content).run();
+  }
+}
+
+function insertContentAtPendingPos(content) {
+  try {
+    placeContentAtPendingOrSelection(content, true);
     try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
     try { scheduleScrollCaretIntoViewAfterKeyboard(); } catch (e) {}
   } catch (e) {}
+}
+
+/**
+ * Picked photos upload one at a time, so the batch reserves a slot per photo in the document up
+ * front and swaps each slot for its image as the upload lands. Reserving up front is what keeps the
+ * batch together: the slots are real nodes, so ProseMirror moves them as a group when the user edits
+ * around them, and text typed at the insert point can't wedge itself between photo 3 and photo 4.
+ * `getContent()` strips unfilled slots, so they never reach a draft or a save.
+ */
+const PHOTO_SLOT_ATTR = 'data-trinote-photo-slot';
+const PHOTO_SLOT_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+let photoSlotIds = [];
+let photoSlotSeq = 0;
+
+function photoSlotPositions() {
+  const found = {};
+  editor.state.doc.descendants((node, pos) => {
+    const id = node.attrs && node.attrs.photoSlot;
+    if (id) found[id] = { pos, node };
+  });
+  return found;
+}
+
+function imageNodeFromItem(item) {
+  const src = (typeof item === 'string') ? item : (item && item.src);
+  if (typeof src !== 'string' || !src) return null;
+  const attrs = { src };
+  const originalSrc = (item && typeof item.originalSrc === 'string') ? item.originalSrc : '';
+  if (originalSrc) attrs.originalSrc = originalSrc;
+  return { type: 'image', attrs };
+}
+
+/**
+ * Reserves `count` slots at the caret captured when Image was tapped, before upload latency lets
+ * that caret move. One transaction, so a single undo takes the whole batch back out.
+ */
+function beginImageBatch(count) {
+  const total = Math.max(0, Math.min(20, parseInt(count, 10) || 0));
+  removePhotoSlots();
+  const saved = pendingMediaInsertPos;
+  pendingMediaInsertPos = null;
+  if (!total) return;
+  const max = editor.state.doc.content.size;
+  let pos = max;
+  if (saved && typeof saved.from === 'number') {
+    const from = clampInsertPos(saved.from, max);
+    const to = clampInsertPos(typeof saved.to === 'number' ? saved.to : from, max);
+    pos = Math.min(from, to);
+    const end = Math.max(from, to);
+    if (pos !== end) {
+      // The Image button was pressed with text selected: the photos replace it.
+      try { editor.chain().focus().deleteRange({ from: pos, to: end }).run(); } catch (e) {}
+    }
+  } else {
+    try { pos = editor.view.hasFocus() ? editor.state.selection.to : max; } catch (e) {}
+  }
+  const ids = [];
+  const nodes = [];
+  for (let i = 0; i < total; i += 1) {
+    photoSlotSeq += 1;
+    const id = 'photo-slot-' + photoSlotSeq;
+    ids.push(id);
+    nodes.push({ type: 'image', attrs: { src: PHOTO_SLOT_PIXEL, photoSlot: id } });
+  }
+  // Images are block leaves: landing at the very end of the note would leave nowhere to put the
+  // caret afterwards, so the batch brings its own paragraph to keep writing in.
+  if (pos >= editor.state.doc.content.size) nodes.push({ type: 'paragraph' });
+  try {
+    editor.chain().insertContentAt(clampInsertPos(pos, editor.state.doc.content.size), nodes).run();
+    photoSlotIds = ids;
+  } catch (e) {
+    photoSlotIds = [];
+  }
+  scrollFirstPhotoSlotIntoView();
+}
+
+function scrollFirstPhotoSlotIntoView() {
+  if (!photoSlotIds.length) return;
+  requestAnimationFrame(() => {
+    try {
+      const el = document.querySelector('.tiptap img[' + PHOTO_SLOT_ATTR + ']');
+      if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch (e) {}
+  });
+}
+
+/** Fills the next reserved slot, or appends at the end of the note if the slot is gone. */
+function insertBatchImage(item) {
+  const node = imageNodeFromItem(item);
+  if (!node) return;
+  const id = photoSlotIds.shift();
+  const slot = id ? photoSlotPositions()[id] : null;
+  if (slot) {
+    const attrs = Object.assign({}, slot.node.attrs, node.attrs, { photoSlot: null });
+    let filled = false;
+    try {
+      filled = editor
+        .chain()
+        .command(({ tr, dispatch }) => {
+          if (dispatch) tr.setNodeMarkup(slot.pos, undefined, attrs);
+          return true;
+        })
+        .run();
+    } catch (e) {}
+    if (filled) return;
+  }
+  // No slot left to fill (deleted while uploading, or the reservation failed outright).
+  try {
+    editor.chain().insertContentAt(editor.state.doc.content.size, node, { updateSelection: false }).run();
+  } catch (e) {}
+}
+
+/** Drops slots no photo ever filled — a cut-short batch must not leave placeholders behind. */
+function removePhotoSlots() {
+  photoSlotIds = [];
+  let removed = false;
+  for (let guard = 0; guard < 40; guard += 1) {
+    const found = photoSlotPositions();
+    const keys = Object.keys(found);
+    if (!keys.length) break;
+    try {
+      const { pos, node } = found[keys[0]];
+      const ok = editor
+        .chain()
+        .command(({ tr, dispatch }) => {
+          if (dispatch) tr.delete(pos, pos + node.nodeSize);
+          return true;
+        })
+        .run();
+      if (!ok) break;
+      removed = true;
+    } catch (e) {
+      break;
+    }
+  }
+  return removed;
+}
+
+function endImageBatch() {
+  removePhotoSlots();
+  try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+}
+
+/** Keeps unfilled slots out of everything the native side stores. */
+function stripPhotoSlotFigures(html) {
+  if (!html || html.indexOf(PHOTO_SLOT_ATTR) === -1) return html;
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('img[' + PHOTO_SLOT_ATTR + ']').forEach((img) => {
+      const fig = img.closest('figure');
+      (fig || img).remove();
+    });
+    return serializeHtmlBodyPreservingTriliumMath(doc);
+  } catch (e) {
+    return html;
+  }
 }
 
 function trinoteInsertImageFromDataUri(src) {
@@ -2571,6 +2748,11 @@ document.getElementById('editor-container').addEventListener('click', function(e
     if (!e.target.closest('.image-popup')) hideImagePopup();
     return;
   }
+  // A slot has nothing to style or caption yet, and selecting it invites replacing it by typing.
+  if (img.hasAttribute(PHOTO_SLOT_ATTR)) {
+    hideImagePopup();
+    return;
+  }
   e.preventDefault();
   e.stopPropagation();
   let pos;
@@ -2597,6 +2779,10 @@ document.addEventListener('click', function(e) {
   if (!figure) return;
   const img = figure.querySelector('img');
   if (!img) return;
+  if (img.hasAttribute(PHOTO_SLOT_ATTR)) {
+    hideImagePopup();
+    return;
+  }
   e.preventDefault();
   e.stopPropagation();
   let pos;
@@ -4547,7 +4733,7 @@ window.editorBridge = {
       });
       html = serializeHtmlBodyPreservingTriliumMath(doc);
     }
-    return html;
+    return stripPhotoSlotFigures(html);
   },
   focus() {
     editor.commands.focus('end');
@@ -4555,7 +4741,13 @@ window.editorBridge = {
   },
   insertHTML(html) { editor.commands.insertContent(html); },
   insertImage(src) { trinoteInsertImageFromDataUri(src); },
-  clearPendingMediaInsert() { pendingMediaInsertPos = null; },
+  // Photo batches stream in as each upload finishes: reserve `count` slots once, then one call per
+  // photo. `item` is a data URI string or `{ src, originalSrc }`, where `originalSrc` is the
+  // server-relative `api/attachments/…` reference the native side restores on save.
+  beginImageBatch(count) { beginImageBatch(count); },
+  insertBatchImage(item) { insertBatchImage(item); },
+  endImageBatch() { endImageBatch(); },
+  clearPendingMediaInsert() { pendingMediaInsertPos = null; removePhotoSlots(); },
   pasteImageURL() { trinoteRequestNativePaste('url'); },
   pastePlainFallback(plain, html) {
     const p = (plain != null) ? String(plain) : '';

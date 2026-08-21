@@ -69,6 +69,12 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func createAttachment(_ request: CreateAttachmentRequest) async throws -> AttachmentResponse
     func renameAttachment(attachmentId: String, title: String) async throws
     func deleteAttachment(_ attachmentId: String) async throws
+    /// `POST /api/attachments/{id}/convert-to-note` — attachment becomes a child note of its owner.
+    func convertAttachmentToNote(attachmentId: String) async throws -> ConvertAttachmentToNoteResponse
+    /// `GET /api/ocr/attachments/{id}/text` — Trilium 0.103+. 404 means OCR is unavailable.
+    func getAttachmentOCRText(attachmentId: String) async throws -> AttachmentOCRTextResponse
+    /// `POST /api/ocr/process-attachment/{id}` — Trilium 0.103+. 404 means OCR is unavailable.
+    func processAttachmentOCR(attachmentId: String, forceReprocess: Bool) async throws -> ProcessAttachmentOCRResponse
 
     // MARK: Sync — documented protocol (POST /api/sync/*)
 
@@ -1355,6 +1361,75 @@ actor TriliumClient: TriliumClientProtocol {
 
     func deleteAttachment(_ attachmentId: String) async throws {
         try await delete("/api/attachments/\(attachmentId)", queryParams: nil, csrf: true)
+    }
+
+    func convertAttachmentToNote(attachmentId: String) async throws -> ConvertAttachmentToNoteResponse {
+        struct Empty: Encodable {}
+        return try await postJSON(
+            "/api/attachments/\(attachmentId)/convert-to-note",
+            body: Empty(),
+            csrf: true
+        )
+    }
+
+    func getAttachmentOCRText(attachmentId: String) async throws -> AttachmentOCRTextResponse {
+        var request = try buildRequest(
+            path: "/api/ocr/attachments/\(attachmentId)/text",
+            method: "GET",
+            queryParams: nil,
+            csrf: false,
+            jsonBody: false
+        )
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response, data: data)
+        do {
+            return try decoder.decode(AttachmentOCRTextResponse.self, from: data)
+        } catch {
+            Log.api.error("Decoding failed for /api/ocr/attachments/\(attachmentId)/text: \(error)")
+            throw APIError.decodingFailed(error.localizedDescription)
+        }
+    }
+
+    func processAttachmentOCR(attachmentId: String, forceReprocess: Bool) async throws -> ProcessAttachmentOCRResponse {
+        struct Body: Encodable { let forceReprocess: Bool }
+        var request = try buildRequest(
+            path: "/api/ocr/process-attachment/\(attachmentId)",
+            method: "POST",
+            queryParams: nil,
+            csrf: true,
+            jsonBody: true
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(Body(forceReprocess: forceReprocess))
+        request.timeoutInterval = Self.ocrRequestTimeout
+        let (data, response) = try await dataForLongRunningRequest(request)
+        try validateResponse(response, data: data)
+        do {
+            return try decoder.decode(ProcessAttachmentOCRResponse.self, from: data)
+        } catch {
+            Log.api.error("Decoding failed for /api/ocr/process-attachment/\(attachmentId): \(error)")
+            throw APIError.decodingFailed(error.localizedDescription)
+        }
+    }
+
+    /// Tesseract often sends no bytes for well over the default 30s idle timeout.
+    private static let ocrRequestTimeout: TimeInterval = 600
+
+    private func dataForLongRunningRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let cfg = URLSessionConfiguration.default
+        cfg.httpCookieStorage = httpCookieStorage
+        cfg.httpShouldSetCookies = true
+        cfg.httpCookieAcceptPolicy = .always
+        cfg.timeoutIntervalForRequest = Self.ocrRequestTimeout
+        cfg.timeoutIntervalForResource = Self.ocrRequestTimeout
+        cfg.waitsForConnectivity = injectedProtocolClasses == nil
+        if let injectedProtocolClasses {
+            cfg.protocolClasses = injectedProtocolClasses
+        }
+        let longSession = URLSession(configuration: cfg)
+        defer { longSession.finishTasksAndInvalidate() }
+        return try await longSession.data(for: request)
     }
 
     // MARK: - Request helpers

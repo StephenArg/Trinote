@@ -1608,7 +1608,16 @@ final class PersistenceManager {
         let rowId = "\(serverProfileId):\(noteId)"
         var descriptor = FetchDescriptor<PendingNoteBodyUpload>(predicate: #Predicate { $0.id == rowId })
         descriptor.fetchLimit = 1
-        if let existing = try context.fetch(descriptor).first {
+        let tFetch = CFAbsoluteTimeGetCurrent()
+        let existingRow = try context.fetch(descriptor).first
+        let fetchMs = CheckboxPerf.ms(tFetch)
+        let tRest = CFAbsoluteTimeGetCurrent()
+        defer {
+            CheckboxPerf.log(
+                "upsertPendingUpload note=\(noteId) bytes=\(body.count) existing=\(existingRow != nil) fetchMs=\(fetchMs) saveMs=\(CheckboxPerf.ms(tRest))"
+            )
+        }
+        if let existing = existingRow {
             existing.body = body
             existing.mime = mime
             existing.queuedAt = .now

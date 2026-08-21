@@ -30,4 +30,22 @@ final class AttachmentFilenameTests: XCTestCase {
         let joined = AttachmentFilename.join(basename: "Updated Budget", ext: split.ext)
         XCTAssertEqual(joined, "Updated Budget.xlsx")
     }
+
+    func testReplacementExtensionMatchesIgnoringCase() {
+        XCTAssertTrue(AttachmentFilename.replacementExtensionMatches(
+            existingTitle: "Scan.PNG",
+            replacementFilename: "photo.png"
+        ))
+        XCTAssertFalse(AttachmentFilename.replacementExtensionMatches(
+            existingTitle: "notes.pdf",
+            replacementFilename: "notes.docx"
+        ))
+    }
+
+    func testReplacementAllowsAnyExtensionWhenExistingHasNone() {
+        XCTAssertTrue(AttachmentFilename.replacementExtensionMatches(
+            existingTitle: "untitled",
+            replacementFilename: "photo.png"
+        ))
+    }
 }

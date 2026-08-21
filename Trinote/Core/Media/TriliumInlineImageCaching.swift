@@ -13,9 +13,12 @@ enum TriliumInlineImageCaching {
         options: []
     )
 
+    /// Concurrent `getAttachmentContent` / `getNoteContent` fetches while inlining one note.
+    private static let maxConcurrentImageFetches = 4
+
     static func hasResolvableInlineImageURLs(in html: String) -> Bool {
-        html.localizedCaseInsensitiveContains("api/attachments/")
-            || html.localizedCaseInsensitiveContains("api/images/")
+        html.containsASCIICaseInsensitive("api/attachments/")
+            || html.containsASCIICaseInsensitive("api/images/")
     }
 
     /// Unique `(routeType, entityId)` pairs referenced in HTML attributes.
@@ -34,7 +37,14 @@ enum TriliumInlineImageCaching {
         return refs
     }
 
-    /// Rewrites matching attributes to base64 data URIs where image bytes are available locally or online.
+    /// Rewrites Trilium image attributes into URLs the read-only `WKWebView` can actually load.
+    ///
+    /// Attachments become `trinote-img://` references served by `TriliumImageSchemeHandler`, which needs no
+    /// bytes here at all: the body stays the size of its text and the note paints without waiting on a single
+    /// download. `api/images/{noteId}` is different — it can point at a mermaid, canvas, or text note whose
+    /// content is not image bytes, and the read-only view card-wraps those instead of rendering them, a
+    /// decision that can only be made with the bytes in hand. Those are still resolved (once per reference,
+    /// a bounded number of fetches in flight) and rewritten to `trinote-img://` off the main actor.
     static func inlineAttachmentImages(
         in html: String,
         client: (any TriliumClientProtocol)?,
@@ -43,47 +53,157 @@ enum TriliumInlineImageCaching {
         sourceNoteId: String,
         parentNoteIds: [String]
     ) async -> String {
-        let htmlNS = html as NSString
-        let fullRange = NSRange(location: 0, length: htmlNS.length)
-        let matches = imageURLPattern.matches(in: html, options: [], range: fullRange)
+        let matches = inlineImageMatches(in: html)
         guard !matches.isEmpty else { return html }
 
-        let ms = NSMutableString(string: html)
-        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
-            guard match.numberOfRanges >= 6 else { continue }
-            let attr = htmlNS.substring(with: match.range(at: 1))
-            let quote = htmlNS.substring(with: match.range(at: 2))
-            let routeType = htmlNS.substring(with: match.range(at: 4))
-            let entityId = htmlNS.substring(with: match.range(at: 5))
+        var seen = Set<Reference>()
+        let noteImageReferences = matches.map(\.reference)
+            .filter { $0.routeType.lowercased() == "images" }
+            .filter { seen.insert($0).inserted }
 
-            guard let data = await loadImageData(
-                routeType: routeType,
-                entityId: entityId,
+        var resolvedImages: [Reference: Data] = [:]
+        if !noteImageReferences.isEmpty {
+            resolvedImages = await imageData(
+                for: noteImageReferences,
                 client: client,
                 persistence: persistence,
                 serverProfileId: serverProfileId,
                 sourceNoteId: sourceNoteId,
                 parentNoteIds: parentNoteIds
-            ), data.isPlausibleInlineImagePayload else {
-                continue
-            }
-
-            let mime = data.detectImageMIME()
-            let b64 = data.base64EncodedString()
-            let dataURI = "data:\(mime);base64,\(b64)"
-            let replacement: String
-            if routeType.lowercased() == "images" {
-                let escId = entityId
-                    .replacingOccurrences(of: "&", with: "&amp;")
-                    .replacingOccurrences(of: "\"", with: "&quot;")
-                replacement = "\(attr)=\(quote)\(dataURI)\(quote) data-trinote-image-note-id=\(quote)\(escId)\(quote)"
-            } else {
-                replacement = "\(attr)=\(quote)\(dataURI)\(quote)"
-            }
-            ms.replaceCharacters(in: match.range, with: replacement)
+            )
         }
 
-        return ms as String
+        return await Task.detached(priority: .userInitiated) {
+            rewritingImageURLs(html: html, matches: matches, imageData: resolvedImages)
+        }.value
+    }
+
+    /// One matched attribute, resolved to the image it points at.
+    private struct InlineImageMatch: Sendable {
+        let range: NSRange
+        let attribute: String
+        let quote: String
+        let reference: Reference
+    }
+
+    private static func inlineImageMatches(in html: String) -> [InlineImageMatch] {
+        let htmlNS = html as NSString
+        let fullRange = NSRange(location: 0, length: htmlNS.length)
+        return imageURLPattern.matches(in: html, options: [], range: fullRange).compactMap { match in
+            guard match.numberOfRanges >= 6 else { return nil }
+            return InlineImageMatch(
+                range: match.range,
+                attribute: htmlNS.substring(with: match.range(at: 1)),
+                quote: htmlNS.substring(with: match.range(at: 2)),
+                reference: Reference(
+                    routeType: htmlNS.substring(with: match.range(at: 4)),
+                    entityId: htmlNS.substring(with: match.range(at: 5))
+                )
+            )
+        }
+    }
+
+    /// Bytes for every reference that resolves, cache first and then a bounded number of fetches in flight.
+    /// References that resolve to nothing are simply absent, leaving their URLs untouched.
+    private static func imageData(
+        for references: [Reference],
+        client: (any TriliumClientProtocol)?,
+        persistence: PersistenceManager,
+        serverProfileId: String,
+        sourceNoteId: String,
+        parentNoteIds: [String]
+    ) async -> [Reference: Data] {
+        var resolved: [Reference: Data] = [:]
+        var needsFetch: [Reference] = []
+        for reference in references {
+            if let cached = plausibleCachedImage(
+                entityId: reference.entityId,
+                entityType: reference.routeType,
+                serverProfileId: serverProfileId,
+                persistence: persistence
+            ) {
+                resolved[reference] = cached
+            } else {
+                needsFetch.append(reference)
+            }
+        }
+
+        guard let client, !needsFetch.isEmpty else { return resolved }
+        guard !shouldSkipImageCaching(
+            sourceNoteId: sourceNoteId,
+            parentNoteIds: parentNoteIds,
+            serverProfileId: serverProfileId
+        ) else {
+            return resolved
+        }
+
+        let fetch: @Sendable (Reference) async -> (Reference, Data?) = { reference in
+            let data = await downloadAndCache(
+                routeType: reference.routeType,
+                entityId: reference.entityId,
+                client: client,
+                persistence: persistence,
+                serverProfileId: serverProfileId,
+                sourceNoteId: sourceNoteId,
+                parentNoteIds: parentNoteIds
+            )
+            return (reference, data)
+        }
+
+        await withTaskGroup(of: (Reference, Data?).self) { group in
+            var started = 0
+            while started < min(maxConcurrentImageFetches, needsFetch.count) {
+                let reference = needsFetch[started]
+                group.addTask { await fetch(reference) }
+                started += 1
+            }
+            while let (reference, data) = await group.next() {
+                if let data { resolved[reference] = data }
+                guard started < needsFetch.count else { continue }
+                let next = needsFetch[started]
+                started += 1
+                group.addTask { await fetch(next) }
+            }
+        }
+        return resolved
+    }
+
+    /// Replaces from the end of the body so earlier ranges stay valid as lengths change.
+    ///
+    /// Note-image references with no resolved bytes are left untouched, which is what lets
+    /// `annotateImageLinkApiImageTagsMissingNoteId` recognise and card-wrap them afterwards.
+    private nonisolated static func rewritingImageURLs(
+        html: String,
+        matches: [InlineImageMatch],
+        imageData: [Reference: Data]
+    ) -> String {
+        let result = NSMutableString(string: html)
+        for match in matches.reversed() {
+            let replacement: String
+            if match.reference.routeType.lowercased() == "images" {
+                // Only rewrite when we already know this note is image bytes. Mermaid/canvas/text
+                // targets stay as `api/images/…` so `annotateImageLinkApiImageTagsMissingNoteId`
+                // can card-wrap them afterwards.
+                guard imageData[match.reference] != nil else { continue }
+                let escapedId = match.reference.entityId
+                    .replacingOccurrences(of: "&", with: "&amp;")
+                    .replacingOccurrences(of: "\"", with: "&quot;")
+                let url = TriliumImageScheme.url(
+                    routeType: match.reference.routeType,
+                    entityId: match.reference.entityId
+                )
+                replacement = "\(match.attribute)=\(match.quote)\(url)\(match.quote)"
+                    + " data-trinote-image-note-id=\(match.quote)\(escapedId)\(match.quote)"
+            } else {
+                let url = TriliumImageScheme.url(
+                    routeType: match.reference.routeType,
+                    entityId: match.reference.entityId
+                )
+                replacement = "\(match.attribute)=\(match.quote)\(url)\(match.quote)"
+            }
+            result.replaceCharacters(in: match.range, with: replacement)
+        }
+        return result as String
     }
 
     /// Loads image bytes from cache or network and persists plausible payloads. Returns nil when unavailable.
@@ -208,6 +328,28 @@ enum TriliumInlineImageCaching {
         }
         guard cached.data.isPlausibleInlineImagePayload else { return nil }
         return cached.data
+    }
+
+    /// Seeds the cache with bytes we just uploaded, so the read-only render that follows a save shows
+    /// the image without downloading what we already had in hand.
+    static func cacheUploadedImage(
+        routeType: String,
+        entityId: String,
+        data: Data,
+        persistence: PersistenceManager,
+        serverProfileId: String,
+        sourceNoteId: String?,
+        parentNoteIds: [String]
+    ) {
+        persistPlausibleImage(
+            entityId: entityId,
+            entityType: routeType,
+            data: data,
+            serverProfileId: serverProfileId,
+            persistence: persistence,
+            sourceNoteId: sourceNoteId,
+            parentNoteIds: parentNoteIds
+        )
     }
 
     private static func persistPlausibleImage(

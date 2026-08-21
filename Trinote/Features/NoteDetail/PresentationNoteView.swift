@@ -225,6 +225,9 @@ struct PresentationNoteView: View {
                         baseURL: viewModel.serverBaseURL,
                         onNoteLinkTapped: { noteId in
                             onOpenSlide(noteId)
+                        },
+                        imageBytes: { routeType, entityId in
+                            await viewModel.loadImageBytes(routeType: routeType, entityId: entityId)
                         }
                     )
                     .padding(.horizontal, 8)
@@ -318,7 +321,36 @@ struct PresentationNoteView: View {
         isLoading = true
         defer { isLoading = false }
         let result = await viewModel.loadPresentationSlides(for: note)
-        slides = result.slides
+        var rewritten: [PresentationModels.Slide] = []
+        rewritten.reserveCapacity(result.slides.count)
+        for slide in result.slides {
+            let html = await viewModel.htmlForReadOnlyDisplay(slide.html)
+            var vertical: [PresentationModels.Slide] = []
+            vertical.reserveCapacity(slide.verticalSlides.count)
+            for nested in slide.verticalSlides {
+                vertical.append(
+                    PresentationModels.Slide(
+                        noteId: nested.noteId,
+                        branchId: nested.branchId,
+                        title: nested.title,
+                        html: await viewModel.htmlForReadOnlyDisplay(nested.html),
+                        background: nested.background,
+                        verticalSlides: []
+                    )
+                )
+            }
+            rewritten.append(
+                PresentationModels.Slide(
+                    noteId: slide.noteId,
+                    branchId: slide.branchId,
+                    title: slide.title,
+                    html: html,
+                    background: slide.background,
+                    verticalSlides: vertical
+                )
+            )
+        }
+        slides = rewritten
         theme = result.theme
         if currentIndex >= slides.count {
             currentIndex = max(0, slides.count - 1)

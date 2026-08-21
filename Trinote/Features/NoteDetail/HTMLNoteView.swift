@@ -5,12 +5,17 @@ import WebKit
 struct HTMLNoteView: View {
     let html: String
     let baseURL: URL?
+    /// Changes only when `html` differs from the last one by checkbox `checked` state alone.
+    var checkboxOnlyRevision: Int = 0
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
     /// Reorder a todo-list item among siblings. `beforeIndex` is nil when appending at end of the sibling group.
     var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
     /// Loads preview content for a tapped `api/attachments/{id}/…` link.
     var loadAttachmentPreview: ((String) async -> AttachmentPreviewItem?)?
+    /// Serves the `trinote-img://` images in `html`, and the full-resolution bytes the full-screen
+    /// viewer shows when one is tapped.
+    var imageBytes: TriliumImageSchemeHandler.ByteProvider?
     /// When set, the web view registers for in-page find (read-only).
     var findControl: FindOnPageControl?
 
@@ -48,6 +53,7 @@ struct HTMLNoteView: View {
             baseURL: baseURL,
             themeColors: themeColors,
             checkboxReorderEnabled: noteCheckboxReorderEnabled,
+            checkboxOnlyRevision: checkboxOnlyRevision,
             onNoteLinkTapped: onNoteLinkTapped,
             onCheckboxToggled: onCheckboxToggled,
             onCheckboxReordered: onCheckboxReordered,
@@ -57,6 +63,7 @@ struct HTMLNoteView: View {
                     attachmentPreview = await loadAttachmentPreview(attachmentId)
                 }
             },
+            imageBytes: imageBytes,
             findControl: findControl,
             onHeightChanged: { contentHeight = $0 },
             onImagePreview: { payload in fullScreenImage = payload }
@@ -95,10 +102,12 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     let baseURL: URL?
     let themeColors: HTMLThemeColors
     let checkboxReorderEnabled: Bool
+    let checkboxOnlyRevision: Int
     var onNoteLinkTapped: ((String) -> Void)?
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
     var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
     var onAttachmentLinkTapped: ((String) -> Void)?
+    var imageBytes: TriliumImageSchemeHandler.ByteProvider?
     var findControl: FindOnPageControl?
     var onHeightChanged: ((CGFloat) -> Void)?
     var onImagePreview: ((FullScreenImagePayload) -> Void)?
@@ -109,6 +118,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             onCheckboxToggled: onCheckboxToggled,
             onCheckboxReordered: onCheckboxReordered,
             onAttachmentLinkTapped: onAttachmentLinkTapped,
+            imageBytes: imageBytes,
             onHeightChanged: onHeightChanged,
             onImagePreview: onImagePreview
         )
@@ -136,6 +146,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         // those are private WebKit preferences that can raise `NSUnknownKeyException` on some iOS
         // versions and broke the entire webview creation (taking canvas/mermaid cards down with it).
 
+        // Images arrive as `trinote-img://` references rather than inlined bytes, so the body handed to
+        // this web view stays the size of its text no matter how many photos the note holds.
+        if let imageBytes {
+            let schemeHandler = TriliumImageSchemeHandler(provider: imageBytes)
+            config.setURLSchemeHandler(schemeHandler, forURLScheme: TriliumImageScheme.scheme)
+            handler.imageSchemeHandler = schemeHandler
+        }
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = handler
         webView.isOpaque = false
@@ -150,34 +168,83 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         handler.webView = webView
         handler.themeColors = themeColors
         handler.checkboxReorderEnabled = checkboxReorderEnabled
+        handler.checkboxOnlyRevision = checkboxOnlyRevision
         handler.findControl = findControl
-        let wrapped = Self.wrapHTML(html, theme: themeColors, checkboxReorderEnabled: checkboxReorderEnabled)
-        webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(wrapped: wrapped, canonicalBase: baseURL))
+        let wrapped = Self.wrapHTMLTimed(
+            html,
+            theme: themeColors,
+            checkboxReorderEnabled: checkboxReorderEnabled,
+            phase: "makeUIView"
+        )
+        handler.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
+        CheckboxPerf.log("loadHTMLString phase=makeUIView wrappedUtf16=\(wrapped.utf16.count)")
+        webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(body: html, canonicalBase: baseURL))
         handler.loadedHTML = html
 
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        let t0 = CFAbsoluteTimeGetCurrent()
         let coordinator = context.coordinator
         coordinator.findControl = findControl
         coordinator.onNoteLinkTapped = onNoteLinkTapped
         coordinator.onCheckboxToggled = onCheckboxToggled
         coordinator.onCheckboxReordered = onCheckboxReordered
         coordinator.onAttachmentLinkTapped = onAttachmentLinkTapped
+        coordinator.imageBytes = imageBytes
         coordinator.onHeightChanged = onHeightChanged
         coordinator.onImagePreview = onImagePreview
         findControl?.registerHTMLWebView(webView)
 
-        let needsReload = html != coordinator.loadedHTML
-            || themeColors != coordinator.themeColors
-            || checkboxReorderEnabled != coordinator.checkboxReorderEnabled
-        guard needsReload else { return }
+        let tCompare = CFAbsoluteTimeGetCurrent()
+        let htmlChanged = html != coordinator.loadedHTML
+        let themeChanged = themeColors != coordinator.themeColors
+        let reorderChanged = checkboxReorderEnabled != coordinator.checkboxReorderEnabled
+        let compareMs = CheckboxPerf.ms(tCompare)
+        guard htmlChanged || themeChanged || reorderChanged else {
+            if CheckboxPerf.lastToggleEndedAt > 0,
+               CFAbsoluteTimeGetCurrent() - CheckboxPerf.lastToggleEndedAt < 5 {
+                CheckboxPerf.log(
+                    "updateUIView noop compareMs=\(compareMs) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs()) lastToggle=#\(CheckboxPerf.lastToggleID)"
+                )
+            }
+            return
+        }
+
+        // Checkbox taps already update the live DOM in JS. Reloading the whole note would collapse
+        // `.frame(height:)` while images decode again — the jump on image-heavy notes. The view model
+        // tells us when a change was a checkbox toggle and nothing else, so this stays O(1).
+        let revisionChanged = checkboxOnlyRevision != coordinator.checkboxOnlyRevision
+        if htmlChanged, !themeChanged, !reorderChanged, revisionChanged,
+           let previous = coordinator.loadedHTML,
+           Self.lengthChangeFitsCheckboxToggle(previous: previous, incoming: html) {
+            coordinator.loadedHTML = html
+            coordinator.checkboxOnlyRevision = checkboxOnlyRevision
+            CheckboxPerf.log(
+                "updateUIView skipReload lastToggle=#\(CheckboxPerf.lastToggleID) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs()) compareMs=\(compareMs) revision=\(checkboxOnlyRevision) totalMs=\(CheckboxPerf.ms(t0))"
+            )
+            return
+        }
+        CheckboxPerf.log(
+            "updateUIView willReload lastToggle=#\(CheckboxPerf.lastToggleID) htmlChanged=\(htmlChanged) themeChanged=\(themeChanged) reorderChanged=\(reorderChanged) revisionChanged=\(revisionChanged) compareMs=\(compareMs) incoming[\(CheckboxPerf.bodyStats(html))]"
+        )
+
         coordinator.loadedHTML = html
         coordinator.themeColors = themeColors
         coordinator.checkboxReorderEnabled = checkboxReorderEnabled
-        let wrapped = Self.wrapHTML(html, theme: themeColors, checkboxReorderEnabled: checkboxReorderEnabled)
-        webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(wrapped: wrapped, canonicalBase: baseURL))
+        coordinator.checkboxOnlyRevision = checkboxOnlyRevision
+        let wrapped = Self.wrapHTMLTimed(
+            html,
+            theme: themeColors,
+            checkboxReorderEnabled: checkboxReorderEnabled,
+            phase: "updateUIView-reload"
+        )
+        coordinator.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
+        CheckboxPerf.log(
+            "loadHTMLString phase=updateUIView-reload lastToggle=#\(CheckboxPerf.lastToggleID) wrappedUtf16=\(wrapped.utf16.count) updateMs=\(CheckboxPerf.ms(t0))"
+        )
+        webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(body: html, canonicalBase: baseURL))
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -192,6 +259,27 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "checkboxDragState")
         uc.removeScriptMessageHandler(forName: "debugLog")
         uc.removeScriptMessageHandler(forName: "imagePreview")
+    }
+
+    /// Guards the revision signal: toggling one `checked` attribute moves the body length by a few
+    /// characters at most, so a bigger jump means something else changed in the same update and the
+    /// WebView really does need reloading.
+    private static func lengthChangeFitsCheckboxToggle(previous: String, incoming: String) -> Bool {
+        abs(incoming.utf16.count - previous.utf16.count) <= 64
+    }
+
+    private static func wrapHTMLTimed(
+        _ body: String,
+        theme: HTMLThemeColors,
+        checkboxReorderEnabled: Bool,
+        phase: String
+    ) -> String {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let wrapped = wrapHTML(body, theme: theme, checkboxReorderEnabled: checkboxReorderEnabled)
+        CheckboxPerf.log(
+            "wrapHTML phase=\(phase) bodyUtf16=\(body.utf16.count) wrappedUtf16=\(wrapped.utf16.count) ms=\(CheckboxPerf.ms(t0))"
+        )
+        return wrapped
     }
 
     static func wrapHTML(_ body: String, theme: HTMLThemeColors, checkboxReorderEnabled: Bool = false) -> String {
@@ -811,9 +899,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         })();
 
         // Tap any regular <img> in the note (not a linked image-note, not inside an include card,
-        // not wrapped in an anchor) to open it full-screen. Uses the rendered <img> element so we
-        // capture exactly what the user sees, regardless of whether the source is a `data:` URI,
-        // a same-origin URL, or a remote URL — `canvas.toDataURL` re-encodes the bytes for native.
+        // not wrapped in an anchor) to open it full-screen. Images we serve ourselves are handed to
+        // native by reference so it can load the original bytes; anything else (a `data:` URI, a
+        // same-origin or remote URL) is captured from the rendered element via `canvas.toDataURL`.
         function trinoteImageIsPreviewable(img) {
             if (!img) return false;
             if (img.hasAttribute('data-trinote-image-note-id')) return false;
@@ -823,6 +911,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
         function trinoteSendImagePreview(img) {
             try {
+                var rawSrc = img.getAttribute('src') || '';
+                if (rawSrc.lastIndexOf('\(TriliumImageScheme.scheme)://', 0) === 0) {
+                    window.webkit.messageHandlers.imagePreview.postMessage({
+                        ref: rawSrc,
+                        alt: img.getAttribute('alt') || ''
+                    });
+                    return true;
+                }
                 var natW = img.naturalWidth || img.width || 0;
                 var natH = img.naturalHeight || img.height || 0;
                 if (natW <= 0 || natH <= 0) return false;
@@ -1149,6 +1245,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     /// Linked mermaid include cards use pre-rendered inline SVG (`trinote-include__inner--mermaid`) and do
     /// **not** match this — they must not force the bundle `baseURL` or load `vendor/mermaid.min.js`.
     private static func htmlContainsInlineMermaidBlocks(_ html: String) -> Bool {
+        // The regex scans the whole body, which is several megabytes once image data URIs are inlined.
+        guard html.containsASCIICaseInsensitive("mermaid") else { return false }
         guard let regex = try? NSRegularExpression(pattern: #"(?i)class\s*=\s*["']mermaid["']"#, options: []) else {
             return false
         }
@@ -1235,18 +1333,23 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
     /// Use the app bundle as the document base when bundled `vendor/…` scripts are referenced (Mermaid, KaTeX) so
     /// WKWebView resolves `vendor/*.js` from the app bundle instead of the note’s canonical base URL.
-    private static func effectiveReadOnlyHTMLBaseURL(wrapped: String, canonicalBase: URL?) -> URL? {
-        guard readOnlyHTMLNeedsBundleBaseURL(wrapped: wrapped) else { return canonicalBase }
+    private static func effectiveReadOnlyHTMLBaseURL(body: String, canonicalBase: URL?) -> URL? {
+        guard readOnlyHTMLNeedsBundleBaseURL(body: body) else { return canonicalBase }
         return Bundle.main.bundleURL
     }
 
-    /// True when wrapped HTML loads `vendor/mermaid.min.js` or `vendor/katex/…` from the app bundle.
-    private static func readOnlyHTMLNeedsBundleBaseURL(wrapped: String) -> Bool {
-        if htmlContainsInlineMermaidBlocks(wrapped),
+    /// True when the wrapper will inject `vendor/mermaid.min.js` or `vendor/katex/…` for this body.
+    ///
+    /// Asks the body rather than the wrapped document: the two are equivalent (only a note body carries
+    /// `class="mermaid"` or math markup — the wrapper's own `.mermaid` / `.math-tex` CSS rules don't match
+    /// either detector), but the body lets those detectors bail on a cheap byte probe instead of running a
+    /// regex over the whole document.
+    private static func readOnlyHTMLNeedsBundleBaseURL(body: String) -> Bool {
+        if htmlContainsInlineMermaidBlocks(body),
            Bundle.main.url(forResource: "mermaid.min", withExtension: "js", subdirectory: "vendor") != nil {
             return true
         }
-        if TriliumMathHTMLSupport.bodyContainsTriliumMathMarkers(wrapped),
+        if TriliumMathHTMLSupport.bodyContainsTriliumMathMarkers(body),
            TriliumMathHTMLSupport.katexJavaScriptIsBundled() {
             return true
         }
@@ -1334,13 +1437,18 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var loadedHTML: String?
+        var loadHTMLStartedAt: CFAbsoluteTime?
         var themeColors: HTMLThemeColors?
         var checkboxReorderEnabled: Bool = false
+        var checkboxOnlyRevision: Int = 0
         weak var findControl: FindOnPageControl?
         var onNoteLinkTapped: ((String) -> Void)?
         var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
         var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
         var onAttachmentLinkTapped: ((String) -> Void)?
+        var imageBytes: TriliumImageSchemeHandler.ByteProvider?
+        /// Held so the handler outlives the configuration that registered it.
+        var imageSchemeHandler: TriliumImageSchemeHandler?
         var onHeightChanged: ((CGFloat) -> Void)?
         var onImagePreview: ((FullScreenImagePayload) -> Void)?
 
@@ -1362,6 +1470,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?,
             onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?,
             onAttachmentLinkTapped: ((String) -> Void)?,
+            imageBytes: TriliumImageSchemeHandler.ByteProvider?,
             onHeightChanged: ((CGFloat) -> Void)?,
             onImagePreview: ((FullScreenImagePayload) -> Void)?
         ) {
@@ -1369,6 +1478,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             self.onCheckboxToggled = onCheckboxToggled
             self.onCheckboxReordered = onCheckboxReordered
             self.onAttachmentLinkTapped = onAttachmentLinkTapped
+            self.imageBytes = imageBytes
             self.onHeightChanged = onHeightChanged
             self.onImagePreview = onImagePreview
         }
@@ -1395,7 +1505,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
                       let index = Self.intFromScriptValue(dict["index"]),
                       let checked = Self.boolFromScriptValue(dict["checked"])
-                else { return }
+                else {
+                    CheckboxPerf.log("js checkboxToggle parse-failed")
+                    return
+                }
+                CheckboxPerf.log("js checkboxToggle index=\(index) checked=\(checked) (native toggleCheckbox next)")
                 onCheckboxToggled?(index, checked)
             case "checkboxReorder":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
@@ -1427,11 +1541,25 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 let windowY = webView.convert(CGPoint(x: webView.bounds.midX, y: clientY), to: nil).y
                 dragScrollWindowY = windowY
             case "imagePreview":
-                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
-                      let dataURL = dict["dataURL"] as? String,
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body) else { return }
+                let title = (dict["alt"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                // Scheme-served images are fetched natively instead of captured out of the page: their
+                // canvas is cross-origin tainted, and re-encoding a full-resolution photo to PNG just to
+                // pass it back over the bridge cost tens of megabytes per tap.
+                if let ref = dict["ref"] as? String,
+                   let reference = TriliumImageScheme.reference(fromURLString: ref) {
+                    guard let imageBytes else { return }
+                    Task { [weak self] in
+                        guard let data = await imageBytes(reference.routeType, reference.entityId),
+                              let image = UIImage(data: data)
+                        else { return }
+                        self?.onImagePreview?(FullScreenImagePayload(image: image, title: title))
+                    }
+                    return
+                }
+                guard let dataURL = dict["dataURL"] as? String,
                       let image = Self.imageFromDataURL(dataURL)
                 else { return }
-                let title = (dict["alt"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 onImagePreview?(FullScreenImagePayload(image: image, title: title))
             default:
                 break
@@ -1584,6 +1712,12 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            if let started = loadHTMLStartedAt {
+                CheckboxPerf.log(
+                    "webView didFinish loadHTMLStringMs=\(CheckboxPerf.ms(started)) lastToggle=#\(CheckboxPerf.lastToggleID) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs())"
+                )
+                loadHTMLStartedAt = nil
+            }
             findControl?.registerHTMLWebView(webView)
             findControl?.reapplyHTMLSearchIfNeeded()
         }

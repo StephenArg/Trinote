@@ -2,12 +2,31 @@ import Foundation
 import Observation
 import UIKit
 
+enum AttachmentOCRState: Equatable, Sendable {
+    case text(String)
+    case empty
+    case unsupported
+    case failed(String)
+}
+
+/// One image for the editor to insert. `src` is what the editor displays; `originalSrc` is the
+/// server-relative reference stored in the note body, restored by `undecorateLinkedImagesFromEditor`
+/// on save. When `originalSrc` is nil the displayed bytes are what gets saved.
+struct EditorImageInsert: Sendable {
+    let src: String
+    let originalSrc: String?
+}
+
 @Observable
 @MainActor
 final class NoteDetailViewModel {
     var note: NoteItem?
     var content: Data?
     var contentString: String?
+    /// Bumped only when `contentString` was patched by `toggleCheckbox`, i.e. the change is a checkbox
+    /// `checked` attribute and nothing else. The read-only WebView uses this to skip a `loadHTMLString`
+    /// it doesn't need — JS already toggled the live DOM.
+    private(set) var checkboxOnlyContentRevision = 0
     private var rawContentString: String?
     var attachments: [AttachmentItem] = []
     var breadcrumbs: [BreadcrumbItem] = []
@@ -22,10 +41,11 @@ final class NoteDetailViewModel {
     // Editing
     var isEditing = false
     var editableContent = ""
-    /// Decorated copy of `editableContent` for the rich text editor's WKWebView. Linked-note `<img src="api/images/{noteId}/...">`
-    /// references are inlined as data URIs (canvas-export.svg, MermaidRenderer SVG, or attachment bytes) because the
-    /// editor.html is loaded from the bundle and can't resolve relative `api/...` URLs. The original src is preserved on
-    /// each rewritten `<img>` via `data-trinote-original-src` so `undecorateLinkedImagesFromEditor` can restore it on save.
+    /// Decorated copy of `editableContent` for the rich text editor's WKWebView. Linked-note
+    /// `<img src="api/images/{noteId}/...">` / `api/attachments/…` references become `trinote-img://`
+    /// URLs (the editor is bundle-loaded and can't resolve relative `api/...` paths). Canvas and mermaid
+    /// `~imageLink`s become include-note cards. The original src is preserved on each rewritten `<img>`
+    /// via `data-trinote-original-src` so `undecorateLinkedImagesFromEditor` can restore it on save.
     /// `nil` while preparation is in flight; the editor view shows a spinner during that brief window.
     var editorDisplayContent: String?
     @ObservationIgnored private var _pendingEditorHTML: String?
@@ -39,6 +59,8 @@ final class NoteDetailViewModel {
     /// Short-lived hint after offline save (e.g. queued for upload).
     var transientEditorMessage: String?
     @ObservationIgnored private var transientEditorMessageTask: Task<Void, Never>?
+    /// Non-nil while picked photos are uploading as attachments; drives the editor status banner.
+    var mediaUploadStatus: String?
 
     // Title edit
     var editingTitle = false
@@ -367,8 +389,8 @@ final class NoteDetailViewModel {
 
         loadContentFromCache()
 
-        // Cached HTML still points at `api/images` / `api/attachments`; WKWebView cannot load those like a browser tab.
-        // If we assign `contentString` before inlining completes, images briefly show as broken (e.g. “?”) while online fetches run.
+        // Cached HTML still points at `api/images` / `api/attachments`; rewrite those to `trinote-img://`
+        // before publishing so the read-only WebView never paints a broken `api/…` URL.
         if let raw = self.rawContentString,
            TriliumInlineImageCaching.hasResolvableInlineImageURLs(in: raw),
            self.note?.type == .text || self.contentString == nil {
@@ -467,7 +489,7 @@ final class NoteDetailViewModel {
 
             var displayHTML = htmlString
             if let html = displayHTML,
-               html.contains("api/attachments/") || html.contains("api/images/") {
+               html.containsASCII("api/attachments/") || html.containsASCII("api/images/") {
                 displayHTML = await self.inlineAttachmentImages(in: html)
             }
 
@@ -526,9 +548,8 @@ final class NoteDetailViewModel {
         }
     }
 
-    /// Finds Trilium image URLs in HTML (`src`, CKEditor `data-src` / `data-cke-saved-src`) and replaces them with
-    /// base64 data URIs. Matches `api/images|attachments` with any prefix (relative, `/api/…`, or `https://host/…/api/…`).
-    /// Applies replacements from the end of the string so ranges stay valid when lengths change.
+    /// Rewrites Trilium image URLs into `trinote-img://` references the read-only WebView can load.
+    /// Matches `api/images|attachments` with any prefix (relative, `/api/…`, or `https://host/…/api/…`).
     private func inlineAttachmentImages(in html: String) async -> String {
         let profileId = self.serverProfileId ?? ""
         let inlined = await TriliumInlineImageCaching.inlineAttachmentImages(
@@ -542,11 +563,31 @@ final class NoteDetailViewModel {
         return Self.dedupeTrinoteImageNoteIdAttributesInHTML(inlined)
     }
 
+    /// Rewrites Trilium image URLs for a body that is not this note's `contentString` (slides, includes).
+    func htmlForReadOnlyDisplay(_ html: String) async -> String {
+        await inlineAttachmentImages(in: html)
+    }
+
+    /// Bytes for one `trinote-img://` request (read-only view, editor, and the full-screen viewer).
+    func loadImageBytes(routeType: String, entityId: String) async -> Data? {
+        let profileId = serverProfileId ?? ""
+        let clientForLoad: (any TriliumClientProtocol)? = isOnline ? client : nil
+        return await TriliumInlineImageCaching.loadImageData(
+            routeType: routeType,
+            entityId: entityId,
+            client: clientForLoad,
+            persistence: persistence,
+            serverProfileId: profileId,
+            sourceNoteId: noteId,
+            parentNoteIds: parentNoteIdsForCache(noteId: noteId)
+        )
+    }
+
     /// `~imageLink` to mermaid/canvas notes still uses `api/images/{noteId}/…`, but `getNoteContent` returns diagram
     /// source/JSON — not inlinable image bytes — so `inlineAttachmentImages` skips those matches. This pass adds
     /// `data-trinote-image-note-id` so card wrap + tap-to-open can work while the `<img>` keeps loading from the server URL.
     private static func annotateImageLinkApiImageTagsMissingNoteId(in html: String) -> String {
-        guard html.localizedCaseInsensitiveContains("api/images") else { return html }
+        guard html.containsASCIICaseInsensitive("api/images") else { return html }
         let tagPattern = try! NSRegularExpression(pattern: #"(?i)(<img\b)([^>]+)(>)"#, options: [])
         let idInUrl = try! NSRegularExpression(pattern: #"(?i)api/images/([a-zA-Z0-9_-]+)/"#, options: [])
         let htmlNS = html as NSString
@@ -580,6 +621,9 @@ final class NoteDetailViewModel {
 
     /// If both `src` and `data-src` pointed at `api/images/…`, inlining can add duplicate `data-trinote-image-note-id`; keep one.
     private static func dedupeTrinoteImageNoteIdAttributesInHTML(_ html: String) -> String {
+        // Runs after every inline pass, and the regex below rebuilds the whole body — megabytes once image
+        // data URIs are in it. Only `api/images` targets can produce the duplicate at all.
+        guard html.containsASCII("data-trinote-image-note-id") else { return html }
         let p = try! NSRegularExpression(
             pattern: #"(?i)(\sdata-trinote-image-note-id\s*=\s*["'][^"']*["'])(\s+data-trinote-image-note-id\s*=\s*["'][^"']*["'])+"#, options: []
         )
@@ -603,7 +647,7 @@ final class NoteDetailViewModel {
         guard let profileId = serverProfileId, !profileId.isEmpty else { return }
         guard var html = contentString else { return }
 
-        if html.contains("include-note") {
+        if html.containsASCII("include-note") {
             let resolved = await resolveIncludeNotesInHTML(html, rootNoteId: noteId)
             if resolved != html {
                 contentString = resolved
@@ -612,7 +656,7 @@ final class NoteDetailViewModel {
         }
         // Include resolution can embed nested HTML with new api/images URLs — inline again.
         guard var after = contentString else { return }
-        if after.contains("api/images") || after.contains("api/attachments") {
+        if after.containsASCII("api/images") || after.containsASCII("api/attachments") {
             let inlined = await inlineAttachmentImages(in: after)
             if inlined != after {
                 contentString = inlined
@@ -625,7 +669,7 @@ final class NoteDetailViewModel {
             after = annotated
         }
         // Wrap `~imageLink` targets that are canvas/mermaid notes (same card chrome as include-note).
-        if after.contains("data-trinote-image-note-id") {
+        if after.containsASCII("data-trinote-image-note-id") {
             let wrapped = await wrapImageLinkCanvasMermaidCards(in: after)
             if wrapped != after {
                 contentString = wrapped
@@ -862,20 +906,18 @@ final class NoteDetailViewModel {
         return NSRange(location: lastFig, length: NSMaxRange(firstClose) - lastFig)
     }
 
-    // MARK: - Editor display decoration (linked canvas/mermaid/imageLink → inlined data URIs)
+    // MARK: - Editor display decoration (linked canvas/mermaid/imageLink → scheme URLs)
 
-    /// Replaces every `<img src="…api/(images|attachments)/{id}/…">` with an inlined `data:` URI so the rich text
-    /// editor's bundle-loaded `WKWebView` (which has no access to the Trilium server's relative paths) can
-    /// actually render the picture. Canvas notes get their `canvas-export.svg` attachment, mermaid notes get a
-    /// freshly rendered SVG via `MermaidRenderer`, and other targets reuse the same image cache / `getNoteContent` /
-    /// `getAttachmentContent` paths as `inlineAttachmentImages`.
+    /// Replaces every `<img src="…api/(images|attachments)/{id}/…">` with a `trinote-img://` URL so the
+    /// rich text editor's bundle-loaded `WKWebView` (which has no access to the Trilium server's relative
+    /// paths) can render the picture. Canvas and mermaid `~imageLink`s become include-note cards instead.
     ///
     /// The original `src` is preserved in `data-trinote-original-src` (round-tripped through TipTap by way of the
     /// `originalSrc` attribute added in `editor.html`), so `undecorateLinkedImagesFromEditor` can restore the
     /// canonical Trilium HTML before saving or storing drafts.
     private func decorateLinkedImagesForEditor(in html: String) async -> String {
-        guard html.localizedCaseInsensitiveContains("api/images")
-                || html.localizedCaseInsensitiveContains("api/attachments") else { return html }
+        guard html.containsASCIICaseInsensitive("api/images")
+                || html.containsASCIICaseInsensitive("api/attachments") else { return html }
 
         // `(?i)` would put NSRegularExpression into a slow path on long strings; we use `.caseInsensitive` instead.
         let pattern = try! NSRegularExpression(
@@ -924,15 +966,11 @@ final class NoteDetailViewModel {
                 continue
             }
 
-            let dataURI = await editorInlinedDataURI(routeType: routeType, entityId: entityId)
-            guard let dataURI else {
-                continue
-            }
-
+            let displaySrc = TriliumImageScheme.url(routeType: routeType, entityId: entityId)
             let escOrig = originalSrc
                 .replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "\"", with: "&quot;")
-            let newTag = "<img\(preAttrs) src=\(quote)\(dataURI)\(quote) data-trinote-original-src=\"\(escOrig)\"\(postAttrs)>"
+            let newTag = "<img\(preAttrs) src=\(quote)\(displaySrc)\(quote) data-trinote-original-src=\"\(escOrig)\"\(postAttrs)>"
             ms.replaceCharacters(in: match.range, with: newTag)
         }
         return ms as String
@@ -989,6 +1027,11 @@ final class NoteDetailViewModel {
             return nil
         }
         let mime = data.detectImageMIME()
+        // The editor only needs display pixels; `data-trinote-original-src` carries the real reference
+        // through to the save, so a preview here costs nothing and keeps the editor's HTML small.
+        if let preview = await EditorImagePreview.downscaledJPEG(from: data, mime: mime) {
+            return "data:image/jpeg;base64,\(preview.base64EncodedString())"
+        }
         return "data:\(mime);base64,\(data.base64EncodedString())"
     }
 
@@ -1071,13 +1114,13 @@ final class NoteDetailViewModel {
     /// references and must round-trip back to Trilium's figure-wrapped imageLink HTML so we never silently rewrite the
     /// canonical Trilium HTML into an `~includeNote` reference. Pure string surgery — safe to call from any actor.
     static func undecorateLinkedImagesFromEditor(in html: String) -> String {
-        let needsImgUndecorate = html.localizedCaseInsensitiveContains("data-trinote-original-src")
-        let needsSectionUndecorate = html.localizedCaseInsensitiveContains("data-trinote-imagelink-original-src")
+        let needsImgUndecorate = html.containsASCIICaseInsensitive("data-trinote-original-src")
+        let needsSectionUndecorate = html.containsASCIICaseInsensitive("data-trinote-imagelink-original-src")
         guard needsImgUndecorate || needsSectionUndecorate else { return html }
         var working = html
         if needsSectionUndecorate {
             working = unwrapImageLinkIncludeSections(in: working)
-            if !working.localizedCaseInsensitiveContains("data-trinote-original-src") {
+            if !working.containsASCIICaseInsensitive("data-trinote-original-src") {
                 return working
             }
         }
@@ -1146,7 +1189,7 @@ final class NoteDetailViewModel {
     private func refreshResolvedTextNoteDisplayAfterSave() async {
         guard note?.type == .text else { return }
         guard var s = contentString, !s.isEmpty else { return }
-        if s.contains("api/images") || s.contains("api/attachments") {
+        if s.containsASCII("api/images") || s.containsASCII("api/attachments") {
             let inlined = await inlineAttachmentImages(in: s)
             if inlined != s {
                 contentString = inlined
@@ -1255,8 +1298,8 @@ final class NoteDetailViewModel {
             // user has to back out and re-enter the note to see the new content (`load()`
             // does the same `loadContentFromCache()` call on entry).
             if let raw = self.rawContentString,
-               raw.localizedCaseInsensitiveContains("api/attachments/")
-                   || raw.localizedCaseInsensitiveContains("api/images/") {
+               raw.containsASCIICaseInsensitive("api/attachments/")
+                   || raw.containsASCIICaseInsensitive("api/images/") {
                 self.contentString = await self.inlineAttachmentImages(in: raw)
             }
             await applyIncludeNoteResolutionIfNeeded()
@@ -1313,7 +1356,7 @@ final class NoteDetailViewModel {
 
         var displayHTML = fetchedHTML
         if let html = displayHTML,
-           html.contains("api/attachments/") || html.contains("api/images/") {
+           html.containsASCII("api/attachments/") || html.containsASCII("api/images/") {
             displayHTML = await self.inlineAttachmentImages(in: html)
         }
         self.contentString = displayHTML
@@ -1353,22 +1396,42 @@ final class NoteDetailViewModel {
     // MARK: - Checkbox Toggle
 
     func toggleCheckbox(index: Int, checked: Bool) {
-        guard let raw = rawContentString ?? contentString else { return }
+        let id = CheckboxPerf.nextID()
+        let t0 = CFAbsoluteTimeGetCurrent()
+        guard let raw = rawContentString ?? contentString else {
+            CheckboxPerf.log("toggle #\(id) abort=no-body index=\(index) checked=\(checked)")
+            return
+        }
+        let usedRawFallback = rawContentString == nil
+        let display = contentString
+        CheckboxPerf.log(
+            "toggle #\(id) start index=\(index) checked=\(checked) note=\(self.noteId) usedRawFallback=\(usedRawFallback) raw[\(CheckboxPerf.bodyStats(raw))] display[\(display.map(CheckboxPerf.bodyStats) ?? "nil")]"
+        )
 
         let checkboxPattern = try! NSRegularExpression(
             pattern: #"<input\s+[^>]*type\s*=\s*["']checkbox["'][^>]*/?\s*>"#,
             options: .caseInsensitive
         )
+        let tRegexRaw = CFAbsoluteTimeGetCurrent()
         let nsRaw = raw as NSString
         let matches = checkboxPattern.matches(in: raw, range: NSRange(location: 0, length: nsRaw.length))
+        CheckboxPerf.log(
+            "toggle #\(id) regexRaw ms=\(CheckboxPerf.ms(tRegexRaw)) matches=\(matches.count) index=\(index)"
+        )
 
-        guard index < matches.count else { return }
+        guard index < matches.count else {
+            CheckboxPerf.log("toggle #\(id) abort=index-out-of-range matches=\(matches.count)")
+            return
+        }
         let matchRange = matches[index].range
         let original = nsRaw.substring(with: matchRange)
 
         var updated: String
         if checked {
-            if original.contains("checked") { return }
+            if original.contains("checked") {
+                CheckboxPerf.log("toggle #\(id) abort=already-checked")
+                return
+            }
             updated = original.replacingOccurrences(of: ">", with: " checked=\"checked\">")
             // Handle self-closing tags
             updated = updated.replacingOccurrences(of: "/ checked=\"checked\">", with: " checked=\"checked\" />")
@@ -1382,11 +1445,17 @@ final class NoteDetailViewModel {
 
         let newRaw = (raw as NSString).replacingCharacters(in: matchRange, with: updated)
         self.rawContentString = newRaw
+        let tHash = CFAbsoluteTimeGetCurrent()
         self.serverContentHash = newRaw.hashValue
+        CheckboxPerf.log("toggle #\(id) hashRaw ms=\(CheckboxPerf.ms(tHash))")
 
-        if let display = contentString {
+        if let display {
+            let tRegexDisplay = CFAbsoluteTimeGetCurrent()
             let nsDisplay = display as NSString
             let displayMatches = checkboxPattern.matches(in: display, range: NSRange(location: 0, length: nsDisplay.length))
+            CheckboxPerf.log(
+                "toggle #\(id) regexDisplay ms=\(CheckboxPerf.ms(tRegexDisplay)) matches=\(displayMatches.count)"
+            )
             if index < displayMatches.count {
                 let displayOriginal = nsDisplay.substring(with: displayMatches[index].range)
                 var displayUpdated: String
@@ -1400,11 +1469,21 @@ final class NoteDetailViewModel {
                         .replacingOccurrences(of: "checked=\"checked\" ", with: "")
                         .replacingOccurrences(of: "checked ", with: "")
                 }
+                let tAssign = CFAbsoluteTimeGetCurrent()
+                self.checkboxOnlyContentRevision += 1
                 self.contentString = (display as NSString).replacingCharacters(in: displayMatches[index].range, with: displayUpdated)
+                CheckboxPerf.log(
+                    "toggle #\(id) assignDisplay ms=\(CheckboxPerf.ms(tAssign)) checkboxOnlyRevision=\(self.checkboxOnlyContentRevision)"
+                )
+            } else {
+                CheckboxPerf.log("toggle #\(id) display-index-miss displayMatches=\(displayMatches.count)")
             }
         }
 
-        saveNoteBodyChange(newRaw)
+        CheckboxPerf.lastToggleEndedAt = CFAbsoluteTimeGetCurrent()
+        saveNoteBodyChange(newRaw, toggleID: id)
+        CheckboxPerf.lastToggleEndedAt = CFAbsoluteTimeGetCurrent()
+        CheckboxPerf.log("toggle #\(id) nativeDone ms=\(CheckboxPerf.ms(t0)) (SwiftUI updateUIView follows)")
     }
 
     // MARK: - List Item Reorder
@@ -1440,16 +1519,31 @@ final class NoteDetailViewModel {
     }
 
     private func saveNoteBodyChange(_ html: String) {
+        saveNoteBodyChange(html, toggleID: nil)
+    }
+
+    private func saveNoteBodyChange(_ html: String, toggleID: UInt64?) {
+        let tag = toggleID.map { "#\($0) " } ?? ""
         let nid = self.noteId
+        let tUtf8 = CFAbsoluteTimeGetCurrent()
         let data = Data(html.utf8)
+        CheckboxPerf.log(
+            "save \(tag)utf8 ms=\(CheckboxPerf.ms(tUtf8)) bytes=\(data.count) [\(CheckboxPerf.bodyStats(html))]"
+        )
         let mime = note?.mime ?? "text/html"
-        guard let profileId = serverProfileId else { return }
+        guard let profileId = serverProfileId else {
+            CheckboxPerf.log("save \(tag)abort=no-profile")
+            return
+        }
 
         do {
+            let tCache = CFAbsoluteTimeGetCurrent()
             cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
+            CheckboxPerf.log("save \(tag)cacheNoteContent ms=\(CheckboxPerf.ms(tCache))")
             // Pass nil so the upsert reads baseUtcDateModified from the cache for new rows.
             // The cache is kept current by the flush after each successful upload, preventing
             // false conflicts when rapid checkbox toggles create successive pending rows.
+            let tUpsert = CFAbsoluteTimeGetCurrent()
             try persistence.upsertPendingNoteBodyUpload(
                 noteId: nid,
                 body: data,
@@ -1457,10 +1551,13 @@ final class NoteDetailViewModel {
                 serverProfileId: profileId,
                 baseUtcDateModified: nil
             )
+            CheckboxPerf.log("save \(tag)upsertPendingUpload ms=\(CheckboxPerf.ms(tUpsert))")
             self.content = data
         } catch {
             Log.api.error("Failed to save note body change locally: \(error)")
+            CheckboxPerf.error("save \(tag)failed \(error.localizedDescription)")
         }
+        CheckboxPerf.log("save \(tag)kickoff backgroundSyncPendingChanges")
         appState.backgroundSyncPendingChanges()
     }
 
@@ -1804,6 +1901,9 @@ final class NoteDetailViewModel {
     ///   is used directly instead of the debounce-cached `_pendingEditorHTML`. This ensures
     ///   non-ProseMirror state like table captions is always included in the save.
     func saveContent(freshHTML: String? = nil) {
+        // Saving now would store the body without the photos still being uploaded, leaving their
+        // attachments orphaned. The status banner is already explaining the wait.
+        if mediaUploadStatus != nil { return }
         if let html = freshHTML {
             let trimmed = html.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
@@ -2186,14 +2286,183 @@ final class NoteDetailViewModel {
     }
 
     func renameAttachmentTitle(attachmentId: String, title: String) async {
-        guard let client else { return }
+        guard let client else {
+            presentAttachmentWriteError(String(localized: "Cannot rename while offline.", comment: "Attachment rename without session"))
+            return
+        }
         do {
             try await client.renameAttachment(attachmentId: attachmentId, title: title)
             await loadAttachments()
         } catch {
-            self.saveError = APIError.from(error).localizedDescription
-            self.showSaveError = true
+            presentAttachmentWriteError(APIError.from(error).localizedDescription)
         }
+    }
+
+    func deleteAttachment(_ attachment: AttachmentItem) async {
+        guard let client else {
+            presentAttachmentWriteError(String(localized: "Cannot delete while offline.", comment: "Attachment delete without session"))
+            return
+        }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            try await client.deleteAttachment(attachment.attachmentId)
+            await loadAttachments()
+        } catch {
+            presentAttachmentWriteError(APIError.from(error).localizedDescription)
+        }
+    }
+
+    /// Deletes every attachment on this note. Stops on the first failure so the list stays
+    /// consistent with what the server still holds; successful deletions before that point are kept.
+    func deleteAllAttachments() async {
+        guard let client else {
+            presentAttachmentWriteError(String(localized: "Cannot delete while offline.", comment: "Attachment delete without session"))
+            return
+        }
+        let snapshot = attachments
+        guard !snapshot.isEmpty else { return }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            for attachment in snapshot {
+                try await client.deleteAttachment(attachment.attachmentId)
+            }
+            await loadAttachments()
+        } catch {
+            await loadAttachments()
+            presentAttachmentWriteError(APIError.from(error).localizedDescription)
+        }
+    }
+
+    func replaceAttachment(_ attachment: AttachmentItem, data: Data, filename: String, mime: String) async {
+        guard let client else {
+            presentAttachmentWriteError(String(localized: "Cannot replace while offline.", comment: "Attachment replace without session"))
+            return
+        }
+        if !AttachmentFilename.replacementExtensionMatches(existingTitle: attachment.title, replacementFilename: filename) {
+            let ext = AttachmentFilename.split(attachment.title).ext
+            presentAttachmentWriteError(
+                String(localized: "The replacement file must use the same extension (.\(ext)).", comment: "Attachment replace extension mismatch")
+            )
+            return
+        }
+        isSaving = true
+        defer { isSaving = false }
+        let contentType = mime.isEmpty ? attachment.mime : mime
+        do {
+            try await client.uploadAttachmentContent(attachment.attachmentId, data: data, contentType: contentType)
+            await loadAttachments()
+        } catch {
+            presentAttachmentWriteError(APIError.from(error).localizedDescription)
+        }
+    }
+
+    func fetchAttachmentOCR(_ attachment: AttachmentItem) async -> AttachmentOCRState {
+        guard let client else {
+            return .failed(String(localized: "Cannot load extracted text while offline.", comment: "OCR fetch without session"))
+        }
+        do {
+            let response = try await client.getAttachmentOCRText(attachmentId: attachment.attachmentId)
+            return Self.ocrState(from: response)
+        } catch {
+            return ocrState(fromError: error)
+        }
+    }
+
+    func processAttachmentOCR(_ attachment: AttachmentItem) async -> AttachmentOCRState {
+        guard let client else {
+            return .failed(String(localized: "Cannot process OCR while offline.", comment: "OCR process without session"))
+        }
+
+        var processText: String?
+        var processFailure: String?
+
+        do {
+            let processed = try await client.processAttachmentOCR(
+                attachmentId: attachment.attachmentId,
+                forceReprocess: true
+            )
+            processText = processed.extractedText
+            if !processed.success {
+                processFailure = processed.message
+                    ?? String(localized: "OCR processing failed.", comment: "OCR process unsuccessful")
+            }
+        } catch {
+            processFailure = APIError.from(error).localizedDescription
+            if case .notFound = APIError.from(error) {
+                return .unsupported
+            }
+        }
+
+        if let processText {
+            return .text(processText)
+        }
+
+        // The client may time out while the server is still writing OCR; always re-fetch.
+        do {
+            let refreshed = try await client.getAttachmentOCRText(attachmentId: attachment.attachmentId)
+            let fromGet = Self.ocrState(from: refreshed)
+            if case .text = fromGet { return fromGet }
+        } catch {
+            if let processFailure {
+                return .failed(processFailure)
+            }
+            return ocrState(fromError: error)
+        }
+
+        if let processFailure {
+            return .failed(processFailure)
+        }
+        return .empty
+    }
+
+    func convertAttachmentToNote(_ attachment: AttachmentItem) async -> (noteId: String, title: String)? {
+        guard let client else {
+            presentAttachmentWriteError(String(localized: "Cannot convert while offline.", comment: "Attachment convert without session"))
+            return nil
+        }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            let response = try await client.convertAttachmentToNote(attachmentId: attachment.attachmentId)
+            await loadAttachments()
+            await loadChildNotes()
+            NotificationCenter.default.post(
+                name: .trinoteTreeShouldRefresh,
+                object: nil,
+                userInfo: ["noteId": noteId]
+            )
+            return (response.note.noteId, response.note.title)
+        } catch {
+            presentAttachmentWriteError(APIError.from(error).localizedDescription)
+            return nil
+        }
+    }
+
+    private func presentAttachmentWriteError(_ message: String) {
+        saveError = message
+        showSaveError = true
+    }
+
+    /// Attachment rows own their own file picker, so they report read failures through here.
+    func presentAttachmentError(_ message: String) {
+        presentAttachmentWriteError(message)
+    }
+
+    private static func ocrState(from response: AttachmentOCRTextResponse) -> AttachmentOCRState {
+        if let text = response.extractedText {
+            return .text(text)
+        }
+        return .empty
+    }
+
+    private func ocrState(fromError error: Error) -> AttachmentOCRState {
+        let apiError = APIError.from(error)
+        if case .notFound = apiError {
+            return .unsupported
+        }
+        return .failed(apiError.localizedDescription)
     }
 
     func uploadAttachment(data: Data, filename: String, mime: String) async -> AttachmentItem? {
@@ -2224,6 +2493,120 @@ final class NoteDetailViewModel {
             self.showSaveError = true
             return nil
         }
+    }
+
+    /// Uploads picked photos as attachments of this note, handing each one to `onReady` the moment its
+    /// upload lands so the editor can show it while the rest are still going. The note body then holds
+    /// a short `api/attachments/…` reference instead of megabytes of base64, which is what Trilium's own
+    /// editor stores and what keeps saving cheap no matter how many photos a note has.
+    ///
+    /// Uploads run one at a time so the photos appear in the order they were picked. A photo whose
+    /// upload fails falls back to a full-size inline data URI, so nothing is ever lost — that note just
+    /// pays the old cost for that one image.
+    func uploadPhotosAsAttachments(
+        _ images: [PhotoLibraryImage],
+        onReady: (EditorImageInsert) -> Void
+    ) async {
+        guard !images.isEmpty else { return }
+        var uploaded = 0
+        let stamp = Self.photoAttachmentTimestamp()
+        for (index, image) in images.enumerated() {
+            mediaUploadStatus = Self.photoUploadStatus(index: index, total: images.count)
+            let filename = "photo-\(stamp)-\(index + 1).\(Self.photoFileExtension(mime: image.mime))"
+            if let attachmentId = await uploadPhotoAttachment(image: image, filename: filename) {
+                uploaded += 1
+                seedImageCache(attachmentId: attachmentId, data: image.data)
+                onReady(
+                    EditorImageInsert(
+                        src: TriliumImageScheme.url(routeType: "attachments", entityId: attachmentId),
+                        originalSrc: Self.attachmentImageSrc(attachmentId: attachmentId, filename: filename)
+                    )
+                )
+            } else {
+                onReady(EditorImageInsert(src: Self.dataURI(image.data, mime: image.mime), originalSrc: nil))
+            }
+        }
+        mediaUploadStatus = nil
+        if uploaded > 0 {
+            await loadAttachments()
+        }
+        if uploaded < images.count {
+            showTransientEditorMessage(
+                String(
+                    localized: "Couldn't upload every photo; some are embedded in the note instead.",
+                    comment: "Photo attachment upload partially failed"
+                )
+            )
+        }
+    }
+
+    private func uploadPhotoAttachment(image: PhotoLibraryImage, filename: String) async -> String? {
+        guard let client, isOnline else { return nil }
+        do {
+            return try await client.uploadNoteAttachment(
+                noteId: noteId,
+                data: image.data,
+                filename: filename,
+                contentType: image.mime
+            )
+        } catch {
+            Log.api.error("Photo attachment upload failed: \(APIError.from(error).localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private func seedImageCache(attachmentId: String, data: Data) {
+        guard let profileId = serverProfileId else { return }
+        TriliumInlineImageCaching.cacheUploadedImage(
+            routeType: "attachments",
+            entityId: attachmentId,
+            data: data,
+            persistence: persistence,
+            serverProfileId: profileId,
+            sourceNoteId: noteId,
+            parentNoteIds: parentNoteIdsForCache(noteId: noteId)
+        )
+    }
+
+    /// The shape Trilium's own editor writes for an image stored as an attachment, and the shape its
+    /// `checkImageAttachments` looks for when deciding which attachments are still in use.
+    private static func attachmentImageSrc(attachmentId: String, filename: String) -> String {
+        let encoded = filename.addingPercentEncoding(withAllowedCharacters: Self.attachmentFilenameAllowed)
+            ?? filename
+        return "api/attachments/\(attachmentId)/image/\(encoded)"
+    }
+
+    /// Matches JavaScript `encodeURIComponent`, which is what Trilium uses for the filename segment.
+    private static let attachmentFilenameAllowed = CharacterSet.alphanumerics
+        .union(CharacterSet(charactersIn: "-_.!~*'()"))
+
+    private static func dataURI(_ data: Data, mime: String) -> String {
+        "data:\(mime);base64,\(data.base64EncodedString())"
+    }
+
+    private static func photoFileExtension(mime: String) -> String {
+        switch mime.lowercased() {
+        case "image/gif": return "gif"
+        case "image/png": return "png"
+        default: return "jpg"
+        }
+    }
+
+    private static func photoAttachmentTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
+    }
+
+    private static func photoUploadStatus(index: Int, total: Int) -> String {
+        if total == 1 {
+            return String(localized: "Adding photo…", comment: "Single photo upload progress")
+        }
+        return String(
+            localized: "Adding photo \(index + 1) of \(total)…",
+            comment: "Photo upload progress with counts"
+        )
     }
 
     // MARK: - Child Notes
@@ -3203,10 +3586,10 @@ final class NoteDetailViewModel {
             let isTextHTMLNote = NoteType(rawValue: cached.noteType) == .text
             let needsDeferredBody: Bool = {
                 guard isTextHTMLNote, let h = html else { return false }
-                return h.localizedCaseInsensitiveContains("api/attachments/")
-                    || h.localizedCaseInsensitiveContains("api/images/")
+                return h.containsASCIICaseInsensitive("api/attachments/")
+                    || h.containsASCIICaseInsensitive("api/images/")
             }()
-            // Defer publishing HTML with unresolved Trilium image URLs so the read-only web view does not paint broken `<img>`s before `inlineAttachmentImages` runs.
+            // Defer publishing HTML with unresolved Trilium image URLs so the read-only web view does not paint broken `<img>`s before the `trinote-img://` rewrite runs.
             if needsDeferredBody {
                 contentString = nil
             } else {

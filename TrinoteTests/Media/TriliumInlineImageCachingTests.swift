@@ -77,6 +77,58 @@ final class TriliumInlineImageCachingTests: XCTestCase {
         XCTAssertEqual(row.data, pngHeader)
     }
 
+    func testInlineAttachmentImagesRewritesAttachmentsToSchemeURLWithoutFetching() async {
+        let html = #"<img src="api/attachments/att1/image.jpg" alt="photo">"#
+        let rewritten = await TriliumInlineImageCaching.inlineAttachmentImages(
+            in: html,
+            client: nil,
+            persistence: persistence,
+            serverProfileId: "s1",
+            sourceNoteId: "host",
+            parentNoteIds: []
+        )
+        XCTAssertTrue(rewritten.contains("trinote-img://attachments/att1"))
+        XCTAssertFalse(rewritten.contains("api/attachments"))
+        XCTAssertFalse(rewritten.contains("data:"))
+    }
+
+    func testInlineAttachmentImagesLeavesUnresolvedNoteImagesUntouched() async {
+        let html = #"<img src="api/images/noteA/avatar.png">"#
+        let rewritten = await TriliumInlineImageCaching.inlineAttachmentImages(
+            in: html,
+            client: nil,
+            persistence: persistence,
+            serverProfileId: "s1",
+            sourceNoteId: "host",
+            parentNoteIds: []
+        )
+        XCTAssertEqual(rewritten, html)
+    }
+
+    func testInlineAttachmentImagesRewritesCachedNoteImagesToSchemeURL() async throws {
+        let pngHeader = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00])
+        try persistence.cacheImage(
+            entityId: "noteA",
+            entityType: "images",
+            data: pngHeader,
+            mime: "image/png",
+            serverProfileId: "s1"
+        )
+        let html = #"<img src="api/images/noteA/avatar.png">"#
+        let rewritten = await TriliumInlineImageCaching.inlineAttachmentImages(
+            in: html,
+            client: nil,
+            persistence: persistence,
+            serverProfileId: "s1",
+            sourceNoteId: "host",
+            parentNoteIds: []
+        )
+        XCTAssertTrue(rewritten.contains(#"src="trinote-img://images/noteA""#))
+        XCTAssertTrue(rewritten.contains(#"data-trinote-image-note-id="noteA""#))
+        XCTAssertFalse(rewritten.contains("data:"))
+        XCTAssertFalse(rewritten.contains("api/images"))
+    }
+
     func testCachedNoteBodiesSkipsEmptyContent() throws {
         try persistence.cacheNote(
             from: TestFixtures.noteResponse(id: "empty", title: "Empty"),

@@ -54,7 +54,7 @@ final class TriliumNoteBodyPolicyTests: XCTestCase {
                     noteId: "g",
                     type: .label,
                     name: "viewType",
-                    value: "geo-map",
+                    value: "geoMap",
                     position: 0,
                     isInheritable: false
                 )

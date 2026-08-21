@@ -1,6 +1,5 @@
 import Combine
 import SwiftUI
-import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
 import WebKit
@@ -15,6 +14,12 @@ private enum NoteDetailToolbarQuickAction: String, CaseIterable {
     case noteDetails
     case favorite
     case findOnPage
+}
+
+private enum EditorFullscreenCover: String, Identifiable {
+    case photoLibrary
+    case camera
+    var id: String { rawValue }
 }
 
 private struct NoteDetailShareURLSheetItem: Identifiable {
@@ -115,16 +120,15 @@ struct NoteDetailView: View {
 
     // Inline image insertion state
     @State private var showEditorImageSourceDialog = false
-    @State private var showEditorImagePicker = false
-    @State private var showEditorCamera = false
+    @State private var editorFullscreenCover: EditorFullscreenCover?
     @State private var showEditorFilePicker = false
-    @State private var editorImageItem: PhotosPickerItem?
     @State private var imageToInsert: String?
     @State private var attachmentToInsert: EditorAttachmentInsert?
     @State private var attachmentRenameContext: EditorAttachmentRenameContext?
     @State private var attachmentRenameBasename = ""
     @State private var pendingAttachmentUpload: PendingAttachmentUpload?
     @State private var pendingAttachmentUploadBasename = ""
+    @State private var showDeleteAllAttachmentsConfirm = false
     @State private var protectedDocumentPassword = ""
     @State private var favoriteNoteIds: Set<String> = []
     @State private var findControl = FindOnPageControl()
@@ -670,6 +674,31 @@ struct NoteDetailView: View {
         )
     }
 
+    private static func beginEditorImageBatch(webView: WKWebView?, count: Int) {
+        webView?.evaluateJavaScript(
+            "try{window.editorBridge.beginImageBatch(\(count))}catch(e){}",
+            completionHandler: nil
+        )
+    }
+
+    private static func insertBatchImageInEditor(webView: WKWebView?, insert: EditorImageInsert) {
+        guard let webView else { return }
+        var item = ["src": insert.src]
+        if let originalSrc = insert.originalSrc {
+            item["originalSrc"] = originalSrc
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: item),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.editorBridge.insertBatchImage(\(json));", completionHandler: nil)
+    }
+
+    private static func endEditorImageBatch(webView: WKWebView?) {
+        webView?.evaluateJavaScript(
+            "try{window.editorBridge.endImageBatch()}catch(e){}",
+            completionHandler: nil
+        )
+    }
+
     private static func updateAttachmentReferenceTitleInEditor(webView: WKWebView?, pos: Int, title: String) {
         guard let webView else { return }
         guard let titleData = try? JSONSerialization.data(withJSONObject: title, options: [.fragmentsAllowed]),
@@ -800,6 +829,37 @@ struct NoteDetailView: View {
     }
 
     var body: some View {
+        bodyWithLifecycle
+            .fullScreenCover(item: $editorFullscreenCover, onDismiss: {
+                EditorCameraCapture.endPortraitSession()
+            }) { cover in
+                editorFullscreenCoverContent(cover)
+            }
+    }
+
+    @ViewBuilder
+    private func editorFullscreenCoverContent(_ cover: EditorFullscreenCover) -> some View {
+        switch cover {
+        case .photoLibrary:
+            PhotoLibraryPickerView { images in
+                editorFullscreenCover = nil
+                Task { await handleEditorPhotoPicks(images) }
+            } onCancel: {
+                editorFullscreenCover = nil
+                editorWebView?.evaluateJavaScript(
+                    "try{window.editorBridge.clearPendingMediaInsert()}catch(e){}",
+                    completionHandler: nil
+                )
+            }
+        case .camera:
+            CameraPickerView(imageToInsert: $imageToInsert) {
+                editorFullscreenCover = nil
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private var bodyWithLifecycle: some View {
         bodyCore
             // Full-size clear host — zero-frame backgrounds often never attach under NavigationStack.
             .background {
@@ -1255,6 +1315,136 @@ struct NoteDetailView: View {
     }
 
     @ViewBuilder
+    private func readOnlyNoteSurface(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    editorStatusBanner(vm)
+                    draftBanner(vm)
+                    breadcrumbsBar(vm)
+                    titleSection(vm, note: note)
+                    Divider()
+                    noteBody(vm, note: note, findControl: findControl)
+                    childNotesSection(vm)
+
+                    if vm.showDetails {
+                        attachmentsSection(vm)
+                        metadataSection(note)
+                    }
+
+                    if note.type.isEditable, !vm.needsProtectedSession, !noteEditorLongPressToEdit {
+                        Color.clear.frame(
+                            height: NoteDetailFloatingChipLayout.scrollClearance(
+                                findBarPresented: findControl.isPresented,
+                                editing: false
+                            )
+                        )
+                    }
+                }
+                .background(
+                    ZStack {
+                        NoteDetailScrollOffsetReader { y, _, fraction in
+                            if readOnlyScrollFractionPendingRestore == nil {
+                                readOnlyScrollFraction = fraction
+                            }
+                            updateFloatingEditVisibility(
+                                contentOffsetY: y,
+                                vm: vm,
+                                note: note
+                            )
+                        }
+                        NoteDetailReadOnlyScrollRestoration(fraction: readOnlyScrollFractionPendingRestore) {
+                            if let restored = readOnlyScrollFractionPendingRestore {
+                                readOnlyScrollFraction = restored
+                            }
+                            readOnlyScrollFractionPendingRestore = nil
+                            if isReadOnlyScrollRevealPending {
+                                withAnimation(.easeOut(duration: 0.18)) {
+                                    isReadOnlyScrollRevealPending = false
+                                }
+                            }
+                            finishFloatingEditScrollSettling(vm: vm, note: note)
+                        }
+                    }
+                    .frame(width: 0, height: 0)
+                )
+            }
+            .simultaneousGesture(longPressToEditGesture(vm: vm, note: note))
+            .opacity(isReadOnlyScrollRevealPending ? 0 : 1)
+
+            if showFloatingEditButton && !noteEditorLongPressToEdit && !isReadOnlyScrollRevealPending {
+                floatingEditFAB(vm: vm)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, findControl.isPresented ? 56 : 12)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                    .zIndex(2)
+            }
+        }
+        .overlay {
+            if isReadOnlyScrollRevealPending {
+                ProgressView()
+                    .controlSize(.regular)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(uiColor: .systemBackground))
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: findControl.isPresented)
+        .refreshable { await vm.refresh(force: true) }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if findControl.isPresented {
+                FindOnPageBar(control: findControl)
+            }
+        }
+        .onAppear {
+            presentFloatingEditOnNoteOpen(vm: vm, note: note)
+            scheduleFloatingEditScrollSettlingEndIfNeeded()
+        }
+        .onChange(of: note.noteId) { _, _ in
+            presentFloatingEditOnNoteOpen(vm: vm, note: note)
+            scheduleFloatingEditScrollSettlingEndIfNeeded()
+        }
+        .onChange(of: vm.isEditing) { _, editing in
+            if editing {
+                readOnlyScrollFractionPendingRestore = nil
+                isReadOnlyScrollRevealPending = false
+                findControl.close()
+                floatingEditSettlingEndWorkItem?.cancel()
+                floatingEditSettlingEndWorkItem = nil
+                floatingEditScrollBaselineReady = false
+                floatingEditIgnoreDirectionalScroll = true
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = false
+                }
+            } else if floatingEditFABEligible(vm: vm, note: note) {
+                presentFloatingEditOnNoteOpen(vm: vm, note: note)
+                scheduleFloatingEditScrollSettlingEndIfNeeded()
+            }
+        }
+        .onChange(of: vm.needsProtectedSession) { _, needs in
+            if needs {
+                floatingEditSettlingEndWorkItem?.cancel()
+                floatingEditSettlingEndWorkItem = nil
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    showFloatingEditButton = false
+                }
+                floatingEditScrollBaselineReady = false
+                floatingEditIgnoreDirectionalScroll = true
+            } else if floatingEditFABEligible(vm: vm, note: note) {
+                presentFloatingEditOnNoteOpen(vm: vm, note: note)
+                scheduleFloatingEditScrollSettlingEndIfNeeded()
+            }
+        }
+        .onChange(of: noteEditorLongPressToEdit) { _, _ in
+            refreshFloatingEditVisibility(vm: vm, note: note)
+        }
+        .onDisappear {
+            findControl.unregisterAll()
+        }
+    }
+
+    @ViewBuilder
     private func noteContent(_ vm: NoteDetailViewModel) -> some View {
         @Bindable var vm = vm
         if vm.isLoading && vm.note == nil {
@@ -1271,168 +1461,50 @@ struct NoteDetailView: View {
         } else if let note = vm.note {
             let _ = vm.geoMapDetectionTick
             VStack(spacing: 0) {
+                // Each branch is type-erased: without AnyView the runtime has to demangle
+                // every note mode's view type as one nested generic, which overflows the
+                // main thread stack while instantiating the metadata.
                 if vm.needsProtectedSession {
-                    protectedNoteOverlay(vm, note: note)
+                    AnyView(protectedNoteOverlay(vm, note: note))
                 } else if note.isCalendarRoot {
-                    calendarDetailView(vm, note: note)
+                    AnyView(calendarDetailView(vm, note: note))
                 } else if isPresentationNote(note) {
                     // Check presentation before kanban: both are book collections; viewType must win.
-                    presentationDetailView(vm, note: note)
+                    AnyView(presentationDetailView(vm, note: note))
                 } else if isKanbanNote(note) {
-                    kanbanDetailView(vm, note: note)
+                    AnyView(kanbanDetailView(vm, note: note))
                 } else if isGeoMapNote(note, contentString: vm.contentString, vm: vm) {
-                    geoMapDetailView(vm, note: note)
+                    AnyView(geoMapDetailView(vm, note: note))
                 } else if vm.isEditing && note.type == .text {
-                    VStack(spacing: 0) {
-                        editorStatusBanner(vm)
-                        richTextEditingView(vm)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    }
-                    .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+                    AnyView(
+                        VStack(spacing: 0) {
+                            editorStatusBanner(vm)
+                            richTextEditingView(vm)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        }
+                        .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+                    )
                 } else if vm.isEditing && note.type == .code {
-                    VStack(spacing: 0) {
-                        editorStatusBanner(vm)
-                        codeEditingView(vm)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    }
-                    .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+                    AnyView(
+                        VStack(spacing: 0) {
+                            editorStatusBanner(vm)
+                            codeEditingView(vm)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        }
+                        .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
+                    )
                 } else if vm.isEditing && note.type == .mermaid {
-                    mermaidEditingView(vm)
+                    AnyView(mermaidEditingView(vm))
                 } else if vm.isEditing && note.type == .mindMap {
-                    mindMapEditingView(vm)
+                    AnyView(mindMapEditingView(vm))
                 } else if vm.isEditing && note.type == .canvas {
-                    canvasEditingView(vm)
+                    AnyView(canvasEditingView(vm))
                 } else if vm.isEditing && note.type == .spreadsheet && horizontalSizeClass == .regular {
-                    spreadsheetEditingView(vm)
+                    AnyView(spreadsheetEditingView(vm))
                 } else if note.type == .mindMap {
-                    mindMapReadOnlyView(vm, note: note)
+                    AnyView(mindMapReadOnlyView(vm, note: note))
                 } else {
-                    ZStack(alignment: .bottomTrailing) {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 0) {
-                                editorStatusBanner(vm)
-                                draftBanner(vm)
-                                breadcrumbsBar(vm)
-                                titleSection(vm, note: note)
-                                Divider()
-                                noteBody(vm, note: note, findControl: findControl)
-                                childNotesSection(vm)
-
-                                if vm.showDetails {
-                                    attachmentsSection(vm)
-                                    metadataSection(note)
-                                }
-
-                                if note.type.isEditable, !vm.needsProtectedSession, !noteEditorLongPressToEdit {
-                                    Color.clear.frame(
-                                        height: NoteDetailFloatingChipLayout.scrollClearance(
-                                            findBarPresented: findControl.isPresented,
-                                            editing: false
-                                        )
-                                    )
-                                }
-                            }
-                            .background(
-                                ZStack {
-                                    NoteDetailScrollOffsetReader { y, _, fraction in
-                                        if readOnlyScrollFractionPendingRestore == nil {
-                                            readOnlyScrollFraction = fraction
-                                        }
-                                        updateFloatingEditVisibility(
-                                            contentOffsetY: y,
-                                            vm: vm,
-                                            note: note
-                                        )
-                                    }
-                                    NoteDetailReadOnlyScrollRestoration(fraction: readOnlyScrollFractionPendingRestore) {
-                                        if let restored = readOnlyScrollFractionPendingRestore {
-                                            readOnlyScrollFraction = restored
-                                        }
-                                        readOnlyScrollFractionPendingRestore = nil
-                                        if isReadOnlyScrollRevealPending {
-                                            withAnimation(.easeOut(duration: 0.18)) {
-                                                isReadOnlyScrollRevealPending = false
-                                            }
-                                        }
-                                        finishFloatingEditScrollSettling(vm: vm, note: note)
-                                    }
-                                }
-                                .frame(width: 0, height: 0)
-                            )
-                        }
-                        .simultaneousGesture(longPressToEditGesture(vm: vm, note: note))
-                        .opacity(isReadOnlyScrollRevealPending ? 0 : 1)
-
-                        if showFloatingEditButton && !noteEditorLongPressToEdit && !isReadOnlyScrollRevealPending {
-                            floatingEditFAB(vm: vm)
-                                .padding(.trailing, 16)
-                                .padding(.bottom, findControl.isPresented ? 56 : 12)
-                                .transition(.scale(scale: 0.88).combined(with: .opacity))
-                                .zIndex(2)
-                        }
-                    }
-                    .overlay {
-                        if isReadOnlyScrollRevealPending {
-                            ProgressView()
-                                .controlSize(.regular)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .background(Color(uiColor: .systemBackground))
-                                .transition(.opacity)
-                                .allowsHitTesting(false)
-                        }
-                    }
-                    .animation(.easeInOut(duration: 0.22), value: findControl.isPresented)
-                    .refreshable { await vm.refresh(force: true) }
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        if findControl.isPresented {
-                            FindOnPageBar(control: findControl)
-                        }
-                    }
-                    .onAppear {
-                        presentFloatingEditOnNoteOpen(vm: vm, note: note)
-                        scheduleFloatingEditScrollSettlingEndIfNeeded()
-                    }
-                    .onChange(of: note.noteId) { _, _ in
-                        presentFloatingEditOnNoteOpen(vm: vm, note: note)
-                        scheduleFloatingEditScrollSettlingEndIfNeeded()
-                    }
-                    .onChange(of: vm.isEditing) { _, editing in
-                        if editing {
-                            readOnlyScrollFractionPendingRestore = nil
-                            isReadOnlyScrollRevealPending = false
-                            findControl.close()
-                            floatingEditSettlingEndWorkItem?.cancel()
-                            floatingEditSettlingEndWorkItem = nil
-                            floatingEditScrollBaselineReady = false
-                            floatingEditIgnoreDirectionalScroll = true
-                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                                showFloatingEditButton = false
-                            }
-                        } else if floatingEditFABEligible(vm: vm, note: note) {
-                            presentFloatingEditOnNoteOpen(vm: vm, note: note)
-                            scheduleFloatingEditScrollSettlingEndIfNeeded()
-                        }
-                    }
-                    .onChange(of: vm.needsProtectedSession) { _, needs in
-                        if needs {
-                            floatingEditSettlingEndWorkItem?.cancel()
-                            floatingEditSettlingEndWorkItem = nil
-                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                                showFloatingEditButton = false
-                            }
-                            floatingEditScrollBaselineReady = false
-                            floatingEditIgnoreDirectionalScroll = true
-                        } else if floatingEditFABEligible(vm: vm, note: note) {
-                            presentFloatingEditOnNoteOpen(vm: vm, note: note)
-                            scheduleFloatingEditScrollSettlingEndIfNeeded()
-                        }
-                    }
-                    .onChange(of: noteEditorLongPressToEdit) { _, _ in
-                        refreshFloatingEditVisibility(vm: vm, note: note)
-                    }
-                    .onDisappear {
-                        findControl.unregisterAll()
-                    }
+                    AnyView(readOnlyNoteSurface(vm, note: note))
                 }
             }
             .toolbar { noteToolbar(vm, note: note) }
@@ -1648,7 +1720,7 @@ struct NoteDetailView: View {
 
     @ViewBuilder
     private func editorStatusBanner(_ vm: NoteDetailViewModel) -> some View {
-        if let msg = vm.transientEditorMessage {
+        if let msg = vm.mediaUploadStatus ?? vm.transientEditorMessage {
             HStack(spacing: 8) {
                 Image(systemName: "icloud.and.arrow.up")
                     .font(.caption)
@@ -1841,6 +1913,7 @@ struct NoteDetailView: View {
                 HTMLNoteView(
                     html: html,
                     baseURL: vm.serverBaseURL,
+                    checkboxOnlyRevision: vm.checkboxOnlyContentRevision,
                     onNoteLinkTapped: { linkedNoteId in
                         navigateToNoteId = linkedNoteId
                     },
@@ -1855,6 +1928,9 @@ struct NoteDetailView: View {
                             return await vm.prepareAttachmentPreview(for: attachment)
                         }
                         return await vm.prepareAttachmentPreview(attachmentId: attachmentId)
+                    },
+                    imageBytes: { routeType, entityId in
+                        await vm.loadImageBytes(routeType: routeType, entityId: entityId)
                     },
                     findControl: findControl
                 )
@@ -1885,7 +1961,9 @@ struct NoteDetailView: View {
                 ImageNoteView(data: data, title: uiTitle(for: note))
             }
         case .file:
-            FileNoteView(note: note, attachments: vm.attachments, viewModel: vm)
+            FileNoteView(note: note, attachments: vm.attachments, viewModel: vm) { noteId, _ in
+                navigateToNoteId = noteId
+            }
         case .canvas:
             CanvasNoteView(noteId: note.noteId, attachments: vm.attachments, client: vm.client, excalidrawJSON: vm.contentString)
         case .mindMap:
@@ -1984,10 +2062,10 @@ struct NoteDetailView: View {
 
     @ViewBuilder
     private func richTextEditingView(_ vm: NoteDetailViewModel) -> some View {
-        // `editorDisplayContent` is the decorated copy of `editableContent` (canvas/mermaid/imageLink → inlined data
-        // URIs), populated asynchronously by `prepareEditorDisplayContent`. While that's in flight we show a brief
-        // spinner so the editor never mounts with broken `<img src="api/images/…">` references — the previous behavior
-        // was to render the editor immediately, which left linked canvas/mermaid notes as broken-image placeholders.
+        // `editorDisplayContent` is the decorated copy of `editableContent` (image refs → `trinote-img://`,
+        // canvas/mermaid imageLinks → include cards), populated asynchronously by `prepareEditorDisplayContent`.
+        // While that's in flight we show a brief spinner so the editor never mounts with broken
+        // `<img src="api/images/…">` references.
         if let displayHTML = vm.editorDisplayContent {
             richTextEditingViewBody(vm, displayHTML: displayHTML)
         } else {
@@ -2064,6 +2142,9 @@ struct NoteDetailView: View {
                 onPasteFile: { data, filename, mime in
                     presentAttachmentUploadNamePrompt(data: data, mime: mime, filename: filename)
                 },
+                imageBytes: { routeType, entityId in
+                    await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+                },
                 imageToInsert: $imageToInsert,
                 attachmentToInsert: $attachmentToInsert,
                 webViewBinding: $editorWebView,
@@ -2088,14 +2169,14 @@ struct NoteDetailView: View {
                     showsCamera: UIImagePickerController.isSourceTypeAvailable(.camera),
                     onPhotoLibrary: {
                         showEditorImageSourceDialog = false
-                        showEditorImagePicker = true
+                        editorFullscreenCover = .photoLibrary
                     },
                     onCamera: {
                         showEditorImageSourceDialog = false
                         // Lock portrait first so the system camera gets upright bounds; present
                         // via fullScreenCover (not UIKit present) so note @State survives.
                         EditorCameraCapture.preparePortraitSession {
-                            showEditorCamera = true
+                            editorFullscreenCover = .camera
                         }
                     },
                     onChooseFile: {
@@ -2130,25 +2211,12 @@ struct NoteDetailView: View {
         .onDisappear {
             cancelEditorSaveChipIdleShowTask()
         }
-        .photosPicker(isPresented: $showEditorImagePicker, selection: $editorImageItem, matching: .images)
-        .onChange(of: editorImageItem) { _, item in
-            guard let item else { return }
-            Task { await handleEditorImagePick(item) }
-        }
         .fileImporter(
             isPresented: $showEditorFilePicker,
             allowedContentTypes: [.item],
             allowsMultipleSelection: false
         ) { result in
             Task { await handleEditorFilePick(result) }
-        }
-        .fullScreenCover(isPresented: $showEditorCamera, onDismiss: {
-            EditorCameraCapture.endPortraitSession()
-        }) {
-            CameraPickerView(imageToInsert: $imageToInsert) {
-                showEditorCamera = false
-            }
-            .ignoresSafeArea()
         }
         .sheet(isPresented: $showIncludeNotePicker) {
             NotePickerSheet(
@@ -2781,25 +2849,16 @@ struct NoteDetailView: View {
         return Self.canonicalGeoMapViewportJSONForTriliumDesktop(trimmed)
     }
 
-    private func handleEditorImagePick(_ item: PhotosPickerItem) async {
-        defer { editorImageItem = nil }
-        guard let data = try? await item.loadTransferable(type: Data.self) else { return }
-
-        let mime = item.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg"
-
-        // Compress to JPEG if it's not already a small image
-        let imageData: Data
-        let imageMime: String
-        if let uiImage = UIImage(data: data) {
-            imageData = uiImage.jpegData(compressionQuality: 0.8) ?? data
-            imageMime = "image/jpeg"
-        } else {
-            imageData = data
-            imageMime = mime
+    private func handleEditorPhotoPicks(_ images: [PhotoLibraryImage]) async {
+        let batch = Array(images.prefix(20))
+        guard !batch.isEmpty, let vm = viewModel else { return }
+        // Reserve a slot per photo before the first upload, then fill them as each one lands.
+        let webView = editorWebView
+        Self.beginEditorImageBatch(webView: webView, count: batch.count)
+        await vm.uploadPhotosAsAttachments(batch) { insert in
+            Self.insertBatchImageInEditor(webView: webView, insert: insert)
         }
-
-        let base64 = imageData.base64EncodedString()
-        imageToInsert = "data:\(imageMime);base64,\(base64)"
+        Self.endEditorImageBatch(webView: webView)
     }
 
     private func handleEditorFilePick(_ result: Result<[URL], Error>) async {
@@ -2889,6 +2948,20 @@ struct NoteDetailView: View {
                 Text(String(localized: "Attachments", comment: "Note detail section"))
                     .font(.headline)
                 Spacer()
+                if !vm.attachments.isEmpty {
+                    Button {
+                        showDeleteAllAttachmentsConfirm = true
+                    } label: {
+                        Label(
+                            String(localized: "Remove All", comment: "Delete every attachment on the note"),
+                            systemImage: "trash"
+                        )
+                    }
+                    .disabled(vm.isSaving || !vm.isOnline)
+                    .accessibilityLabel(
+                        String(localized: "Remove all attachments", comment: "Accessibility label for delete-all attachments")
+                    )
+                }
                 AttachmentUploadButton(noteId: vm.noteId, viewModel: vm)
             }
             .padding(.horizontal)
@@ -2901,9 +2974,30 @@ struct NoteDetailView: View {
                     .padding(.horizontal)
             } else {
                 ForEach(vm.attachments) { attachment in
-                    AttachmentRow(attachment: attachment, viewModel: vm)
+                    AttachmentRow(attachment: attachment, viewModel: vm) { noteId, _ in
+                        navigateToNoteId = noteId
+                    }
                 }
             }
+        }
+        .alert(
+            String(localized: "Remove All Attachments?", comment: "Delete-all attachments confirm title"),
+            isPresented: $showDeleteAllAttachmentsConfirm
+        ) {
+            Button(String(localized: "Cancel", comment: "Cancel delete-all attachments"), role: .cancel) {}
+            Button(
+                String(localized: "Remove All", comment: "Confirm delete-all attachments"),
+                role: .destructive
+            ) {
+                Task { await vm.deleteAllAttachments() }
+            }
+        } message: {
+            Text(
+                String(
+                    localized: "Delete all \(vm.attachments.count) attachments from this note? This cannot be undone.",
+                    comment: "Delete-all attachments confirm message; count is substituted"
+                )
+            )
         }
     }
 

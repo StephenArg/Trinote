@@ -1,9 +1,11 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct FileNoteView: View {
     let note: NoteItem
     let attachments: [AttachmentItem]
     let viewModel: NoteDetailViewModel
+    let onOpenNote: (String, String) -> Void
 
     @Environment(AppState.self) private var appState
 
@@ -23,7 +25,7 @@ struct FileNoteView: View {
 
             if !attachments.isEmpty {
                 ForEach(attachments) { attachment in
-                    AttachmentRow(attachment: attachment, viewModel: viewModel)
+                    AttachmentRow(attachment: attachment, viewModel: viewModel, onOpenNote: onOpenNote)
                 }
             }
 
@@ -148,11 +150,21 @@ struct UnsupportedNoteView: View {
 struct AttachmentRow: View {
     let attachment: AttachmentItem
     let viewModel: NoteDetailViewModel
+    let onOpenNote: (String, String) -> Void
 
     @State private var isLoading = false
     @State private var showShareSheet = false
     @State private var shareURL: URL?
     @State private var previewItem: AttachmentPreviewItem?
+    @State private var showRename = false
+    @State private var renameBasename = ""
+    @State private var showOCRSheet = false
+    @State private var showDeleteConfirm = false
+    @State private var showReplacePicker = false
+
+    private var lockedExtension: String {
+        AttachmentFilename.split(attachment.title).ext
+    }
 
     var body: some View {
         Button {
@@ -201,6 +213,32 @@ struct AttachmentRow: View {
         .accessibilityHint(String(localized: "Opens attachment preview", comment: "Attachment row tap hint"))
         .contextMenu {
             Button {
+                renameBasename = AttachmentFilename.split(attachment.title).basename
+                showRename = true
+            } label: {
+                Label(String(localized: "Rename", comment: "Rename attachment"), systemImage: "pencil")
+            }
+            Button {
+                showReplacePicker = true
+            } label: {
+                Label(String(localized: "Replace", comment: "Replace attachment file"), systemImage: "arrow.triangle.2.circlepath")
+            }
+            Button {
+                showOCRSheet = true
+            } label: {
+                Label(String(localized: "View extracted text", comment: "View attachment OCR"), systemImage: "text.viewfinder")
+            }
+            Button {
+                Task { await convertToNote() }
+            } label: {
+                Label(String(localized: "Convert to note", comment: "Convert attachment to note"), systemImage: "doc.badge.plus")
+            }
+            Button(role: .destructive) {
+                showDeleteConfirm = true
+            } label: {
+                Label(String(localized: "Delete", comment: "Delete attachment"), systemImage: "trash")
+            }
+            Button {
                 Task { await shareAttachment() }
             } label: {
                 Label(String(localized: "Share", comment: "Share attachment"), systemImage: "square.and.arrow.up")
@@ -215,6 +253,48 @@ struct AttachmentRow: View {
             if let shareURL {
                 ShareSheet(items: [shareURL])
             }
+        }
+        .sheet(isPresented: $showOCRSheet) {
+            AttachmentOCRTextSheet(attachment: attachment, viewModel: viewModel) {
+                showOCRSheet = false
+            }
+        }
+        .fileImporter(
+            isPresented: $showReplacePicker,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: false
+        ) { result in
+            Task { await handleReplacePick(result) }
+        }
+        .alert(
+            String(localized: "Rename Attachment", comment: "Attachment rename title"),
+            isPresented: $showRename
+        ) {
+            TextField(
+                String(localized: "Filename", comment: "Attachment rename basename field"),
+                text: $renameBasename
+            )
+            Button(String(localized: "Cancel", comment: "Cancel"), role: .cancel) {}
+            Button(String(localized: "Rename", comment: "Rename attachment confirm")) {
+                applyRename()
+            }
+            .disabled(renameBasename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            if !lockedExtension.isEmpty {
+                Text(String(localized: "Extension: .\(lockedExtension)", comment: "Attachment rename extension hint"))
+            }
+        }
+        .confirmationDialog(
+            String(localized: "Delete Attachment", comment: "Attachment delete confirm title"),
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(String(localized: "Delete", comment: "Confirm delete attachment"), role: .destructive) {
+                Task { await viewModel.deleteAttachment(attachment) }
+            }
+            Button(String(localized: "Cancel", comment: "Cancel"), role: .cancel) {}
+        } message: {
+            Text(String(localized: "Delete “\(attachment.title)”? This cannot be undone.", comment: "Attachment delete confirm message"))
         }
     }
 
@@ -231,5 +311,45 @@ struct AttachmentRow: View {
               let url = try? AttachmentPreviewFileStore.write(data: data, filename: attachment.title) else { return }
         shareURL = url
         showShareSheet = true
+    }
+
+    private func applyRename() {
+        let trimmed = renameBasename.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let newTitle = AttachmentFilename.join(basename: trimmed, ext: lockedExtension)
+        Task { await viewModel.renameAttachmentTitle(attachmentId: attachment.attachmentId, title: newTitle) }
+    }
+
+    private func convertToNote() async {
+        isLoading = true
+        defer { isLoading = false }
+        if let result = await viewModel.convertAttachmentToNote(attachment) {
+            onOpenNote(result.noteId, result.title)
+        }
+    }
+
+    private func handleReplacePick(_ result: Result<[URL], Error>) async {
+        do {
+            let urls = try result.get()
+            guard let url = urls.first else { return }
+            guard url.startAccessingSecurityScopedResource() else {
+                viewModel.presentAttachmentError(
+                    String(localized: "Cannot access the selected file.", comment: "Attachment replace file access")
+                )
+                return
+            }
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            let data = try Data(contentsOf: url)
+            let filename = url.lastPathComponent.isEmpty ? "attachment" : url.lastPathComponent
+            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? attachment.mime
+            await viewModel.replaceAttachment(attachment, data: data, filename: filename, mime: mime)
+        } catch is CancellationError {
+            return
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError { return }
+            viewModel.presentAttachmentError(error.localizedDescription)
+        }
     }
 }

@@ -27,4 +27,11 @@ enum AttachmentFilename {
         if base.lowercased().hasSuffix(".\(trimmedExt.lowercased())") { return base }
         return "\(base).\(trimmedExt)"
     }
+
+    /// When `existingTitle` has an extension, the replacement must use the same one (case-insensitive).
+    static func replacementExtensionMatches(existingTitle: String, replacementFilename: String) -> Bool {
+        let required = split(existingTitle).ext
+        guard !required.isEmpty else { return true }
+        return split(replacementFilename).ext.caseInsensitiveCompare(required) == .orderedSame
+    }
 }

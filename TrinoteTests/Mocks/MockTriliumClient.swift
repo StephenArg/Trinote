@@ -18,6 +18,9 @@ actor MockTriliumClient: TriliumClientProtocol {
     var attachmentsResult: Result<[AttachmentResponse], Error> = .success([])
     var attachmentContentResult: Result<Data, Error>?
     var createAttachmentResult: Result<AttachmentResponse, Error>?
+    var convertAttachmentToNoteResult: Result<ConvertAttachmentToNoteResponse, Error>?
+    var attachmentOCRTextResult: Result<AttachmentOCRTextResponse, Error>?
+    var processAttachmentOCRResult: Result<ProcessAttachmentOCRResponse, Error>?
     var syncCheckResult: Result<SyncCheckResponse, Error> = .success(SyncCheckResponse())
     var syncPullResult: Result<SyncPullResponse, Error> = .success(SyncPullResponse(
         entityChanges: [], maxEntityChangeId: 0, outstandingPullCount: 0,
@@ -333,4 +336,30 @@ actor MockTriliumClient: TriliumClientProtocol {
     func renameAttachment(attachmentId: String, title: String) async throws {}
 
     func deleteAttachment(_ attachmentId: String) async throws {}
+
+    func convertAttachmentToNote(attachmentId: String) async throws -> ConvertAttachmentToNoteResponse {
+        if let result = convertAttachmentToNoteResult { return try result.get() }
+        return ConvertAttachmentToNoteResponse(
+            note: ConvertAttachmentToNoteResponse.ConvertedNote(
+                noteId: "converted-\(attachmentId)",
+                title: "Converted"
+            )
+        )
+    }
+
+    func getAttachmentOCRText(attachmentId: String) async throws -> AttachmentOCRTextResponse {
+        _ = attachmentId
+        if let result = attachmentOCRTextResult { return try result.get() }
+        return AttachmentOCRTextResponse(success: true, text: "", hasOcr: false)
+    }
+
+    func processAttachmentOCR(attachmentId: String, forceReprocess: Bool) async throws -> ProcessAttachmentOCRResponse {
+        _ = attachmentId
+        _ = forceReprocess
+        if let result = processAttachmentOCRResult { return try result.get() }
+        return ProcessAttachmentOCRResponse(
+            success: true,
+            result: ProcessAttachmentOCRResponse.OCRResult(text: "ocr text", confidence: 0.9)
+        )
+    }
 }

@@ -30,7 +30,7 @@ struct IncludeNoteResolver {
     /// Rewrites all top-level include-note sections. Nested includes inside text bodies recurse with
     /// `nestingLevel` + 1 up to `maxNesting` (default 3).
     func resolve(html: String, seenNoteIds: Set<String>, nestingLevel: Int = 0, maxNesting: Int = 3) async -> String {
-        guard html.contains("include-note") else { return html }
+        guard html.containsASCII("include-note") else { return html }
         var result = html
         while let block = Self.findNextIncludeBlock(in: result) {
             let replacement = await renderIncludeBlock(
@@ -338,9 +338,8 @@ struct IncludeNoteResolver {
 
     private func imagePreviewTag(noteId: String) async -> String? {
         guard let data = await loadRawBody(noteId: noteId), !data.isEmpty, data.isPlausibleInlineImagePayload else { return nil }
-        let mime = data.detectImageMIME()
-        let b64 = data.base64EncodedString()
-        return "<img class=\"trinote-include__img\" src=\"data:\(mime);base64,\(b64)\" alt=\"\" />"
+        let src = TriliumImageScheme.url(routeType: "images", entityId: noteId)
+        return "<img class=\"trinote-include__img\" src=\"\(src)\" alt=\"\" />"
     }
 
     /// Canvas read-only view prefers `canvas-export.svg`; same for include previews.
@@ -348,7 +347,8 @@ struct IncludeNoteResolver {
         guard let attachmentId = await canvasExportSVGAttachmentId(noteId: noteId) else { return nil }
         let clientForLoad: (any TriliumClientProtocol)? = isOnline ? client : nil
         let parentNoteIds = (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
-        guard let d = await TriliumInlineImageCaching.loadImageData(
+        // Seed the cache so the scheme handler has bytes as soon as the card paints.
+        _ = await TriliumInlineImageCaching.loadImageData(
             routeType: "attachments",
             entityId: attachmentId,
             client: clientForLoad,
@@ -356,11 +356,9 @@ struct IncludeNoteResolver {
             serverProfileId: profileId,
             sourceNoteId: noteId,
             parentNoteIds: parentNoteIds
-        ), !d.isEmpty, d.isPlausibleInlineImagePayload else {
-            return nil
-        }
-        let mime = d.detectImageMIME()
-        return "<img class=\"trinote-include__img\" src=\"data:\(mime);base64,\(d.base64EncodedString())\" alt=\"\" />"
+        )
+        let src = TriliumImageScheme.url(routeType: "attachments", entityId: attachmentId)
+        return "<img class=\"trinote-include__img\" src=\"\(src)\" alt=\"\" />"
     }
 
     private func canvasExportSVGAttachmentId(noteId: String) async -> String? {

@@ -157,6 +157,11 @@ final class AppState {
     /// network availability, and leaves pending rows in SwiftData on failure for later retry.
     /// Re-runs automatically if new changes arrived while a flush was in flight.
     func backgroundSyncPendingChanges() {
+        if CheckboxPerf.lastToggleID > 0,
+           CheckboxPerf.lastToggleEndedAt > 0,
+           CFAbsoluteTimeGetCurrent() - CheckboxPerf.lastToggleEndedAt < 10 {
+            CheckboxPerf.log("backgroundSyncPendingChanges kickoff lastToggle=#\(CheckboxPerf.lastToggleID)")
+        }
         Task { [weak self] in
             guard let self else { return }
             await self.flushPendingLocalChangesIfPossible()
@@ -550,6 +555,9 @@ final class AppState {
             return
         }
         guard !pending.isEmpty else { return }
+        CheckboxPerf.log(
+            "flushBodies start count=\(pending.count) lastToggle=#\(CheckboxPerf.lastToggleID) sizes=[\(pending.map { "\($0.noteId):\($0.body.count)B" }.joined(separator: ","))]"
+        )
         if !assumeSessionIsReady, let tc = client as? TriliumClient {
             do {
                 try await restoreSessionWithTimeout(client: tc, seconds: 10)
@@ -563,6 +571,11 @@ final class AppState {
         }
         for row in pending {
             let snapshotDate = row.queuedAt
+            let tRow = CFAbsoluteTimeGetCurrent()
+            // Read once up front: the row is deleted below, and touching its attributes afterwards traps
+            // with "backing data was detached from a context without resolving attribute faults".
+            let rowNoteId = row.noteId
+            let rowBodyBytes = row.body.count
             do {
                 let fresh = try? await client.getNote(row.noteId)
                 let base = row.baseUtcDateModified.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -612,9 +625,15 @@ final class AppState {
                         }
                         try? persistence.deletePendingNoteBodyUploadIfUnchanged(noteId: row.noteId, serverProfileId: profileId, snapshotDate: snapshotDate)
                         NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+                        CheckboxPerf.log(
+                            "flushBodies conflict note=\(rowNoteId) bytes=\(rowBodyBytes) ms=\(CheckboxPerf.ms(tRow)) lastToggle=#\(CheckboxPerf.lastToggleID)"
+                        )
                         continue
                     }
                 }
+                CheckboxPerf.log(
+                    "flushBodies updateNoteContent start note=\(rowNoteId) bytes=\(rowBodyBytes) lastToggle=#\(CheckboxPerf.lastToggleID)"
+                )
                 try await client.updateNoteContent(row.noteId, content: row.body, contentType: row.mime)
                 // Fetch the server's new utcDateModified after our upload so that
                 // (a) the cache is current for future pending rows, and
@@ -638,8 +657,14 @@ final class AppState {
                     try? persistence.updatePendingBodyUploadBase(noteId: row.noteId, serverProfileId: profileId, newBase: newServerMod)
                 }
                 Log.sync.info("Flushed offline-edited body for note \(row.noteId)")
+                CheckboxPerf.log(
+                    "flushBodies done note=\(rowNoteId) bytes=\(rowBodyBytes) ms=\(CheckboxPerf.ms(tRow)) lastToggle=#\(CheckboxPerf.lastToggleID)"
+                )
             } catch {
-                Log.sync.warning("Pending body upload failed for \(row.noteId): \(error)")
+                Log.sync.warning("Pending body upload failed for \(rowNoteId): \(error)")
+                CheckboxPerf.log(
+                    "flushBodies failed note=\(rowNoteId) bytes=\(rowBodyBytes) ms=\(CheckboxPerf.ms(tRow)) lastToggle=#\(CheckboxPerf.lastToggleID)"
+                )
                 break
             }
         }

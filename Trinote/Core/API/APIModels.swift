@@ -82,6 +82,11 @@ enum TriliumServerCompatibility {
         if s.hasPrefix("v") || s.hasPrefix("V") {
             s.removeFirst()
         }
+        // Drop SemVer prerelease / build metadata (`-beta.1`, `+build`) so `0.103.0-beta.1`
+        // compares equal to `0.103.0` for feature gates.
+        if let meta = s.firstIndex(where: { $0 == "-" || $0 == "+" }) {
+            s = String(s[..<meta])
+        }
         return s.split(separator: ".", omittingEmptySubsequences: false).map { segment in
             let digits = segment.prefix(while: { $0.isNumber })
             return Int(digits) ?? 0
@@ -395,6 +400,131 @@ struct CreateAttachmentRequest: Encodable {
     let title: String
     let content: String
     let position: Int?
+}
+
+/// `POST /api/attachments/{id}/convert-to-note` (`ConvertAttachmentToNoteResponse`).
+struct ConvertAttachmentToNoteResponse: Decodable, Sendable {
+    let note: ConvertedNote
+
+    struct ConvertedNote: Decodable, Sendable {
+        let noteId: String
+        let title: String
+    }
+}
+
+/// `GET /api/ocr/attachments/{id}/text` (`TextRepresentationResponse`).
+struct AttachmentOCRTextResponse: Decodable, Sendable {
+    let success: Bool
+    let text: String
+    let hasOcr: Bool
+    let message: String?
+
+    /// Non-empty extracted text, regardless of `hasOcr`.
+    var extractedText: String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case success, text, hasOcr, message, textRepresentation, ocrText
+    }
+
+    init(success: Bool, text: String, hasOcr: Bool, message: String? = nil) {
+        self.success = success
+        self.text = text
+        self.hasOcr = hasOcr
+        self.message = message
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        success = (try? c.decode(Bool.self, forKey: .success)) ?? true
+        text = (try? c.decode(String.self, forKey: .text))
+            ?? (try? c.decode(String.self, forKey: .textRepresentation))
+            ?? (try? c.decode(String.self, forKey: .ocrText))
+            ?? ""
+        if let flag = try? c.decode(Bool.self, forKey: .hasOcr) {
+            hasOcr = flag
+        } else {
+            hasOcr = !text.isEmpty
+        }
+        message = try? c.decode(String.self, forKey: .message)
+    }
+}
+
+/// `POST /api/ocr/process-attachment/{id}` (`OCRProcessResponse`).
+struct ProcessAttachmentOCRResponse: Decodable, Sendable {
+    let success: Bool
+    let message: String?
+    let result: OCRResult?
+    let minConfidence: Double?
+
+    /// Non-empty text from `result` or a top-level `text` field.
+    var extractedText: String? {
+        let trimmed = result?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    struct OCRResult: Decodable, Sendable {
+        let text: String?
+        let confidence: Double?
+
+        init(text: String?, confidence: Double?) {
+            self.text = text
+            self.confidence = confidence
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            text = (try? c.decode(String.self, forKey: .text))
+                ?? (try? c.decode(String.self, forKey: .textRepresentation))
+            if let value = try? c.decode(Double.self, forKey: .confidence) {
+                confidence = value
+            } else if let value = try? c.decode(Int.self, forKey: .confidence) {
+                confidence = Double(value)
+            } else {
+                confidence = nil
+            }
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case text, confidence, textRepresentation
+        }
+    }
+
+    init(success: Bool, message: String? = nil, result: OCRResult? = nil, minConfidence: Double? = nil) {
+        self.success = success
+        self.message = message
+        self.result = result
+        self.minConfidence = minConfidence
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        success = (try? c.decode(Bool.self, forKey: .success)) ?? true
+        message = try? c.decode(String.self, forKey: .message)
+        if let value = try? c.decode(Double.self, forKey: .minConfidence) {
+            minConfidence = value
+        } else if let value = try? c.decode(Int.self, forKey: .minConfidence) {
+            minConfidence = Double(value)
+        } else {
+            minConfidence = nil
+        }
+
+        if let nested = try? c.decode(OCRResult.self, forKey: .result) {
+            result = nested
+        } else if let text = try? c.decode(String.self, forKey: .result) {
+            result = OCRResult(text: text, confidence: nil)
+        } else if let text = try? c.decode(String.self, forKey: .text) {
+            result = OCRResult(text: text, confidence: nil)
+        } else {
+            result = nil
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case success, message, result, minConfidence, text
+    }
 }
 
 // MARK: - Create Note
