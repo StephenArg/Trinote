@@ -2,6 +2,57 @@ import SwiftUI
 
 /// Maps Trilium’s `#color` label (named tokens or `#RRGGBB` / `#RGB`) to SwiftUI colors for the note tree.
 enum TriliumNoteColorMapper {
+
+    /// Default colors shown in the note appearance picker.
+    /// Leading entries match Trilium desktop’s `NoteColorPicker` hex palette; named tokens follow.
+    static let pickerPalette: [String] = [
+        // Trilium desktop defaults (apps/client/src/menus/custom-items/NoteColorPicker.tsx)
+        "#e64d4d", "#e6994d", "#e5e64d", "#99e64d", "#4de64d", "#4de699",
+        "#4de5e6", "#4d99e6", "#4d4de6", "#994de6", "#e64db3",
+        // Classic named presets (Bootstrap / legacy Trilium)
+        "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "brown", "gray",
+        "black", "white",
+        // Extended named palette
+        "lime", "teal", "indigo", "violet", "amber", "emerald", "sky", "fuchsia", "rose",
+        "slate", "zinc", "stone", "navy", "maroon", "olive", "gold", "silver", "aqua",
+        "lightgreen", "darkred", "darkorange", "darkgreen", "darkblue",
+        "lightgray", "darkgray",
+    ]
+
+    /// Whether two `#color` label values resolve to the same swatch.
+    static func colorLabelsMatch(current: String?, option: String) -> Bool {
+        guard let currentCanonical = canonicalColorLabel(from: current),
+              let optionCanonical = canonicalColorLabel(from: option)
+        else { return false }
+        return currentCanonical.caseInsensitiveCompare(optionCanonical) == .orderedSame
+    }
+
+    /// Short label for a picker swatch (hex shown uppercase, names title-cased).
+    static func pickerDisplayName(for label: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("#") {
+            return trimmed.uppercased()
+        }
+        return trimmed.capitalized
+    }
+
+    /// Returns a canonical `#color` label value for persistence, or `nil` when empty/invalid.
+    static func canonicalColorLabel(from raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let hex = parseHexColor(trimmed) {
+            return "#\(hex.uppercased())"
+        }
+
+        let key = trimmed.lowercased()
+        if namedHex[key] != nil {
+            return key
+        }
+        return nil
+    }
+
     /// Returns a color when `raw` is a recognized hex or palette name; otherwise `nil` so callers fall back to app theme colors.
     static func swiftUIColor(for raw: String?) -> Color? {
         guard let raw else { return nil }

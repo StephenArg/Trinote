@@ -4,7 +4,12 @@ import UIKit
 /// Apple’s camera picker is portrait-only; a SwiftUI host that still advertises landscape
 /// leaves the preview black or stretched.
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    static let lockPortraitOrientationKey = "lockPortraitOrientation"
     static let defaultOrientationMask: UIInterfaceOrientationMask = .allButUpsideDown
+
+    static var preferredOrientationMask: UIInterfaceOrientationMask {
+        UserDefaults.standard.bool(forKey: lockPortraitOrientationKey) ? .portrait : defaultOrientationMask
+    }
 
     @MainActor
     private static var orientationLock: UIInterfaceOrientationMask = defaultOrientationMask
@@ -38,9 +43,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     /// Restore the mask from before the last `lockTemporarily`.
     @MainActor
     static func restore() {
-        let previous = maskBeforeTemporaryLock ?? defaultOrientationMask
+        let previous = maskBeforeTemporaryLock ?? preferredOrientationMask
         maskBeforeTemporaryLock = nil
         lock(previous)
+    }
+
+    /// Applies the portrait-lock setting from Settings (skipped while a temporary lock is active).
+    @MainActor
+    static func applyUserOrientationPreference() {
+        guard maskBeforeTemporaryLock == nil else { return }
+        lock(preferredOrientationMask)
     }
 
     @MainActor

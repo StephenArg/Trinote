@@ -481,12 +481,46 @@ struct SearchResultRow: View {
         .multilineTextAlignment(.leading)
     }
 
+    private var effectiveIconClass: String? {
+        let profileId = appState.activeProfile?.id
+        if let resolved = NoteIconClassResolver.effectiveIconClass(
+            noteId: note.noteId,
+            ownIconClass: note.iconClass,
+            templateRelationValue: note.templateRelationValue,
+            parentNoteProvider: { parentId in
+                guard let profileId else { return nil }
+                return PersistenceManager.shared.parentNoteContextForIconWalk(
+                    noteId: parentId,
+                    serverProfileId: profileId
+                )
+            },
+            templateIconClassProvider: { target in
+                guard let profileId else {
+                    return TriliumBuiltinTemplateIcons.iconClass(for: target)
+                }
+                return PersistenceManager.shared.cachedTemplateIconClass(
+                    templateTarget: target,
+                    serverProfileId: profileId
+                )
+            }
+        ) {
+            return resolved
+        }
+        guard let profileId else { return note.resolvedIconClass }
+        return PersistenceManager.shared.cachedEffectiveNoteIconClass(noteId: note.noteId, serverProfileId: profileId)
+            ?? note.resolvedIconClass
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: note.resolvedIconName)
-                .foregroundStyle(triliumColor ?? .secondary)
-                .frame(width: 24)
-                .accessibilityHidden(true)
+            NoteIconView(
+                iconClass: effectiveIconClass,
+                fallbackNoteType: note.iconFallbackNoteType,
+                size: .regular,
+                foregroundStyle: triliumColor ?? .secondary
+            )
+            .frame(width: 24)
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 titleView

@@ -518,19 +518,15 @@ final class PersistenceManager {
         let id = "\(serverProfileId):\(noteId)"
         var descriptor = FetchDescriptor<RecentNote>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
-        // Fresh cache + parentNoteIds from getNote — best time to resolve top-level notebook icon.
-        let rowIcon = recentsRowIconSystemName(noteId: noteId, fallbackNoteType: noteType, serverProfileId: serverProfileId)
         if let existing = try context.fetch(descriptor).first {
             existing.accessedAt = .now
             existing.title = title
-            existing.listIconSystemName = rowIcon
         } else {
             let recent = RecentNote(
                 noteId: noteId,
                 title: title,
                 noteType: noteType,
-                serverProfileId: serverProfileId,
-                listIconSystemName: rowIcon
+                serverProfileId: serverProfileId
             )
             context.insert(recent)
         }
@@ -564,13 +560,11 @@ final class PersistenceManager {
     /// Inserts a new tab; the same `noteId` can appear in multiple open tabs. Evicts the oldest when over the cap.
     @discardableResult
     func addOpenNoteTab(noteId: String, title: String, noteType: String, serverProfileId: String) throws -> String {
-        let rowIcon = cachedNoteIconSystemName(noteId: noteId, fallbackNoteType: noteType, serverProfileId: serverProfileId)
         let tab = OpenNoteTab(
             noteId: noteId,
             title: title,
             noteType: noteType,
             serverProfileId: serverProfileId,
-            listIconSystemName: rowIcon,
             addedAt: .now
         )
         context.insert(tab)
@@ -611,15 +605,9 @@ final class PersistenceManager {
         serverProfileId: String
     ) throws {
         guard let row = try fetchOpenNoteTab(id: id, serverProfileId: serverProfileId) else { return }
-        let rowIcon = cachedNoteIconSystemName(
-            noteId: noteId,
-            fallbackNoteType: noteType,
-            serverProfileId: serverProfileId
-        )
         row.noteId = noteId
         row.title = title
         row.noteType = noteType
-        row.listIconSystemName = rowIcon
         try context.save()
         NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil)
     }
@@ -825,34 +813,179 @@ final class PersistenceManager {
         return segments
     }
 
-    /// SF Symbol for the **note itself** (its own `iconClass` label, then its type).
-    /// Falls back to `fallbackNoteType`’s default symbol if the note is not cached yet.
+    /// Legacy SF Symbol helper retained for callers that still expect a string; icons resolve from cache at display time.
     func cachedNoteIconSystemName(noteId: String, fallbackNoteType: String, serverProfileId: String) -> String {
-        guard let cached = try? fetchCachedNote(id: noteId, serverProfileId: serverProfileId) else {
-            return (NoteType(rawValue: fallbackNoteType) ?? .text).iconName
-        }
-        let type = NoteType(rawValue: cached.noteType) ?? .text
+        (NoteType(rawValue: fallbackNoteType) ?? .text).iconName
+    }
+
+    /// `#iconClass` for a cached note, if set on that note only.
+    func cachedNoteIconClass(noteId: String, serverProfileId: String) -> String? {
         let attrs = (try? fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)) ?? []
         let iconClass = attrs.first { $0.name == "iconClass" && $0.type == "label" }?.value
             ?? attrs.first { $0.name == "iconClass" }?.value
-        if let mapped = NoteIconMapper.sfSymbol(for: iconClass) { return mapped }
-        return type.iconName
+        return BoxiconsResolver.usableIconClass(from: iconClass)
     }
 
-    /// SF Symbol for a recents row: matches the note directly under `root` on the path to `noteId`
-    /// (Trilium “top-level” notebook). Uses that note’s `iconClass` + type; falls back to `fallbackNoteType` if cache is missing.
-    func recentsRowIconSystemName(noteId: String, fallbackNoteType: String, serverProfileId: String) -> String {
-        guard let topId = topLevelNoteIdUnderRoot(noteId: noteId, serverProfileId: serverProfileId),
-              let cached = try? fetchCachedNote(id: topId, serverProfileId: serverProfileId)
-        else {
-            return (NoteType(rawValue: fallbackNoteType) ?? .text).iconName
-        }
-        let type = NoteType(rawValue: cached.noteType) ?? .text
-        let attrs = (try? fetchCachedAttributes(noteId: topId, serverProfileId: serverProfileId)) ?? []
-        // Match `NoteItem` / tree: iconClass is a label attribute.
-        let iconClass = attrs.first { $0.name == "iconClass" && $0.type == "label" }?.value
+    /// Effective `#iconClass` including template targets and inheritable labels from ancestors.
+    func cachedEffectiveNoteIconClass(noteId: String, serverProfileId: String) -> String? {
+        let attrs = (try? fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)) ?? []
+        let ownRaw = attrs.first { $0.name == "iconClass" && $0.type == "label" }?.value
             ?? attrs.first { $0.name == "iconClass" }?.value
-        return NoteIconMapper.sfSymbol(for: iconClass) ?? type.iconName
+        let templateTarget = attrs.first { $0.name == "template" && $0.type == "relation" }?.value
+
+        return NoteIconClassResolver.effectiveIconClass(
+            noteId: noteId,
+            ownIconClass: ownRaw,
+            templateRelationValue: templateTarget,
+            parentNoteProvider: { [self] targetId in
+                guard let note = try? fetchCachedNote(id: targetId, serverProfileId: serverProfileId) else {
+                    return nil
+                }
+                let targetAttrs = (try? fetchCachedAttributes(noteId: targetId, serverProfileId: serverProfileId)) ?? []
+                let parentIds = allParentNoteIdsForTreeWalk(
+                    noteId: targetId,
+                    serverProfileId: serverProfileId,
+                    cached: note
+                )
+                return NoteIconClassResolver.ParentNoteContext(
+                    attributes: attributeItems(from: targetAttrs),
+                    parentNoteIds: parentIds
+                )
+            },
+            templateIconClassProvider: { [self] target in
+                cachedTemplateIconClass(templateTarget: target, serverProfileId: serverProfileId)
+            }
+        )
+    }
+
+    /// `#iconClass` from a `~template` target note, with built-in template fallbacks.
+    func cachedTemplateIconClass(templateTarget: String, serverProfileId: String) -> String? {
+        let target = templateTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else { return nil }
+
+        let attrs = (try? fetchCachedAttributes(noteId: target, serverProfileId: serverProfileId)) ?? []
+        let raw = attrs.first { $0.name == "iconClass" && $0.type == "label" }?.value
+            ?? attrs.first { $0.name == "iconClass" }?.value
+        if let usable = BoxiconsResolver.usableIconClass(from: raw) {
+            return usable
+        }
+
+        return TriliumBuiltinTemplateIcons.iconClass(for: target)
+    }
+
+    /// Parent metadata for walking inheritable `#iconClass` labels.
+    func parentNoteContextForIconWalk(noteId: String, serverProfileId: String) -> NoteIconClassResolver.ParentNoteContext? {
+        guard let note = try? fetchCachedNote(id: noteId, serverProfileId: serverProfileId) else {
+            return nil
+        }
+        let attrs = (try? fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)) ?? []
+        return NoteIconClassResolver.ParentNoteContext(
+            attributes: attributeItems(from: attrs),
+            parentNoteIds: allParentNoteIdsForTreeWalk(noteId: noteId, serverProfileId: serverProfileId, cached: note)
+        )
+    }
+
+    private func attributeItems(from cached: [CachedAttribute]) -> [AttributeItem] {
+        cached.map { row in
+            AttributeItem(
+                attributeId: row.attributeId,
+                noteId: row.noteId,
+                type: AttributeItem.AttributeKind(rawValue: row.type) ?? .label,
+                name: row.name,
+                value: row.value,
+                position: row.position,
+                isInheritable: row.isInheritable
+            )
+        }
+    }
+
+    /// `#iconClass` for a recents row: top-level notebook under `root` on the path to `noteId`.
+    func recentsRowIconClass(noteId: String, serverProfileId: String) -> String? {
+        guard let topId = topLevelNoteIdUnderRoot(noteId: noteId, serverProfileId: serverProfileId) else {
+            return nil
+        }
+        return cachedNoteIconClass(noteId: topId, serverProfileId: serverProfileId)
+    }
+
+    /// Icon context for a recents/favorites row (top-level notebook under root).
+    func recentsRowIconContext(
+        noteId: String,
+        fallbackNoteType: String,
+        serverProfileId: String
+    ) -> NoteRowIconContext {
+        let fallback = NoteType(rawValue: fallbackNoteType) ?? .text
+        guard let topId = topLevelNoteIdUnderRoot(noteId: noteId, serverProfileId: serverProfileId) else {
+            return NoteRowIconContext(iconClass: nil, fallbackNoteType: fallback)
+        }
+        let topType = (try? fetchCachedNote(id: topId, serverProfileId: serverProfileId))
+            .flatMap { NoteType(rawValue: $0.noteType) } ?? fallback
+        let iconClass = cachedNoteIconClass(noteId: topId, serverProfileId: serverProfileId)
+        return NoteRowIconContext(iconClass: iconClass, fallbackNoteType: topType)
+    }
+
+    /// Icon context for an open tab row (the tab note’s own icon).
+    func tabRowIconContext(
+        noteId: String,
+        fallbackNoteType: String,
+        serverProfileId: String
+    ) -> NoteRowIconContext {
+        let fallback = NoteType(rawValue: fallbackNoteType) ?? .text
+        let noteType = (try? fetchCachedNote(id: noteId, serverProfileId: serverProfileId))
+            .flatMap { NoteType(rawValue: $0.noteType) } ?? fallback
+        let iconClass = cachedEffectiveNoteIconClass(noteId: noteId, serverProfileId: serverProfileId)
+        return NoteRowIconContext(iconClass: iconClass, fallbackNoteType: noteType)
+    }
+
+    /// Updates or removes the cached `#iconClass` label for offline / optimistic UI.
+    func setCachedIconClass(_ iconClass: String?, noteId: String, serverProfileId: String) throws {
+        let attrs = try fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)
+        let existing = attrs.filter { $0.type == "label" && $0.name == "iconClass" }
+        for row in existing {
+            try deleteCachedAttribute(attributeId: row.attributeId, serverProfileId: serverProfileId)
+        }
+        guard let iconClass, !iconClass.isEmpty, iconClass != "bx bx-empty" else {
+            try commitBatch()
+            return
+        }
+        let localId = "local-iconClass-\(noteId)"
+        let cached = CachedAttribute(
+            attributeId: localId,
+            noteId: noteId,
+            type: "label",
+            name: "iconClass",
+            value: iconClass,
+            serverProfileId: serverProfileId
+        )
+        context.insert(cached)
+        try commitBatch()
+    }
+
+    /// Updates or removes the cached Trilium `#color` label for offline / optimistic UI.
+    func setCachedColorLabel(_ colorLabel: String?, noteId: String, serverProfileId: String) throws {
+        let attrs = try fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)
+        let existing = attrs.filter {
+            $0.type == "label" && $0.name.caseInsensitiveCompare("color") == .orderedSame
+        }
+        for row in existing {
+            try deleteCachedAttribute(attributeId: row.attributeId, serverProfileId: serverProfileId)
+        }
+        guard let colorLabel,
+              let normalized = TriliumNoteColorMapper.canonicalColorLabel(from: colorLabel)
+        else {
+            try commitBatch()
+            return
+        }
+        let localId = "local-color-\(noteId)"
+        let cached = CachedAttribute(
+            attributeId: localId,
+            noteId: noteId,
+            type: "label",
+            name: "color",
+            value: normalized,
+            serverProfileId: serverProfileId
+        )
+        context.insert(cached)
+        try commitBatch()
     }
 
     /// Raw value of a cached note's `#color` label (Trilium tree color), or `nil` when absent.

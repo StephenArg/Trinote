@@ -210,7 +210,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
                 NoteCreationAttribute(type: "label", name: "viewType", value: "geoMap"),
                 NoteCreationAttribute(type: "label", name: "hidePromotedAttributes", value: ""),
                 NoteCreationAttribute(type: "label", name: "label:geolocation", value: geolocationSchema),
-                NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx bx-map-alt"),
+                NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-map-alt"),
                 NoteCreationAttribute(type: "label", name: "subtreeHidden", value: "false"),
                 // Built-in _templates title is "Geo Map" (space); value must match for search resolution before createAttribute.
                 NoteCreationAttribute(type: "relation", name: "template", value: "Geo Map"),

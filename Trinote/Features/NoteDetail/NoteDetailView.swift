@@ -135,6 +135,7 @@ struct NoteDetailView: View {
     @State private var findDeepLinkConsumed = false
     @State private var noteDetailShareURLSheetItem: NoteDetailShareURLSheetItem?
     @State private var showMoveParentPicker = false
+    @State private var showAppearancePicker = false
     @State private var showShareLocally = false
     @State private var moveNoteDetailConfirm: MoveNoteDetailConfirm?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
@@ -1583,6 +1584,18 @@ struct NoteDetailView: View {
                     navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
                 }
             }
+            .sheet(isPresented: $showAppearancePicker) {
+                NoteAppearancePickerSheet(
+                    currentIconClass: note.iconClass,
+                    currentColorLabel: note.colorLabelValue,
+                    onSelectIcon: { iconClass in
+                        Task { await vm.setNoteIconClass(iconClass) }
+                    },
+                    onSelectColor: { colorLabel in
+                        Task { await vm.setNoteColor(colorLabel) }
+                    }
+                )
+            }
             .fullScreenCover(isPresented: Binding(
                 get: { vm.isEditing && note.type == .spreadsheet && horizontalSizeClass != .regular },
                 set: { newValue in
@@ -1813,6 +1826,32 @@ struct NoteDetailView: View {
     }
 
     @ViewBuilder
+    private func noteTitleIconButton(vm: NoteDetailViewModel, note: NoteItem, width: CGFloat) -> some View {
+        let canChange = canChangeNoteAppearance(note)
+        Button {
+            showAppearancePicker = true
+        } label: {
+            NoteIconView(
+                iconClass: vm.effectiveIconClass(for: note),
+                fallbackNoteType: note.iconFallbackNoteType,
+                size: .title,
+                foregroundStyle: noteDetailTitleForegroundColor(for: note)
+            )
+            .frame(width: width, alignment: .center)
+        }
+        .buttonStyle(.plain)
+        .disabled(!canChange || vm.isSaving)
+        .accessibilityLabel(String(localized: "Change note appearance", comment: "VoiceOver"))
+        .accessibilityHidden(!canChange)
+    }
+
+    private func canChangeNoteAppearance(_ note: NoteItem) -> Bool {
+        guard note.noteId != TriliumTreeConstants.rootNoteId else { return false }
+        if note.isProtected, !appState.protectedSessionActive { return false }
+        return true
+    }
+
+    @ViewBuilder
     private func titleSection(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
         @Bindable var vm = vm
         VStack(alignment: .leading, spacing: 4) {
@@ -1854,11 +1893,7 @@ struct NoteDetailView: View {
                 HStack(alignment: .top, spacing: 0) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(alignment: .firstTextBaseline, spacing: titleIconSpacing) {
-                            Image(systemName: note.resolvedIconName)
-                                .font(.title2)
-                                .foregroundStyle(noteDetailTitleForegroundColor(for: note))
-                                .frame(width: titleIconColumnWidth, alignment: .center)
-                                .accessibilityHidden(true)
+                            noteTitleIconButton(vm: vm, note: note, width: titleIconColumnWidth)
                             Text(uiTitle(for: note))
                                 .font(.title2.bold())
                                 .foregroundStyle(noteDetailTitleForegroundColor(for: note))
@@ -2048,10 +2083,13 @@ struct NoteDetailView: View {
                         navigateToNoteId = child.noteId
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: child.resolvedIconName)
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 22)
+                            NoteIconView(
+                                iconClass: child.iconClass,
+                                fallbackNoteType: child.iconFallbackNoteType,
+                                size: .regular,
+                                foregroundStyle: .secondary
+                            )
+                            .frame(width: 22)
                             Text(NoteItem.maskedStoredTitle(child.title, isProtected: child.isProtected, protectedSessionActive: appState.protectedSessionActive))
                                 .font(.body)
                                 .lineLimit(2)
@@ -3173,6 +3211,18 @@ struct NoteDetailView: View {
                     vm.editingTitle = true
                 } label: {
                     Label(String(localized: "Rename", comment: "Note overflow menu"), systemImage: "pencil")
+                }
+
+                if canChangeNoteAppearance(note) {
+                    Button {
+                        showAppearancePicker = true
+                    } label: {
+                        Label(
+                            String(localized: "Change Icon/Color", comment: "Note overflow menu: open appearance picker"),
+                            systemImage: "paintpalette"
+                        )
+                    }
+                    .disabled(vm.isSaving)
                 }
 
                 Divider()

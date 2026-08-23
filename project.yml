@@ -29,8 +29,10 @@ settings:
     DEVELOPMENT_TEAM: R6WYB662P7
     CODE_SIGN_STYLE: Automatic
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "1.19.7"
-    CURRENT_PROJECT_VERSION: "15"
+    # Version source of truth for XcodeGen. After changing Version/Build in Xcode,
+    # build once (or run Scripts/sync_project_yml_version.sh) to write back here.
+    MARKETING_VERSION: "1.19.8"
+    CURRENT_PROJECT_VERSION: "16"
 
 packages:
   Highlightr:
@@ -58,6 +60,8 @@ targets:
           - "**/Resources/vendor/**"
           - "**/Resources/canvas-editor-assets/**"
           - "**/Resources/univer-editor-assets/**"
+          # Build-time source for Boxicons catalog generator only.
+          - "**/Resources/BoxiconsVendor/**"
           - "**/*.entitlements"
       - path: TrinoteShared
       # Folder references: preserve directory structure in the bundle for HTML relative paths.
@@ -74,6 +78,7 @@ targets:
       - path: Trinote/Resources/Localizable.xcstrings
       - path: Trinote/Resources/Assets.xcassets
       - path: Trinote/Resources/editor-icons
+      - path: Trinote/Resources/Fonts
       # Bundle only vendored scripts at repo root — not node_modules (duplicate filenames break the build).
       - path: Trinote/Resources/editor-vendor
         excludes:
@@ -83,6 +88,10 @@ targets:
       - target: TrinoteShare
         embed: true
         codeSign: true
+    preBuildScripts:
+      - name: Sync Version to project.yml
+        path: Scripts/sync_project_yml_version.sh
+        basedOnDependencyAnalysis: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.trinote

@@ -14,8 +14,8 @@ struct RecentsView: View {
     @State private var pathByNoteId: [String: String] = [:]
     /// Row title with protected-note masking (SwiftData may still hold decrypted titles after restart).
     @State private var displayTitleByNoteId: [String: String] = [:]
-    /// SF Symbol for the top-level-under-root note (same visual grouping as tree).
-    @State private var iconByNoteId: [String: String] = [:]
+    /// Icon context for the top-level-under-root note (same visual grouping as tree).
+    @State private var iconContextByNoteId: [String: NoteRowIconContext] = [:]
     /// Raw value of the leaf note's `#color` label (Trilium tree color), per note id.
     @State private var colorLabelByNoteId: [String: String] = [:]
     @State private var navigateToNote: (String, String)?
@@ -49,10 +49,15 @@ struct RecentsView: View {
                             navigateToNote = (recent.noteId, navTitle)
                         } label: {
                             HStack(spacing: 12) {
-                                Image(systemName: recentsRowIcon(for: recent))
-                                    .foregroundStyle(resolvedIconColor(for: recent))
-                                    .frame(width: 24)
-                                    .accessibilityHidden(true)
+                                let rowIcon = recentsRowIcon(for: recent)
+                                NoteIconView(
+                                    iconClass: rowIcon.iconClass,
+                                    fallbackNoteType: rowIcon.fallbackNoteType,
+                                    size: .regular,
+                                    foregroundStyle: resolvedIconColor(for: recent)
+                                )
+                                .frame(width: 24)
+                                .accessibilityHidden(true)
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(displayTitleByNoteId[recent.noteId] ?? recent.title)
@@ -117,7 +122,7 @@ struct RecentsView: View {
             let raw = try pm.fetchRecentNotes(serverProfileId: profileId)
             var paths: [String: String] = [:]
             var titlesOut: [String: String] = [:]
-            var icons: [String: String] = [:]
+            var icons: [String: NoteRowIconContext] = [:]
             var colors: [String: String] = [:]
             var visible: [RecentNote] = []
             visible.reserveCapacity(raw.count)
@@ -156,7 +161,7 @@ struct RecentsView: View {
                 visible.append(recent)
                 paths[recent.noteId] = pathUI
                 titlesOut[recent.noteId] = rowTitle
-                icons[recent.noteId] = pm.recentsRowIconSystemName(
+                icons[recent.noteId] = pm.recentsRowIconContext(
                     noteId: recent.noteId,
                     fallbackNoteType: recent.noteType,
                     serverProfileId: profileId
@@ -169,23 +174,24 @@ struct RecentsView: View {
             recentNotes = visible
             pathByNoteId = paths
             displayTitleByNoteId = titlesOut
-            iconByNoteId = icons
+            iconContextByNoteId = icons
             colorLabelByNoteId = colors
         } catch {
             Log.persistence.error("Failed to load recents: \(error)")
             recentNotes = []
             pathByNoteId = [:]
             displayTitleByNoteId = [:]
-            iconByNoteId = [:]
+            iconContextByNoteId = [:]
             colorLabelByNoteId = [:]
         }
     }
 
-    /// Persisted icon from last open, then live recompute from cache, then note type.
-    private func recentsRowIcon(for recent: RecentNote) -> String {
-        if let s = recent.listIconSystemName, !s.isEmpty { return s }
-        if let s = iconByNoteId[recent.noteId], !s.isEmpty { return s }
-        return (NoteType(rawValue: recent.noteType) ?? .text).iconName
+    private func recentsRowIcon(for recent: RecentNote) -> NoteRowIconContext {
+        if let ctx = iconContextByNoteId[recent.noteId] { return ctx }
+        return NoteRowIconContext(
+            iconClass: nil,
+            fallbackNoteType: NoteType(rawValue: recent.noteType) ?? .text
+        )
     }
 
     /// Trilium `#color` label wins when the global setting is on and the value is recognized.

@@ -26,7 +26,7 @@ struct FavoritesView: View {
     /// Same row chrome as Recents: path from cache, tree “notebook” icon, last-open time when known.
     @State private var pathByNoteId: [String: String] = [:]
     @State private var displayTitleByNoteId: [String: String] = [:]
-    @State private var iconByNoteId: [String: String] = [:]
+    @State private var iconContextByNoteId: [String: NoteRowIconContext] = [:]
     @State private var lastAccessByNoteId: [String: Date] = [:]
     /// Raw value of the leaf note's `#color` label (Trilium tree color), per note id.
     @State private var colorLabelByNoteId: [String: String] = [:]
@@ -246,12 +246,16 @@ struct FavoritesView: View {
     }
 
     private func favoriteSectionBanner(_ section: FavoriteNotebookSection) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: sectionHeaderIcon(for: section))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 22, alignment: .center)
-                .accessibilityHidden(true)
+        let headerIcon = sectionHeaderIconContext(for: section)
+        return HStack(spacing: 8) {
+            NoteIconView(
+                iconClass: headerIcon.iconClass,
+                fallbackNoteType: headerIcon.fallbackNoteType,
+                size: .regular,
+                foregroundStyle: .secondary
+            )
+            .frame(width: 22, alignment: .center)
+            .accessibilityHidden(true)
             Text(section.title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
@@ -282,12 +286,14 @@ struct FavoritesView: View {
         .accessibilityAddTraits(.isHeader)
     }
 
-    private func sectionHeaderIcon(for section: FavoriteNotebookSection) -> String {
-        guard let profileId = appState.activeProfile?.id else { return "folder" }
-        if section.id == "__other__" {
-            return "square.grid.2x2"
+    private func sectionHeaderIconContext(for section: FavoriteNotebookSection) -> NoteRowIconContext {
+        guard let profileId = appState.activeProfile?.id else {
+            return NoteRowIconContext(iconClass: nil, fallbackNoteType: .text)
         }
-        return PersistenceManager.shared.recentsRowIconSystemName(
+        if section.id == "__other__" {
+            return NoteRowIconContext(iconClass: nil, fallbackNoteType: .collection)
+        }
+        return PersistenceManager.shared.recentsRowIconContext(
             noteId: section.id,
             fallbackNoteType: NoteType.text.rawValue,
             serverProfileId: profileId
@@ -379,10 +385,15 @@ struct FavoritesView: View {
                 Image(systemName: selectedIds.contains(fav.noteId) ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(selectedIds.contains(fav.noteId) ? Color.accentColor : Color.secondary)
             }
-            Image(systemName: favoritesRowIcon(for: fav))
-                .foregroundStyle(resolvedIconColor(for: fav))
-                .frame(width: 24)
-                .accessibilityHidden(true)
+            let rowIcon = favoritesRowIcon(for: fav)
+            NoteIconView(
+                iconClass: rowIcon.iconClass,
+                fallbackNoteType: rowIcon.fallbackNoteType,
+                size: .regular,
+                foregroundStyle: resolvedIconColor(for: fav)
+            )
+            .frame(width: 24)
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayTitleByNoteId[fav.noteId] ?? fav.title)
@@ -421,9 +432,12 @@ struct FavoritesView: View {
         .contentShape(Rectangle())
     }
 
-    private func favoritesRowIcon(for fav: FavoriteNote) -> String {
-        if let s = iconByNoteId[fav.noteId], !s.isEmpty { return s }
-        return (NoteType(rawValue: fav.noteType) ?? .text).iconName
+    private func favoritesRowIcon(for fav: FavoriteNote) -> NoteRowIconContext {
+        if let ctx = iconContextByNoteId[fav.noteId] { return ctx }
+        return NoteRowIconContext(
+            iconClass: nil,
+            fallbackNoteType: NoteType(rawValue: fav.noteType) ?? .text
+        )
     }
 
     private func favoritesAccessLabel(for fav: FavoriteNote) -> String? {
@@ -463,7 +477,7 @@ struct FavoritesView: View {
             favorites = []
             pathByNoteId = [:]
             displayTitleByNoteId = [:]
-            iconByNoteId = [:]
+            iconContextByNoteId = [:]
             lastAccessByNoteId = [:]
             colorLabelByNoteId = [:]
             return
@@ -473,7 +487,7 @@ struct FavoritesView: View {
             let raw = try pm.fetchFavorites(serverProfileId: profileId)
             var paths: [String: String] = [:]
             var titlesOut: [String: String] = [:]
-            var icons: [String: String] = [:]
+            var icons: [String: NoteRowIconContext] = [:]
             var access: [String: Date] = [:]
             var colors: [String: String] = [:]
             var visible: [FavoriteNote] = []
@@ -509,24 +523,13 @@ struct FavoritesView: View {
                 paths[fav.noteId] = pathUI
                 titlesOut[fav.noteId] = rowTitle
 
-                let recent = try? pm.fetchRecentNote(noteId: fav.noteId, serverProfileId: profileId)
-                if let recent {
+                icons[fav.noteId] = pm.recentsRowIconContext(
+                    noteId: fav.noteId,
+                    fallbackNoteType: fav.noteType,
+                    serverProfileId: profileId
+                )
+                if let recent = try? pm.fetchRecentNote(noteId: fav.noteId, serverProfileId: profileId) {
                     access[fav.noteId] = recent.accessedAt
-                    if let s = recent.listIconSystemName, !s.isEmpty {
-                        icons[fav.noteId] = s
-                    } else {
-                        icons[fav.noteId] = pm.recentsRowIconSystemName(
-                            noteId: fav.noteId,
-                            fallbackNoteType: fav.noteType,
-                            serverProfileId: profileId
-                        )
-                    }
-                } else {
-                    icons[fav.noteId] = pm.recentsRowIconSystemName(
-                        noteId: fav.noteId,
-                        fallbackNoteType: fav.noteType,
-                        serverProfileId: profileId
-                    )
                 }
                 if let colorRaw = pm.cachedNoteColorLabel(noteId: fav.noteId, serverProfileId: profileId) {
                     colors[fav.noteId] = colorRaw
@@ -536,7 +539,7 @@ struct FavoritesView: View {
             favorites = visible
             pathByNoteId = paths
             displayTitleByNoteId = titlesOut
-            iconByNoteId = icons
+            iconContextByNoteId = icons
             lastAccessByNoteId = access
             colorLabelByNoteId = colors
         } catch {
@@ -544,7 +547,7 @@ struct FavoritesView: View {
             favorites = []
             pathByNoteId = [:]
             displayTitleByNoteId = [:]
-            iconByNoteId = [:]
+            iconContextByNoteId = [:]
             lastAccessByNoteId = [:]
             colorLabelByNoteId = [:]
         }

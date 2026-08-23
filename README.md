@@ -53,6 +53,21 @@ open Trinote.xcodeproj
 
 Select an iOS 17+ simulator or device and press **Cmd+R**.
 
+### Version & build number
+
+`MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` live in **`project.yml`** (XcodeGen’s source of truth). You can bump them either way:
+
+1. **In Xcode** — Trinote target → General → Version / Build, then **build once** (`Cmd+B`). A pre-build script writes the values back into `project.yml`.
+2. **In `project.yml`** — edit the two keys under `settings.base`, then run `xcodegen generate`.
+
+To sync manually without building:
+
+```bash
+./Scripts/sync_project_yml_version.sh
+```
+
+If you edit `project.yml` without running `xcodegen generate`, the next build may overwrite your YAML changes with the older values still in the `.xcodeproj`.
+
 ## Connecting to a Server
 
 ### Password sign-in

@@ -35,14 +35,9 @@ struct NoteItem: Identifiable, Hashable, Sendable {
         return t.isEmpty ? nil : t
     }
 
-    /// SF Symbol name: custom Trilium `#iconClass` if mapped; else semantic overlays; else note `type` default.
-    var resolvedIconName: String {
-        if let mapped = NoteIconMapper.sfSymbol(for: iconClass) { return mapped }
-        if isSemanticGeoMap { return NoteType.geoMap.iconName }
-        if isSemanticPresentation { return NoteType.presentation.iconName }
-        if isSemanticKanban { return NoteType.kanban.iconName }
-        if isTriliumCollectionNote { return NoteType.collection.iconName }
-        return type.iconName
+    /// Trilium `#iconClass` label when present on this note (may be empty or `bx bx-empty`).
+    var resolvedIconClass: String? {
+        BoxiconsResolver.usableIconClass(from: iconClass)
     }
 
     var sortableTitle: String { title.lowercased() }
@@ -231,6 +226,84 @@ extension NoteItem {
 
     /// Shown in lists when the document-password session is locked but SwiftData still has a decrypted title from a prior session.
     static let protectedTitlePlaceholder = String(localized: "Protected note", comment: "Title placeholder for protected notes when locked")
+
+    /// Returns a copy with Trilium `#color` replaced (removed when `nil` or empty).
+    func replacingColorLabel(_ colorLabel: String?) -> NoteItem {
+        let normalized = TriliumNoteColorMapper.canonicalColorLabel(from: colorLabel)
+        let filtered = attributes.filter {
+            !($0.type == .label && $0.name.caseInsensitiveCompare("color") == .orderedSame)
+        }
+        let nextAttributes: [AttributeItem]
+        if let normalized {
+            nextAttributes = filtered + [
+                AttributeItem(
+                    attributeId: "local-color-\(noteId)",
+                    noteId: noteId,
+                    type: .label,
+                    name: "color",
+                    value: normalized,
+                    position: 0,
+                    isInheritable: false
+                ),
+            ]
+        } else {
+            nextAttributes = filtered
+        }
+        return NoteItem(
+            noteId: noteId,
+            title: title,
+            type: type,
+            mime: mime,
+            isProtected: isProtected,
+            dateCreated: dateCreated,
+            dateModified: dateModified,
+            parentNoteIds: parentNoteIds,
+            childNoteIds: childNoteIds,
+            parentBranchIds: parentBranchIds,
+            childBranchIds: childBranchIds,
+            attributes: nextAttributes
+        )
+    }
+
+    /// Returns a copy with `#iconClass` replaced (removed when `nil` or empty).
+    func replacingIconClass(_ iconClass: String?) -> NoteItem {
+        let trimmed = iconClass?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized: String? = {
+            guard let trimmed, !trimmed.isEmpty, trimmed != "bx bx-empty" else { return nil }
+            return trimmed
+        }()
+        let filtered = attributes.filter { !($0.type == .label && $0.name == "iconClass") }
+        let nextAttributes: [AttributeItem]
+        if let normalized {
+            nextAttributes = filtered + [
+                AttributeItem(
+                    attributeId: "local-iconClass-\(noteId)",
+                    noteId: noteId,
+                    type: .label,
+                    name: "iconClass",
+                    value: normalized,
+                    position: 0,
+                    isInheritable: false
+                ),
+            ]
+        } else {
+            nextAttributes = filtered
+        }
+        return NoteItem(
+            noteId: noteId,
+            title: title,
+            type: type,
+            mime: mime,
+            isProtected: isProtected,
+            dateCreated: dateCreated,
+            dateModified: dateModified,
+            parentNoteIds: parentNoteIds,
+            childNoteIds: childNoteIds,
+            parentBranchIds: parentBranchIds,
+            childBranchIds: childBranchIds,
+            attributes: nextAttributes
+        )
+    }
 
     func uiTitle(forProtectedSessionActive sessionActive: Bool) -> String {
         if isProtected, !sessionActive { return Self.protectedTitlePlaceholder }

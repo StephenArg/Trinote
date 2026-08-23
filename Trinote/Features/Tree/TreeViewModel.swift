@@ -808,6 +808,52 @@ final class TreeViewModel {
         noteCache[noteId]
     }
 
+    /// Own, template, or inherited `#iconClass` for tree display.
+    func effectiveIconClass(for note: NoteItem) -> String? {
+        if let resolved = NoteIconClassResolver.effectiveIconClass(
+            noteId: note.noteId,
+            ownIconClass: note.iconClass,
+            templateRelationValue: note.templateRelationValue,
+            parentNoteProvider: { [self] parentId in
+                parentIconContext(noteId: parentId)
+            },
+            templateIconClassProvider: { [self] target in
+                templateIconClass(for: target)
+            }
+        ) {
+            return resolved
+        }
+        guard let profileId = serverProfileId else { return note.resolvedIconClass }
+        return persistence.cachedEffectiveNoteIconClass(noteId: note.noteId, serverProfileId: profileId)
+            ?? note.resolvedIconClass
+    }
+
+    private func templateIconClass(for target: String) -> String? {
+        if let templateNote = noteCache[target],
+           let icon = BoxiconsResolver.usableIconClass(from: templateNote.iconClass) {
+            return icon
+        }
+        if let match = noteCache.values.first(where: { $0.title.caseInsensitiveCompare(target) == .orderedSame }),
+           let icon = BoxiconsResolver.usableIconClass(from: match.iconClass) {
+            return icon
+        }
+        guard let profileId = serverProfileId else {
+            return TriliumBuiltinTemplateIcons.iconClass(for: target)
+        }
+        return persistence.cachedTemplateIconClass(templateTarget: target, serverProfileId: profileId)
+    }
+
+    private func parentIconContext(noteId: String) -> NoteIconClassResolver.ParentNoteContext? {
+        if let note = noteCache[noteId] {
+            return NoteIconClassResolver.ParentNoteContext(
+                attributes: note.attributes,
+                parentNoteIds: note.parentNoteIds
+            )
+        }
+        guard let profileId = serverProfileId else { return nil }
+        return persistence.parentNoteContextForIconWalk(noteId: noteId, serverProfileId: profileId)
+    }
+
     /// Sub-notes already loaded in the in-memory tree (expanded parent). Used to seed note detail when SwiftData has no branch/child rows yet (common offline).
     func childNoteSummariesForDetailSeed(parentNoteId: String) -> [ChildNoteSummary]? {
         guard let node = Self.findTreeNode(noteId: parentNoteId, in: rootChildren),

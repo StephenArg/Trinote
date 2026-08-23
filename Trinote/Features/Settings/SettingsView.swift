@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @AppStorage("appearanceMode") private var appearanceMode: String = AppearanceMode.device.rawValue
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
+    @AppStorage(AppDelegate.lockPortraitOrientationKey) private var lockPortraitOrientation = false
     @AppStorage("useCustomTextColor") private var useCustomTextColor: Bool = false
     @AppStorage("customLightTextColor") private var customLightTextColor: String = "#1c1c1e"
     @AppStorage("customDarkTextColor") private var customDarkTextColor: String = "#aaaaaa"
@@ -141,6 +142,14 @@ struct SettingsView: View {
                 showResetColorsConfirm = true
             }
             .foregroundStyle(.tint)
+
+            Toggle(
+                String(localized: "Lock Portrait Orientation", comment: "Settings: prevent landscape rotation"),
+                isOn: $lockPortraitOrientation
+            )
+            .onChange(of: lockPortraitOrientation) { _, _ in
+                AppDelegate.applyUserOrientationPreference()
+            }
         }
         .alert(String(localized: "Reset Colors to Default?", comment: "Settings alert title"), isPresented: $showResetColorsConfirm) {
             Button(String(localized: "Cancel", comment: "Alert dismiss"), role: .cancel) {}

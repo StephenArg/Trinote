@@ -178,6 +178,9 @@ struct TrinoteApp: App {
                     persistenceError = error.localizedDescription
                 }
             }
+            .onAppear {
+                AppDelegate.applyUserOrientationPreference()
+            }
         }
     }
 

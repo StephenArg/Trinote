@@ -2004,6 +2004,160 @@ final class NoteDetailViewModel {
         )
     }
 
+    /// Own, template, or inherited `#iconClass` for display.
+    func effectiveIconClass(for note: NoteItem) -> String? {
+        if let resolved = NoteIconClassResolver.effectiveIconClass(
+            noteId: note.noteId,
+            ownIconClass: note.iconClass,
+            templateRelationValue: note.templateRelationValue,
+            parentNoteProvider: { [self] parentId in
+                guard let profileId = serverProfileId else { return nil }
+                return persistence.parentNoteContextForIconWalk(noteId: parentId, serverProfileId: profileId)
+            },
+            templateIconClassProvider: { [self] target in
+                guard let profileId = serverProfileId else {
+                    return TriliumBuiltinTemplateIcons.iconClass(for: target)
+                }
+                return persistence.cachedTemplateIconClass(templateTarget: target, serverProfileId: profileId)
+            }
+        ) {
+            return resolved
+        }
+        guard let profileId = serverProfileId else { return note.resolvedIconClass }
+        return persistence.cachedEffectiveNoteIconClass(noteId: note.noteId, serverProfileId: profileId)
+            ?? note.resolvedIconClass
+    }
+
+    /// Sets or clears the Trilium `#color` label on this note.
+    @discardableResult
+    func setNoteColor(_ colorLabel: String?) async -> Bool {
+        let nid = noteId
+        guard let current = note else { return false }
+
+        let normalized = TriliumNoteColorMapper.canonicalColorLabel(from: colorLabel)
+
+        isSaving = true
+        defer { isSaving = false }
+
+        if let client, isOnline {
+            do {
+                if let existing = current.attributes.first(where: {
+                    $0.type == .label && $0.name.caseInsensitiveCompare("color") == .orderedSame
+                }) {
+                    try await client.deleteAttribute(noteId: nid, attributeId: existing.attributeId)
+                }
+                if let normalized {
+                    try await client.createAttribute(CreateAttributeRequest(
+                        noteId: nid,
+                        type: "label",
+                        name: "color",
+                        value: normalized,
+                        isInheritable: nil,
+                        position: nil
+                    ))
+                }
+                let updated = try await client.getNote(nid)
+                self.note = NoteItem(from: updated)
+                if let profileId = serverProfileId {
+                    persistNoteResponse(updated, profileId: profileId)
+                    try? persistence.commitBatch()
+                }
+                NotificationCenter.default.post(
+                    name: .trinoteTreeShouldRefresh,
+                    object: nil,
+                    userInfo: ["noteId": nid]
+                )
+                return true
+            } catch {
+                saveError = APIError.from(error).localizedDescription
+                showSaveError = true
+                return false
+            }
+        }
+
+        guard let profileId = serverProfileId else { return false }
+        do {
+            try persistence.setCachedColorLabel(normalized, noteId: nid, serverProfileId: profileId)
+            self.note = current.replacingColorLabel(normalized)
+            NotificationCenter.default.post(
+                name: .trinoteTreeShouldRefresh,
+                object: nil,
+                userInfo: ["noteId": nid]
+            )
+            return true
+        } catch {
+            saveError = error.localizedDescription
+            showSaveError = true
+            return false
+        }
+    }
+
+    /// Sets or clears the Trilium `#iconClass` label on this note.
+    @discardableResult
+    func setNoteIconClass(_ iconClass: String?) async -> Bool {
+        let nid = noteId
+        guard let current = note else { return false }
+
+        let trimmed = iconClass?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized: String? = {
+            guard let trimmed, !trimmed.isEmpty, trimmed != "bx bx-empty" else { return nil }
+            return BoxiconsResolver.usableIconClass(from: trimmed) ?? trimmed
+        }()
+
+        isSaving = true
+        defer { isSaving = false }
+
+        if let client, isOnline {
+            do {
+                if let existing = current.attributes.first(where: { $0.type == .label && $0.name == "iconClass" }) {
+                    try await client.deleteAttribute(noteId: nid, attributeId: existing.attributeId)
+                }
+                if let normalized {
+                    try await client.createAttribute(CreateAttributeRequest(
+                        noteId: nid,
+                        type: "label",
+                        name: "iconClass",
+                        value: normalized,
+                        isInheritable: nil,
+                        position: nil
+                    ))
+                }
+                let updated = try await client.getNote(nid)
+                self.note = NoteItem(from: updated)
+                if let profileId = serverProfileId {
+                    persistNoteResponse(updated, profileId: profileId)
+                    try? persistence.commitBatch()
+                }
+                NotificationCenter.default.post(
+                    name: .trinoteTreeShouldRefresh,
+                    object: nil,
+                    userInfo: ["noteId": nid]
+                )
+                return true
+            } catch {
+                saveError = APIError.from(error).localizedDescription
+                showSaveError = true
+                return false
+            }
+        }
+
+        guard let profileId = serverProfileId else { return false }
+        do {
+            try persistence.setCachedIconClass(normalized, noteId: nid, serverProfileId: profileId)
+            self.note = current.replacingIconClass(normalized)
+            NotificationCenter.default.post(
+                name: .trinoteTreeShouldRefresh,
+                object: nil,
+                userInfo: ["noteId": nid]
+            )
+            return true
+        } catch {
+            saveError = error.localizedDescription
+            showSaveError = true
+            return false
+        }
+    }
+
     /// Updates a code note’s MIME (language). Keeps `type` as `code` (Trilium’s model for Markdown too).
     func updateCodeNoteMime(_ mime: String) async {
         let nid = self.noteId
@@ -3673,8 +3827,4 @@ struct ChildNoteSummary: Identifiable, Sendable {
     let childCount: Int
 
     var id: String { noteId }
-
-    var resolvedIconName: String {
-        NoteIconMapper.sfSymbol(for: iconClass) ?? type.iconName
-    }
 }

@@ -33,7 +33,7 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertFalse(item.isTriliumCollectionNote)
         XCTAssertEqual(item.viewTypeLabelValue, "geoMap")
         XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.geoMap.displayName)
-        XCTAssertEqual(item.resolvedIconName, NoteType.geoMap.iconName)
+        XCTAssertEqual(item.iconFallbackNoteType.iconName, NoteType.geoMap.iconName)
     }
 
     func testSemanticGeoMapViewTypeCaseInsensitive() {
@@ -205,7 +205,7 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(geoAttrs.count, 9)
         XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "collection", value: "")))
         XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "viewType", value: "geoMap")))
-        XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx bx-map-alt")))
+        XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-map-alt")))
         XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "label", name: "subtreeHidden", value: "false")))
         XCTAssertTrue(geoAttrs.contains(NoteCreationAttribute(type: "relation", name: "template", value: "Geo Map")))
         XCTAssertEqual(geoAttrs.filter { $0.name == "hidePromotedAttributes" }.count, 2)
@@ -233,7 +233,7 @@ final class TreeLogicTests: XCTestCase {
             item.uiNoteTypeDisplayName,
             String(localized: "Collection", comment: "Note type: Trilium collection container")
         )
-        XCTAssertEqual(item.resolvedIconName, NoteType.collection.iconName)
+        XCTAssertEqual(item.iconFallbackNoteType.iconName, NoteType.collection.iconName)
     }
 
     /// List/Grid collections: Trilium often uses `~template=_template_list_view` with **no** `#collection` label.
@@ -278,7 +278,7 @@ final class TreeLogicTests: XCTestCase {
             item.uiNoteTypeDisplayName,
             String(localized: "Collection", comment: "Note type: Trilium collection container")
         )
-        XCTAssertEqual(item.resolvedIconName, NoteType.collection.iconName)
+        XCTAssertEqual(item.iconFallbackNoteType.iconName, NoteType.collection.iconName)
     }
 
     /// `type: collection` + `#viewType=geoMap` is still a semantic geo map, not a generic collection.
@@ -318,7 +318,7 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertFalse(item.isSemanticPresentation)
         XCTAssertFalse(item.isTriliumCollectionNote)
         XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.kanban.displayName)
-        XCTAssertEqual(item.resolvedIconName, NoteType.kanban.iconName)
+        XCTAssertEqual(item.iconFallbackNoteType.iconName, NoteType.kanban.iconName)
     }
 
     func testSemanticKanbanViewTypeCaseInsensitive() {
@@ -360,7 +360,7 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertFalse(item.isSemanticKanban)
         XCTAssertFalse(item.isTriliumCollectionNote)
         XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.presentation.displayName)
-        XCTAssertEqual(item.resolvedIconName, NoteType.presentation.iconName)
+        XCTAssertEqual(item.iconFallbackNoteType.iconName, NoteType.presentation.iconName)
     }
 
     func testSemanticPresentationTemplateRelation() {

@@ -247,10 +247,14 @@ struct SharedNotesManagementView: View {
                 Image(systemName: selectedIds.contains(note.noteId) ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(selectedIds.contains(note.noteId) ? Color.accentColor : Color.secondary)
             }
-            Image(systemName: note.resolvedIconName)
-                .foregroundStyle(color ?? .secondary)
-                .frame(width: 24)
-                .accessibilityHidden(true)
+            NoteIconView(
+                iconClass: note.resolvedIconClass,
+                fallbackNoteType: note.iconFallbackNoteType,
+                size: .regular,
+                foregroundStyle: color ?? .secondary
+            )
+            .frame(width: 24)
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayTitle)

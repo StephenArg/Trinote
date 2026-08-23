@@ -11,6 +11,31 @@ final class TriliumNoteColorMapperTests: XCTestCase {
         XCTAssertNil(TriliumNoteColorMapper.swiftUIColor(for: "   "))
     }
 
+    func testCanonicalColorLabelNormalizesHex() {
+        XCTAssertEqual(TriliumNoteColorMapper.canonicalColorLabel(from: "#f0a"), "#FF00AA")
+        XCTAssertEqual(TriliumNoteColorMapper.canonicalColorLabel(from: "#e64d4d"), "#E64D4D")
+        XCTAssertEqual(TriliumNoteColorMapper.canonicalColorLabel(from: "red"), "red")
+        XCTAssertNil(TriliumNoteColorMapper.canonicalColorLabel(from: "not_a_real_trilium_color_token"))
+        XCTAssertNil(TriliumNoteColorMapper.canonicalColorLabel(from: ""))
+    }
+
+    func testColorLabelsMatchHexCaseInsensitive() {
+        XCTAssertTrue(TriliumNoteColorMapper.colorLabelsMatch(current: "#E64D4D", option: "#e64d4d"))
+        XCTAssertTrue(TriliumNoteColorMapper.colorLabelsMatch(current: "red", option: "red"))
+        XCTAssertFalse(TriliumNoteColorMapper.colorLabelsMatch(current: "red", option: "blue"))
+    }
+
+    func testPickerPaletteIncludesTriliumDesktopDefaults() {
+        XCTAssertGreaterThan(TriliumNoteColorMapper.pickerPalette.count, 30)
+        XCTAssertEqual(TriliumNoteColorMapper.pickerPalette.first, "#e64d4d")
+        for entry in TriliumNoteColorMapper.pickerPalette {
+            XCTAssertNotNil(
+                TriliumNoteColorMapper.swiftUIColor(for: entry),
+                "picker entry should render: \(entry)"
+            )
+        }
+    }
+
     func testUnknownNameReturnsNil() {
         XCTAssertNil(TriliumNoteColorMapper.swiftUIColor(for: "not_a_real_trilium_color_token"))
     }

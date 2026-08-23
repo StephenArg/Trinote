@@ -1538,11 +1538,14 @@ struct TreeNodeRow: View {
         } label: {
             HStack(spacing: 8) {
                 ZStack(alignment: .bottomTrailing) {
-                    Image(systemName: node.note.resolvedIconName)
-                        .foregroundStyle(titleForegroundColor)
-                        .font(.callout)
-                        .frame(width: 20)
-                        .accessibilityHidden(true)
+                    NoteIconView(
+                        iconClass: viewModel.effectiveIconClass(for: node.note),
+                        fallbackNoteType: node.note.iconFallbackNoteType,
+                        size: .compact,
+                        foregroundStyle: titleForegroundColor
+                    )
+                    .frame(width: 20)
+                    .accessibilityHidden(true)
 
                     if node.note.isProtected {
                         Image(systemName: "lock.fill")

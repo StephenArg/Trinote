@@ -157,9 +157,13 @@ struct NotePickerSheet: View {
                             dismiss()
                         } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: note.resolvedIconName)
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 24)
+                                NoteIconView(
+                                    iconClass: note.resolvedIconClass,
+                                    fallbackNoteType: note.iconFallbackNoteType,
+                                    size: .regular,
+                                    foregroundStyle: .secondary
+                                )
+                                .frame(width: 24)
                                 Text(note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))
                                     .lineLimit(2)
                                 Spacer()

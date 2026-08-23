@@ -84,11 +84,12 @@ struct NoteTabsBar: View {
                             HStack(spacing: Self.tabGap) {
                                 ForEach(tabs) { tab in
                                     let title = displayTitle(for: tab)
-                                    let icon = rowIcon(for: tab)
+                                    let icon = rowIconContext(for: tab)
                                     let isDragging = draggingTabId == tab.id
                                     NoteTabCell(
                                         displayTitle: title,
-                                        systemImage: icon,
+                                        iconClass: icon.iconClass,
+                                        fallbackNoteType: icon.fallbackNoteType,
                                         isActive: currentOpenTabId != nil && tab.id == currentOpenTabId,
                                         width: tabW,
                                         reorderHandleWidth: Self.reorderHandleWidth,
@@ -230,16 +231,18 @@ struct NoteTabsBar: View {
         )
     }
 
-    private func rowIcon(for tab: OpenNoteTab) -> String {
+    private func rowIconContext(for tab: OpenNoteTab) -> NoteRowIconContext {
         if let profileId = appState.activeProfile?.id {
-            return PersistenceManager.shared.cachedNoteIconSystemName(
+            return PersistenceManager.shared.tabRowIconContext(
                 noteId: tab.noteId,
                 fallbackNoteType: tab.noteType,
                 serverProfileId: profileId
             )
         }
-        if let s = tab.listIconSystemName, !s.isEmpty { return s }
-        return (NoteType(rawValue: tab.noteType) ?? .text).iconName
+        return NoteRowIconContext(
+            iconClass: nil,
+            fallbackNoteType: NoteType(rawValue: tab.noteType) ?? .text
+        )
     }
 
     private func displayTitle(for tab: OpenNoteTab) -> String {
@@ -476,7 +479,8 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
 
 private struct NoteTabCell: View {
     let displayTitle: String
-    let systemImage: String
+    let iconClass: String?
+    let fallbackNoteType: NoteType
     let isActive: Bool
     let width: CGFloat
     let reorderHandleWidth: CGFloat
@@ -499,10 +503,13 @@ private struct NoteTabCell: View {
 
             Button(action: onTap) {
                 HStack(alignment: .center, spacing: 4) {
-                    Image(systemName: systemImage)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                        .frame(width: 16, alignment: .center)
+                    NoteIconView(
+                        iconClass: iconClass,
+                        fallbackNoteType: fallbackNoteType,
+                        size: .compact,
+                        foregroundStyle: isActive ? Color.accentColor : Color.secondary
+                    )
+                    .frame(width: 16, alignment: .center)
                     Text(displayTitle)
                         .font(.footnote)
                         .lineLimit(2)
