@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Shared login form (main screen + Add Instance sheet)
 
@@ -32,6 +33,15 @@ struct LoginFormContent: View {
             Button(String(localized: "OK", comment: "Dismiss alert")) { viewModel.showError = false }
         } message: {
             Text(viewModel.errorMessage ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
+        }
+        .fullScreenCover(isPresented: $viewModel.isWaitingForSafariHandoff) {
+            SSOSafariHandoffWaitingView(
+                onOpenSafariAgain: { viewModel.reopenSSOSafari() },
+                onCopySetupScript: {
+                    UIPasteboard.general.string = TriliumSSOHandoff.handlerNoteSource
+                },
+                onCancel: { viewModel.cancelSSOLogin() }
+            )
         }
         .sheet(isPresented: $viewModel.showTotpEntry) {
             TotpEntrySheet(viewModel: viewModel, appState: appState)
@@ -130,7 +140,40 @@ struct LoginFormContent: View {
             Toggle(String(localized: "Stay signed in (Remember me)", comment: "Login toggle"), isOn: $viewModel.rememberMe)
                 .font(.subheadline)
 
-            Text(String(localized: "TOTP is supported. SSO must be completed in the browser.", comment: "Login hint"))
+            Text(String(localized: "TOTP is supported for password sign-in.", comment: "Login hint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                VStack { Divider() }
+                Text(String(localized: "or", comment: "Login divider between password and SSO"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                VStack { Divider() }
+            }
+            .padding(.vertical, 4)
+
+            Button {
+                focusedField = nil
+                viewModel.beginSSOLogin(appState: appState, rejectIfServerAlreadyAdded: rejectIfServerAlreadyAdded)
+            } label: {
+                Group {
+                    if viewModel.isLoading {
+                        ProgressView()
+                    } else {
+                        Text(String(localized: "Sign in with SSO", comment: "SSO login button"))
+                            .fontWeight(.semibold)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(!viewModel.canSubmitSSO || viewModel.isLoading)
+            .accessibilityLabel(String(localized: "Sign in with SSO", comment: "VoiceOver"))
+
+            Text(String(localized: "Opens Safari for Authelia, Authentik, Keycloak, and other providers (Face ID and security keys work). After your notes load, return here and tap Continue. Requires a one-time custom request handler on your server.", comment: "SSO login hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -388,6 +431,11 @@ private struct SavedProfileRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if profile.authMethod == .sso {
+                        Text(String(localized: "SSO", comment: "Saved server uses SSO"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -399,9 +447,14 @@ private struct SavedProfileRow: View {
             Spacer()
 
             if !isActive {
-                Button(String(localized: "Connect", comment: "Login profile row"), action: onConnect)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                Button(
+                    profile.authMethod == .sso
+                        ? String(localized: "Sign in with SSO", comment: "Reconnect SSO profile")
+                        : String(localized: "Connect", comment: "Login profile row"),
+                    action: onConnect
+                )
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
 
             Button(role: .destructive) {
@@ -422,6 +475,66 @@ private struct SavedProfileRow: View {
         } message: {
             Text(String(localized: "This will remove the server profile and sign out. Your notes on the server will not be affected.", comment: "Remove profile message"))
         }
+    }
+}
+
+// MARK: - Safari SSO waiting
+
+private struct SSOSafariHandoffWaitingView: View {
+    let onOpenSafariAgain: () -> Void
+    let onCopySetupScript: () -> Void
+    let onCancel: () -> Void
+
+    @State private var didCopySetup = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                    Text(String(localized: "Complete sign-in in Safari", comment: "SSO Safari waiting title"))
+                        .font(.title3.bold())
+                        .frame(maxWidth: .infinity)
+                    Text(String(localized: "Safari should open your SSO sign-in page. Finish Face ID or your provider there. When your notes load, return here and tap Continue.", comment: "SSO Safari waiting body"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Button(String(localized: "Continue", comment: "SSO reopen Safari after sign-in"), action: onOpenSafariAgain)
+                        .buttonStyle(.borderedProminent)
+                        .frame(maxWidth: .infinity)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(String(localized: "First-time setup", comment: "SSO handoff setup heading"))
+                            .font(.headline)
+                        Text(String(localized: "If Safari says “No handler matched”, create a JS Backend note in Trilium, add the label below, paste the script, then try again.", comment: "SSO handoff setup steps"))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Text("#customRequestHandler=trinote-sso-handoff")
+                            .font(.footnote.monospaced())
+                            .textSelection(.enabled)
+                        Button {
+                            onCopySetupScript()
+                            didCopySetup = true
+                        } label: {
+                            Text(didCopySetup
+                                 ? String(localized: "Copied handler script", comment: "SSO setup copied")
+                                 : String(localized: "Copy handler script", comment: "SSO copy setup"))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle(String(localized: "Sign in with SSO", comment: "SSO sheet title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(String(localized: "Cancel", comment: "SSO cancel"), action: onCancel)
+                }
+            }
+        }
+        .interactiveDismissDisabled()
     }
 }
 

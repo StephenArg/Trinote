@@ -99,7 +99,10 @@ enum TriliumCookieArchive {
     }
 
     static func export(from storage: HTTPCookieStorage, for url: URL) -> Data? {
-        let cookies = storage.cookies(for: url) ?? []
+        export(cookies: storage.cookies(for: url) ?? [], for: url)
+    }
+
+    static func export(cookies: [HTTPCookie], for url: URL) -> Data? {
         guard !cookies.isEmpty else { return nil }
         var out: [[String: Any]] = []
         out.reserveCapacity(cookies.count)
@@ -185,6 +188,7 @@ actor TriliumClient: TriliumClientProtocol {
     private let accessHeaders: [String: String]?
     nonisolated let cloudflareAccessCredentials: CloudflareAccessCredentials?
     private let injectedProtocolClasses: [AnyClass]?
+    private let urlSessionDelegate: SameHostRedirectDelegate
 
     /// - Parameter urlSessionConfiguration: Optional config (e.g. tests with `URLProtocol`). Always wired to this client’s `httpCookieStorage`.
     init(
@@ -227,7 +231,9 @@ actor TriliumClient: TriliumClientProtocol {
         config.httpCookieAcceptPolicy = .always
 
         self.injectedProtocolClasses = urlSessionConfiguration?.protocolClasses
-        self.session = URLSession(configuration: config)
+        let delegate = SameHostRedirectDelegate(allowedHost: baseURL.host?.lowercased() ?? "")
+        self.urlSessionDelegate = delegate
+        self.session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
     private nonisolated static func clearCookies(in jar: HTTPCookieStorage, for baseURL: URL) {
@@ -585,7 +591,7 @@ actor TriliumClient: TriliumClientProtocol {
         for c in httpCookieStorage.cookies ?? [] {
             guard Self.cookieDomainMatchesHost(c.domain, host: host) else { continue }
             let name = c.name.lowercased()
-            guard name == "_csrf" || name == "csrf-token" else { continue }
+            guard name == "_csrf" || name == "csrf-token" || name == "trilium-csrf" else { continue }
             let raw = c.value.removingPercentEncoding ?? c.value
             guard let pipeIdx = raw.firstIndex(of: "|") else {
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1515,10 +1521,29 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     private func applyAccessHeaders(to request: inout URLRequest) {
+        applyJarCookies(to: &request)
         guard let accessHeaders else { return }
         for (name, value) in accessHeaders {
             request.setValue(value, forHTTPHeaderField: name)
         }
+    }
+
+    /// `HTTPCookieStorage.cookies(for:)` is unreliable for imported SSO cookies; send them explicitly.
+    private func applyJarCookies(to request: inout URLRequest) {
+        guard let url = request.url, let host = url.host?.lowercased() else { return }
+        let fromURL = httpCookieStorage.cookies(for: url) ?? []
+        let fromHost = (httpCookieStorage.cookies ?? []).filter {
+            Self.cookieDomainMatchesHost($0.domain, host: host)
+        }
+        var seen = Set<String>()
+        var parts: [String] = []
+        for cookie in fromURL + fromHost {
+            let key = cookie.name.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            parts.append("\(cookie.name)=\(cookie.value)")
+        }
+        guard !parts.isEmpty else { return }
+        request.setValue(parts.joined(separator: "; "), forHTTPHeaderField: "Cookie")
     }
 
     private static func makeURL(baseURL: URL, path: String, queryParams: [String: String]?) throws -> URL {
@@ -1701,19 +1726,15 @@ fileprivate enum TriliumCookieResponseParser {
         }
 
         let parsed = HTTPCookie.cookies(withResponseHeaderFields: headerDict, for: url)
-        let normalized = normalizeCookiesForSharedJar(parsed, requestURL: url)
+        let normalized = TriliumCookieNormalizer.normalizeForSharedJar(parsed, requestURL: url)
         jar.setCookies(normalized, for: url, mainDocumentURL: url)
         for c in normalized {
             jar.setCookie(c)
         }
     }
 
-    /// Parses `_csrf=value` directly from the raw `Set-Cookie` header and stores it.
-    /// This bypasses `HTTPCookie.cookies(withResponseHeaderFields:for:)` which drops
-    /// `_csrf` when multiple cookies with comma-containing `Expires` dates are collapsed.
-    /// Parses `_csrf=value` directly from raw `Set-Cookie` header and stores it,
-    /// bypassing `HTTPCookie.cookies()` which drops `_csrf` when multiple cookies
-    /// with comma-containing `Expires` dates are collapsed into one header.
+    /// Parses `_csrf=value` from raw `Set-Cookie`. `HTTPCookie.cookies()` can drop it
+    /// when multiple cookies with comma-containing `Expires` dates are collapsed.
     static func manuallyStoreCsrfCookie(from response: HTTPURLResponse, in jar: HTTPCookieStorage) {
         guard let url = response.url, let host = url.host?.lowercased() else { return }
         var rawSetCookie: String?
@@ -1745,36 +1766,36 @@ fileprivate enum TriliumCookieResponseParser {
         }
     }
 
-    /// Parsed cookies often use a `Path` scoped to `/login` (or odd `Domain`); `HTTPCookieStorage.cookies(for: https://host/)` then returns **zero**, so `GET /` sends no session.
-    private static func normalizeCookiesForSharedJar(_ parsed: [HTTPCookie], requestURL: URL) -> [HTTPCookie] {
-        guard let host = requestURL.host?.lowercased() else { return parsed }
-        let https = requestURL.scheme?.lowercased() == "https"
+}
 
-        return parsed.compactMap { original in
-            var props: [HTTPCookiePropertyKey: Any] = [
-                .name: original.name,
-                .value: original.value,
-                .domain: host,
-                .path: "/"
-            ]
-            if https {
-                props[.secure] = "TRUE"
-            }
-            if let orig = original.properties {
-                if let expires = orig[.expires] {
-                    props[.expires] = expires
-                }
-                if let maxAge = orig[.maximumAge] {
-                    props[.maximumAge] = maxAge
-                }
-                if let version = orig[.version] {
-                    props[.version] = version
-                }
-                // Intentionally omit SameSite: iOS may refuse to send SameSite=Strict
-                // cookies from a native app, breaking CSRF double-submit validation.
-            }
-            return HTTPCookie(properties: props) ?? original
+/// Follows redirects only on the Trilium host. Authelia/Cloudflare login hops otherwise loop.
+private final class SameHostRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    private let allowedHost: String
+
+    init(allowedHost: String) {
+        self.allowedHost = allowedHost.lowercased()
+        super.init()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let host = request.url?.host?.lowercased(), host == allowedHost else {
+            Log.auth.debug("SSO/API blocked off-host redirect to \(request.url?.host ?? "nil")")
+            completionHandler(nil)
+            return
         }
+        let path = request.url?.path.lowercased() ?? ""
+        if path == "/login" || path.hasPrefix("/login/") {
+            Log.auth.debug("SSO/API stopped redirect to login page")
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }
 

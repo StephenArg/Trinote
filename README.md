@@ -55,10 +55,26 @@ Select an iOS 17+ simulator or device and press **Cmd+R**.
 
 ## Connecting to a Server
 
+### Password sign-in
+
 1. Enter your server URL (same origin you use in the browser)
 2. Enter your Trilium **password** (same as the web UI)
 3. Optional: **Remember me** — matches Trilium’s longer-lived session cookie
-4. **TOTP / SSO**: complete login in the browser first if your server requires it
+4. **TOTP** is supported for password sign-in
+
+### SSO sign-in (OpenID / OAuth)
+
+If your Trilium server uses **built-in OAuth/OpenID** (Authelia, Authentik, Keycloak, PocketID, Google OIDC, etc.), see **[docs/sso-setup.md](docs/sso-setup.md)** for the full user setup guide (one-time server handler + app sign-in flow).
+
+Short version:
+
+1. Add the `trinote-sso-handoff` custom request handler on your Trilium server (script in `docs/trinote-sso-handoff.js`).
+2. In Trinote, enter your server URL and tap **Sign in with SSO**.
+3. Complete sign-in in Safari, return to Trinote, tap **Continue**.
+
+Optional: **Cloudflare Access** service-token credentials under Advanced if API calls still need them after handoff.
+
+Protected notes still require your Trilium **document password** after sign-in — SSO only replaces server login.
 
 ### Self-signed certificates
 

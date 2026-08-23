@@ -28,7 +28,7 @@ enum APIError: LocalizedError, Sendable {
         case .invalidResponse:
             return "Received an invalid response from the server."
         case .unauthorized:
-            return "Authentication failed. Check your password or sign in again in the browser if you use SSO."
+            return "Authentication failed. Check your password, sign in with SSO again, or complete login in the browser if your server requires it."
         case .notFound(let resource):
             return "Not found: \(resource)"
         case .serverError(let code, let message):
@@ -49,7 +49,7 @@ enum APIError: LocalizedError, Sendable {
         case .totpInvalid:
             return "TOTP code is incorrect. Please try again."
         case .noToken:
-            return "Not signed in. Please log in with your Trilium password."
+            return "Not signed in. Please log in with your Trilium password or SSO."
         case .connectionRefused:
             return "Connection refused. Check the server address and ensure Trilium is running."
         case .cancelled:

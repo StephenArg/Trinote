@@ -17,8 +17,16 @@ final class AuthViewModel {
     var showError = false
     var profiles: [ServerProfile] = []
 
-    /// Set to `true` after a successful `login` / `submitTotp` so sheets (e.g. Add Instance) can dismiss.
+    /// Set to `true` after a successful `login` / `submitTotp` / SSO so sheets (e.g. Add Instance) can dismiss.
     var didFinishSuccessfulLogin = false
+
+    /// Waiting for Safari to redirect back via `trinote://sso-complete`.
+    var isWaitingForSafariHandoff = false
+    /// Context for the in-progress Safari SSO login.
+    var ssoBaseURL: URL?
+    var ssoCloudflareCredentials: CloudflareAccessCredentials?
+    var ssoPendingProfile: ServerProfile?
+    var ssoRejectIfServerAlreadyAdded = false
 
     /// TOTP / MFA state
     var totpCode = ""
@@ -27,6 +35,7 @@ final class AuthViewModel {
     private var pendingTotpProfile: ServerProfile?
 
     private let persistence = PersistenceManager.shared
+    private let keychain = KeychainManager.shared
 
     enum URLScheme: String, CaseIterable {
         case https = "https://"
@@ -50,6 +59,10 @@ final class AuthViewModel {
         return hasServer && !password.isEmpty
     }
 
+    var canSubmitSSO: Bool {
+        !serverURL.trimmingCharacters(in: .whitespaces).isEmpty && !isLoading
+    }
+
     func loadProfiles() {
         do {
             profiles = try persistence.fetchServerProfiles()
@@ -71,6 +84,150 @@ final class AuthViewModel {
             urlScheme = .https
             serverURL = url
         }
+    }
+
+    func fillCloudflareFromKeychain(profile: ServerProfile) async {
+        if let existing = try? await keychain.loadCloudflareAccessCredentials(forServer: profile.id) {
+            cloudflareClientId = existing.clientId
+            cloudflareClientSecret = existing.clientSecret
+        }
+    }
+
+    private var activeSSOService: TriliumSSOSafariHandoffLoginService?
+
+    func beginSSOLogin(appState: AppState, rejectIfServerAlreadyAdded: Bool = false) {
+        let displayName = serverName.nilIfEmpty ?? serverURL
+        let profile = findOrCreateProfile(name: displayName, url: fullServerURL)
+        guard let url = profile.url else {
+            errorMessage = APIError.invalidURL.localizedDescription
+            showError = true
+            return
+        }
+
+        if let validationError = CloudflareAccessValidation.errorMessage(
+            clientId: cloudflareClientId,
+            clientSecret: cloudflareClientSecret
+        ) {
+            errorMessage = validationError
+            showError = true
+            return
+        }
+
+        ssoPendingProfile = profile
+        ssoBaseURL = url
+        ssoCloudflareCredentials = cloudflareCredentialsFromForm()
+        ssoRejectIfServerAlreadyAdded = rejectIfServerAlreadyAdded
+
+        Task { await runSSO(appState: appState) }
+    }
+
+    func beginSSOLogin(for profile: ServerProfile, appState: AppState) async {
+        fillFromProfile(profile)
+        await fillCloudflareFromKeychain(profile: profile)
+        ssoPendingProfile = profile
+        ssoBaseURL = profile.url
+        ssoCloudflareCredentials = cloudflareCredentialsFromForm()
+        ssoRejectIfServerAlreadyAdded = false
+
+        guard let url = profile.url else {
+            errorMessage = APIError.invalidURL.localizedDescription
+            showError = true
+            return
+        }
+
+        await runSSO(appState: appState)
+    }
+
+    func reopenSSOSafari() {
+        activeSSOService?.reopenSafari()
+    }
+
+    private func runSSO(appState: AppState) async {
+        guard let url = ssoBaseURL else { return }
+
+        isWaitingForSafariHandoff = true
+        errorMessage = nil
+        var keepWaitingCover = false
+        defer {
+            if !keepWaitingCover {
+                isWaitingForSafariHandoff = false
+                activeSSOService = nil
+            }
+        }
+
+        let service = TriliumSSOSafariHandoffLoginService(
+            baseURL: url,
+            cloudflareAccessCredentials: ssoCloudflareCredentials
+        )
+        activeSSOService = service
+
+        do {
+            let cookieData = try await service.performLogin()
+            await completeImportedSSOLogin(cookieData: cookieData, appState: appState)
+        } catch let error as SSOLoginError where error == .cancelled {
+            Log.auth.info("SSO cancelled by user")
+        } catch let error as SSOLoginError where error == .staleSafariSession {
+            keepWaitingCover = true
+            errorMessage = error.localizedDescription
+            showError = true
+            Log.auth.info("SSO stale Safari session — waiting for user to retry")
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            showError = true
+            Log.auth.error("SSO login failed: \(error)")
+        }
+    }
+
+    private func completeImportedSSOLogin(cookieData: Data, appState: AppState) async {
+        didFinishSuccessfulLogin = false
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        guard let profile = ssoPendingProfile else { return }
+
+        if ssoRejectIfServerAlreadyAdded {
+            loadProfiles()
+            let normalizedInput = profile.normalizedBaseURL
+            if profiles.contains(where: { $0.normalizedBaseURL == normalizedInput && $0.id != profile.id }) {
+                errorMessage = String(
+                    localized: "You are already signed in to this server. Switch to it under Settings → Instances, or sign it out there before adding it again.",
+                    comment: "Error when Add Instance URL matches an existing profile"
+                )
+                showError = true
+                return
+            }
+        }
+
+        do {
+            try await appState.loginWithImportedSession(
+                cookieData: cookieData,
+                profile: profile,
+                cloudflareAccessCredentials: ssoCloudflareCredentials,
+                authMethod: .sso
+            )
+            cloudflareClientSecret = ""
+            loadProfiles()
+            didFinishSuccessfulLogin = true
+        } catch let pe as PersistenceError {
+            errorMessage = pe.localizedDescription
+            showError = true
+        } catch let error as KeychainError {
+            errorMessage = error.localizedDescription
+            showError = true
+        } catch {
+            errorMessage = APIError.from(error).localizedDescription
+            showError = true
+            Log.auth.error("SSO login failed: \(error)")
+        }
+    }
+
+    func cancelSSOLogin() {
+        activeSSOService?.cancel()
+        isWaitingForSafariHandoff = false
+        ssoBaseURL = nil
+        ssoCloudflareCredentials = nil
+        ssoPendingProfile = nil
     }
 
     func login(appState: AppState, rejectIfServerAlreadyAdded: Bool = false) async {
@@ -182,6 +339,13 @@ final class AuthViewModel {
 
         do {
             try await appState.activateProfile(profile)
+        } catch let apiError as APIError where apiError.isAuthError {
+            if profile.authMethod == .sso {
+                await beginSSOLogin(for: profile, appState: appState)
+            } else {
+                errorMessage = apiError.localizedDescription
+                showError = true
+            }
         } catch {
             errorMessage = APIError.from(error).localizedDescription
             showError = true

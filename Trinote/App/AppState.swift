@@ -1058,6 +1058,45 @@ final class AppState {
         )
         try await newClient.login(password: password, rememberMe: rememberMe, totpToken: totpToken)
 
+        try await finalizeSuccessfulLogin(
+            profile: profile,
+            client: newClient,
+            cloudflareAccessCredentials: cloudflareAccessCredentials,
+            authMethod: .password
+        )
+    }
+
+    func loginWithImportedSession(
+        cookieData: Data,
+        profile: ServerProfile,
+        cloudflareAccessCredentials: CloudflareAccessCredentials?,
+        authMethod: ServerAuthMethod
+    ) async throws {
+        guard let url = profile.url else { throw APIError.invalidURL }
+
+        try await keychain.clearServerAuthArtifacts(forServer: profile.id)
+        let newClient = await makeTriliumClient(
+            baseURL: url,
+            profileId: profile.id,
+            persistedCookieData: cookieData,
+            pendingCloudflareAccessCredentials: cloudflareAccessCredentials
+        )
+        try await restoreSessionWithTimeout(client: newClient, seconds: 12)
+
+        try await finalizeSuccessfulLogin(
+            profile: profile,
+            client: newClient,
+            cloudflareAccessCredentials: cloudflareAccessCredentials,
+            authMethod: authMethod
+        )
+    }
+
+    private func finalizeSuccessfulLogin(
+        profile: ServerProfile,
+        client newClient: TriliumClient,
+        cloudflareAccessCredentials: CloudflareAccessCredentials?,
+        authMethod: ServerAuthMethod
+    ) async throws {
         if activeProfile?.id != profile.id {
             NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
             tabNavigationResetGeneration += 1
@@ -1069,6 +1108,7 @@ final class AppState {
         try? await keychain.saveSessionCookies(exportedLogin, forServer: profile.id)
         _ = try await triliumInstanceId(for: profile)
 
+        profile.authMethod = authMethod
         try persistence.saveProfile(profile)
         if let cloudflareAccessCredentials {
             try await keychain.saveCloudflareAccessCredentials(cloudflareAccessCredentials, forServer: profile.id)
@@ -1082,7 +1122,7 @@ final class AppState {
         self.lastRefreshed = .now
         self.serverAppInfo = await newClient.lastFetchedAppInfo
         try persistence.setActiveProfile(profile)
-        Log.auth.info("Logged in to \(profile.name) (session)")
+        Log.auth.info("Logged in to \(profile.name) (session, \(authMethod.rawValue))")
         syncManager.restoreSyncState(profileId: profile.id)
         _ = try await triliumInstanceId(for: profile)
         await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
@@ -1179,8 +1219,9 @@ final class AppState {
         }
     }
 
-    /// Handles `trinote://` URLs opened by the Share Extension (or elsewhere).
+    /// Handles `trinote://` URLs opened by the Share Extension or Safari SSO handoff.
     func handleIncomingURL(_ url: URL) {
+        if SSOHandoffInbox.deliver(url) { return }
         shareImport.handleOpenURL(url)
     }
 

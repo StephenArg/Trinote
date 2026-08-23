@@ -9,6 +9,13 @@ final class ServerProfile {
     var isActive: Bool
     var dateAdded: Date
     var lastConnected: Date?
+    /// How the user last signed in — used to offer SSO reconnect when the session expires.
+    var authMethodRaw: String = ServerAuthMethod.password.rawValue
+
+    var authMethod: ServerAuthMethod {
+        get { ServerAuthMethod(rawValue: authMethodRaw) ?? .password }
+        set { authMethodRaw = newValue.rawValue }
+    }
 
     init(
         id: String = UUID().uuidString,
@@ -16,7 +23,8 @@ final class ServerProfile {
         baseURL: String,
         isActive: Bool = false,
         dateAdded: Date = .now,
-        lastConnected: Date? = nil
+        lastConnected: Date? = nil,
+        authMethod: ServerAuthMethod = .password
     ) {
         self.id = id
         self.name = name
@@ -24,6 +32,7 @@ final class ServerProfile {
         self.isActive = isActive
         self.dateAdded = dateAdded
         self.lastConnected = lastConnected
+        self.authMethodRaw = authMethod.rawValue
     }
 
     var url: URL? {
