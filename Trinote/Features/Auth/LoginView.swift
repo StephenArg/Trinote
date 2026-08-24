@@ -27,7 +27,7 @@ struct LoginFormContent: View {
             serverForm
             credentialForm
             advancedForm
-            loginButton
+            actionButtons
         }
         .alert(String(localized: "Error", comment: "Login error"), isPresented: $viewModel.showError) {
             Button(String(localized: "OK", comment: "Dismiss alert")) { viewModel.showError = false }
@@ -143,39 +143,6 @@ struct LoginFormContent: View {
             Text(String(localized: "TOTP is supported for password sign-in.", comment: "Login hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            HStack {
-                VStack { Divider() }
-                Text(String(localized: "or", comment: "Login divider between password and SSO"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                VStack { Divider() }
-            }
-            .padding(.vertical, 4)
-
-            Button {
-                focusedField = nil
-                viewModel.beginSSOLogin(appState: appState, rejectIfServerAlreadyAdded: rejectIfServerAlreadyAdded)
-            } label: {
-                Group {
-                    if viewModel.isLoading {
-                        ProgressView()
-                    } else {
-                        Text(String(localized: "Sign in with SSO", comment: "SSO login button"))
-                            .fontWeight(.semibold)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .disabled(!viewModel.canSubmitSSO || viewModel.isLoading)
-            .accessibilityLabel(String(localized: "Sign in with SSO", comment: "VoiceOver"))
-
-            Text(String(localized: "Opens Safari for Authelia, Authentik, Keycloak, and other providers (Face ID and security keys work). After your notes load, return here and tap Continue. Requires a one-time custom request handler on your server.", comment: "SSO login hint"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .textFieldStyle(.roundedBorder)
     }
@@ -210,27 +177,56 @@ struct LoginFormContent: View {
         .textFieldStyle(.roundedBorder)
     }
 
-    private var loginButton: some View {
-        Button {
-            focusedField = nil
-            Task { await viewModel.login(appState: appState, rejectIfServerAlreadyAdded: rejectIfServerAlreadyAdded) }
-        } label: {
-            Group {
-                if viewModel.isLoading {
-                    ProgressView()
-                        .tint(.white)
-                } else {
-                    Text(String(localized: "Connect", comment: "Login button"))
-                        .fontWeight(.semibold)
+    private var actionButtons: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Button {
+                    focusedField = nil
+                    viewModel.beginSSOLogin(appState: appState, rejectIfServerAlreadyAdded: rejectIfServerAlreadyAdded)
+                } label: {
+                    Group {
+                        if viewModel.isLoading {
+                            ProgressView()
+                        } else {
+                            Text(String(localized: "Sign in with SSO", comment: "SSO login button"))
+                                .fontWeight(.semibold)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!viewModel.canSubmitSSO || viewModel.isLoading)
+                .accessibilityLabel(String(localized: "Sign in with SSO", comment: "VoiceOver"))
+
+                Button {
+                    focusedField = nil
+                    Task { await viewModel.login(appState: appState, rejectIfServerAlreadyAdded: rejectIfServerAlreadyAdded) }
+                } label: {
+                    Group {
+                        if viewModel.isLoading {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Text(String(localized: "Connect", comment: "Login button"))
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!viewModel.canSubmit || viewModel.isLoading)
+                .accessibilityLabel(String(localized: "Connect to server", comment: "VoiceOver"))
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
+
+            Text(String(localized: "Opens Safari for Authelia, Authentik, Keycloak, and other providers (Face ID and security keys work). After your notes load, return here and tap Continue. Requires a one-time custom request handler on your server.", comment: "SSO login hint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .disabled(!viewModel.canSubmit || viewModel.isLoading)
-        .accessibilityLabel(String(localized: "Connect to server", comment: "VoiceOver"))
     }
 }
 

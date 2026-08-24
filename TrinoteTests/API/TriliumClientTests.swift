@@ -30,7 +30,8 @@ final class TriliumClientTests: XCTestCase {
 
     private func makeClient(
         persistedCookies: Data? = nil,
-        cloudflareAccessCredentials: CloudflareAccessCredentials? = nil
+        cloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
+        skipBootstrapWithoutOIDCSession: Bool = false
     ) -> TriliumClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
@@ -38,7 +39,8 @@ final class TriliumClientTests: XCTestCase {
             baseURL: URL(string: "https://trilium.test")!,
             persistedCookieData: persistedCookies,
             cloudflareAccessCredentials: cloudflareAccessCredentials,
-            urlSessionConfiguration: config
+            urlSessionConfiguration: config,
+            skipBootstrapWithoutOIDCSession: skipBootstrapWithoutOIDCSession
         )
     }
 
@@ -50,6 +52,15 @@ final class TriliumClientTests: XCTestCase {
 
     private let appInfoJSON = #"{"appVersion":"0.95.0","dbVersion":228}"#
 
+    /// OIDC `appSession` cookie so `restoreSession()` may call `/bootstrap` for CSRF when needed.
+    private func oidcSessionCookieData() -> Data {
+        let cookie = HTTPCookie(properties: [
+            .domain: "trilium.test", .path: "/", .name: "appSession",
+            .value: "oidc-session", .version: 0
+        ])!
+        return TriliumCookieArchive.export(cookies: [cookie], for: URL(string: "https://trilium.test")!)!
+    }
+
     /// Standard response for `/bootstrap` on v0.101 servers (not found).
     private func bootstrapNotFound(_ request: URLRequest) -> (HTTPURLResponse, Data) {
         (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
@@ -57,7 +68,7 @@ final class TriliumClientTests: XCTestCase {
 
     // MARK: - Session + CSRF (v0.102+ bootstrap)
 
-    /// v0.102+: `GET /bootstrap` returns JSON with `csrfToken`.
+    /// v0.102+: `GET /bootstrap` returns JSON with `csrfToken` when the OIDC appSession cookie is present.
     func testRestoreSessionUsesCsrfFromBootstrapJSON() async throws {
         MockURLProtocol.requestHandler = { [appInfoJSON] request in
             let path = request.url?.path ?? ""
@@ -72,7 +83,7 @@ final class TriliumClientTests: XCTestCase {
             return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
         }
 
-        let client = makeClient()
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
         try await client.restoreSession()
         _ = try await client.getAppInfo()
     }
@@ -181,6 +192,31 @@ final class TriliumClientTests: XCTestCase {
         _ = try await client.getAppInfo()
     }
 
+    /// v0.105+: `Set-Cookie: trilium-csrf=token|hash` must be parsed (csrf-csrf v4 cookie name).
+    func testRestoreSessionExtractsTriliumCsrfFromSetCookieHeader() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+            }
+            if path.isEmpty || path == "/" {
+                let html = "<html><head><title>Trilium Notes</title></head><body><script type=\"module\" crossorigin src=\"/assets/index.js\"></script></body></html>"
+                let headers = [
+                    "Set-Cookie": "trilium.sid=s%3Aabc.xyz; Path=/; Expires=Thu, 01 Jan 2099 00:00:00 GMT; HttpOnly; SameSite=Strict, trilium-csrf=triliumTok42|triliumHash99; Path=/; HttpOnly; SameSite=Strict"
+                ]
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!, Data(html.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        try await client.restoreSession()
+        _ = try await client.getAppInfo()
+    }
+
     /// When neither /bootstrap, HTML, nor cookies contain a token, restore
     /// should still succeed (server may not require CSRF).
     func testRestoreSessionSucceedsWithoutCsrf() async throws {
@@ -274,7 +310,7 @@ final class TriliumClientTests: XCTestCase {
             return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
         }
 
-        let client = makeClient()
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
         try await client.restoreSession()
         let note = try await client.getNote("abc")
         XCTAssertEqual(note.noteId, "abc")
@@ -303,7 +339,7 @@ final class TriliumClientTests: XCTestCase {
             return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
         }
 
-        let client = makeClient()
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
         try await client.restoreSession()
         let res = try await client.searchNotes(query: "hello", fastSearch: false, includeArchived: false, ancestorNoteId: nil, orderBy: nil, orderDirection: nil, limit: 10)
         XCTAssertEqual(res.results.count, 0)
@@ -585,7 +621,7 @@ final class TriliumClientTests: XCTestCase {
             return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
         }
 
-        let client = makeClient()
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
         try await client.restoreSession()
         _ = try await client.getAppInfo()
     }
@@ -607,7 +643,7 @@ final class TriliumClientTests: XCTestCase {
             return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
         }
 
-        let client = makeClient(cloudflareAccessCredentials: credentials)
+        let client = makeClient(persistedCookies: oidcSessionCookieData(), cloudflareAccessCredentials: credentials)
         try await client.restoreSession()
         _ = try await client.getAppInfo()
     }

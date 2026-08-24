@@ -47,6 +47,8 @@ Copy the handler script from one of these places:
 
 Paste the full script into the JS backend note and save.
 
+**After upgrading Trilium to v0.105 or newer**, paste the script again even if SSO worked before. v0.105 tightened SSO session checks; the current handler validates via `/api/app-info` (not `/bootstrap`) and refreshes cookies before opening Trinote.
+
 ### 4. Confirm it works
 
 In Safari on your phone (or any browser), open:
@@ -104,7 +106,7 @@ This is only needed when API calls from the app require those headers in additio
 | Symptom | What to try |
 |--------|-------------|
 | Safari says **“No handler matched”** | Create the JS backend note, set `#customRequestHandler=trinote-sso-handoff`, paste the latest script, save. |
-| Jumps to **“Opening Trinote…”** but the app says authentication failed | Safari had an old cookie. Update the handler script (recent versions verify the session first), then tap **Continue** in the app to sign in again. |
+| Jumps to **“Opening Trinote…”** but the app says authentication failed | Safari had an old cookie, or the handler script is outdated. On Trilium **v0.105+**, re-copy the latest handler script, then tap **Continue** in the app to sign in again. |
 | Stuck on **“Taking you to sign-in…”** | Confirm Trilium OAuth works in Safari at your server URL. Check Trilium logs and your IdP redirect URI (`https://<your-server>/callback`). |
 | **Too many redirects** | Often Cloudflare Access or a proxy loop. Add Access service-token credentials under **Advanced**, or fix proxy auth so `/api/app-info` is reachable after login. |
 | Face ID never appears | You must use **Sign in with SSO** (Safari). In-app browsers cannot run WebAuthn reliably. |
@@ -118,7 +120,7 @@ iOS does not let apps read Safari’s cookies. Trinote therefore:
 
 1. Opens Safari to your server’s handoff page.
 2. You sign in with your normal SSO flow in Safari.
-3. The handoff script checks that the Trilium session is valid, then opens `trinote://sso-complete` with the session cookies.
+3. The handoff script checks that the Trilium session is valid via `/api/app-info`, reloads once to capture fresh cookies, then opens `trinote://sso-complete` with the session cookies.
 4. Trinote stores those cookies and uses them like a normal Trilium web session.
 
 The handoff page must **link** to `trinote://` (user tap or JavaScript `location.href`). An HTTP redirect to a custom URL scheme is unreliable behind some proxies.

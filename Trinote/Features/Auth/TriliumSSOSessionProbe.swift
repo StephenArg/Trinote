@@ -10,7 +10,8 @@ enum TriliumSSOSessionProbe {
             baseURL: baseURL,
             persistedCookieData: cookieData,
             cloudflareAccessCredentials: cloudflareAccessCredentials,
-            urlSessionConfiguration: URLSessionConfiguration.ephemeral
+            urlSessionConfiguration: URLSessionConfiguration.ephemeral,
+            skipBootstrapWithoutOIDCSession: true
         )
         try await probeClient.restoreSession()
     }

@@ -29,22 +29,59 @@ final class TriliumClientImportedSessionTests: XCTestCase {
 
     private let appInfoJSON = #"{"appVersion":"0.102.0","dbVersion":228}"#
 
-    private func makeSessionCookieData() -> Data {
-        let props: [HTTPCookiePropertyKey: Any] = [
+    private func makeSessionCookieData(includeCsrf: Bool = false) -> Data {
+        var cookies: [HTTPCookie] = []
+        cookies.append(HTTPCookie(properties: [
             .name: "trilium.sid",
             .value: "imported-session",
             .domain: "trilium.test",
             .path: "/",
-        ]
-        let cookie = HTTPCookie(properties: props)!
-        return TriliumCookieArchive.export(cookies: [cookie], for: URL(string: "https://trilium.test")!)!
+        ])!)
+        if includeCsrf {
+            cookies.append(HTTPCookie(properties: [
+                .name: "trilium-csrf",
+                .value: "imported-csrf|hash",
+                .domain: "trilium.test",
+                .path: "/",
+            ])!)
+        }
+        return TriliumCookieArchive.export(cookies: cookies, for: URL(string: "https://trilium.test")!)!
     }
 
     func testRestoreSessionWithImportedCookies() async throws {
         MockURLProtocol.requestHandler = { [appInfoJSON] request in
             let path = request.url?.path ?? ""
             if path.hasSuffix("/bootstrap") {
-                let json = #"{"csrfToken":"boot_csrf","device":"mobile","triliumVersion":"0.102.0"}"#
+                XCTFail("restoreSession must not call /bootstrap without appSession (v0.105 SSO)")
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let client = TriliumClient(
+            baseURL: URL(string: "https://trilium.test")!,
+            persistedCookieData: makeSessionCookieData(includeCsrf: true),
+            urlSessionConfiguration: config,
+            skipBootstrapWithoutOIDCSession: true
+        )
+        try await client.restoreSession()
+        let sessionValid = await client.isSessionValid
+        XCTAssertTrue(sessionValid)
+    }
+
+    /// v0.105 SSO: unauthenticated `/bootstrap` must not be required when `/api/app-info` succeeds.
+    func testRestoreSessionSkipsBootstrapOnV105SSOWithoutAppSession() async throws {
+        var bootstrapCalled = false
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                bootstrapCalled = true
+                let json = #"{"loggedIn":false,"login":{"ssoEnabled":true},"triliumVersion":"0.105.0"}"#
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
             }
             if path.contains("api/app-info") {
@@ -58,10 +95,12 @@ final class TriliumClientImportedSessionTests: XCTestCase {
         config.protocolClasses = [MockURLProtocol.self]
         let client = TriliumClient(
             baseURL: URL(string: "https://trilium.test")!,
-            persistedCookieData: makeSessionCookieData(),
-            urlSessionConfiguration: config
+            persistedCookieData: makeSessionCookieData(includeCsrf: true),
+            urlSessionConfiguration: config,
+            skipBootstrapWithoutOIDCSession: true
         )
         try await client.restoreSession()
+        XCTAssertFalse(bootstrapCalled)
         let sessionValid = await client.isSessionValid
         XCTAssertTrue(sessionValid)
     }

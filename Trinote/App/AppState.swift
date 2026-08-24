@@ -766,7 +766,8 @@ final class AppState {
         baseURL: URL,
         profileId: String,
         persistedCookieData: Data?,
-        pendingCloudflareAccessCredentials: CloudflareAccessCredentials? = nil
+        pendingCloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
+        skipBootstrapWithoutOIDCSession: Bool? = nil
     ) async -> TriliumClient {
         let cfCredentials: CloudflareAccessCredentials?
         if let pendingCloudflareAccessCredentials {
@@ -774,10 +775,19 @@ final class AppState {
         } else {
             cfCredentials = try? await keychain.loadCloudflareAccessCredentials(forServer: profileId)
         }
+        let skipBootstrap: Bool
+        if let skipBootstrapWithoutOIDCSession {
+            skipBootstrap = skipBootstrapWithoutOIDCSession
+        } else if let profile = (try? persistence.fetchServerProfiles())?.first(where: { $0.id == profileId }) {
+            skipBootstrap = profile.authMethod == .sso
+        } else {
+            skipBootstrap = false
+        }
         return TriliumClient(
             baseURL: baseURL,
             persistedCookieData: persistedCookieData,
-            cloudflareAccessCredentials: cfCredentials
+            cloudflareAccessCredentials: cfCredentials,
+            skipBootstrapWithoutOIDCSession: skipBootstrap
         )
     }
 
@@ -1079,7 +1089,8 @@ final class AppState {
             baseURL: url,
             profileId: profile.id,
             persistedCookieData: cookieData,
-            pendingCloudflareAccessCredentials: cloudflareAccessCredentials
+            pendingCloudflareAccessCredentials: cloudflareAccessCredentials,
+            skipBootstrapWithoutOIDCSession: true
         )
         try await restoreSessionWithTimeout(client: newClient, seconds: 12)
 

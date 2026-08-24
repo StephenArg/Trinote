@@ -189,14 +189,18 @@ actor TriliumClient: TriliumClientProtocol {
     nonisolated let cloudflareAccessCredentials: CloudflareAccessCredentials?
     private let injectedProtocolClasses: [AnyClass]?
     private let urlSessionDelegate: SameHostRedirectDelegate
+    /// SSO Safari handoff imports `trilium.sid` without OIDC `appSession`; v0.105+ `/bootstrap` clears `loggedIn` in that case.
+    private let skipBootstrapWithoutOIDCSession: Bool
 
-    /// - Parameter urlSessionConfiguration: Optional config (e.g. tests with `URLProtocol`). Always wired to this client’s `httpCookieStorage`.
+    /// - Parameter skipBootstrapWithoutOIDCSession: When true, `restoreSession()` avoids `GET /bootstrap` without an OIDC `appSession` cookie (Trilium v0.105+ SSO handoff). Password login always uses `/bootstrap` when needed.
     init(
         baseURL: URL,
         persistedCookieData: Data? = nil,
         cloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
-        urlSessionConfiguration: URLSessionConfiguration? = nil
+        urlSessionConfiguration: URLSessionConfiguration? = nil,
+        skipBootstrapWithoutOIDCSession: Bool = false
     ) {
+        self.skipBootstrapWithoutOIDCSession = skipBootstrapWithoutOIDCSession
         self.baseURL = baseURL
         if let cloudflareAccessCredentials, cloudflareAccessCredentials.isComplete {
             self.cloudflareAccessCredentials = cloudflareAccessCredentials
@@ -438,8 +442,20 @@ actor TriliumClient: TriliumClientProtocol {
     private(set) var lastFetchedAppInfo: AppInfoResponse?
 
     func restoreSession() async throws {
-        try await refreshCsrf()
+        // Handoff imports trilium.sid + trilium-csrf but not the OIDC appSession cookie.
+        // On SSO-enabled Trilium v0.105+, GET /bootstrap runs checkAuth and clears
+        // session.loggedIn when appSession is absent — validate via /api/app-info first.
+        if csrfToken == nil {
+            csrfToken = extractCsrfTokenFromCookie()
+        }
         lastFetchedAppInfo = try await getAppInfo()
+        if csrfToken == nil {
+            if skipBootstrapWithoutOIDCSession {
+                try await refreshCsrfSkippingSSOBootstrapIfNeeded()
+            } else {
+                try await refreshCsrf()
+            }
+        }
         isSessionValid = true
     }
 
@@ -583,6 +599,25 @@ actor TriliumClient: TriliumClientProtocol {
         try await fetchCsrfFromAppShellHTML()
     }
 
+    /// Like `refreshCsrf()` but skips `/bootstrap` when the OIDC `appSession` cookie is absent.
+    private func refreshCsrfSkippingSSOBootstrapIfNeeded() async throws {
+        if hasOIDCSessionCookie() {
+            if await fetchCsrfFromBootstrap() { return }
+        } else {
+            Log.auth.debug("restoreSession: skipping /bootstrap (no OIDC appSession cookie)")
+        }
+        try await fetchCsrfFromAppShellHTML()
+    }
+
+    /// express-openid-connect's session cookie (default name `appSession`).
+    private func hasOIDCSessionCookie() -> Bool {
+        guard let host = baseURL.host?.lowercased() else { return false }
+        return (httpCookieStorage.cookies ?? []).contains { cookie in
+            Self.cookieDomainMatchesHost(cookie.domain, host: host)
+                && cookie.name == "appSession"
+        }
+    }
+
     /// `csrf-csrf` v3 stores the cookie as `token|hash` (delimiter `|`).
     /// The `x-csrf-token` header must send only the `token` part (before `|`).
     /// This works even when the HTML is a Vite SPA shell with no embedded token.
@@ -607,29 +642,19 @@ actor TriliumClient: TriliumClientProtocol {
     /// iOS collapses multiple `Set-Cookie` headers into one comma-separated string inside
     /// `allHeaderFields`.  When `trilium.sid` has an `Expires` date containing commas,
     /// `HTTPCookie.cookies(withResponseHeaderFields:for:)` misparses the combined string
-    /// and silently drops the `_csrf` cookie.  This method extracts the token directly.
+    /// and silently drops the CSRF cookie.  This method extracts the token directly.
     private nonisolated static func extractCsrfFromSetCookieHeader(_ response: HTTPURLResponse) -> String? {
-        var rawSetCookie: String?
+        guard let raw = rawSetCookieHeader(from: response) else { return nil }
+        return TriliumCookieResponseParser.extractCsrfTokenValue(fromSetCookie: raw)
+    }
+
+    private nonisolated static func rawSetCookieHeader(from response: HTTPURLResponse) -> String? {
         for (key, value) in response.allHeaderFields {
             if let k = key as? String, k.lowercased() == "set-cookie", let v = value as? String {
-                rawSetCookie = v
-                break
+                return v
             }
         }
-        guard let raw = rawSetCookie,
-              let nameRange = raw.range(of: "_csrf=", options: .caseInsensitive) else { return nil }
-
-        let afterEquals = raw[nameRange.upperBound...]
-        let valueEnd = afterEquals.firstIndex(of: ";") ?? afterEquals.endIndex
-        let decoded = String(afterEquals[afterEquals.startIndex..<valueEnd])
-            .removingPercentEncoding ?? String(afterEquals[afterEquals.startIndex..<valueEnd])
-
-        if let pipe = decoded.firstIndex(of: "|") {
-            let token = String(decoded[decoded.startIndex..<pipe]).trimmingCharacters(in: .whitespacesAndNewlines)
-            return token.isEmpty ? nil : token
-        }
-        let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        return nil
     }
 
     private func manuallyStoreCsrfCookie(from response: HTTPURLResponse) {
@@ -1733,7 +1758,9 @@ fileprivate enum TriliumCookieResponseParser {
         }
     }
 
-    /// Parses `_csrf=value` from raw `Set-Cookie`. `HTTPCookie.cookies()` can drop it
+    private static let csrfCookieNames = ["trilium-csrf", "_csrf", "csrf-token"]
+
+    /// Parses CSRF cookie values from raw `Set-Cookie`. `HTTPCookie.cookies()` can drop them
     /// when multiple cookies with comma-containing `Expires` dates are collapsed.
     static func manuallyStoreCsrfCookie(from response: HTTPURLResponse, in jar: HTTPCookieStorage) {
         guard let url = response.url, let host = url.host?.lowercased() else { return }
@@ -1745,16 +1772,11 @@ fileprivate enum TriliumCookieResponseParser {
             }
         }
         guard let raw = rawSetCookie,
-              let nameRange = raw.range(of: "_csrf=", options: .caseInsensitive) else { return }
-
-        let afterEquals = raw[nameRange.upperBound...]
-        let valueEnd = afterEquals.firstIndex(of: ";") ?? afterEquals.endIndex
-        let fullValue = String(afterEquals[afterEquals.startIndex..<valueEnd])
-        guard !fullValue.isEmpty else { return }
+              let parsed = parseCsrfCookiePair(fromSetCookie: raw) else { return }
 
         var props: [HTTPCookiePropertyKey: Any] = [
-            .name: "_csrf",
-            .value: fullValue,
+            .name: parsed.name,
+            .value: parsed.value,
             .domain: host,
             .path: "/"
         ]
@@ -1764,6 +1786,34 @@ fileprivate enum TriliumCookieResponseParser {
         if let cookie = HTTPCookie(properties: props) {
             jar.setCookie(cookie)
         }
+    }
+
+    /// Returns the token portion (before `|`) from the first recognized CSRF cookie in `Set-Cookie`.
+    static func extractCsrfTokenValue(fromSetCookie raw: String) -> String? {
+        guard let parsed = parseCsrfCookiePair(fromSetCookie: raw) else { return nil }
+        return tokenFromCsrfCookieValue(parsed.value)
+    }
+
+    private static func parseCsrfCookiePair(fromSetCookie raw: String) -> (name: String, value: String)? {
+        for name in csrfCookieNames {
+            guard let nameRange = raw.range(of: "\(name)=", options: .caseInsensitive) else { continue }
+            let afterEquals = raw[nameRange.upperBound...]
+            let valueEnd = afterEquals.firstIndex(of: ";") ?? afterEquals.endIndex
+            let fullValue = String(afterEquals[afterEquals.startIndex..<valueEnd])
+            guard !fullValue.isEmpty else { continue }
+            return (name, fullValue)
+        }
+        return nil
+    }
+
+    private static func tokenFromCsrfCookieValue(_ fullValue: String) -> String? {
+        let decoded = fullValue.removingPercentEncoding ?? fullValue
+        if let pipe = decoded.firstIndex(of: "|") {
+            let token = String(decoded[decoded.startIndex..<pipe]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return token.isEmpty ? nil : token
+        }
+        let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
 }

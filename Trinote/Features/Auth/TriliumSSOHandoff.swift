@@ -107,6 +107,7 @@ function parseCookies(header) {
 function keepCookie(cookie) {
     const name = cookie.name.toLowerCase();
     return name === "trilium.sid"
+        || name === "appsession"
         || name === "_csrf"
         || name === "csrf-token"
         || name.startsWith("trilium")
@@ -219,20 +220,18 @@ function openApp() {
     location.href = appUrl;
 }
 
-function tryAppInfo() {
-    return fetch("/api/app-info", { credentials: "same-origin", cache: "no-store" })
-        .then(function (r) { if (r.ok) openApp(); else goSignIn(); })
-        .catch(goSignIn);
-}
+const reloadKey = "trinote-handoff-reloaded";
 
-fetch("/bootstrap", { credentials: "same-origin", cache: "no-store" })
+fetch("/api/app-info", { credentials: "same-origin", cache: "no-store" })
     .then(function (r) {
-        if (!r.ok) return tryAppInfo();
-        return r.json().then(function (data) {
-            if (!data || data.loggedIn === false || data.login) return goSignIn();
-            if (data.csrfToken || data.triliumVersion) return openApp();
-            return tryAppInfo();
-        });
+        if (!r.ok) return goSignIn();
+        if (!sessionStorage.getItem(reloadKey)) {
+            sessionStorage.setItem(reloadKey, "1");
+            location.replace(returnTo);
+            return;
+        }
+        sessionStorage.removeItem(reloadKey);
+        openApp();
     })
     .catch(goSignIn);
 </script>
