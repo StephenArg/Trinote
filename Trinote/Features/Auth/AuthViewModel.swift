@@ -273,7 +273,7 @@ final class AuthViewModel {
             cloudflareClientSecret = ""
             loadProfiles()
             didFinishSuccessfulLogin = true
-        } catch let error as APIError where error == .totpRequired {
+        } catch APIError.totpRequired {
             pendingTotpProfile = profile
             totpCode = ""
             showTotpEntry = true
@@ -304,7 +304,8 @@ final class AuthViewModel {
                 rememberMe: rememberMe,
                 totpToken: totpCode,
                 profile: profile,
-                cloudflareAccessCredentials: cloudflareCredentialsFromForm()
+                cloudflareAccessCredentials: cloudflareCredentialsFromForm(),
+                isContinuingPendingLogin: true
             )
             password = ""
             totpCode = ""
@@ -312,8 +313,8 @@ final class AuthViewModel {
             showTotpEntry = false
             loadProfiles()
             didFinishSuccessfulLogin = true
-        } catch let error as APIError where error == .totpInvalid {
-            errorMessage = error.localizedDescription
+        } catch APIError.totpInvalid {
+            errorMessage = APIError.totpInvalid.localizedDescription
             showError = true
             totpCode = ""
         } catch {
@@ -326,10 +327,11 @@ final class AuthViewModel {
         }
     }
 
-    func cancelTotp() {
+    func cancelTotp(appState: AppState) {
         showTotpEntry = false
         pendingTotpProfile = nil
         totpCode = ""
+        appState.clearPendingPasswordLogin()
     }
 
     func connectToProfile(_ profile: ServerProfile, appState: AppState) async {
@@ -371,15 +373,5 @@ final class AuthViewModel {
         let secret = cloudflareClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty, !secret.isEmpty else { return nil }
         return CloudflareAccessCredentials(clientId: id, clientSecret: secret)
-    }
-}
-
-private extension APIError {
-    static func == (lhs: APIError, rhs: APIError) -> Bool {
-        switch (lhs, rhs) {
-        case (.totpRequired, .totpRequired): return true
-        case (.totpInvalid, .totpInvalid): return true
-        default: return false
-        }
     }
 }

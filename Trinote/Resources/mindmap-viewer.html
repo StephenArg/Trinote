@@ -35,6 +35,7 @@
 <div id="error"></div>
 
 <script src="vendor/MindElixir.iife.js"></script>
+<script src="vendor/mindmap-gestures.js"></script>
 <script>
 const ME = MindElixir.default || MindElixir;
 const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -60,6 +61,7 @@ window.mindmapViewer = {
                 theme: isDark ? MindElixir.DARK_THEME : null
             });
             mind.init(data);
+            installMindMapPinchPan(mind);
         } catch (e) {
             loadEl.style.display = 'none';
             errEl.style.display = 'block';

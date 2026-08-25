@@ -23,14 +23,14 @@ struct AppInfoResponse: Decodable {
 /// understand which quirks (new note types, schema changes) might not be fully handled yet.
 enum TriliumServerCompatibility {
     /// Highest `MAX_MIGRATION_VERSION` (`dbVersion`) the iOS client was tested against.
-    /// Still 238 as of v0.104.0 (no new migrations since v0.103.0).
-    static let testedMaxDbVersion: Int = 238
+    /// 240 as of v0.105.0 (migrations 239–240: TOTP cleanup, board select definitions).
+    static let testedMaxDbVersion: Int = 240
 
-    /// Highest `SYNC_VERSION` the iOS client was tested against. Still 39 as of v0.104.0.
+    /// Highest `SYNC_VERSION` the iOS client was tested against. Still 39 as of v0.105.0.
     static let testedMaxSyncVersion: Int = 39
 
     /// Human label used in the Settings banner when displaying the tested ceiling.
-    static let testedMaxAppVersion = "v0.104.0"
+    static let testedMaxAppVersion = "v0.105.0"
 
     /// Trilium release that introduced the `spreadsheet` note type (Univer Sheets).
     static let spreadsheetMinAppVersion = "0.103.0"

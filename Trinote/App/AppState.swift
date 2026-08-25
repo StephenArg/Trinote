@@ -1050,30 +1050,54 @@ final class AppState {
         startRealtimeIfPossible()
     }
 
+    /// Client from a password login that stopped at `totpRequired`; reused on the TOTP step.
+    private var pendingPasswordLoginClient: TriliumClient?
+
     func loginWithPassword(
         _ password: String,
         rememberMe: Bool,
         totpToken: String? = nil,
         profile: ServerProfile,
-        cloudflareAccessCredentials: CloudflareAccessCredentials? = nil
+        cloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
+        isContinuingPendingLogin: Bool = false
     ) async throws {
         guard let url = profile.url else { throw APIError.invalidURL }
 
-        try await keychain.clearServerAuthArtifacts(forServer: profile.id)
-        let newClient = await makeTriliumClient(
-            baseURL: url,
-            profileId: profile.id,
-            persistedCookieData: nil,
-            pendingCloudflareAccessCredentials: cloudflareAccessCredentials
-        )
-        try await newClient.login(password: password, rememberMe: rememberMe, totpToken: totpToken)
+        let newClient: TriliumClient
+        if isContinuingPendingLogin, let pending = pendingPasswordLoginClient {
+            newClient = pending
+        } else {
+            pendingPasswordLoginClient = nil
+            try await keychain.clearServerAuthArtifacts(forServer: profile.id)
+            newClient = await makeTriliumClient(
+                baseURL: url,
+                profileId: profile.id,
+                persistedCookieData: nil,
+                pendingCloudflareAccessCredentials: cloudflareAccessCredentials
+            )
+        }
 
+        do {
+            try await newClient.login(password: password, rememberMe: rememberMe, totpToken: totpToken)
+        } catch APIError.totpRequired {
+            pendingPasswordLoginClient = newClient
+            throw APIError.totpRequired
+        } catch {
+            pendingPasswordLoginClient = nil
+            throw error
+        }
+
+        pendingPasswordLoginClient = nil
         try await finalizeSuccessfulLogin(
             profile: profile,
             client: newClient,
             cloudflareAccessCredentials: cloudflareAccessCredentials,
             authMethod: .password
         )
+    }
+
+    func clearPendingPasswordLogin() {
+        pendingPasswordLoginClient = nil
     }
 
     func loginWithImportedSession(
@@ -1108,6 +1132,22 @@ final class AppState {
         cloudflareAccessCredentials: CloudflareAccessCredentials?,
         authMethod: ServerAuthMethod
     ) async throws {
+        try await activateLoggedInSession(
+            profile: profile,
+            client: newClient,
+            cloudflareAccessCredentials: cloudflareAccessCredentials,
+            authMethod: authMethod
+        )
+        finishLoginInBackground(profileId: profile.id)
+    }
+
+    /// Persists session cookies and switches the active profile — fast path so login UI can dismiss immediately.
+    private func activateLoggedInSession(
+        profile: ServerProfile,
+        client newClient: TriliumClient,
+        cloudflareAccessCredentials: CloudflareAccessCredentials?,
+        authMethod: ServerAuthMethod
+    ) async throws {
         if activeProfile?.id != profile.id {
             NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
             tabNavigationResetGeneration += 1
@@ -1135,10 +1175,18 @@ final class AppState {
         try persistence.setActiveProfile(profile)
         Log.auth.info("Logged in to \(profile.name) (session, \(authMethod.rawValue))")
         syncManager.restoreSyncState(profileId: profile.id)
-        _ = try await triliumInstanceId(for: profile)
-        await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
-        await runIncrementalSync(maxWaitSeconds: 30)
-        startRealtimeIfPossible()
+    }
+
+    /// Flush queues, incremental sync, and WebSocket — same work as launch, without blocking login UI.
+    private func finishLoginInBackground(profileId: String) {
+        Task { @MainActor in
+            guard self.activeProfile?.id == profileId, self.isAuthenticated else { return }
+            await self.flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
+            guard self.activeProfile?.id == profileId else { return }
+            await self.runIncrementalSync(maxWaitSeconds: 30)
+            guard self.activeProfile?.id == profileId else { return }
+            self.startRealtimeIfPossible()
+        }
     }
 
     func logout() async {

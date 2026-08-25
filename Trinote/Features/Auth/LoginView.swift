@@ -26,8 +26,8 @@ struct LoginFormContent: View {
             header
             serverForm
             credentialForm
-            advancedForm
             actionButtons
+            advancedForm
         }
         .alert(String(localized: "Error", comment: "Login error"), isPresented: $viewModel.showError) {
             Button(String(localized: "OK", comment: "Dismiss alert")) { viewModel.showError = false }
@@ -179,7 +179,7 @@ struct LoginFormContent: View {
 
     private var actionButtons: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 Button {
                     focusedField = nil
                     viewModel.beginSSOLogin(appState: appState, rejectIfServerAlreadyAdded: rejectIfServerAlreadyAdded)
@@ -191,10 +191,11 @@ struct LoginFormContent: View {
                             Text(String(localized: "Sign in with SSO", comment: "SSO login button"))
                                 .fontWeight(.semibold)
                                 .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.8)
                         }
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -212,10 +213,11 @@ struct LoginFormContent: View {
                         } else {
                             Text(String(localized: "Connect", comment: "Login button"))
                                 .fontWeight(.semibold)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                         }
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -345,6 +347,12 @@ private struct TotpEntrySheet: View {
                     .focused($isTotpFocused)
                     .accessibilityLabel(String(localized: "TOTP code", comment: "VoiceOver"))
                     .onSubmit { submit() }
+                    .onChange(of: viewModel.totpCode) { _, newValue in
+                        let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                        if trimmed.count == 6, trimmed.allSatisfy(\.isNumber) {
+                            submit()
+                        }
+                    }
 
                 Button {
                     submit()
@@ -378,7 +386,7 @@ private struct TotpEntrySheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(String(localized: "Cancel", comment: "TOTP cancel")) {
-                        viewModel.cancelTotp()
+                        viewModel.cancelTotp(appState: appState)
                     }
                 }
             }
@@ -394,6 +402,9 @@ private struct TotpEntrySheet: View {
     }
 
     private func submit() {
+        guard !viewModel.isLoading else { return }
+        let trimmed = viewModel.totpCode.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
         Task { await viewModel.submitTotp(appState: appState) }
     }
 }

@@ -674,4 +674,130 @@ final class TriliumClientTests: XCTestCase {
         let client = makeClient(cloudflareAccessCredentials: credentials)
         try await client.login(password: "secret", rememberMe: false, totpToken: nil)
     }
+
+    // MARK: - TOTP login detection
+
+    func testLogin401JsonTotpRequired() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/login"), request.httpMethod == "POST" {
+                let json = #"{"success":false,"factor":"totp"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        do {
+            try await client.login(password: "secret", rememberMe: false, totpToken: nil)
+            XCTFail("Expected totpRequired")
+        } catch APIError.totpRequired {
+            // expected
+        } catch {
+            XCTFail("Expected totpRequired, got \(error)")
+        }
+    }
+
+    func testLogin401JsonTotpInvalid() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/login"), request.httpMethod == "POST" {
+                let json = #"{"success":false,"factor":"totp"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        do {
+            try await client.login(password: "secret", rememberMe: false, totpToken: "000000")
+            XCTFail("Expected totpInvalid")
+        } catch APIError.totpInvalid {
+            // expected
+        } catch {
+            XCTFail("Expected totpInvalid, got \(error)")
+        }
+    }
+
+    func testLogin401JsonWrongPasswordUnauthorized() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/login"), request.httpMethod == "POST" {
+                let json = #"{"success":false,"factor":"password"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        do {
+            try await client.login(password: "wrong", rememberMe: false, totpToken: nil)
+            XCTFail("Expected unauthorized")
+        } catch APIError.unauthorized {
+            // expected
+        } catch {
+            XCTFail("Expected unauthorized, got \(error)")
+        }
+    }
+
+    func testLoginRedirectFollow401JsonTotpRequired() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/login"), request.httpMethod == "POST" {
+                let headers = ["Location": "/"]
+                return (HTTPURLResponse(url: request.url!, statusCode: 302, httpVersion: nil, headerFields: headers)!, Data())
+            }
+            if path.isEmpty || path == "/" {
+                let json = #"{"success":false,"factor":"totp"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            XCTFail("Unexpected path: \(path) method=\(request.httpMethod ?? "")")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        do {
+            try await client.login(password: "secret", rememberMe: false, totpToken: nil)
+            XCTFail("Expected totpRequired")
+        } catch APIError.totpRequired {
+            // expected
+        } catch {
+            XCTFail("Expected totpRequired, got \(error)")
+        }
+    }
+
+    func testLoginBootstrapTotpRequiredBeforeAppInfo() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/login"), request.httpMethod == "POST" {
+                let headers = ["Location": "/"]
+                return (HTTPURLResponse(url: request.url!, statusCode: 302, httpVersion: nil, headerFields: headers)!, Data())
+            }
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"loggedIn":false,"login":{"totpEnabled":true,"ssoEnabled":false}}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.isEmpty || path == "/" {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("<html></html>".utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            XCTFail("Unexpected path: \(path) method=\(request.httpMethod ?? "")")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient()
+        do {
+            try await client.login(password: "secret", rememberMe: false, totpToken: nil)
+            XCTFail("Expected totpRequired")
+        } catch APIError.totpRequired {
+            // expected
+        } catch {
+            XCTFail("Expected totpRequired, got \(error)")
+        }
+    }
 }

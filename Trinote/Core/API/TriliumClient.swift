@@ -271,8 +271,11 @@ actor TriliumClient: TriliumClientProtocol {
         var req = URLRequest(url: loginURL)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
         applyAccessHeaders(to: &req)
         req.httpBody = Data(body.utf8)
+
+        let submittedTotp = Self.hasSubmittedTotpToken(totpToken)
 
         let (redirectStopData, redirectStopHTTP, loginSession) = try await postLoginStoppingAtRedirect(request: req)
         defer { loginSession.finishTasksAndInvalidate() }
@@ -282,13 +285,7 @@ actor TriliumClient: TriliumClientProtocol {
         stripSameSiteFromCookies()
 
         if redirectStopHTTP.statusCode == 401 {
-            let submittedTotp = totpToken.map { !$0.isEmpty } ?? false
-            let totpError = Self.detectLoginFailure(from: redirectStopData, submittedTotpToken: submittedTotp)
-            switch totpError {
-            case .required: throw APIError.totpRequired
-            case .invalid:  throw APIError.totpInvalid
-            case .none:     throw APIError.unauthorized
-            }
+            try Self.throwMappedLoginFailure(from: redirectStopData, submittedTotpToken: submittedTotp)
         }
 
         var shellData = redirectStopData
@@ -318,7 +315,9 @@ actor TriliumClient: TriliumClientProtocol {
             TriliumCookieResponseParser.storeCookies(from: h, in: httpCookieStorage)
             manuallyStoreCsrfCookie(from: h)
             stripSameSiteFromCookies()
-            if h.statusCode == 401 { throw APIError.unauthorized }
+            if h.statusCode == 401 {
+                try Self.throwMappedLoginFailure(from: d, submittedTotpToken: submittedTotp)
+            }
             guard (200...399).contains(h.statusCode) else {
                 throw APIError.serverError(statusCode: h.statusCode, message: String(data: d, encoding: .utf8))
             }
@@ -349,7 +348,18 @@ actor TriliumClient: TriliumClientProtocol {
             }
         }
 
-        lastFetchedAppInfo = try await getAppInfo()
+        if !submittedTotp, await bootstrapIndicatesTotpRequired() {
+            throw APIError.totpRequired
+        }
+
+        do {
+            lastFetchedAppInfo = try await getAppInfo()
+        } catch APIError.unauthorized {
+            if !submittedTotp, await bootstrapIndicatesTotpRequired() {
+                throw APIError.totpRequired
+            }
+            throw APIError.unauthorized
+        }
 
         isSessionValid = true
     }
@@ -379,25 +389,72 @@ actor TriliumClient: TriliumClientProtocol {
 
     enum TotpDetectionResult { case required, invalid, none }
 
+    private nonisolated static func hasSubmittedTotpToken(_ totpToken: String?) -> Bool {
+        guard let totpToken else { return false }
+        return !totpToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private nonisolated static func throwMappedLoginFailure(from data: Data, submittedTotpToken: Bool) throws {
+        switch detectLoginFailure(from: data, submittedTotpToken: submittedTotpToken) {
+        case .required: throw APIError.totpRequired
+        case .invalid:  throw APIError.totpInvalid
+        case .none:     throw APIError.unauthorized
+        }
+    }
+
     /// Classifies a failed `POST /login` 401 body.
     ///
     /// - Trilium **v0.104+** returns JSON `{ "success": false, "factor": "password"|"totp" }`.
+    /// - Trilium **v0.105+** pre-auth `/bootstrap` JSON may surface `login.totpEnabled` instead.
     /// - Older servers (≤ v0.103) return the rendered login HTML with `wrongTotp` / `totpEnabled`.
     private nonisolated static func detectLoginFailure(from data: Data, submittedTotpToken: Bool) -> TotpDetectionResult {
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let factor = json["factor"] as? String {
-            switch factor.lowercased() {
-            case "totp":
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let factor = json["factor"] as? String {
+                switch factor.lowercased() {
+                case "totp":
+                    return submittedTotpToken ? .invalid : .required
+                case "password":
+                    return .none
+                default:
+                    break
+                }
+            }
+            if bootstrapJSONIndicatesTotpRequired(json) {
                 return submittedTotpToken ? .invalid : .required
-            case "password":
-                return .none
-            default:
-                break
             }
         }
 
         let html = String(data: data, encoding: .utf8) ?? ""
         return detectTotpFromLoginResponse(html: html)
+    }
+
+    /// v0.105+ pre-auth bootstrap payload: `{ loggedIn: false, login: { totpEnabled: true } }`.
+    private nonisolated static func bootstrapJSONIndicatesTotpRequired(_ json: [String: Any]) -> Bool {
+        guard json["loggedIn"] as? Bool == false else { return false }
+        guard let login = json["login"] as? [String: Any] else { return false }
+        return login["totpEnabled"] as? Bool == true
+    }
+
+    /// Whether `/bootstrap` reports an unauthenticated session on a TOTP-enabled server.
+    private func bootstrapIndicatesTotpRequired() async -> Bool {
+        do {
+            let url = try Self.makeURL(baseURL: baseURL, path: "/bootstrap", queryParams: nil)
+            var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+            applyAccessHeaders(to: &req)
+            let (data, response) = try await session.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                return false
+            }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return false
+            }
+            return Self.bootstrapJSONIndicatesTotpRequired(json)
+        } catch {
+            return false
+        }
     }
 
     /// Inspects the 401 HTML returned by POST /login for TOTP indicators (≤ v0.103).
