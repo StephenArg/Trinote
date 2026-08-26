@@ -34,9 +34,28 @@ the HTML files consume via `window.mermaid.initialize`, `.run`, `.render`.
 
 Vendored runtime for mind-map notes; pinned independently of Trilium.
 
-## `leaflet.js` / `leaflet.css`
+## `leaflet.js` / `leaflet.css` (removed)
 
-Vendored runtime for geo-map notes; pinned independently of Trilium.
+Replaced by MapLibre GL for geo-map notes (see below).
+
+## `maplibre-gl.js` / `maplibre-gl.css`
+
+MapLibre GL **5.24.0** for geo-map editor/viewer (`geomap-*.html`). Matches Trilium v0.105 desktop.
+
+```bash
+curl -sSfL -o Trinote/Resources/vendor/maplibre-gl.js \
+  https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js
+curl -sSfL -o Trinote/Resources/vendor/maplibre-gl.css \
+  https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css
+```
+
+## `geomap-core.js` / `geomap-marker-images.js` / `gpx.js`
+
+Shared MapLibre map engine, rasterized marker pins (colour + Boxicons glyph), and GPX parsing for `geomap-editor.html` / `geomap-viewer.html`.
+
+## `geomap-styles/`
+
+VersaTiles Colorful vector style JSON (`versatiles-colorful.json`), copied from Trilium v0.105. Tile URLs point at `https://tiles.versatiles.org/`.
 
 ## `katex/`
 

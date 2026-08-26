@@ -211,6 +211,21 @@ struct NoteDetailView: View {
     /// Bridge to communicate with the geo map editor WKWebView.
     @StateObject private var geoMapEditorBridge = GeoMapEditorBridge()
     @State private var geoMapPins: [GeoMapPin] = []
+    @State private var geoMapTracks: [GeoMapTrack] = []
+    @State private var geoMapDisplaySettings = GeoMapDisplaySettings()
+    @State private var geoMapCachedSettingsJSON = GeoMapDisplaySettings().bridgeJSON()
+    @State private var geoMapInitialViewportJSON = ""
+    @State private var geoMapViewportSaveTask: Task<Void, Never>?
+    @State private var geoMapSelection: GeoMapSelection?
+    @State private var geoMapShowSettings = false
+    @State private var geoMapShowGpxImporter = false
+    @State private var geoMapDetailHTML: String?
+    @State private var geoMapDetailGPXStats: GeoMapGPXParser.Stats?
+    @State private var geoMapFocusedMarkId: String?
+    @State private var geoMapLastScrolledMarkId: String?
+    @State private var geoMapLastFeatureSelectTime: Date?
+    @State private var geoMapLastLoadNoteId: String?
+    @State private var geoMapLastLoadAt = Date.distantPast
 
     private var principalTitleText: String {
         if let n = viewModel?.note {
@@ -2037,7 +2052,16 @@ struct NoteDetailView: View {
         case .spreadsheet:
             SpreadsheetNoteView(json: vm.contentString)
         case .geoMap:
-            GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
+            GeoMapNoteView(
+                viewportJSON: geoMapInitialViewportJSON.isEmpty
+                    ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
+                    : geoMapInitialViewportJSON,
+                markers: geoMapPins,
+                tracks: geoMapTracks,
+                settingsJSON: geoMapCachedSettingsJSON,
+                onOpenPinNote: { navigateToNoteId = $0 }
+            )
+            .onAppear { loadGeoMapData(vm: vm, note: note) }
         case .kanban:
             KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
                 .frame(minHeight: 420)
@@ -2046,7 +2070,16 @@ struct NoteDetailView: View {
                 .frame(minHeight: 420)
         case .book, .collection:
             if isGeoMapNote(note, contentString: vm.contentString, vm: vm) {
-                GeoMapNoteView(viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString), markers: geoMapPins) { navigateToNoteId = $0 }
+                GeoMapNoteView(
+                    viewportJSON: geoMapInitialViewportJSON.isEmpty
+                    ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
+                    : geoMapInitialViewportJSON,
+                    markers: geoMapPins,
+                    tracks: geoMapTracks,
+                    settingsJSON: geoMapCachedSettingsJSON,
+                    onOpenPinNote: { navigateToNoteId = $0 }
+                )
+                .onAppear { loadGeoMapData(vm: vm, note: note) }
             } else if isPresentationNote(note) {
                 PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
                     .frame(minHeight: 420)
@@ -2670,12 +2703,16 @@ struct NoteDetailView: View {
             editorStatusBanner(vm)
             draftBanner(vm)
             breadcrumbsBar(vm)
-            titleSection(vm, note: note)
+            geoMapTitleSection(vm, note: note)
             Divider()
 
             GeoMapEditorView(
-                viewportJSON: effectiveGeoMapViewportJSONForDisplay(vm.contentString),
+                viewportJSON: geoMapInitialViewportJSON.isEmpty
+                    ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
+                    : geoMapInitialViewportJSON,
                 markers: geoMapPins,
+                tracks: geoMapTracks,
+                settingsJSON: geoMapCachedSettingsJSON,
                 bridge: geoMapEditorBridge,
                 onCreatePin: { lat, lng in
                     handleGeoMapCreatePin(vm: vm, note: note, lat: lat, lng: lng)
@@ -2687,16 +2724,37 @@ struct NoteDetailView: View {
                     handleGeoMapRemovePin(vm: vm, noteId: noteId)
                 },
                 onViewportChanged: { json in
-                    let canon = Self.canonicalGeoMapViewportJSONForTriliumDesktop(json)
-                    let trimmed = (vm.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard canon != trimmed else { return }
-                    vm.editableContent = canon
-                    vm.saveContent()
+                    geoMapViewportSaveTask?.cancel()
+                    geoMapViewportSaveTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        guard !Task.isCancelled else { return }
+                        let canon = Self.canonicalGeoMapViewportJSONForTriliumDesktop(json)
+                        let trimmed = (vm.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard canon != trimmed else { return }
+                        vm.editableContent = canon
+                        vm.saveContent()
+                    }
                 },
                 onOpenPinNote: { pinNoteId in
                     navigateToNoteId = pinNoteId
+                },
+                onFeatureSelected: { noteId, kind, markFocus in
+                    geoMapLastFeatureSelectTime = Date()
+                    handleGeoMapFeatureSelected(vm: vm, noteId: noteId, kind: kind, markFocus: markFocus)
+                },
+                onSelectionCleared: {
+                    if let selectedAt = geoMapLastFeatureSelectTime,
+                       Date().timeIntervalSince(selectedAt) < 0.25 {
+                        Log.geoMap.info("[geo-map-debug] selectionCleared ignored (recent feature select)")
+                        return
+                    }
+                    clearGeoMapSelection()
+                },
+                onImportGpxRequested: {
+                    geoMapShowGpxImporter = true
                 }
             )
+            .equatable()
             .frame(height: Self.geoMapEditorBandHeight())
             .frame(maxWidth: .infinity)
             .clipped()
@@ -2705,60 +2763,355 @@ struct NoteDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
+            geoMapDisplaySettings = GeoMapDisplaySettings(from: note)
+            geoMapCachedSettingsJSON = geoMapDisplaySettings.bridgeJSON()
+            geoMapInitialViewportJSON = effectiveGeoMapViewportJSONForDisplay(vm.contentString)
             if !vm.hasDraft {
                 vm.editableContent = vm.contentString ?? ""
             }
-            loadGeoMapPins(vm: vm, note: note)
+            loadGeoMapData(vm: vm, note: note)
         }
         .onChange(of: note.noteId) { _, _ in
             geoMapPins = []
+            geoMapTracks = []
+            clearGeoMapSelection()
+            geoMapDisplaySettings = GeoMapDisplaySettings(from: note)
+            geoMapCachedSettingsJSON = geoMapDisplaySettings.bridgeJSON()
+            geoMapInitialViewportJSON = effectiveGeoMapViewportJSONForDisplay(vm.contentString)
             if !vm.hasDraft {
                 vm.editableContent = vm.contentString ?? ""
             }
-            loadGeoMapPins(vm: vm, note: note)
+            loadGeoMapData(vm: vm, note: note)
+        }
+        .onChange(of: geoMapDisplaySettings) { _, newSettings in
+            geoMapCachedSettingsJSON = newSettings.bridgeJSON()
+        }
+        .sheet(isPresented: $geoMapShowSettings) {
+            GeoMapSettingsSheet(settings: $geoMapDisplaySettings) {
+                saveGeoMapSettings(vm: vm, note: note)
+            }
+        }
+        .fileImporter(
+            isPresented: $geoMapShowGpxImporter,
+            allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml],
+            allowsMultipleSelection: false
+        ) { result in
+            handleGeoMapGpxImport(result: result, vm: vm, note: note)
+        }
+    }
+
+    @ViewBuilder
+    private func geoMapTitleSection(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        @Bindable var vm = vm
+        let titleIconColumnWidth: CGFloat = 24
+        let titleIconSpacing: CGFloat = 8
+
+        VStack(alignment: .leading, spacing: 4) {
+            if vm.editingTitle {
+                HStack(alignment: .top, spacing: titleIconSpacing) {
+                    Color.clear.frame(width: titleIconColumnWidth).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            TextField(String(localized: "Title", comment: "Note title field"), text: $vm.editedTitle)
+                                .font(.title2.bold())
+                                .foregroundStyle(noteDetailTitleForegroundColor(for: note))
+                                .textFieldStyle(.roundedBorder)
+                            Button(String(localized: "Save", comment: "Save title")) {
+                                Task { await vm.renameNote() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(vm.isSaving)
+                            Button(String(localized: "Cancel", comment: "Cancel title edit")) { vm.editingTitle = false }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                        geoMapLastChangedRow(note: note)
+                    }
+                }
+            } else {
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline, spacing: titleIconSpacing) {
+                            noteTitleIconButton(vm: vm, note: note, width: titleIconColumnWidth)
+                            Text(uiTitle(for: note))
+                                .font(.title2.bold())
+                                .foregroundStyle(noteDetailTitleForegroundColor(for: note))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        geoMapLastChangedRow(note: note)
+                            .padding(.leading, titleIconColumnWidth + titleIconSpacing)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .onTapGesture {
+                    vm.editedTitle = note.title
+                    vm.editingTitle = true
+                }
+                .accessibilityLabel(String(localized: "Note title: \(uiTitle(for: note)). Tap to edit.", comment: "VoiceOver note title"))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func geoMapLastChangedRow(note: NoteItem) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            if let modified = lastChangedCaption(for: note) {
+                Text(modified)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel(String(localized: "Last changed \(modified)", comment: "Accessibility"))
+            } else {
+                Spacer(minLength: 0)
+            }
+            Button {
+                geoMapShowSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(String(localized: "Map settings", comment: "Geo map settings gear"))
         }
     }
 
     @ViewBuilder
     private func geoMapSubnotesScrollArea(vm: NoteDetailViewModel, mapParentNote: NoteItem) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                Color.clear.frame(height: 16)
-                if vm.childNotes.isEmpty && !vm.isLoadingChildren {
-                    Text(
-                        String(
-                            localized: "Sub-notes appear here. Long-press the map to add a location.",
-                            comment: "Geo map: empty sub-note list hint below map"
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(height: 8).id("geoMapDetailTop")
+                    if let selection = geoMapSelection {
+                        GeoMapDetailPanel(
+                            selection: selection,
+                            pin: geoMapPins.first(where: { $0.noteId == selection.noteId }),
+                            track: geoMapTracks.first(where: { $0.noteId == selection.noteId }),
+                            pinHTML: geoMapDetailHTML,
+                            gpxStats: geoMapDetailGPXStats,
+                            onClose: { clearGeoMapSelection() },
+                            onOpenNote: { navigateToNoteId = selection.noteId },
+                            onMovePin: selection.kind == .pin ? {
+                                geoMapEditorBridge.beginMovePin(noteId: selection.noteId)
+                            } : nil,
+                            onDelete: {
+                                if selection.kind == .pin {
+                                    handleGeoMapRemovePin(vm: vm, noteId: selection.noteId)
+                                } else {
+                                    handleGeoMapRemoveTrack(vm: vm, noteId: selection.noteId, mapParentNote: mapParentNote)
+                                }
+                            },
+                            onNoteLinkTapped: { navigateToNoteId = $0 },
+                            onFocusMark: { focus in
+                                geoMapFocusedMarkId = focus.markId
+                                geoMapEditorBridge.focusTrackMark(focus)
+                            },
+                            focusedMarkId: $geoMapFocusedMarkId
                         )
-                    )
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 12)
+                    } else {
+                        if vm.childNotes.isEmpty && !vm.isLoadingChildren {
+                            Text(
+                                String(
+                                    localized: "Sub-notes appear here. Long-press the map to add a location.",
+                                    comment: "Geo map: empty sub-note list hint below map"
+                                )
+                            )
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 12)
+                        }
+                        childNotesSection(vm)
+                    }
+                    Color.clear.frame(minHeight: 80)
                 }
-                childNotesSection(vm)
-                Color.clear.frame(minHeight: 80)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
+            .onChange(of: geoMapSelection?.id) { _, newId in
+                guard newId != nil else { return }
+                if geoMapFocusedMarkId == nil {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("geoMapDetailTop", anchor: .top)
+                    }
+                }
+            }
+            .onChange(of: geoMapFocusedMarkId) { _, markId in
+                scrollGeoMapDetailToMark(markId, proxy: proxy)
+            }
+            .onChange(of: geoMapDetailGPXStats?.pointCount) { _, _ in
+                scrollGeoMapDetailToMark(geoMapFocusedMarkId, proxy: proxy)
+            }
         }
         .refreshable {
             await vm.refresh(force: true)
-            loadGeoMapPins(vm: vm, note: mapParentNote)
+            loadGeoMapData(vm: vm, note: mapParentNote, force: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func loadGeoMapPins(vm: NoteDetailViewModel, note: NoteItem) {
-        Task {
+    private func loadGeoMapData(vm: NoteDetailViewModel, note: NoteItem, force: Bool = false) {
+        let now = Date()
+        if !force,
+           note.noteId == geoMapLastLoadNoteId,
+           now.timeIntervalSince(geoMapLastLoadAt) < 10 {
+            return
+        }
+        geoMapLastLoadNoteId = note.noteId
+        geoMapLastLoadAt = now
+        let newSettings = GeoMapDisplaySettings(from: note)
+        if newSettings != geoMapDisplaySettings {
+            geoMapDisplaySettings = newSettings
+            geoMapCachedSettingsJSON = newSettings.bridgeJSON()
+        }
+        Task { @MainActor in
             let pins: [GeoMapPin]
+            let tracks: [GeoMapTrack]
             if vm.client != nil, vm.isOnline {
-                pins = await vm.fetchGeoMapPinsFromServer(note: note)
+                async let serverPins = vm.fetchGeoMapPinsFromServer(note: note)
+                async let serverTracks = vm.fetchGeoMapTracksFromServer(note: note)
+                pins = await serverPins
+                tracks = await serverTracks
             } else {
                 pins = vm.geoMapPinsFromCache()
+                tracks = vm.geoMapTracksFromCache()
+            }
+            if pins == geoMapPins, tracks == geoMapTracks {
+                return
             }
             geoMapPins = pins
+            geoMapTracks = tracks
+            Log.geoMap.info(
+                "[geo-map-debug] loadGeoMapData pins=\(pins.count) tracks=\(tracks.count) online=\(vm.isOnline)"
+            )
+        }
+    }
+
+    private func loadGeoMapPins(vm: NoteDetailViewModel, note: NoteItem) {
+        loadGeoMapData(vm: vm, note: note)
+    }
+
+    private func clearGeoMapSelection() {
+        geoMapSelection = nil
+        geoMapDetailHTML = nil
+        geoMapDetailGPXStats = nil
+        geoMapFocusedMarkId = nil
+        geoMapLastScrolledMarkId = nil
+        geoMapEditorBridge.clearSelection()
+    }
+
+    private func geoMapDetailScrollAnchorId(for rawMarkId: String) -> String? {
+        guard let selection = geoMapSelection, selection.kind == .track,
+              let track = geoMapTracks.first(where: { $0.noteId == selection.noteId }) else { return nil }
+        if rawMarkId == "summary" {
+            guard let stats = geoMapDetailGPXStats,
+                  let focus = track.journeyFocus(at: 0, stats: stats) else { return nil }
+            return GeoMapMarkFocus.scrollAnchorId(for: focus.markId)
+        }
+        let normalized = GeoMapMarkFocus.normalizedListMarkId(rawMarkId)
+        if normalized.hasPrefix("waypoint:") || normalized.hasPrefix("line-start:") {
+            return GeoMapMarkFocus.scrollAnchorId(for: normalized)
+        }
+        return nil
+    }
+
+    private func scrollGeoMapDetailToMark(_ rawMarkId: String?, proxy: ScrollViewProxy) {
+        guard let rawMarkId, rawMarkId != geoMapLastScrolledMarkId,
+              let anchorId = geoMapDetailScrollAnchorId(for: rawMarkId) else { return }
+        geoMapLastScrolledMarkId = rawMarkId
+        Log.geoMap.info("[geo-map-debug] scrollToMark raw=\(rawMarkId) anchor=\(anchorId)")
+        withAnimation(.easeOut(duration: 0.25)) {
+            proxy.scrollTo(anchorId, anchor: .center)
+        }
+    }
+
+    private func handleGeoMapFeatureSelected(
+        vm: NoteDetailViewModel,
+        noteId: String,
+        kind: GeoMapFeatureKind,
+        markFocus: GeoMapMarkFocus? = nil
+    ) {
+        let nextMarkId = markFocus?.markId
+        if geoMapSelection?.noteId == noteId,
+           geoMapSelection?.kind == kind,
+           geoMapFocusedMarkId == nextMarkId {
+            Log.geoMap.info("[geo-map-debug] featureSelected SKIP duplicate noteId=\(noteId) markId=\(nextMarkId ?? "nil")")
+            return
+        }
+        Log.geoMap.info("[geo-map-debug] featureSelected noteId=\(noteId) kind=\(kind.rawValue) markId=\(nextMarkId ?? "nil")")
+        let isSameNote = geoMapSelection?.noteId == noteId
+        geoMapSelection = GeoMapSelection(noteId: noteId, kind: kind)
+        geoMapFocusedMarkId = nextMarkId
+        if nextMarkId != geoMapLastScrolledMarkId {
+            geoMapLastScrolledMarkId = nil
+        }
+        if !isSameNote || kind == .pin {
+            geoMapDetailHTML = nil
+            geoMapDetailGPXStats = nil
+        }
+        Task {
+            if kind == .pin {
+                geoMapDetailHTML = await vm.geoMapChildHTML(for: noteId)
+            } else if let track = geoMapTracks.first(where: { $0.noteId == noteId }) {
+                geoMapDetailGPXStats = GeoMapGPXParser.parse(track.gpxXML)
+            }
+        }
+    }
+
+    private func saveGeoMapSettings(vm: NoteDetailViewModel, note: NoteItem) {
+        geoMapEditorBridge.applySettings(geoMapDisplaySettings.bridgeJSON())
+        guard let client = vm.client else { return }
+        Task {
+            do {
+                let updated = try await geoMapDisplaySettings.apply(to: note, via: client)
+                vm.note = updated
+            } catch {
+                Log.geoMap.error("Failed to save geo map settings: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func handleGeoMapGpxImport(result: Result<[URL], Error>, vm: NoteDetailViewModel, note: NoteItem) {
+        switch result {
+        case .failure(let error):
+            Log.geoMap.error("GPX import picker failed: \(error.localizedDescription)")
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            Task {
+                do {
+                    let data = try Data(contentsOf: url)
+                    let track = try await vm.importGeoMapGpxFile(
+                        data: data,
+                        filename: url.lastPathComponent,
+                        parentNoteId: note.noteId
+                    )
+                    geoMapTracks.append(track)
+                    geoMapEditorBridge.loadTracks(geoMapTracks.bridgeJSONArray())
+                    await vm.loadChildNotes()
+                    appState.backgroundSyncPendingChanges()
+                } catch {
+                    Log.geoMap.error("GPX import failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func handleGeoMapRemoveTrack(vm: NoteDetailViewModel, noteId: String, mapParentNote: NoteItem) {
+        Task {
+            let ok = await vm.deleteChildNote(noteId: noteId)
+            guard ok else { return }
+            clearGeoMapSelection()
+            if vm.client != nil, vm.isOnline {
+                await vm.refreshDirectChildrenMetadataFromServer()
+            } else {
+                await vm.loadChildNotes()
+            }
+            loadGeoMapData(vm: vm, note: mapParentNote, force: true)
         }
     }
 
@@ -2805,7 +3158,11 @@ struct NoteDetailView: View {
                     value: "\(lat),\(lng)", isInheritable: nil, position: nil
                 ))
                 if let idx = geoMapPins.firstIndex(where: { $0.noteId == noteId }) {
-                    geoMapPins[idx] = GeoMapPin(noteId: noteId, title: geoMapPins[idx].title, lat: lat, lng: lng)
+                    let existing = geoMapPins[idx]
+                    geoMapPins[idx] = GeoMapPin(
+                        noteId: noteId, title: existing.title, lat: lat, lng: lng,
+                        iconClass: existing.iconClass, color: existing.color
+                    )
                 }
                 if let n = vm.note {
                     loadGeoMapPins(vm: vm, note: n)
@@ -2820,13 +3177,16 @@ struct NoteDetailView: View {
         Task {
             let ok = await vm.deleteChildNote(noteId: noteId)
             guard ok else { return }
+            if geoMapSelection?.noteId == noteId { clearGeoMapSelection() }
+            geoMapPins.removeAll { $0.noteId == noteId }
+            geoMapEditorBridge.removePin(noteId: noteId)
             if vm.client != nil, vm.isOnline {
                 await vm.refreshDirectChildrenMetadataFromServer()
             } else {
                 await vm.loadChildNotes()
             }
             if let n = vm.note {
-                loadGeoMapPins(vm: vm, note: n)
+                loadGeoMapData(vm: vm, note: n, force: true)
             }
         }
     }
@@ -2859,12 +3219,15 @@ struct NoteDetailView: View {
                 ?? doubleFromJSONNumber(dict["lon"])
         }
 
-        guard let lat = latVal, let lng = lngVal else { return raw }
+        guard let lat = latVal, let lng = lngVal, let zoomVal = doubleFromJSONNumber(zoom) else { return raw }
 
         let canonical: [String: Any] = [
             "view": [
-                "center": ["lat": lat, "lng": lng],
-                "zoom": zoom
+                "center": [
+                    "lat": (lat * 10000).rounded() / 10000,
+                    "lng": (lng * 10000).rounded() / 10000,
+                ],
+                "zoom": (zoomVal * 100).rounded() / 100,
             ]
         ]
         guard let out = try? JSONSerialization.data(withJSONObject: canonical, options: [.sortedKeys]),

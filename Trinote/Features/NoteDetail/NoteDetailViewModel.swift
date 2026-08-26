@@ -3066,7 +3066,15 @@ final class NoteDetailViewModel {
                   let lng = Double(parts[1].trimmingCharacters(in: .whitespaces)) else { continue }
             let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
             let title = trimmedTitle.isEmpty ? childId : trimmedTitle
-            pins.append(GeoMapPin(noteId: childId, title: title, lat: lat, lng: lng))
+            let iconClassLabel = attrs.first(where: { $0.type == "label" && $0.name == "iconClass" })?.value
+            let iconClass = GeoMapMarkerIconClass.forNote(
+                type: cached.parsedType ?? .text,
+                mime: cached.mime,
+                iconClassLabel: iconClassLabel,
+                childNoteCount: cached.childNoteIds.count
+            )
+            let color = attrs.first(where: { $0.type == "label" && $0.name.caseInsensitiveCompare("color") == .orderedSame })?.value
+            pins.append(GeoMapPin(noteId: childId, title: title, lat: lat, lng: lng, iconClass: iconClass, color: color))
         }
         return pins
     }
@@ -3086,13 +3094,161 @@ final class NoteDetailViewModel {
                     if parts.count == 2,
                        let lat = Double(parts[0].trimmingCharacters(in: .whitespaces)),
                        let lng = Double(parts[1].trimmingCharacters(in: .whitespaces)) {
-                        pins.append(GeoMapPin(noteId: childId, title: childItem.title, lat: lat, lng: lng))
+                        pins.append(GeoMapPin(
+                            noteId: childId,
+                            title: childItem.title,
+                            lat: lat,
+                            lng: lng,
+                            iconClass: GeoMapMarkerIconClass.forNoteItem(childItem),
+                            color: childItem.colorLabelValue
+                        ))
                     }
                 }
             } catch {
             }
         }
         return pins
+    }
+
+    func geoMapTracksFromCache() -> [GeoMapTrack] {
+        guard let profileId = serverProfileId else { return [] }
+        var tracks: [GeoMapTrack] = []
+        for childId in resolvedChildNoteIdsForDetail() {
+            guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
+            guard cached.mime == GeoMapDisplaySettings.gpxMIME else { continue }
+            let title = cached.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? childId : cached.title
+            guard let body = cached.content,
+                  let xml = String(data: body, encoding: .utf8) else { continue }
+            let attrs = (try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
+            let iconClassLabel = attrs.first(where: { $0.type == "label" && $0.name == "iconClass" })?.value
+            let iconClass = GeoMapMarkerIconClass.forNote(
+                type: cached.parsedType ?? .file,
+                mime: cached.mime,
+                iconClassLabel: iconClassLabel,
+                childNoteCount: cached.childNoteIds.count
+            )
+            let color = attrs.first(where: { $0.type == "label" && $0.name.caseInsensitiveCompare("color") == .orderedSame })?.value
+            guard let track = GeoMapTrack.make(
+                noteId: childId,
+                title: title,
+                gpxXML: xml,
+                iconClass: iconClass,
+                color: color
+            ) else { continue }
+            tracks.append(track)
+        }
+        return tracks
+    }
+
+    func fetchGeoMapTracksFromServer(note: NoteItem) async -> [GeoMapTrack] {
+        guard let client, isOnline else { return [] }
+        var tracks: [GeoMapTrack] = []
+        let parentNote = try? await client.getNote(note.noteId)
+        let childIds = parentNote?.childNoteIds ?? note.childNoteIds
+        for childId in childIds {
+            do {
+                let childResp = try await client.getNote(childId)
+                let childItem = NoteItem(from: childResp)
+                guard childItem.mime == GeoMapDisplaySettings.gpxMIME else { continue }
+                let content = try await client.getNoteContent(childId)
+                guard let xml = String(data: content, encoding: .utf8) else { continue }
+                guard let track = GeoMapTrack.make(
+                    noteId: childId,
+                    title: childItem.title,
+                    gpxXML: xml,
+                    iconClass: GeoMapMarkerIconClass.forNoteItem(childItem),
+                    color: childItem.colorLabelValue
+                ) else { continue }
+                tracks.append(track)
+            } catch {
+            }
+        }
+        return tracks
+    }
+
+    func importGeoMapGpxFile(data: Data, filename: String, parentNoteId: String) async throws -> GeoMapTrack {
+        let baseName = filename
+            .replacingOccurrences(of: ".gpx", with: "", options: [.caseInsensitive])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = baseName.isEmpty ? String(localized: "Track", comment: "Default GPX track title") : baseName
+        guard let xml = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "GeoMap", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid GPX encoding"])
+        }
+        guard GeoMapGPXParser.readTrackLines(from: xml).isEmpty == false else {
+            throw NSError(domain: "GeoMap", code: 2, userInfo: [NSLocalizedDescriptionKey: "No track data in GPX file"])
+        }
+
+        if let profileId = serverProfileId, client == nil || !isOnline {
+            let (noteId, _) = try persistence.createOfflineChildNote(
+                parentNoteId: parentNoteId,
+                title: title,
+                noteType: "file",
+                mime: GeoMapDisplaySettings.gpxMIME,
+                initialContent: xml,
+                serverProfileId: profileId
+            )
+            guard let track = GeoMapTrack.make(
+                noteId: noteId,
+                title: title,
+                gpxXML: xml,
+                iconClass: nil,
+                color: nil
+            ) else {
+                throw NSError(domain: "GeoMap", code: 2, userInfo: [NSLocalizedDescriptionKey: "No track data in GPX file"])
+            }
+            return track
+        }
+
+        guard let client else {
+            throw NSError(domain: "GeoMap", code: 3, userInfo: [NSLocalizedDescriptionKey: "No server connection"])
+        }
+        let response = try await client.createChildNoteWithContent(
+            parentNoteId: parentNoteId,
+            title: title,
+            noteType: "file",
+            mime: GeoMapDisplaySettings.gpxMIME,
+            body: data
+        )
+        if let profileId = serverProfileId {
+            try? persistence.cacheNoteIfAllowed(from: response.note, serverProfileId: profileId, policy: cacheExclusion)
+            try? persistence.cacheBranchIfAllowed(
+                from: response.branch,
+                parentNoteIdsForNote: response.note.parentNoteIds,
+                serverProfileId: profileId,
+                policy: cacheExclusion
+            )
+            cacheNoteContentIfAllowed(response.note.noteId, content: data, profileId: profileId, response: response.note)
+            try? persistence.commitBatch()
+        }
+        guard let track = GeoMapTrack.make(
+            noteId: response.note.noteId,
+            title: title,
+            gpxXML: xml,
+            iconClass: nil,
+            color: nil
+        ) else {
+            throw NSError(domain: "GeoMap", code: 2, userInfo: [NSLocalizedDescriptionKey: "No track data in GPX file"])
+        }
+        return track
+    }
+
+    func geoMapChildHTML(for noteId: String) async -> String? {
+        if let profileId = serverProfileId,
+           let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId),
+           let data = cached.content,
+           let html = String(data: data, encoding: .utf8), !html.isEmpty {
+            return html
+        }
+        guard let client, isOnline else { return nil }
+        do {
+            let content = try await client.getNoteContent(noteId)
+            if let profileId = serverProfileId {
+                try? persistence.cacheNoteContent(noteId, content: content, serverProfileId: profileId)
+            }
+            return String(data: content, encoding: .utf8)
+        } catch {
+            return nil
+        }
     }
 
     /// When the parent is a semantic geo map (`geoMap` or `book` + `#viewType=geoMap`) with an empty body, child `#geolocation` may not be in SwiftData yet. Fetches a limited set of children so routing can recognize pins.

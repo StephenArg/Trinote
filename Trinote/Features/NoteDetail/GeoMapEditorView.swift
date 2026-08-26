@@ -10,34 +10,72 @@ final class GeoMapEditorBridge: ObservableObject {
         coordinator.getViewport(completion: completion)
     }
 
-    func addPin(noteId: String, title: String, lat: Double, lng: Double) {
-        coordinator?.addPin(noteId: noteId, title: title, lat: lat, lng: lng)
+    func addPin(noteId: String, title: String, lat: Double, lng: Double, color: String? = nil) {
+        coordinator?.addPin(noteId: noteId, title: title, lat: lat, lng: lng, color: color)
     }
 
     func removePin(noteId: String) {
         coordinator?.removePin(noteId: noteId)
+    }
+
+    func applySettings(_ json: String) {
+        coordinator?.applySettings(json)
+    }
+
+    func loadTracks(_ json: String) {
+        coordinator?.loadTracks(json)
+    }
+
+    func set3DEnabled(_ enabled: Bool) {
+        coordinator?.set3DEnabled(enabled)
+    }
+
+    func selectFeature(noteId: String, kind: GeoMapFeatureKind) {
+        coordinator?.selectFeature(noteId: noteId, kind: kind)
+    }
+
+    func clearSelection() {
+        coordinator?.clearSelection()
+    }
+
+    func beginMovePin(noteId: String) {
+        coordinator?.beginMovePin(noteId: noteId)
+    }
+
+    func focusTrackMark(_ focus: GeoMapMarkFocus) {
+        coordinator?.focusTrackMark(focus)
     }
 }
 
 struct GeoMapEditorView: UIViewRepresentable {
     let viewportJSON: String
     let markers: [GeoMapPin]
+    let tracks: [GeoMapTrack]
+    let settingsJSON: String
     let bridge: GeoMapEditorBridge
     var onCreatePin: ((_ lat: Double, _ lng: Double) -> Void)?
     var onMovePin: ((_ noteId: String, _ lat: Double, _ lng: Double) -> Void)?
     var onRemovePin: ((_ noteId: String) -> Void)?
     var onViewportChanged: ((_ json: String) -> Void)?
     var onOpenPinNote: ((_ noteId: String) -> Void)?
+    var onFeatureSelected: ((_ noteId: String, _ kind: GeoMapFeatureKind, _ markFocus: GeoMapMarkFocus?) -> Void)?
+    var onSelectionCleared: (() -> Void)?
+    var onImportGpxRequested: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             viewportJSON: viewportJSON,
             markers: markers,
+            tracks: tracks,
+            settingsJSON: settingsJSON,
             onCreatePin: onCreatePin,
             onMovePin: onMovePin,
             onRemovePin: onRemovePin,
             onViewportChanged: onViewportChanged,
-            onOpenPinNote: onOpenPinNote
+            onOpenPinNote: onOpenPinNote,
+            onFeatureSelected: onFeatureSelected,
+            onSelectionCleared: onSelectionCleared,
+            onImportGpxRequested: onImportGpxRequested
         )
     }
 
@@ -50,6 +88,8 @@ struct GeoMapEditorView: UIViewRepresentable {
         container.clipsToBounds = true
 
         let uc = WKUserContentController()
+        GeoMapWebViewStyleInjection.inject(into: uc)
+        GeoMapWebViewBoxiconsInjection.inject(into: uc)
         uc.add(coordinator, name: "geoMapEditorReady")
         uc.add(coordinator, name: "geoMapCreatePin")
         uc.add(coordinator, name: "geoMapPinMoved")
@@ -57,6 +97,11 @@ struct GeoMapEditorView: UIViewRepresentable {
         uc.add(coordinator, name: "geoMapViewportChanged")
         uc.add(coordinator, name: "geoMapOpenPinNote")
         uc.add(coordinator, name: "geoMapJSError")
+        uc.add(coordinator, name: "geoMapDebugLog")
+        uc.add(coordinator, name: "geoMapFeatureSelected")
+        uc.add(coordinator, name: "geoMapSelectionCleared")
+        uc.add(coordinator, name: "geoMapImportGpxRequested")
+        uc.add(coordinator, name: "geoMap3DChanged")
 
         let config = WKWebViewConfiguration()
         config.userContentController = uc
@@ -98,22 +143,27 @@ struct GeoMapEditorView: UIViewRepresentable {
         context.coordinator.onRemovePin = onRemovePin
         context.coordinator.onViewportChanged = onViewportChanged
         context.coordinator.onOpenPinNote = onOpenPinNote
+        context.coordinator.onFeatureSelected = onFeatureSelected
+        context.coordinator.onSelectionCleared = onSelectionCleared
+        context.coordinator.onImportGpxRequested = onImportGpxRequested
         context.coordinator.latestViewportJSON = viewportJSON
         context.coordinator.latestMarkers = markers
-        context.coordinator.syncMarkersFromSwiftUIIfNeeded()
-        context.coordinator.invalidateLeafletIfBoundsChanged(containerBounds: container.bounds)
+        context.coordinator.latestTracks = tracks
+        context.coordinator.latestSettingsJSON = settingsJSON
+        context.coordinator.syncFromSwiftUIIfNeeded()
+        context.coordinator.invalidateMapIfBoundsChanged(containerBounds: container.bounds)
     }
 
     static func dismantleUIView(_ container: UIView, coordinator: Coordinator) {
         guard let webView = coordinator.webView else { return }
         let uc = webView.configuration.userContentController
-        uc.removeScriptMessageHandler(forName: "geoMapEditorReady")
-        uc.removeScriptMessageHandler(forName: "geoMapCreatePin")
-        uc.removeScriptMessageHandler(forName: "geoMapPinMoved")
-        uc.removeScriptMessageHandler(forName: "geoMapPinRemoved")
-        uc.removeScriptMessageHandler(forName: "geoMapViewportChanged")
-        uc.removeScriptMessageHandler(forName: "geoMapOpenPinNote")
-        uc.removeScriptMessageHandler(forName: "geoMapJSError")
+        for name in [
+            "geoMapEditorReady", "geoMapCreatePin", "geoMapPinMoved", "geoMapPinRemoved",
+            "geoMapViewportChanged", "geoMapOpenPinNote", "geoMapJSError", "geoMapDebugLog",
+            "geoMapFeatureSelected", "geoMapSelectionCleared", "geoMapImportGpxRequested", "geoMap3DChanged"
+        ] {
+            uc.removeScriptMessageHandler(forName: name)
+        }
     }
 
     // MARK: - Coordinator
@@ -125,31 +175,41 @@ struct GeoMapEditorView: UIViewRepresentable {
         var onRemovePin: ((_ noteId: String) -> Void)?
         var onViewportChanged: ((_ json: String) -> Void)?
         var onOpenPinNote: ((_ noteId: String) -> Void)?
-        private let initialMarkers: [GeoMapPin]
-        /// Updated from SwiftUI so the first `injectMarkers` uses the latest viewport when content loads async.
+        var onFeatureSelected: ((_ noteId: String, _ kind: GeoMapFeatureKind, _ markFocus: GeoMapMarkFocus?) -> Void)?
+        var onSelectionCleared: (() -> Void)?
+        var onImportGpxRequested: (() -> Void)?
         var latestViewportJSON: String
-        /// Current pins from SwiftUI (`loadGeoMapPins` may finish after the web page is ready).
         var latestMarkers: [GeoMapPin]
+        var latestTracks: [GeoMapTrack]
+        var latestSettingsJSON: String
         private var lastSyncedMarkersFingerprint = ""
+        private var lastSyncedTracksFingerprint = ""
+        private var lastSyncedSettingsJSON = ""
         private var editorReady = false
         private var mapReady = false
-        /// Last container size we told Leaflet about (WKWebView often starts at 0×0 before SwiftUI lays out).
         private var lastInvalidateBounds: CGRect = .null
 
-        init(viewportJSON: String, markers: [GeoMapPin],
+        init(viewportJSON: String, markers: [GeoMapPin], tracks: [GeoMapTrack], settingsJSON: String,
              onCreatePin: ((_ lat: Double, _ lng: Double) -> Void)?,
              onMovePin: ((_ noteId: String, _ lat: Double, _ lng: Double) -> Void)?,
              onRemovePin: ((_ noteId: String) -> Void)?,
              onViewportChanged: ((_ json: String) -> Void)?,
-             onOpenPinNote: ((_ noteId: String) -> Void)?) {
+             onOpenPinNote: ((_ noteId: String) -> Void)?,
+             onFeatureSelected: ((_ noteId: String, _ kind: GeoMapFeatureKind, _ markFocus: GeoMapMarkFocus?) -> Void)?,
+             onSelectionCleared: (() -> Void)?,
+             onImportGpxRequested: (() -> Void)?) {
             self.latestViewportJSON = viewportJSON
             self.latestMarkers = markers
-            self.initialMarkers = markers
+            self.latestTracks = tracks
+            self.latestSettingsJSON = settingsJSON
             self.onCreatePin = onCreatePin
             self.onMovePin = onMovePin
             self.onRemovePin = onRemovePin
             self.onViewportChanged = onViewportChanged
             self.onOpenPinNote = onOpenPinNote
+            self.onFeatureSelected = onFeatureSelected
+            self.onSelectionCleared = onSelectionCleared
+            self.onImportGpxRequested = onImportGpxRequested
         }
 
         func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -158,16 +218,14 @@ struct GeoMapEditorView: UIViewRepresentable {
                 editorReady = true
                 mapReady = false
                 lastSyncedMarkersFingerprint = ""
+                lastSyncedTracksFingerprint = ""
+                lastSyncedSettingsJSON = ""
                 lastInvalidateBounds = .null
-                let wvFrame = webView?.frame ?? .zero
-                let markerCount = self.latestMarkers.count
-                let vpPrefix = String(self.latestViewportJSON.prefix(80))
-                Log.geoMap.info("GeoMapEditor READY: webViewFrame=\(wvFrame.width)×\(wvFrame.height) markers=\(markerCount) viewport=\(vpPrefix)")
-                injectMarkers(latestMarkers)
+                injectInitialState()
 
-            case "geoMapJSError":
+            case "geoMapJSError", "geoMapDebugLog":
                 let msg = (message.body as? String) ?? "unknown"
-                Log.geoMap.error("GeoMapEditor JS_ERROR: \(msg)")
+                GeoMapBridgeLogging.handleScriptMessage(name: message.name, body: msg)
 
             case "geoMapCreatePin":
                 guard let body = message.body as? String,
@@ -175,9 +233,7 @@ struct GeoMapEditorView: UIViewRepresentable {
                       let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let lat = dict["lat"] as? Double,
                       let lng = dict["lng"] as? Double else { return }
-                DispatchQueue.main.async { [weak self] in
-                    self?.onCreatePin?(lat, lng)
-                }
+                DispatchQueue.main.async { [weak self] in self?.onCreatePin?(lat, lng) }
 
             case "geoMapPinMoved":
                 guard let body = message.body as? String,
@@ -186,30 +242,48 @@ struct GeoMapEditorView: UIViewRepresentable {
                       let noteId = dict["noteId"] as? String,
                       let lat = dict["lat"] as? Double,
                       let lng = dict["lng"] as? Double else { return }
-                DispatchQueue.main.async { [weak self] in
-                    self?.onMovePin?(noteId, lat, lng)
-                }
+                DispatchQueue.main.async { [weak self] in self?.onMovePin?(noteId, lat, lng) }
 
             case "geoMapPinRemoved":
                 guard let body = message.body as? String,
                       let data = body.data(using: .utf8),
                       let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let noteId = dict["noteId"] as? String else { return }
-                DispatchQueue.main.async { [weak self] in
-                    self?.onRemovePin?(noteId)
-                }
+                DispatchQueue.main.async { [weak self] in self?.onRemovePin?(noteId) }
 
             case "geoMapViewportChanged":
                 guard let json = message.body as? String else { return }
-                DispatchQueue.main.async { [weak self] in
-                    self?.onViewportChanged?(json)
-                }
+                DispatchQueue.main.async { [weak self] in self?.onViewportChanged?(json) }
 
             case "geoMapOpenPinNote":
                 guard let noteId = message.body as? String, !noteId.isEmpty else { return }
-                DispatchQueue.main.async { [weak self] in
-                    self?.onOpenPinNote?(noteId)
+                DispatchQueue.main.async { [weak self] in self?.onOpenPinNote?(noteId) }
+
+            case "geoMapFeatureSelected":
+                guard let body = message.body as? String,
+                      let data = body.data(using: .utf8),
+                      let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let noteId = dict["noteId"] as? String,
+                      let kindRaw = dict["kind"] as? String,
+                      let kind = GeoMapFeatureKind(rawValue: kindRaw) else { return }
+                var markFocus: GeoMapMarkFocus?
+                if let markId = dict["markId"] as? String,
+                   let lat = dict["lat"] as? Double,
+                   let lng = dict["lng"] as? Double {
+                    markFocus = GeoMapMarkFocus(noteId: noteId, markId: markId, lat: lat, lng: lng)
                 }
+                DispatchQueue.main.async { [weak self] in
+                    self?.onFeatureSelected?(noteId, kind, markFocus)
+                }
+
+            case "geoMapSelectionCleared":
+                DispatchQueue.main.async { [weak self] in self?.onSelectionCleared?() }
+
+            case "geoMapImportGpxRequested":
+                DispatchQueue.main.async { [weak self] in self?.onImportGpxRequested?() }
+
+            case "geoMap3DChanged":
+                break
 
             default:
                 break
@@ -217,10 +291,14 @@ struct GeoMapEditorView: UIViewRepresentable {
         }
 
         private static func markersFingerprint(_ pins: [GeoMapPin]) -> String {
-            pins.map { "\($0.noteId)|\($0.title)|\($0.lat)|\($0.lng)" }.sorted().joined(separator: "\u{1e}")
+            pins.map { "\($0.noteId)|\($0.title)|\($0.lat)|\($0.lng)|\($0.markerColorHex)|\($0.iconClass ?? "")" }.sorted().joined(separator: "\u{1e}")
         }
 
-        func invalidateLeafletIfBoundsChanged(containerBounds: CGRect) {
+        private static func tracksFingerprint(_ tracks: [GeoMapTrack]) -> String {
+            tracks.map { "\($0.noteId)|\($0.title)|\($0.summaryTitle)|\($0.lines.count)|\($0.waypoints.count)|\($0.markerColorHex)|\($0.iconClass ?? "")" }.sorted().joined(separator: "\u{1e}")
+        }
+
+        func invalidateMapIfBoundsChanged(containerBounds: CGRect) {
             guard mapReady, let webView else { return }
             guard containerBounds.width > 1, containerBounds.height > 1 else { return }
             if lastInvalidateBounds.width > 0,
@@ -235,73 +313,123 @@ struct GeoMapEditorView: UIViewRepresentable {
             )
         }
 
-        /// When pins arrive after `geoMapEditorReady`, push them without tearing down the map.
-        func syncMarkersFromSwiftUIIfNeeded() {
+        func syncFromSwiftUIIfNeeded() {
             guard editorReady, mapReady, let webView else { return }
-            let fp = Self.markersFingerprint(latestMarkers)
-            guard fp != lastSyncedMarkersFingerprint else { return }
-            lastSyncedMarkersFingerprint = fp
-            let markersStr = Self.jsonEscapedMarkersArray(latestMarkers)
-            webView.evaluateJavaScript("window.geoMapEditor.loadMarkers('\(markersStr)');") { _, error in
-                if let error {
-                    Log.geoMap.error("geoMapEditor.loadMarkers (sync) failed: \(error.localizedDescription)")
+            let markerFP = Self.markersFingerprint(latestMarkers)
+            if markerFP != lastSyncedMarkersFingerprint {
+                lastSyncedMarkersFingerprint = markerFP
+                Log.geoMap.info("[geo-map-debug] Swift sync pins → JS count=\(self.latestMarkers.count)")
+                if let markersJSON = Self.markersJSONArray(latestMarkers) {
+                    webView.evaluateJavaScript("window.geoMapEditor.loadMarkersData(\(markersJSON));") { _, error in
+                        if let error { Log.geoMap.error("geoMapEditor.loadMarkers sync failed: \(error.localizedDescription)") }
+                    }
+                }
+            }
+            let trackFP = Self.tracksFingerprint(latestTracks)
+            if trackFP != lastSyncedTracksFingerprint {
+                lastSyncedTracksFingerprint = trackFP
+                Log.geoMap.info("[geo-map-debug] Swift sync tracks → JS count=\(self.latestTracks.count)")
+                if let tracksJSON = Self.tracksJSONArray(latestTracks) {
+                    webView.evaluateJavaScript("window.geoMapEditor.loadTracksData(\(tracksJSON));") { _, error in
+                        if let error { Log.geoMap.error("geoMapEditor.loadTracks sync failed: \(error.localizedDescription)") }
+                    }
+                }
+            }
+            if latestSettingsJSON != lastSyncedSettingsJSON {
+                lastSyncedSettingsJSON = latestSettingsJSON
+                Log.geoMap.info("[geo-map-debug] Swift sync settings → JS")
+                webView.evaluateJavaScript("window.geoMapEditor.applySettings('\(Self.jsonEscaped(latestSettingsJSON))');") { _, error in
+                    if let error { Log.geoMap.error("geoMapEditor.applySettings sync failed: \(error.localizedDescription)") }
                 }
             }
         }
 
-        private static func jsonEscapedMarkersArray(_ pins: [GeoMapPin]) -> String {
-            let arr = pins.map { pin in
-                ["noteId": pin.noteId, "title": pin.title, "lat": pin.lat, "lng": pin.lng] as [String: Any]
+        private static func markersJSONArray(_ pins: [GeoMapPin]) -> String? {
+            let arr = pins.map { pin -> [String: Any] in
+                var dict: [String: Any] = [
+                    "noteId": pin.noteId, "title": pin.title,
+                    "lat": pin.lat, "lng": pin.lng,
+                    "color": pin.markerColorHex,
+                    "iconClass": pin.iconClass ?? GeoMapMarkerIconClass.forNote(type: .text, mime: "", iconClassLabel: nil, childNoteCount: 0),
+                ]
+                return dict
             }
-            if let data = try? JSONSerialization.data(withJSONObject: arr),
-               let s = String(data: data, encoding: .utf8) {
-                return s.replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "'", with: "\\'")
-                    .replacingOccurrences(of: "\n", with: "\\n")
-                    .replacingOccurrences(of: "\r", with: "\\r")
-            }
-            return "[]"
+            return jsonString(arr)
         }
 
-        func injectMarkers(_ pins: [GeoMapPin]) {
-            guard editorReady, let webView else { return }
+        private static func tracksJSONArray(_ tracks: [GeoMapTrack]) -> String? {
+            let arr = tracks.map { track -> [String: Any] in
+                var dict: [String: Any] = [
+                    "noteId": track.noteId,
+                    "title": track.title,
+                    "summaryTitle": track.summaryTitle,
+                    "lineNames": track.lineNames,
+                    "lines": track.lines,
+                    "color": track.markerColorHex,
+                    "waypoints": track.waypoints.map { waypoint -> [String: Any] in
+                        var wpt: [String: Any] = ["lng": waypoint.lng, "lat": waypoint.lat]
+                        if let name = waypoint.name, !name.isEmpty { wpt["name"] = name }
+                        return wpt
+                    },
+                ]
+                if let icon = track.iconClass { dict["iconClass"] = icon }
+                return dict
+            }
+            return jsonString(arr)
+        }
 
-            let escaped = latestViewportJSON
-                .replacingOccurrences(of: "\\", with: "\\\\")
+        private static func jsonString(_ object: Any) -> String? {
+            guard let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+
+        private static func jsonEscaped(_ raw: String) -> String {
+            raw.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "'", with: "\\'")
                 .replacingOccurrences(of: "\n", with: "\\n")
                 .replacingOccurrences(of: "\r", with: "\\r")
+        }
 
-            let markersStr = Self.jsonEscapedMarkersArray(pins)
-
-            let js = "window.geoMapEditor.init('\(escaped)'); window.geoMapEditor.loadMarkers('\(markersStr)');"
-            Log.geoMap.info("GeoMapEditor injectMarkers: pins=\(pins.count) viewportLen=\(escaped.count)")
+        func injectInitialState() {
+            guard editorReady, let webView else { return }
+            guard let markersJSON = Self.markersJSONArray(latestMarkers),
+                  let tracksJSON = Self.tracksJSONArray(latestTracks) else {
+                Log.geoMap.error("GeoMapEditor init JSON encoding failed")
+                return
+            }
+            let js = """
+            window.geoMapEditor.init(\(latestViewportJSON), \(latestSettingsJSON));
+            window.geoMapEditor.loadMarkersData(\(markersJSON));
+            window.geoMapEditor.loadTracksData(\(tracksJSON));
+            """
+            Log.geoMap.info(
+                "[markers] Swift inject init pins=\(GeoMapBridgeLogging.markersSummary(self.latestMarkers)) tracks=\(GeoMapBridgeLogging.tracksSummary(self.latestTracks))"
+            )
             webView.evaluateJavaScript(js) { _, error in
                 if let error {
-                    Log.geoMap.error("GeoMapEditor init/load JS FAILED: \(error.localizedDescription)")
+                    Log.geoMap.error("GeoMapEditor init JS FAILED: \(error.localizedDescription)")
                 } else {
                     self.mapReady = true
-                    self.lastSyncedMarkersFingerprint = Self.markersFingerprint(pins)
-                    let wvFrame = webView.frame
-                    Log.geoMap.info("GeoMapEditor init OK: mapReady=true webViewFrame=\(wvFrame.width)×\(wvFrame.height)")
-                    let bump = "try{window.geoMapEditor&&window.geoMapEditor.invalidateSize&&window.geoMapEditor.invalidateSize();}catch(e){}"
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak webView] in
-                        webView?.evaluateJavaScript(bump, completionHandler: nil)
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak webView] in
-                        webView?.evaluateJavaScript(bump, completionHandler: nil)
-                    }
+                    self.lastSyncedMarkersFingerprint = Self.markersFingerprint(self.latestMarkers)
+                    self.lastSyncedTracksFingerprint = Self.tracksFingerprint(self.latestTracks)
+                    self.lastSyncedSettingsJSON = self.latestSettingsJSON
+                    self.bumpInvalidateSize()
                 }
             }
         }
 
-        func addPin(noteId: String, title: String, lat: Double, lng: Double) {
+        private func bumpInvalidateSize() {
+            guard let webView else { return }
+            let bump = "try{window.geoMapEditor&&window.geoMapEditor.invalidateSize&&window.geoMapEditor.invalidateSize();}catch(e){}"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { webView.evaluateJavaScript(bump, completionHandler: nil) }
+        }
+
+        func addPin(noteId: String, title: String, lat: Double, lng: Double, color: String? = nil) {
             guard editorReady, mapReady, let webView else { return }
-            let safeTitle = title
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
+            let safeTitle = Self.jsonEscaped(title)
+            let colorArg = color.map { "'\(Self.jsonEscaped($0))'" } ?? "null"
             webView.evaluateJavaScript(
-                "window.geoMapEditor.addPin('\(noteId)', '\(safeTitle)', \(lat), \(lng));"
+                "window.geoMapEditor.addPin('\(noteId)', '\(safeTitle)', \(lat), \(lng), \(colorArg));"
             ) { _, error in
                 if let error { Log.geoMap.error("geoMapEditor.addPin failed: \(error.localizedDescription)") }
             }
@@ -309,9 +437,57 @@ struct GeoMapEditorView: UIViewRepresentable {
 
         func removePin(noteId: String) {
             guard editorReady, mapReady, let webView else { return }
-            webView.evaluateJavaScript("window.geoMapEditor.removePin('\(noteId)');") { _, error in
+            let escaped = Self.jsonEscaped(noteId)
+            webView.evaluateJavaScript("window.geoMapEditor.removePin('\(escaped)');") { _, error in
                 if let error { Log.geoMap.error("geoMapEditor.removePin failed: \(error.localizedDescription)") }
             }
+        }
+
+        func applySettings(_ json: String) {
+            guard editorReady, mapReady, let webView else { return }
+            webView.evaluateJavaScript("window.geoMapEditor.applySettings('\(Self.jsonEscaped(json))');") { _, error in
+                if let error { Log.geoMap.error("geoMapEditor.applySettings failed: \(error.localizedDescription)") }
+            }
+        }
+
+        func loadTracks(_ json: String) {
+            guard editorReady, mapReady, let webView else { return }
+            webView.evaluateJavaScript("window.geoMapEditor.loadTracksData(\(json));") { _, error in
+                if let error { Log.geoMap.error("geoMapEditor.loadTracks failed: \(error.localizedDescription)") }
+            }
+        }
+
+        func set3DEnabled(_ enabled: Bool) {
+            guard editorReady, mapReady, let webView else { return }
+            webView.evaluateJavaScript("window.geoMapEditor.set3DEnabled(\(enabled));", completionHandler: nil)
+        }
+
+        func selectFeature(noteId: String, kind: GeoMapFeatureKind) {
+            guard editorReady, mapReady, let webView else { return }
+            webView.evaluateJavaScript(
+                "window.geoMapEditor.selectFeature('\(noteId)', '\(kind.rawValue)');",
+                completionHandler: nil
+            )
+        }
+
+        func clearSelection() {
+            guard editorReady, mapReady, let webView else { return }
+            webView.evaluateJavaScript("window.geoMapEditor.clearSelection();", completionHandler: nil)
+        }
+
+        func beginMovePin(noteId: String) {
+            guard editorReady, mapReady, let webView else { return }
+            webView.evaluateJavaScript("window.geoMapEditor.beginMovePin('\(noteId)');", completionHandler: nil)
+        }
+
+        func focusTrackMark(_ focus: GeoMapMarkFocus) {
+            guard editorReady, mapReady, let webView else { return }
+            let escapedMarkId = Self.jsonEscaped(focus.markId)
+            let escapedNoteId = Self.jsonEscaped(focus.noteId)
+            webView.evaluateJavaScript(
+                "window.geoMapEditor.focusTrackMark('\(escapedNoteId)', '\(escapedMarkId)', \(focus.lng), \(focus.lat));",
+                completionHandler: nil
+            )
         }
 
         func getViewport(completion: @escaping (String) -> Void) {
@@ -329,5 +505,14 @@ struct GeoMapEditorView: UIViewRepresentable {
                 }
             }
         }
+    }
+}
+
+extension GeoMapEditorView: Equatable {
+    static func == (lhs: GeoMapEditorView, rhs: GeoMapEditorView) -> Bool {
+        lhs.viewportJSON == rhs.viewportJSON
+            && lhs.markers == rhs.markers
+            && lhs.tracks == rhs.tracks
+            && lhs.settingsJSON == rhs.settingsJSON
     }
 }

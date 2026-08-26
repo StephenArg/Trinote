@@ -7,6 +7,15 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     private var session: URLSession!
     private var reconnectAttempt = 0
     private var debounceTask: Task<Void, Never>?
+    /// Invalidates receive loops belonging to sockets we have already torn down, so a stale
+    /// completion cannot drive a reconnect for a connection nobody is using any more.
+    private var connectionGeneration = 0
+    private var isReconnectScheduled = false
+    private var lastPingAckAt: Date?
+
+    /// We answer the server's `ping` with a message of the same type, so without a floor the two
+    /// sides can trade pings as fast as the socket allows. Trilium's own client pings once a second.
+    private static let pingAckMinimumInterval: TimeInterval = 1
 
     private let cookieStorage: HTTPCookieStorage
     private let baseURL: URL
@@ -45,35 +54,39 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
         let t = session.webSocketTask(with: request)
         task = t
         t.resume()
-        reconnectAttempt = 0
-        receiveLoop()
+        let generation = connectionGeneration
+        receiveLoop(generation: generation)
     }
 
     func stop() {
+        connectionGeneration &+= 1
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         debounceTask?.cancel()
         debounceTask = nil
     }
 
-    private func receiveLoop() {
-        task?.receive { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let message):
-                switch message {
-                case .string(let text):
-                    Task { @MainActor [weak self] in self?.handleMessageText(text) }
-                case .data(let data):
-                    if let text = String(data: data, encoding: .utf8) {
-                        Task { @MainActor [weak self] in self?.handleMessageText(text) }
+    private func receiveLoop(generation: Int) {
+        guard generation == connectionGeneration, let task else { return }
+        task.receive { [weak self] result in
+            Task { @MainActor [weak self] in
+                guard let self, generation == self.connectionGeneration else { return }
+                switch result {
+                case .success(let message):
+                    switch message {
+                    case .string(let text):
+                        self.handleMessageText(text)
+                    case .data(let data):
+                        if let text = String(data: data, encoding: .utf8) {
+                            self.handleMessageText(text)
+                        }
+                    @unknown default:
+                        break
                     }
-                @unknown default:
-                    break
+                    self.receiveLoop(generation: generation)
+                case .failure:
+                    self.scheduleReconnect()
                 }
-                Task { @MainActor in self.receiveLoop() }
-            case .failure:
-                Task { @MainActor in self.scheduleReconnect() }
             }
         }
     }
@@ -105,16 +118,24 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func sendPingAck() {
+        let now = Date()
+        if let lastPingAckAt, now.timeIntervalSince(lastPingAckAt) < Self.pingAckMinimumInterval {
+            return
+        }
+        lastPingAckAt = now
         let payload = #"{"type":"ping"}"#
         task?.send(.string(payload)) { _ in }
     }
 
     private func scheduleReconnect() {
+        guard !isReconnectScheduled else { return }
+        isReconnectScheduled = true
         stop()
         reconnectAttempt = min(reconnectAttempt + 1, 8)
         let delay = min(Double(reconnectAttempt) * 1.5, 30)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            self.isReconnectScheduled = false
             self.start()
         }
     }
@@ -124,6 +145,16 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
         c.scheme = (c.scheme == "https") ? "wss" : "ws"
         guard let u = c.url else { return nil }
         return u
+    }
+
+    nonisolated func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didOpenWithProtocol protocol: String?
+    ) {
+        Task { @MainActor in
+            self.reconnectAttempt = 0
+        }
     }
 
     nonisolated func urlSession(

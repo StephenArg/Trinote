@@ -135,6 +135,11 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: TrinoteTests
+        excludes:
+          - Fixtures/**
+    resources:
+      - path: TrinoteTests/Fixtures
+        type: folder
     dependencies:
       - target: Trinote
     settings:

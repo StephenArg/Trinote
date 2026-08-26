@@ -176,6 +176,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         webView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
 
         if #available(iOS 16.4, *) {
             webView.isInspectable = false
@@ -834,7 +835,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             return { search: search, clear: clear, next: next, prev: prev, matchCount: matchCount, active1Based: active1Based, activeRectInViewport: activeRectInViewport, goToMatch: goToMatch };
         })();
         function reportHeight() {
-            const h = document.body.scrollHeight;
+            const h = Math.ceil(Math.max(
+                document.body.scrollHeight,
+                document.body.offsetHeight,
+                document.documentElement.scrollHeight
+            ));
             window.webkit.messageHandlers.heightUpdate.postMessage(h);
         }
         window.addEventListener('load', reportHeight);
@@ -1657,6 +1662,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             switch message.name {
             case "heightUpdate":
                 if let height = message.body as? CGFloat, height > 0 {
+                    if let webView {
+                        webView.scrollView.setContentOffset(.zero, animated: false)
+                    }
                     onHeightChanged?(height)
                 }
             case "noteLink":
