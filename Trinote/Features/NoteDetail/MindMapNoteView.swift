@@ -3,9 +3,11 @@ import WebKit
 
 struct MindMapNoteView: View {
     let json: String
+    /// Serves `trinote-img://` photos rewritten from Trilium `api/attachments` / `api/images` URLs.
+    var imageBytes: TriliumImageSchemeHandler.ByteProvider?
 
     var body: some View {
-        MindMapWebView(json: json)
+        MindMapWebView(json: json, imageBytes: imageBytes)
             // Full-size host so the blocker joins the nav hierarchy (zero-frame hosts often don't).
             .background {
                 NavigationPopGestureBlocker(blocked: true, label: "MindMapNote")
@@ -21,6 +23,7 @@ struct MindMapNoteView: View {
 
 private struct MindMapWebView: UIViewRepresentable {
     let json: String
+    var imageBytes: TriliumImageSchemeHandler.ByteProvider?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -29,6 +32,11 @@ private struct MindMapWebView: UIViewRepresentable {
         uc.add(context.coordinator, name: "mindmapViewerReady")
         let config = WKWebViewConfiguration()
         config.userContentController = uc
+        if let imageBytes {
+            let schemeHandler = TriliumImageSchemeHandler(provider: imageBytes)
+            config.setURLSchemeHandler(schemeHandler, forURLScheme: TriliumImageScheme.scheme)
+            context.coordinator.imageSchemeHandler = schemeHandler
+        }
         let webView = PopGestureSuppressingWKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.backgroundColor = .clear
@@ -62,6 +70,8 @@ private struct MindMapWebView: UIViewRepresentable {
 
     class Coordinator: NSObject, WKScriptMessageHandler {
         var json: String = ""
+        /// Held so the handler outlives the configuration that registered it.
+        var imageSchemeHandler: TriliumImageSchemeHandler?
         weak var webView: WKWebView?
         private var isReady = false
         private var lastRenderedJSON: String?

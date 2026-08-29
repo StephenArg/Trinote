@@ -4,10 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <link rel="stylesheet" href="vendor/MindElixir.css">
+<link rel="stylesheet" href="vendor/mindmap-node-menu.css">
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-touch-callout: none; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; touch-action: none; }
-    #map { width: 100%; height: 100%; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; touch-action: manipulation; }
+    #map { width: 100%; height: 100%; touch-action: none; }
     #loading {
         font-family: -apple-system, system-ui, sans-serif;
         color: #888; font-size: 15px;
@@ -24,8 +25,19 @@
         background: rgba(0,0,0,0.06);
         display: none; z-index: 10;
     }
+    .mind-elixir-toolbar.lt span {
+        border-radius: 8px;
+        padding: 3px;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .mind-elixir-toolbar.lt span.is-active {
+        background: rgba(128, 128, 128, 0.35);
+    }
     @media (prefers-color-scheme: dark) {
         #error { background: rgba(255,255,255,0.08); }
+        .mind-elixir-toolbar.lt span.is-active {
+            background: rgba(255, 255, 255, 0.16);
+        }
     }
 
     #link-popup {
@@ -68,10 +80,36 @@
 
 <script src="vendor/MindElixir.iife.js"></script>
 <script src="vendor/mindmap-gestures.js"></script>
+<script src="vendor/mindmap-node-menu.js"></script>
 <script>
 const ME = MindElixir.default || MindElixir;
 const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 let mind = null;
+
+function layoutDirection(data) {
+    const d = data && data.direction;
+    return (d === 0 || d === 1 || d === 2 || d === 3) ? d : ME.SIDE;
+}
+
+function installMindMapDownLayout(instance) {
+    const bar = instance.container && instance.container.querySelector('.mind-elixir-toolbar.lt');
+    if (!bar || bar.querySelector('#tbltd')) return;
+    const span = document.createElement('span');
+    span.id = 'tbltd';
+    span.setAttribute('aria-label', 'Top-down layout');
+    span.innerHTML = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4.6" r="2.15"/><path d="M11.2 6.6h1.6v3.5h-1.6z"/><path d="M6.1 10.1h11.8v1.6H6.1z"/><path d="M5.3 10.1h1.6v4.3H5.3z"/><path d="M17.1 10.1h1.6v4.3h-1.6z"/><circle cx="6.1" cy="19.2" r="2.15"/><circle cx="17.9" cy="19.2" r="2.15"/></svg>';
+    span.onclick = function () { instance.initDown(); };
+    bar.appendChild(span);
+
+    function syncActive() {
+        const id = { 0: 'tbltl', 1: 'tbltr', 2: 'tblts', 3: 'tbltd' }[instance.direction];
+        bar.querySelectorAll('span').forEach(function (el) {
+            el.classList.toggle('is-active', el.id === id);
+        });
+    }
+    syncActive();
+    instance.bus.addListener('changeDirection', syncActive);
+}
 
 window.mindmapEditor = {
     load(jsonString) {
@@ -83,19 +121,24 @@ window.mindmapEditor = {
 
             mind = new ME({
                 el: '#map',
-                direction: data.direction || ME.SIDE,
+                direction: layoutDirection(data),
                 draggable: true,
                 editable: true,
                 contextMenu: true,
                 toolBar: true,
-                nodeMenu: true,
                 keypress: true,
-                theme: isDark ? MindElixir.DARK_THEME : null
+                theme: isDark ? MindElixir.DARK_THEME : null,
+                imageProxy: window.trinoteMindMapImageProxy
             });
             mind.init(data);
             installMindMapPinchPan(mind);
+            installMindMapNodeMenu(mind);
+            installMindMapDownLayout(mind);
 
             mind.bus.addListener('operation', function() {
+                try { window.webkit.messageHandlers.mindmapChanged.postMessage('changed'); } catch(e) {}
+            });
+            mind.bus.addListener('changeDirection', function() {
                 try { window.webkit.messageHandlers.mindmapChanged.postMessage('changed'); } catch(e) {}
             });
 

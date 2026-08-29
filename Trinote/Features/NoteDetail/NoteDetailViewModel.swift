@@ -111,11 +111,28 @@ final class NoteDetailViewModel {
     @ObservationIgnored private var metadataRefreshTask: Task<Void, Never>?
     /// Blob id from the latest `getNote` response (used to skip redundant `getNoteContent` for empty notes).
     private var serverBlobId: String?
+    /// Settings appearance (light/dark) so include-card mermaid SVGs can be re-baked without restarting.
+    @ObservationIgnored nonisolated(unsafe) private var appearanceModeObserver: NSObjectProtocol?
 
     init(noteId: String, appState: AppState, seedChildSummaries: [ChildNoteSummary]? = nil) {
         self.noteId = noteId
         self.appState = appState
         self.seedChildSummaries = seedChildSummaries
+        appearanceModeObserver = NotificationCenter.default.addObserver(
+            forName: .trinoteAppearanceModeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.rerenderMermaidPreviewsForAppearanceChange()
+            }
+        }
+    }
+
+    deinit {
+        if let appearanceModeObserver {
+            NotificationCenter.default.removeObserver(appearanceModeObserver)
+        }
     }
 
     /// Called when `.trinoteOfflineNoteIdReplaced` swaps an offline `ol_*` id for a server id while this
@@ -641,6 +658,30 @@ final class NoteDetailViewModel {
     }
 
     // MARK: - Include note (Trilium `<section class="include-note">`)
+
+    /// Re-bake read-only mermaid include/image-link SVGs after Settings appearance changes.
+    /// Must restart from `rawContentString`: resolved HTML has already replaced include placeholders
+    /// with themed SVG, so running `applyIncludeNoteResolutionIfNeeded` on `contentString` is a no-op.
+    private func rerenderMermaidPreviewsForAppearanceChange() async {
+        guard !isEditing else { return }
+        guard note?.type == .text else { return }
+        guard let display = contentString, Self.displayHTMLContainsMermaidPreview(display) else { return }
+        guard let raw = rawContentString else { return }
+
+        if TriliumInlineImageCaching.hasResolvableInlineImageURLs(in: raw) {
+            let inlined = await inlineAttachmentImages(in: raw)
+            guard !isEditing else { return }
+            contentString = inlined
+        } else {
+            contentString = raw
+        }
+        guard !isEditing else { return }
+        await applyIncludeNoteResolutionIfNeeded()
+    }
+
+    private static func displayHTMLContainsMermaidPreview(_ html: String) -> Bool {
+        html.containsASCIICaseInsensitive("mermaid")
+    }
 
     private func applyIncludeNoteResolutionIfNeeded() async {
         guard let note, note.type == .text else { return }

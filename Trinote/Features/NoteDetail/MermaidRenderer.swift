@@ -60,17 +60,11 @@ final class MermaidRenderer: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     }
 
     private func appearanceFingerprint() -> String {
-        UserDefaults.standard.string(forKey: "appearanceMode") ?? AppearanceMode.device.rawValue
+        AppearanceMode.stored.rawValue
     }
 
     private func applyInterfaceStyle(to webView: WKWebView) {
-        let raw = UserDefaults.standard.string(forKey: "appearanceMode") ?? ""
-        let mode = AppearanceMode(rawValue: raw) ?? .device
-        switch mode {
-        case .device: webView.overrideUserInterfaceStyle = .unspecified
-        case .light: webView.overrideUserInterfaceStyle = .light
-        case .dark: webView.overrideUserInterfaceStyle = .dark
-        }
+        webView.applyTrinoteAppearanceMode()
     }
 
     /// Attach the hidden `WKWebView` once; call from `MermaidRendererHost` when the app window exists.
@@ -113,14 +107,17 @@ final class MermaidRenderer: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     }
 
     /// Called when the user changes appearance in Settings so the next render uses a fresh `mermaid.initialize`.
-    func onAppearanceModeChanged() {
+    /// Reloads the hidden viewer and waits until it is ready so include-card SVGs can be re-baked immediately.
+    func onAppearanceModeChanged() async {
         let fp = appearanceFingerprint()
         cache.removeAll()
         lastAppearanceFingerprint = fp
         guard let webView else { return }
-        isReady = false
         applyInterfaceStyle(to: webView)
+        guard webView.url != nil else { return }
+        isReady = false
         webView.reload()
+        await waitUntilReady()
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -167,7 +164,7 @@ final class MermaidRenderer: NSObject, WKScriptMessageHandler, WKNavigationDeleg
 
     /// Bump when the rendering pipeline changes (HTML viewer CSS/JS, post-processing, layout-context width)
     /// so cached SVGs from older code paths are not served. Keeps appearance fingerprinting separate.
-    private static let rendererVersion = "v2-bodywidth"
+    private static let rendererVersion = "v5-pie-muted-dark"
 
     private func cacheKey(for source: String) -> String {
         let fp = appearanceFingerprint()
@@ -218,6 +215,7 @@ final class MermaidRenderer: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         }
 
         let b64 = Data(source.utf8).base64EncodedString()
+        let isDark = AppearanceMode.stored.usesDarkMermaidTheme
         // Use `callAsyncJavaScript` so WebKit properly awaits the `renderToString` Promise. Plain
         // `evaluateJavaScript` reports the Promise as "JavaScript execution returned a result of an
         // unsupported type" on current iOS SDKs. Argument key must be a valid JS identifier so we
@@ -227,14 +225,17 @@ final class MermaidRenderer: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         const bytes = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
         const src = new TextDecoder('utf-8').decode(bytes);
-        return await window.mermaidViewer.renderToString(src);
+        if (typeof window.trinoteApplyMermaidTheme === 'function') {
+            window.trinoteApplyMermaidTheme(!!isDarkArg);
+        }
+        return await window.mermaidViewer.renderToString(src, !!isDarkArg);
         """
 
         let svg: String? = await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
             let state = ContinuationState(cont: cont)
             webView.callAsyncJavaScript(
                 asyncBody,
-                arguments: ["b64Arg": b64],
+                arguments: ["b64Arg": b64, "isDarkArg": isDark],
                 in: nil,
                 in: .page
             ) { result in

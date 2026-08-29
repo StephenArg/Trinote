@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 enum AppearanceMode: String, CaseIterable, Identifiable {
     case device = "Device"
@@ -22,6 +23,19 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         case .device: return nil
         case .light: return .light
         case .dark: return .dark
+        }
+    }
+
+    static var stored: AppearanceMode {
+        AppearanceMode(rawValue: UserDefaults.standard.string(forKey: "appearanceMode") ?? "") ?? .device
+    }
+
+    /// Mermaid's `dark` vs `default` theme for the current Settings appearance.
+    var usesDarkMermaidTheme: Bool {
+        switch self {
+        case .dark: return true
+        case .light: return false
+        case .device: return UITraitCollection.current.userInterfaceStyle == .dark
         }
     }
 }
@@ -107,6 +121,9 @@ struct TrinoteApp: App {
                                     .allowsHitTesting(false)
                                     .accessibilityHidden(true)
                             }
+                            .background {
+                                MermaidDeviceAppearanceBridge()
+                            }
                             .shareImportHost(appState: appState)
                             .task {
                                 await appState.bootstrap()
@@ -114,7 +131,10 @@ struct TrinoteApp: App {
                                 appState.shareImport.checkForPendingPayload()
                             }
                             .onChange(of: appearanceMode) { _, _ in
-                                MermaidRenderer.shared.onAppearanceModeChanged()
+                                Task { @MainActor in
+                                    await MermaidRenderer.shared.onAppearanceModeChanged()
+                                    NotificationCenter.default.post(name: .trinoteAppearanceModeDidChange, object: nil)
+                                }
                             }
                     } else if let persistenceError {
                         VStack(spacing: 16) {
@@ -312,6 +332,24 @@ struct TrinoteApp: App {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
+    }
+}
+
+/// Reloads mermaid when iOS light/dark flips while Settings appearance is Device.
+/// Choosing Light or Dark in Settings is handled by `onChange(of: appearanceMode)` on `RootView`.
+private struct MermaidDeviceAppearanceBridge: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .onChange(of: colorScheme) { _, _ in
+                guard AppearanceMode.stored == .device else { return }
+                Task { @MainActor in
+                    await MermaidRenderer.shared.onAppearanceModeChanged()
+                    NotificationCenter.default.post(name: .trinoteAppearanceModeDidChange, object: nil)
+                }
+            }
     }
 }
 

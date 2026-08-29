@@ -35,6 +35,7 @@ struct HTMLNoteView: View {
     @AppStorage("customLightTextColor") private var customLightTextColor: String = "#1c1c1e"
     @AppStorage("customDarkTextColor") private var customDarkTextColor: String = "#aaaaaa"
     @AppStorage("noteCheckboxReorderEnabled") private var noteCheckboxReorderEnabled: Bool = true
+    @Environment(\.colorScheme) private var colorScheme
 
     private var themeColors: HTMLThemeColors {
         let theme = ColorTheme(rawValue: colorTheme) ?? .default
@@ -76,6 +77,7 @@ struct HTMLNoteView: View {
             },
             imageBytes: imageBytes,
             findControl: findControl,
+            colorScheme: colorScheme,
             onHeightChanged: { contentHeight = $0 },
             onImagePreview: { payload in fullScreenImage = payload }
         )
@@ -123,6 +125,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     var onAttachmentLinkTapped: ((String) -> Void)?
     var imageBytes: TriliumImageSchemeHandler.ByteProvider?
     var findControl: FindOnPageControl?
+    var colorScheme: ColorScheme
     var onHeightChanged: ((CGFloat) -> Void)?
     var onImagePreview: ((FullScreenImagePayload) -> Void)?
 
@@ -189,6 +192,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         handler.taskStateCycleEnabled = taskStateCycleEnabled
         handler.checkboxOnlyRevision = checkboxOnlyRevision
         handler.findControl = findControl
+        handler.lastAppliedColorScheme = colorScheme
+        webView.applyTrinoteAppearanceMode()
         let wrapped = Self.wrapHTMLTimed(
             html,
             theme: themeColors,
@@ -218,6 +223,17 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.onHeightChanged = onHeightChanged
         coordinator.onImagePreview = onImagePreview
         findControl?.registerHTMLWebView(webView)
+        webView.applyTrinoteAppearanceMode()
+        let appearanceChanged = coordinator.lastAppliedColorScheme != colorScheme
+        if appearanceChanged {
+            coordinator.lastAppliedColorScheme = colorScheme
+            let isDark = colorScheme == .dark ? "true" : "false"
+            webView.evaluateJavaScript(
+                "typeof window.trinoteRerenderMermaid === 'function' && window.trinoteRerenderMermaid(\(isDark));"
+            )
+        } else if coordinator.lastAppliedColorScheme == nil {
+            coordinator.lastAppliedColorScheme = colorScheme
+        }
 
         let tCompare = CFAbsoluteTimeGetCurrent()
         let htmlChanged = html != coordinator.loadedHTML
@@ -688,6 +704,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
           max-width: none;
           height: auto;
           display: block;
+        }
+        /* Mermaid `dark` paints pie1 as #1f2020, matching iOS dark backgrounds. */
+        @media (prefers-color-scheme: dark) {
+          path.pieCircle[fill="#1f2020"],
+          path.pieCircle[fill="#1F2020"] { fill: #100A0A !important; }
         }
         @media (prefers-color-scheme: dark) {
           section.trinote-include[data-note-type="canvas"] .trinote-include__inner--image,
@@ -1456,20 +1477,40 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             });
             return out;
           }
-          function renderAllMermaid() {
+          function renderAllMermaid(isDarkOverride) {
             try {
               if (!window.mermaid) return;
-              var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+              var isDark = (typeof isDarkOverride === 'boolean')
+                ? isDarkOverride
+                : window.matchMedia('(prefers-color-scheme: dark)').matches;
               mermaid.initialize({
                 startOnLoad: false,
                 securityLevel: 'strict',
                 theme: isDark ? 'dark' : 'default',
-                fontFamily: '-apple-system, system-ui, sans-serif'
+                fontFamily: '-apple-system, system-ui, sans-serif',
+                themeVariables: isDark ? {
+                  pie1: '#100A0A',
+                  pie2: '#3D1931',
+                  pie3: '#3C4548',
+                  pie4: '#1A1214',
+                  pie5: '#2A2428',
+                  pie6: '#4A2038',
+                  pie7: '#243038',
+                  pie8: '#2C1818',
+                  pie9: '#352030',
+                  pie10: '#1C2428',
+                  pie11: '#3A2830',
+                  pie12: '#2C2C30',
+                  pieStrokeColor: '#000000',
+                  pieOuterStrokeColor: '#000000',
+                  pieOpacity: '1'
+                } : undefined
               });
               var nodes = document.querySelectorAll('.mermaid:not([data-trinote-mermaid-rendered])');
               nodes.forEach(function(node, idx) {
+                var source = node.getAttribute('data-trinote-mermaid-source') || node.textContent || '';
+                node.setAttribute('data-trinote-mermaid-source', source);
                 node.setAttribute('data-trinote-mermaid-rendered', '1');
-                var source = node.textContent || '';
                 var id = 'trinote-mmd-' + idx + '-' + Math.random().toString(36).slice(2, 8);
                 function applyResult(svgString) {
                   node.innerHTML = trinoteFixMermaidSvgWidth(svgString);
@@ -1494,6 +1535,22 @@ private struct HTMLNoteWebView: UIViewRepresentable {
               trinoteSendDebug('[MMD-INLINE] renderAllMermaid throw err=' + (e && e.message || e));
             }
           }
+          window.trinoteRerenderMermaid = function(isDark) {
+            document.querySelectorAll('.mermaid[data-trinote-mermaid-source]').forEach(function(node) {
+              node.removeAttribute('data-trinote-mermaid-rendered');
+              node.textContent = node.getAttribute('data-trinote-mermaid-source') || '';
+            });
+            renderAllMermaid(isDark);
+          };
+          try {
+            var mql = window.matchMedia('(prefers-color-scheme: dark)');
+            var onScheme = function(e) {
+              var isDark = e && typeof e.matches === 'boolean' ? e.matches : undefined;
+              window.trinoteRerenderMermaid(isDark);
+            };
+            if (mql.addEventListener) mql.addEventListener('change', onScheme);
+            else if (mql.addListener) mql.addListener(onScheme);
+          } catch (e) {}
           if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', renderAllMermaid);
           else renderAllMermaid();
         })();
@@ -1614,6 +1671,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var taskStateCycleEnabled: Bool = false
         var checkboxOnlyRevision: Int = 0
         weak var findControl: FindOnPageControl?
+        var lastAppliedColorScheme: ColorScheme?
         var onNoteLinkTapped: ((String) -> Void)?
         var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
         var onTaskStateCycled: ((_ index: Int) -> Void)?

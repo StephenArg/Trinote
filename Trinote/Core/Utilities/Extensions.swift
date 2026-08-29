@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WebKit
 
 // MARK: - Deferred system share sheet (SwiftUI `.sheet` + `UIActivityViewController`)
 
@@ -54,6 +55,20 @@ extension Notification.Name {
     static let trinoteLastActiveOpenTabIdChanged = Notification.Name("TrinoteLastActiveOpenTabIdChanged")
     /// Posted on the main thread **before** `AppState.activeProfile` changes to another instance so tab stacks can pop note destinations (avoids showing the wrong server’s note id against the new profile).
     static let trinoteWillSwitchServerProfile = Notification.Name("TrinoteWillSwitchServerProfile")
+    /// Posted after Settings appearance (light/dark/device) is applied and `MermaidRenderer` has reloaded,
+    /// so read-only mermaid SVGs can re-render with the new theme without an app restart.
+    static let trinoteAppearanceModeDidChange = Notification.Name("TrinoteAppearanceModeDidChange")
+}
+
+extension WKWebView {
+    /// Aligns `prefers-color-scheme` with Settings → Appearance so mermaid (and other) CSS/JS themes update.
+    func applyTrinoteAppearanceMode() {
+        switch AppearanceMode.stored {
+        case .device: overrideUserInterfaceStyle = .unspecified
+        case .light: overrideUserInterfaceStyle = .light
+        case .dark: overrideUserInterfaceStyle = .dark
+        }
+    }
 }
 
 /// Thread-safe tracker for "ghost notes" — notes the server still lists in its

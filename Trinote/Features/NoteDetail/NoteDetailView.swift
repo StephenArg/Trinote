@@ -2047,7 +2047,12 @@ struct NoteDetailView: View {
             CanvasNoteView(noteId: note.noteId, attachments: vm.attachments, client: vm.client, excalidrawJSON: vm.contentString)
         case .mindMap:
             if let json = vm.contentString {
-                MindMapNoteView(json: json)
+                MindMapNoteView(
+                    json: json,
+                    imageBytes: { routeType, entityId in
+                        await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+                    }
+                )
             }
         case .spreadsheet:
             SpreadsheetNoteView(
@@ -2542,7 +2547,12 @@ struct NoteDetailView: View {
                 Divider()
 
                 if let json = vm.contentString {
-                    MindMapNoteView(json: json)
+                    MindMapNoteView(
+                        json: json,
+                        imageBytes: { routeType, entityId in
+                            await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+                        }
+                    )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     Spacer()
@@ -2587,7 +2597,10 @@ struct NoteDetailView: View {
             MindMapEditorView(
                 initialJSON: vm.editableContent,
                 bridge: mindMapEditorBridge,
-                onMapChanged: { mindMapHasUnsavedChanges = true }
+                onMapChanged: { mindMapHasUnsavedChanges = true },
+                imageBytes: { routeType, entityId in
+                    await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+                }
             )
             .onAppear {
                 mindMapHasUnsavedChanges = false

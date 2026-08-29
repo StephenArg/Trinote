@@ -4632,6 +4632,23 @@ function trinoteRunMermaidInSlot(slot) {
         startOnLoad: false,
         securityLevel: 'loose',
         theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
+        themeVariables: window.matchMedia('(prefers-color-scheme: dark)').matches ? {
+          pie1: '#100A0A',
+          pie2: '#3D1931',
+          pie3: '#3C4548',
+          pie4: '#1A1214',
+          pie5: '#2A2428',
+          pie6: '#4A2038',
+          pie7: '#243038',
+          pie8: '#2C1818',
+          pie9: '#352030',
+          pie10: '#1C2428',
+          pie11: '#3A2830',
+          pie12: '#2C2C30',
+          pieStrokeColor: '#000000',
+          pieOuterStrokeColor: '#000000',
+          pieOpacity: '1'
+        } : undefined
       });
     }
     const runOut = window.mermaid.run({ nodes: Array.from(nodes) });

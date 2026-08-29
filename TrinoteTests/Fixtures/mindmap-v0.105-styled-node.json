@@ -1,0 +1,59 @@
+{
+  "direction": 2,
+  "nodeData": {
+    "id": "root",
+    "topic": "Project Plan",
+    "root": true,
+    "children": [
+      {
+        "id": "n-styled",
+        "topic": "Styled node",
+        "style": {
+          "color": "#ffffff",
+          "background": "#e64553",
+          "fontSize": "16px",
+          "fontWeight": "bold"
+        },
+        "icons": ["🎯"],
+        "note": "<p>Rich-text memo from Trilium v0.105</p>",
+        "tags": ["priority"],
+        "hyperLink": "https://triliumnotes.org",
+        "unknownFutureKey": { "plugin": "desktop-only", "v": 2 },
+        "children": []
+      },
+      {
+        "id": "n-image",
+        "topic": "Image node",
+        "image": {
+          "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+          "width": 48,
+          "height": 48,
+          "fit": "contain"
+        },
+        "children": [
+          {
+            "id": "n-child",
+            "topic": "Nested child",
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  "arrows": [
+    {
+      "id": "arrow-1",
+      "label": "depends on",
+      "from": "n-styled",
+      "to": "n-image",
+      "delta1": { "x": 80, "y": 0 },
+      "delta2": { "x": -80, "y": 0 }
+    }
+  ],
+  "summaries": [],
+  "theme": {
+    "name": "Latte",
+    "type": "light"
+  },
+  "unknownRootExtension": { "desktopOnly": true }
+}

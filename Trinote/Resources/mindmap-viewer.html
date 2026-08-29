@@ -51,14 +51,17 @@ window.mindmapViewer = {
 
             mind = new ME({
                 el: '#map',
-                direction: data.direction || ME.SIDE,
+                direction: (data.direction === 0 || data.direction === 1 || data.direction === 2 || data.direction === 3)
+                    ? data.direction
+                    : ME.SIDE,
                 draggable: true,
                 editable: false,
                 contextMenu: false,
                 toolBar: false,
                 nodeMenu: false,
                 keypress: false,
-                theme: isDark ? MindElixir.DARK_THEME : null
+                theme: isDark ? MindElixir.DARK_THEME : null,
+                imageProxy: window.trinoteMindMapImageProxy
             });
             mind.init(data);
             installMindMapPinchPan(mind);

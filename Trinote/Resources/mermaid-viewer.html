@@ -39,6 +39,9 @@
         #diagram svg .treeView-node-label,
         #diagram svg g.tree-view text { fill: #ffffff !important; }
         #diagram svg .treeView-node-line { stroke: #ffffff !important; }
+        /* Native mermaid dark pie1 (#1f2020) matches iOS dark backgrounds; use the muted near-black instead. */
+        #diagram svg path.pieCircle[fill="#1f2020"],
+        #diagram svg path.pieCircle[fill="#1F2020"] { fill: #100A0A !important; }
     }
 </style>
 </head>
@@ -58,16 +61,63 @@ function trinoteMermaidLog(msg) {
 const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 const chosenTheme = isDark ? 'dark' : 'default';
 
+// Mermaid's `dark` theme sets pie1 = primaryColor (#1f2020), which matches iOS dark
+// backgrounds so the first slice disappears. Override with a categorical palette.
+// Mermaid's `dark` theme sets pie1 = #1f2020, which matches iOS dark backgrounds.
+// Use a muted near-black / plum / slate palette so slices stay dark but readable.
+function trinoteMermaidThemeVariables(isDark) {
+    if (!isDark) return undefined;
+    return {
+        pie1: '#100A0A',
+        pie2: '#3D1931',
+        pie3: '#3C4548',
+        pie4: '#1A1214',
+        pie5: '#2A2428',
+        pie6: '#4A2038',
+        pie7: '#243038',
+        pie8: '#2C1818',
+        pie9: '#352030',
+        pie10: '#1C2428',
+        pie11: '#3A2830',
+        pie12: '#2C2C30',
+        pieStrokeColor: '#000000',
+        pieOuterStrokeColor: '#000000',
+        pieOpacity: '1'
+    };
+}
+
 if (typeof window.mermaid !== 'undefined') {
     mermaid.initialize({
         startOnLoad: false,
         theme: chosenTheme,
         securityLevel: 'strict',
-        fontFamily: '-apple-system, system-ui, sans-serif'
+        fontFamily: '-apple-system, system-ui, sans-serif',
+        themeVariables: trinoteMermaidThemeVariables(isDark)
     });
 } else {
     trinoteMermaidLog('mermaid.initialize SKIPPED - window.mermaid undefined');
 }
+
+function trinoteApplyMermaidTheme(isDark) {
+    if (typeof window.mermaid === 'undefined') return;
+    mermaid.initialize({
+        startOnLoad: false,
+        theme: isDark ? 'dark' : 'default',
+        securityLevel: 'strict',
+        fontFamily: '-apple-system, system-ui, sans-serif',
+        themeVariables: trinoteMermaidThemeVariables(isDark)
+    });
+}
+window.trinoteApplyMermaidTheme = trinoteApplyMermaidTheme;
+
+function trinoteCoerceIsDark(value) {
+    if (typeof value === 'boolean') return value;
+    if (value === 1 || value === '1' || value === 'true') return true;
+    if (value === 0 || value === '0' || value === 'false') return false;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+let trinoteLastMermaidSource = '';
 
 // Re-initialize on color scheme change so mermaid picks up the new theme without a page reload. Native
 // (`MermaidRenderer.onAppearanceModeChanged`) will still reload in response to user appearance changes;
@@ -75,14 +125,10 @@ if (typeof window.mermaid !== 'undefined') {
 try {
     const mql = window.matchMedia('(prefers-color-scheme: dark)');
     const handler = function(e) {
-        const newTheme = e.matches ? 'dark' : 'default';
         try {
-            mermaid.initialize({
-                startOnLoad: false,
-                theme: newTheme,
-                securityLevel: 'strict',
-                fontFamily: '-apple-system, system-ui, sans-serif'
-            });
+            if (trinoteLastMermaidSource) {
+                window.mermaidViewer.render(trinoteLastMermaidSource, e.matches);
+            }
         } catch (err) { trinoteMermaidLog('re-init error: ' + (err.message || err)); }
     };
     if (mql.addEventListener) mql.addEventListener('change', handler);
@@ -121,7 +167,9 @@ function trinoteFixMermaidSvgWidth(svg) {
 const TRINOTE_MERMAID_RENDER_WIDTH_PX = 1200;
 
 window.mermaidViewer = {
-    async render(source) {
+    async render(source, isDark) {
+        trinoteApplyMermaidTheme(trinoteCoerceIsDark(isDark));
+        trinoteLastMermaidSource = typeof source === 'string' ? source : '';
         const loadEl = document.getElementById('loading');
         const diagEl = document.getElementById('diagram');
         const errEl = document.getElementById('error');
@@ -146,7 +194,7 @@ window.mermaidViewer = {
         bodyEl.style.width = TRINOTE_MERMAID_RENDER_WIDTH_PX + 'px';
         if (diagEl) diagEl.style.width = TRINOTE_MERMAID_RENDER_WIDTH_PX + 'px';
         try {
-            const { svg } = await mermaid.render('mermaid-graph', source);
+            const { svg } = await mermaid.render('mermaid-graph-' + Date.now(), source);
             loadEl.style.display = 'none';
             diagEl.innerHTML = trinoteFixMermaidSvgWidth(svg);
             reportHeight();
@@ -163,11 +211,16 @@ window.mermaidViewer = {
         }
     },
     /** Used by `MermaidRenderer` to pre-render linked-note includes without mutating `#diagram`. */
-    async renderToString(source) {
+    async renderToString(source, isDark) {
         // Empty source → empty SVG. `MermaidRenderer` treats `""` as "no diagram to inline",
         // which is the right behavior when an included note's mermaid block is blank.
         if (typeof source !== 'string' || !source.trim()) {
             return '';
+        }
+        if (typeof isDark === 'boolean' || typeof isDark === 'number' || typeof isDark === 'string') {
+            trinoteApplyMermaidTheme(trinoteCoerceIsDark(isDark));
+        } else {
+            trinoteApplyMermaidTheme(window.matchMedia('(prefers-color-scheme: dark)').matches);
         }
         const id = 'mermaid-graph-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
         const bodyEl = document.body;

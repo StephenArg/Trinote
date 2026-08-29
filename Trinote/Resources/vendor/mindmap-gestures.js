@@ -56,3 +56,21 @@
         container.addEventListener('pointercancel', onPointerEnd, { passive: true });
     };
 })();
+
+// Trilium desktop stores node photos as relative API URLs
+// (`api/attachments/{id}/image/…` or `api/images/{noteId}/…`). Mind maps load
+// from file://, so those never hit the server. Rewrite to trinote-img:// for
+// WKWebView; data:/blob: (Trinote uploads) and existing trinote-img:// stay.
+// MindElixir's imageProxy only changes <img src>, not node JSON, so save still
+// writes the canonical Trilium URL.
+window.trinoteMindMapImageProxy = function (url) {
+    if (!url || typeof url !== 'string') return url;
+    var trimmed = url.trim();
+    if (!trimmed) return url;
+    var head = trimmed.slice(0, 12).toLowerCase();
+    if (head.indexOf('data:') === 0 || head.indexOf('blob:') === 0) return url;
+    if (trimmed.toLowerCase().indexOf('trinote-img:') === 0) return url;
+    var match = trimmed.match(/api\/(attachments|images)\/([A-Za-z0-9_-]+)\//i);
+    if (!match) return url;
+    return 'trinote-img://' + match[1].toLowerCase() + '/' + match[2];
+};

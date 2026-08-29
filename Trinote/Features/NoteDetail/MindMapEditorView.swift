@@ -17,9 +17,16 @@ struct MindMapEditorView: View {
     let initialJSON: String
     let bridge: MindMapEditorBridge
     var onMapChanged: (() -> Void)?
+    /// Serves `trinote-img://` photos rewritten from Trilium `api/attachments` / `api/images` URLs.
+    var imageBytes: TriliumImageSchemeHandler.ByteProvider?
 
     var body: some View {
-        MindMapEditorWebView(initialJSON: initialJSON, bridge: bridge, onMapChanged: onMapChanged)
+        MindMapEditorWebView(
+            initialJSON: initialJSON,
+            bridge: bridge,
+            onMapChanged: onMapChanged,
+            imageBytes: imageBytes
+        )
             .background {
                 NavigationPopGestureBlocker(blocked: true, label: "MindMapEditor")
             }
@@ -30,6 +37,7 @@ private struct MindMapEditorWebView: UIViewRepresentable {
     let initialJSON: String
     let bridge: MindMapEditorBridge
     var onMapChanged: (() -> Void)?
+    var imageBytes: TriliumImageSchemeHandler.ByteProvider?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(initialJSON: initialJSON, onMapChanged: onMapChanged)
@@ -46,6 +54,11 @@ private struct MindMapEditorWebView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.userContentController = uc
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        if let imageBytes {
+            let schemeHandler = TriliumImageSchemeHandler(provider: imageBytes)
+            config.setURLSchemeHandler(schemeHandler, forURLScheme: TriliumImageScheme.scheme)
+            coordinator.imageSchemeHandler = schemeHandler
+        }
 
         let webView = PopGestureSuppressingWKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = coordinator
@@ -61,6 +74,7 @@ private struct MindMapEditorWebView: UIViewRepresentable {
             webView.isInspectable = true
         }
         coordinator.webView = webView
+        webView.applyTrinoteAppearanceMode()
 
         if let fileURL = Bundle.main.url(forResource: "mindmap-editor", withExtension: "html") {
             webView.loadFileURL(fileURL, allowingReadAccessTo: Bundle.main.bundleURL)
@@ -69,6 +83,7 @@ private struct MindMapEditorWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.applyTrinoteAppearanceMode()
         context.coordinator.onMapChanged = onMapChanged
     }
 
@@ -84,6 +99,8 @@ private struct MindMapEditorWebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var onMapChanged: (() -> Void)?
+        /// Held so the handler outlives the configuration that registered it.
+        var imageSchemeHandler: TriliumImageSchemeHandler?
         private let initialJSON: String
         private var editorReady = false
 
