@@ -143,20 +143,36 @@ struct AttachmentPreviewItem: Identifiable {
         case text(String)
         case pdf
         case quickLook
+        case officeHTML(String)
     }
 
     let id = UUID()
     let title: String
     let mime: String
-    let fileURL: URL
+    let fileURL: URL?
     let shareData: Data
     let kind: Kind
+
+    var canShare: Bool { fileURL != nil }
 
     static func make(title: String, mime: String, data: Data) -> AttachmentPreviewItem? {
         guard !data.isEmpty else { return nil }
         guard let fileURL = try? AttachmentPreviewFileStore.write(data: data, filename: title) else { return nil }
         let kind = previewKind(mime: mime, data: data)
         return AttachmentPreviewItem(title: title, mime: mime, fileURL: fileURL, shareData: data, kind: kind)
+    }
+
+    static func makeOfficeHTML(title: String, mime: String, html: String, data: Data) -> AttachmentPreviewItem? {
+        let trimmed = html.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let fileURL = data.isEmpty ? nil : try? AttachmentPreviewFileStore.write(data: data, filename: title)
+        return AttachmentPreviewItem(
+            title: title,
+            mime: mime,
+            fileURL: fileURL,
+            shareData: data,
+            kind: .officeHTML(html)
+        )
     }
 
     private static func previewKind(mime: String, data: Data) -> Kind {
@@ -217,17 +233,36 @@ struct AttachmentPreviewView: View {
                     PDFAttachmentPreview(data: item.shareData)
                 }
             case .quickLook:
+                if let fileURL = item.fileURL {
+                    previewChrome {
+                        QuickLookPreview(url: fileURL)
+                            .ignoresSafeArea(edges: .bottom)
+                    }
+                } else {
+                    previewChrome {
+                        ContentUnavailableView(
+                            String(localized: "Cannot Preview", comment: "Attachment preview unavailable"),
+                            systemImage: "eye.slash",
+                            description: Text(String(localized: "This file could not be opened for preview.", comment: "Attachment preview missing file"))
+                        )
+                    }
+                }
+            case .officeHTML(let html):
                 previewChrome {
-                    QuickLookPreview(url: item.fileURL)
+                    OfficeHTMLPreviewView(html: html, fillsAvailableHeight: true)
                         .ignoresSafeArea(edges: .bottom)
                 }
             }
         }
         .onDisappear {
-            AttachmentPreviewFileStore.remove(item.fileURL)
+            if let fileURL = item.fileURL {
+                AttachmentPreviewFileStore.remove(fileURL)
+            }
         }
         .sheet(isPresented: $showShareSheet) {
-            ShareSheet(items: [item.fileURL])
+            if let fileURL = item.fileURL {
+                ShareSheet(items: [fileURL])
+            }
         }
     }
 
@@ -244,12 +279,14 @@ struct AttachmentPreviewView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            showShareSheet = true
-                        } label: {
-                            Image(systemName: "square.and.arrow.up")
+                        if item.canShare {
+                            Button {
+                                showShareSheet = true
+                            } label: {
+                                Image(systemName: "square.and.arrow.up")
+                            }
+                            .accessibilityLabel(String(localized: "Share", comment: "Share attachment"))
                         }
-                        .accessibilityLabel(String(localized: "Share", comment: "Share attachment"))
                     }
                 }
         }

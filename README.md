@@ -13,6 +13,7 @@ A native iOS client for self-hosted [TriliumNext](https://github.com/TriliumNext
 - **Search** full-text across all notes via the server search API
 - **Edit** note titles, content (HTML source or code), create/delete notes
 - **Attachments** — upload from Photos/Files, download, share
+- **Office & EPUB previews** — `.docx`, `.xlsx`, `.pptx`, ODF, RTF and EPUB open in-app (Trilium **v0.105+**; falls back to Quick Look on older servers)
 - **Offline cache** — tree structure and recently opened notes cached locally
 - **Multiple servers** — save and switch between server profiles
 - **Dark mode** and numerous color options
@@ -57,16 +58,16 @@ Select an iOS 17+ simulator or device and press **Cmd+R**.
 
 `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` live in **`project.yml`** (XcodeGen’s source of truth). You can bump them either way:
 
-1. **In Xcode** — Trinote target → General → Version / Build, then **build once** (`Cmd+B`). A pre-build script writes the values back into `project.yml`.
-2. **In `project.yml`** — edit the two keys under `settings.base`, then run `xcodegen generate`.
+1. **In Xcode** — Trinote target → General → Identity → Version / Build, then build or run (`Cmd+R`). That build ships the new values in the app (and share extension), and a pre-build script writes them back into `project.yml` so a later `xcodegen generate` will not revert them.
+2. **In `project.yml`** — edit the two keys under `settings.base`, then run `xcodegen generate` before building.
 
-To sync manually without building:
+To sync `project.yml` from the current Xcode project without building:
 
 ```bash
 ./Scripts/sync_project_yml_version.sh
 ```
 
-If you edit `project.yml` without running `xcodegen generate`, the next build may overwrite your YAML changes with the older values still in the `.xcodeproj`.
+If you edit `project.yml` without running `xcodegen generate`, the next build may overwrite your YAML changes with the values still in the `.xcodeproj`.
 
 ## Connecting to a Server
 

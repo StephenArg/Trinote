@@ -75,6 +75,10 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func getAttachmentOCRText(attachmentId: String) async throws -> AttachmentOCRTextResponse
     /// `POST /api/ocr/process-attachment/{id}` — Trilium 0.103+. 404 means OCR is unavailable.
     func processAttachmentOCR(attachmentId: String, forceReprocess: Bool) async throws -> ProcessAttachmentOCRResponse
+    /// `GET /api/notes/:id/office-preview` — Trilium 0.105+. Server-rendered HTML for Office / EPUB.
+    func getNoteOfficePreview(_ noteId: String) async throws -> OfficePreviewResponse
+    /// `GET /api/attachments/:id/office-preview` — Trilium 0.105+. Server-rendered HTML for Office / EPUB.
+    func getAttachmentOfficePreview(_ attachmentId: String) async throws -> OfficePreviewResponse
 
     // MARK: Sync — documented protocol (POST /api/sync/*)
 
@@ -1494,14 +1498,42 @@ actor TriliumClient: TriliumClientProtocol {
 
     /// Tesseract often sends no bytes for well over the default 30s idle timeout.
     private static let ocrRequestTimeout: TimeInterval = 600
+    /// Office conversion is CPU-bound; the default session times out at 30s.
+    private static let officePreviewTimeout: TimeInterval = 120
+
+    func getNoteOfficePreview(_ noteId: String) async throws -> OfficePreviewResponse {
+        try await getOfficePreview(path: "/api/notes/\(noteId)/office-preview")
+    }
+
+    func getAttachmentOfficePreview(_ attachmentId: String) async throws -> OfficePreviewResponse {
+        try await getOfficePreview(path: "/api/attachments/\(attachmentId)/office-preview")
+    }
+
+    private func getOfficePreview(path: String) async throws -> OfficePreviewResponse {
+        var request = try buildRequest(path: path, method: "GET", queryParams: nil, csrf: false, jsonBody: false)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = Self.officePreviewTimeout
+        let (data, response) = try await dataForLongRunningRequest(request, timeout: Self.officePreviewTimeout)
+        try validateResponse(response, data: data)
+        do {
+            return try decoder.decode(OfficePreviewResponse.self, from: data)
+        } catch {
+            Log.api.error("Decoding failed for \(path): \(error)")
+            throw APIError.decodingFailed(error.localizedDescription)
+        }
+    }
 
     private func dataForLongRunningRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        try await dataForLongRunningRequest(request, timeout: Self.ocrRequestTimeout)
+    }
+
+    private func dataForLongRunningRequest(_ request: URLRequest, timeout: TimeInterval) async throws -> (Data, URLResponse) {
         let cfg = URLSessionConfiguration.default
         cfg.httpCookieStorage = httpCookieStorage
         cfg.httpShouldSetCookies = true
         cfg.httpCookieAcceptPolicy = .always
-        cfg.timeoutIntervalForRequest = Self.ocrRequestTimeout
-        cfg.timeoutIntervalForResource = Self.ocrRequestTimeout
+        cfg.timeoutIntervalForRequest = timeout
+        cfg.timeoutIntervalForResource = timeout
         cfg.waitsForConnectivity = injectedProtocolClasses == nil
         if let injectedProtocolClasses {
             cfg.protocolClasses = injectedProtocolClasses

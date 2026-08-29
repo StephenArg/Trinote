@@ -8,8 +8,122 @@ struct FileNoteView: View {
     let onOpenNote: (String, String) -> Void
 
     @Environment(AppState.self) private var appState
+    @State private var previewItem: AttachmentPreviewItem?
+    @State private var showShareSheet = false
+    @State private var shareURL: URL?
+
+    private var isOfficeFile: Bool {
+        OfficeMimeTypes.isOfficeMimeType(note.mime)
+    }
 
     var body: some View {
+        VStack(spacing: 16) {
+            if isOfficeFile {
+                officeHeader
+                officePreviewSection
+            } else {
+                legacyHeader
+            }
+
+            if !attachments.isEmpty {
+                ForEach(attachments) { attachment in
+                    AttachmentRow(attachment: attachment, viewModel: viewModel, onOpenNote: onOpenNote)
+                }
+            }
+
+            if !isOfficeFile, note.mime.hasPrefix("text/"), let content = viewModel.contentString {
+                ScrollView(.horizontal) {
+                    Text(content)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding()
+                }
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, isOfficeFile ? 16 : 40)
+        .task(id: viewModel.officePreviewLoadToken) {
+            guard isOfficeFile else { return }
+            await viewModel.loadFileNoteOfficePreviewIfNeeded()
+        }
+        .fullScreenCover(item: $previewItem) { item in
+            AttachmentPreviewView(item: item) {
+                previewItem = nil
+            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let shareURL {
+                ShareSheet(items: [shareURL])
+            }
+        }
+    }
+
+    private var officeHeader: some View {
+        VStack(spacing: 8) {
+            Text(note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            Text(note.mime)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                if viewModel.content != nil {
+                    Button {
+                        shareFileNote()
+                    } label: {
+                        Label(String(localized: "Share", comment: "Share file note"), systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var officePreviewSection: some View {
+        switch viewModel.fileNoteOfficePreview {
+        case .idle, .loading:
+            ProgressView(String(localized: "Rendering document…", comment: "Office file note preview loading"))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 32)
+        case .ready(let html):
+            OfficeHTMLPreviewView(html: html)
+        case .failed:
+            VStack(spacing: 12) {
+                Text(String(localized: "This document could not be previewed. You can still open or share the original file.", comment: "Office file note preview failed"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                HStack(spacing: 12) {
+                    Button {
+                        previewItem = viewModel.prepareFileNoteBodyPreviewItem()
+                    } label: {
+                        Label(String(localized: "Quick Look", comment: "Open file note in Quick Look"), systemImage: "eye")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(viewModel.content == nil)
+                    Button {
+                        shareFileNote()
+                    } label: {
+                        Label(String(localized: "Share", comment: "Share file note"), systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(viewModel.content == nil)
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var legacyHeader: some View {
         VStack(spacing: 16) {
             Image(systemName: "doc.fill")
                 .font(.system(size: 48))
@@ -22,29 +136,15 @@ struct FileNoteView: View {
             Text(note.mime)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            if !attachments.isEmpty {
-                ForEach(attachments) { attachment in
-                    AttachmentRow(attachment: attachment, viewModel: viewModel, onOpenNote: onOpenNote)
-                }
-            }
-
-            if note.mime.hasPrefix("text/") {
-                if let content = viewModel.contentString {
-                    ScrollView(.horizontal) {
-                        Text(content)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .padding()
-                    }
-                    .background(Color(.secondarySystemGroupedBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .padding(.horizontal)
-                }
-            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+    }
+
+    private func shareFileNote() {
+        let filename = OfficeMimeTypes.filename(fromTitle: note.title, mime: note.mime)
+        guard let data = viewModel.content,
+              let url = try? AttachmentPreviewFileStore.write(data: data, filename: filename) else { return }
+        shareURL = url
+        showShareSheet = true
     }
 }
 

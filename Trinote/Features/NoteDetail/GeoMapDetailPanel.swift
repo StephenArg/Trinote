@@ -101,7 +101,8 @@ struct GeoMapDetailPanel: View {
                 html: html,
                 baseURL: nil,
                 onNoteLinkTapped: onNoteLinkTapped,
-                listInteractionEnabled: false
+                listInteractionEnabled: false,
+                allowCollapsibleReorder: false
             )
             .background(Color(.secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 8))

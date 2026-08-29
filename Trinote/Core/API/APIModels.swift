@@ -41,10 +41,19 @@ enum TriliumServerCompatibility {
     /// Trilium release that introduced the Presentation collection view (`#viewType=presentation`).
     static let presentationMinAppVersion = "0.99.2"
 
+    /// Trilium release that introduced `GET …/office-preview` for Office / EPUB HTML conversion.
+    static let officePreviewMinAppVersion = "0.105.0"
+
     /// `true` when `/api/app-info` reports Trilium v0.103.0 or newer (spreadsheet note type).
     static func supportsSpreadsheetNotes(_ info: AppInfoResponse?) -> Bool {
         guard let info else { return false }
         return isAppVersion(info.appVersion, atLeast: spreadsheetMinAppVersion)
+    }
+
+    /// `true` when `/api/app-info` reports Trilium v0.105.0 or newer (Office / EPUB HTML preview).
+    static func supportsOfficePreview(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: officePreviewMinAppVersion)
     }
 
     /// `true` when `/api/app-info` reports Trilium v0.97.2 or newer (Kanban Board view).
@@ -400,6 +409,11 @@ struct CreateAttachmentRequest: Encodable {
     let title: String
     let content: String
     let position: Int?
+}
+
+/// `GET /api/notes/:id/office-preview` and `GET /api/attachments/:id/office-preview` (Trilium v0.105+).
+struct OfficePreviewResponse: Decodable, Sendable {
+    let html: String
 }
 
 /// `POST /api/attachments/{id}/convert-to-note` (`ConvertAttachmentToNoteResponse`).

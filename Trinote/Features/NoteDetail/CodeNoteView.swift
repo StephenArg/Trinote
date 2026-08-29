@@ -100,7 +100,8 @@ struct CodeNoteView: View {
                     findControl: findControl,
                     listInteractionEnabled: onTaskStateCycled != nil,
                     taskStateCycleEnabled: onTaskStateCycled != nil,
-                    allowListReorder: false
+                    allowListReorder: false,
+                    allowCollapsibleReorder: false
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(.secondarySystemGroupedBackground))

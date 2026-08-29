@@ -9,6 +9,14 @@ enum AttachmentOCRState: Equatable, Sendable {
     case failed(String)
 }
 
+enum FileNoteOfficePreviewState: Equatable, Sendable {
+    case idle
+    case loading
+    case ready(String)
+    case failed
+}
+
+
 /// One image for the editor to insert. `src` is what the editor displays; `originalSrc` is the
 /// server-relative reference stored in the note body, restored by `undecorateLinkedImagesFromEditor`
 /// on save. When `originalSrc` is nil the displayed bytes are what gets saved.
@@ -29,6 +37,12 @@ final class NoteDetailViewModel {
     private(set) var checkboxOnlyContentRevision = 0
     private var rawContentString: String?
     var attachments: [AttachmentItem] = []
+    /// Server HTML preview for Office / EPUB file notes (`GET /api/notes/:id/office-preview`).
+    private(set) var fileNoteOfficePreview: FileNoteOfficePreviewState = .idle
+    @ObservationIgnored private var officePreviewCacheKey = ""
+    /// Bumped when file-note office preview should be (re)fetched so `FileNoteView` re-runs its task.
+    private(set) var officePreviewLoadToken = 0
+    @ObservationIgnored private var officePreviewGeneration = 0
     var breadcrumbs: [BreadcrumbItem] = []
     var isLoading = false
     var isLoadingContent = false
@@ -403,6 +417,10 @@ final class NoteDetailViewModel {
     /// the cached version. Images are inlined from the local cache.
     func loadContent() async {
         let nid = self.noteId
+        fileNoteOfficePreview = .idle
+        officePreviewCacheKey = ""
+        officePreviewLoadToken += 1
+        officePreviewGeneration += 1
 
         loadContentFromCache()
 
@@ -1568,6 +1586,50 @@ final class NoteDetailViewModel {
         saveNoteBodyChange(newRaw)
     }
 
+    /// Moves a collapsible `<details>` block among its parent’s sibling lines without entering the editor.
+    /// `beforeChildIndex` is the index among those siblings to insert before, or `nil` to append.
+    func reorderCollapsible(fromIndex: Int, beforeChildIndex: Int?) {
+        guard let raw = rawContentString ?? contentString else { return }
+        guard let newRaw = HTMLCollapsibleReorder.movingDetails(
+            in: raw,
+            fromIndex: fromIndex,
+            beforeChildIndex: beforeChildIndex
+        ) else { return }
+
+        self.rawContentString = newRaw
+        self.serverContentHash = newRaw.hashValue
+
+        if let display = contentString,
+           let newDisplay = HTMLCollapsibleReorder.movingDetails(
+               in: display,
+               fromIndex: fromIndex,
+               beforeChildIndex: beforeChildIndex
+           ) {
+            self.contentString = newDisplay
+        }
+
+        saveNoteBodyChange(newRaw)
+    }
+
+    /// Persists expand/collapse of the `index`-th interactive `<details>` via the HTML `open` attribute.
+    func setCollapsibleOpen(index: Int, open: Bool) {
+        guard let raw = rawContentString ?? contentString else { return }
+        guard let newRaw = HTMLCollapsibleReorder.settingOpen(in: raw, index: index, open: open) else { return }
+
+        self.rawContentString = newRaw
+        self.serverContentHash = newRaw.hashValue
+        self.checkboxOnlyContentRevision += 1
+
+        if let display = contentString,
+           let newDisplay = HTMLCollapsibleReorder.settingOpen(in: display, index: index, open: open) {
+            self.contentString = newDisplay
+        } else if contentString != nil {
+            self.contentString = newRaw
+        }
+
+        saveNoteBodyChange(newRaw)
+    }
+
     /// Backward-compatible name for todo-only call sites.
     func reorderCheckbox(fromIndex: Int, beforeIndex: Int?) {
         reorderListItem(fromIndex: fromIndex, beforeIndex: beforeIndex)
@@ -2529,7 +2591,24 @@ final class NoteDetailViewModel {
     }
 
     func prepareAttachmentPreview(for attachment: AttachmentItem) async -> AttachmentPreviewItem? {
-        guard let (data, _) = await downloadAttachment(attachment) else { return nil }
+        async let html = fetchSanitizedOfficePreviewHTML(
+            noteId: nil,
+            attachmentId: attachment.attachmentId,
+            mime: attachment.mime,
+            contentLength: attachment.contentLength
+        )
+        async let downloaded = downloadAttachment(attachment)
+        let officeHTML = await html
+        let pair = await downloaded
+        if let officeHTML {
+            return AttachmentPreviewItem.makeOfficeHTML(
+                title: attachment.title,
+                mime: attachment.mime,
+                html: officeHTML,
+                data: pair?.0 ?? Data()
+            )
+        }
+        guard let (data, _) = pair else { return nil }
         return AttachmentPreviewItem.make(title: attachment.title, mime: attachment.mime, data: data)
     }
 
@@ -2537,11 +2616,82 @@ final class NoteDetailViewModel {
         guard let client else { return nil }
         do {
             let meta = try await client.getAttachment(attachmentId)
-            let data = try await client.getAttachmentContent(attachmentId)
             let attachment = AttachmentItem(from: meta)
-            return AttachmentPreviewItem.make(title: attachment.title, mime: attachment.mime, data: data)
+            return await prepareAttachmentPreview(for: attachment)
         } catch {
             Log.api.error("Failed to prepare attachment preview")
+            return nil
+        }
+    }
+
+    /// Loads Trilium's Office / EPUB HTML preview for the current file note, if applicable.
+    func loadFileNoteOfficePreviewIfNeeded() async {
+        guard let note, OfficeMimeTypes.isOfficeMimeType(note.mime) else {
+            fileNoteOfficePreview = .idle
+            return
+        }
+        let key = "\(note.noteId):\(content?.count ?? 0):\(note.mime)"
+        if key == officePreviewCacheKey {
+            switch fileNoteOfficePreview {
+            case .ready, .failed:
+                return
+            case .idle, .loading:
+                break
+            }
+        }
+        officePreviewCacheKey = key
+        officePreviewGeneration += 1
+        let generation = officePreviewGeneration
+        fileNoteOfficePreview = .loading
+        if let html = await fetchSanitizedOfficePreviewHTML(
+            noteId: note.noteId,
+            attachmentId: nil,
+            mime: note.mime,
+            contentLength: content?.count
+        ) {
+            guard generation == officePreviewGeneration else { return }
+            fileNoteOfficePreview = .ready(html)
+        } else {
+            guard generation == officePreviewGeneration else { return }
+            fileNoteOfficePreview = .failed
+        }
+    }
+
+    func prepareFileNoteBodyPreviewItem() -> AttachmentPreviewItem? {
+        guard let note, let data = content, !data.isEmpty else { return nil }
+        let filename = OfficeMimeTypes.filename(fromTitle: note.title, mime: note.mime)
+        return AttachmentPreviewItem.make(title: filename, mime: note.mime, data: data)
+    }
+
+    private func shouldRequestOfficePreview(mime: String, contentLength: Int?) -> Bool {
+        guard OfficeMimeTypes.isOfficeMimeType(mime) else { return false }
+        guard !OfficeMimeTypes.exceedsPreviewSize(contentLength) else { return false }
+        guard appState.isOnline, client != nil else { return false }
+        return TriliumServerCompatibility.supportsOfficePreview(appState.serverAppInfo)
+    }
+
+    private func fetchSanitizedOfficePreviewHTML(
+        noteId: String?,
+        attachmentId: String?,
+        mime: String,
+        contentLength: Int?
+    ) async -> String? {
+        guard shouldRequestOfficePreview(mime: mime, contentLength: contentLength) else { return nil }
+        guard let client else { return nil }
+        do {
+            let response: OfficePreviewResponse
+            if let noteId {
+                response = try await client.getNoteOfficePreview(noteId)
+            } else if let attachmentId {
+                response = try await client.getAttachmentOfficePreview(attachmentId)
+            } else {
+                return nil
+            }
+            let html = OfficeHTMLSanitizer.prepareForPreview(response.html)
+            let trimmed = html.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : html
+        } catch {
+            Log.api.error("Office preview failed: \(error.localizedDescription)")
             return nil
         }
     }

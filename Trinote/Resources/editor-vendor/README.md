@@ -43,3 +43,13 @@ cd Trinote/Resources/editor-vendor
 npm install
 npm run build:indent
 ```
+
+## `collapsible-extension.js`
+
+Built from `collapsible-entry.mjs` for Trilium-style **collapsible blocks** (`<details class="trilium-collapsible">` / `<summary>`, with a persisted `open` attribute).
+
+```bash
+cd Trinote/Resources/editor-vendor
+npm install
+npm run build:collapsible
+```

@@ -574,6 +574,95 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertTrue(TriliumServerCompatibility.supportsPresentationNotes(atPresentation))
     }
 
+    func testSupportsOfficePreviewRequiresV0_105() {
+        XCTAssertFalse(TriliumServerCompatibility.supportsOfficePreview(nil))
+        let before = AppInfoResponse(
+            appVersion: "0.104.1",
+            dbVersion: 238,
+            syncVersion: 39,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertFalse(TriliumServerCompatibility.supportsOfficePreview(before))
+        let at = AppInfoResponse(
+            appVersion: "0.105.0",
+            dbVersion: 240,
+            syncVersion: 39,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertTrue(TriliumServerCompatibility.supportsOfficePreview(at))
+        let newer = AppInfoResponse(
+            appVersion: "v0.105.1",
+            dbVersion: 240,
+            syncVersion: 39,
+            buildDate: nil,
+            buildRevision: nil,
+            dataDirectory: nil,
+            clipperProtocolVersion: nil,
+            utcDateTime: nil
+        )
+        XCTAssertTrue(TriliumServerCompatibility.supportsOfficePreview(newer))
+    }
+
+    func testGetNoteOfficePreviewDecodesHTML() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/notes/n1/office-preview")
+            let json = #"{"html":"<p>Doc</p>"}"#
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(json.utf8)
+            )
+        }
+        let client = makeClient()
+        let result = try await client.getNoteOfficePreview("n1")
+        XCTAssertEqual(result.html, "<p>Doc</p>")
+    }
+
+    func testGetAttachmentOfficePreviewDecodesHTML() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/attachments/a9/office-preview")
+            let json = #"{"html":"<table><tr><td>1</td></tr></table>"}"#
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(json.utf8)
+            )
+        }
+        let client = makeClient()
+        let result = try await client.getAttachmentOfficePreview("a9")
+        XCTAssertEqual(result.html, "<table><tr><td>1</td></tr></table>")
+    }
+
+    func testGetNoteOfficePreviewSurfaces400() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let json = #"{"message":"Office document is too large to preview"}"#
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!,
+                Data(json.utf8)
+            )
+        }
+        let client = makeClient()
+        do {
+            _ = try await client.getNoteOfficePreview("n1")
+            XCTFail("Expected APIError.serverError 400")
+        } catch let error as APIError {
+            guard case .serverError(let code, let message) = error else {
+                XCTFail("Expected serverError, got \(error)")
+                return
+            }
+            XCTAssertEqual(code, 400)
+            XCTAssertEqual(message, "Office document is too large to preview")
+        }
+    }
+
     func testCompareAppVersionsHandlesPrereleaseSuffix() {
         XCTAssertEqual(
             TriliumServerCompatibility.compareAppVersions("0.103.0-beta.1", "0.103.0"),

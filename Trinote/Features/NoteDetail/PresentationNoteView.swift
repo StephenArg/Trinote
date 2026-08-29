@@ -228,7 +228,8 @@ struct PresentationNoteView: View {
                         },
                         imageBytes: { routeType, entityId in
                             await viewModel.loadImageBytes(routeType: routeType, entityId: entityId)
-                        }
+                        },
+                        allowCollapsibleReorder: false
                     )
                     .padding(.horizontal, 8)
                 }

@@ -1994,6 +1994,12 @@ struct NoteDetailView: View {
                     onCheckboxReordered: { fromIndex, beforeIndex in
                         vm.reorderListItem(fromIndex: fromIndex, beforeIndex: beforeIndex)
                     },
+                    onCollapsibleReordered: { fromIndex, beforeChildIndex in
+                        vm.reorderCollapsible(fromIndex: fromIndex, beforeChildIndex: beforeChildIndex)
+                    },
+                    onCollapsibleToggled: { index, open in
+                        vm.setCollapsibleOpen(index: index, open: open)
+                    },
                     loadAttachmentPreview: { attachmentId in
                         if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
                             return await vm.prepareAttachmentPreview(for: attachment)

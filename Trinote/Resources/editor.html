@@ -98,6 +98,13 @@ body { display: flex; flex-direction: column; }
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.toolbar button svg.toolbar-collapsible-icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 /* Small dropdown hint next to icon (lists, colors, callout) */
 .toolbar button svg.toolbar-btn-chevron {
   width: 11px;
@@ -499,6 +506,76 @@ body { display: flex; flex-direction: column; }
 @media (prefers-color-scheme: dark) {
   .tiptap aside.admonition, .tiptap div[data-callout-type] { background: rgba(255,255,255,0.05); }
 }
+
+/* Trilium collapsible blocks: <details class="trilium-collapsible"><summary> */
+.tiptap details.trilium-collapsible {
+  position: relative;
+  margin: 0.65em 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(128,128,128,0.08);
+}
+.tiptap details.trilium-collapsible > summary {
+  list-style: none;
+  cursor: text;
+  font-weight: 500;
+  padding: 10px 14px 10px 36px;
+  background: rgba(128,128,128,0.12);
+  outline: none;
+  position: relative;
+  min-height: 1.35em;
+}
+.tiptap details.trilium-collapsible > summary::-webkit-details-marker { display: none; }
+.tiptap details.trilium-collapsible > summary::marker { content: none; display: none; }
+.tiptap details.trilium-collapsible > summary::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  width: 0;
+  height: 0;
+  margin-top: -4px;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 7px solid currentColor;
+  opacity: 0.85;
+  pointer-events: none;
+  transform: rotate(0deg);
+  transform-origin: 35% 50%;
+  transition: transform 0.15s ease;
+}
+.tiptap details.trilium-collapsible[open] > summary::before {
+  transform: rotate(90deg);
+}
+.tiptap details.trilium-collapsible[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+.tiptap details.trilium-collapsible > *:not(summary) {
+  margin-left: 12px;
+  margin-right: 12px;
+}
+.tiptap details.trilium-collapsible > *:not(summary):first-of-type { margin-top: 10px; }
+.tiptap details.trilium-collapsible > *:not(summary):last-child { margin-bottom: 10px; }
+.tiptap details.trilium-collapsible > summary:has(> br.ProseMirror-trailingBreak:only-child)::after,
+.tiptap details.trilium-collapsible > summary:empty::after {
+  content: "Title";
+  color: var(--placeholder);
+  font-weight: 400;
+  pointer-events: none;
+  /* Overlay the caret line — ::after after a trailing <br> would otherwise sit on the next line. */
+  position: absolute;
+  left: 36px;
+  right: 14px;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tiptap details.trilium-collapsible + details.trilium-collapsible {
+  margin-top: 3px;
+}
 .tiptap pre {
   background: rgba(128,128,128,0.1); padding: 12px; border-radius: 8px;
   font-size: 14px; font-family: "SF Mono", Menlo, monospace;
@@ -811,6 +888,7 @@ body { display: flex; flex-direction: column; }
 
 <script src="tiptap-bundle.min.js"></script>
 <script src="callout-extension.js"></script>
+<script src="collapsible-extension.js"></script>
 <script src="font-size-extension.js"></script>
 <script src="list-styles-extension.js"></script>
 <script src="indent-extension.js"></script>
@@ -824,6 +902,8 @@ if (typeof TipTap === 'undefined') {
 }
 const { Editor, StarterKit, Underline, TextAlign, Color, TextStyle, Highlight, Table, TableRow, TableCell, TableHeader, Link, TaskList, TaskItem, Placeholder, Subscript, Superscript, Image } = TipTap;
 const CalloutExt = (typeof TipTapCallout !== 'undefined' && TipTapCallout && TipTapCallout.Callout) ? TipTapCallout.Callout : null;
+const CollapsibleBlockExt = (typeof TipTapCollapsible !== 'undefined' && TipTapCollapsible && TipTapCollapsible.Collapsible) ? TipTapCollapsible.Collapsible : null;
+const CollapsibleSummaryExt = (typeof TipTapCollapsible !== 'undefined' && TipTapCollapsible && TipTapCollapsible.CollapsibleSummary) ? TipTapCollapsible.CollapsibleSummary : null;
 const FontSizeExt = (typeof TipTapTriliumFontSize !== 'undefined' && TipTapTriliumFontSize && TipTapTriliumFontSize.TriliumFontSize) ? TipTapTriliumFontSize.TriliumFontSize : null;
 const ListStylesMod = (typeof TipTapListStyles !== 'undefined' && TipTapListStyles) ? TipTapListStyles : null;
 const TriliumBulletListExt = ListStylesMod && ListStylesMod.TriliumBulletList ? ListStylesMod.TriliumBulletList : null;
@@ -1597,6 +1677,8 @@ const editorExtensions = [
   FigureImage,
 ];
 if (CalloutExt) editorExtensions.push(CalloutExt);
+if (CollapsibleSummaryExt) editorExtensions.push(CollapsibleSummaryExt);
+if (CollapsibleBlockExt) editorExtensions.push(CollapsibleBlockExt);
 if (FontSizeExt) editorExtensions.push(FontSizeExt);
 if (useTriliumListStyles) {
   editorExtensions.push(TriliumBulletListExt);
@@ -2031,6 +2113,15 @@ const TASK_LIST_TOOLBAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="
 const FONT_SIZE_TOOLBAR_SVG = '<svg class="toolbar-font-size-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 15 15" fill="currentColor" aria-hidden="true"><path d="M2.5 2.1a.4.4 0 0 1 .283.117l2 2l.05.064a.4.4 0 0 1-.05.503a.4.4 0 0 1-.503.05l-.063-.05L2.9 3.467v8.067l1.317-1.317a.4.4 0 0 1 .566.566l-2 2a.4.4 0 0 1-.566 0l-2-2l-.051-.063a.4.4 0 0 1 .554-.554l.063.051l1.316 1.316V3.467L.783 4.784a.401.401 0 0 1-.566-.567l2-2l.061-.05A.4.4 0 0 1 2.5 2.1m5.47 9.64a.501.501 0 0 1-.94-.34zm2.53-8.99a.5.5 0 0 1 .47.33l3 8.32a.5.5 0 0 1-.94.34l-.983-2.724H8.953l-.982 2.724l-.471-.17l-.47-.17l3-8.32l.031-.07a.5.5 0 0 1 .439-.26M9.259 8.166h2.482L10.5 4.725z"/></svg>';
 /* Summation-style glyph (no image asset) */
 const MATH_TOOLBAR_SVG = '<span class="math-toolbar-glyph" aria-hidden="true" style="font-size:20px;font-weight:700;line-height:1">∑</span>';
+const COLLAPSIBLE_TOOLBAR_SVG = '<svg class="toolbar-collapsible-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+  + '<circle cx="12" cy="12" r="8.25"/>'
+  + '<path d="M8.4 10.4L12 14.1L15.6 10.4"/>'
+  + '</svg>';
+function insertOrWrapCollapsible() {
+  if (!CollapsibleBlockExt) return;
+  const wrapped = editor.chain().focus().wrapInCollapsible().run();
+  if (!wrapped) editor.chain().focus().insertCollapsible().run();
+}
 /* Calendar-with-clock glyph for the "insert date/time" button (Trilium Alt+T equivalent).
  * The inner clock uses var(--toolbar-bg) as its fill so it punches a clean hole through
  * the calendar body in both light and dark mode. */
@@ -4150,6 +4241,7 @@ btn('Include', '<span style="font-weight:800;font-size:14px;line-height:1">⊕</
   try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'pickIncludeNote' }); } catch(e) {}
 }, () => editor.isActive('includeNote'));
 makeTableGridPicker();
+btn('Collapsible block', COLLAPSIBLE_TOOLBAR_SVG, () => insertOrWrapCollapsible(), () => editor.isActive('collapsible'));
 btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () => false);
 btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
 makeCalloutToolbar();
@@ -4329,6 +4421,33 @@ function normalizeCalloutsForTrilium(doc) {
     const typeClass = types.find(tt => aside.classList.contains(tt));
     const t = typeClass || 'note';
     aside.className = 'admonition ' + t;
+  });
+}
+
+// Trilium collapsible blocks: every <details> needs a leading <summary> for the TipTap schema.
+function ensureCollapsibleSummaries(doc) {
+  doc.querySelectorAll('details').forEach(d => {
+    const kids = Array.from(d.children);
+    let summary = kids.find(c => c.tagName === 'SUMMARY');
+    if (!summary) {
+      summary = doc.createElement('summary');
+      d.insertBefore(summary, d.firstChild);
+    } else if (summary !== d.firstElementChild) {
+      d.insertBefore(summary, d.firstChild);
+    }
+  });
+}
+
+// Saved HTML must match Trilium desktop: <details class="trilium-collapsible" [open]>.
+function normalizeCollapsiblesForTrilium(doc) {
+  doc.querySelectorAll('details').forEach(d => {
+    d.classList.add('trilium-collapsible');
+    d.querySelectorAll(':scope > .trilium-collapsible-arrow, :scope > .trinote-collapsible-drag-handle').forEach(el => el.remove());
+    const inner = d.querySelector(':scope > .trilium-collapsible-inner');
+    if (inner) {
+      while (inner.firstChild) d.insertBefore(inner.firstChild, inner);
+      inner.remove();
+    }
   });
 }
 
@@ -4546,6 +4665,7 @@ function ckToTiptap(html) {
   });
 
   migrateTriliumAdmonitionsForTiptap(doc);
+  ensureCollapsibleSummaries(doc);
   migrateTriliumMathForTiptap(doc);
   migrateCkColorMarkupForTiptap(doc);
   return doc.body.innerHTML;
@@ -4556,6 +4676,7 @@ function tiptapToCk(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
   normalizeCalloutsForTrilium(doc);
+  normalizeCollapsiblesForTrilium(doc);
   tiptapMarkToCkSpans(doc);
 
   doc.querySelectorAll('ul[data-type="taskList"]').forEach(ul => {

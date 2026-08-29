@@ -13,6 +13,8 @@ struct HTMLNoteView: View {
     var onTaskStateCycled: ((_ index: Int) -> Void)?
     /// Reorder a todo-list item among siblings. `beforeIndex` is nil when appending at end of the sibling group.
     var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
+    var onCollapsibleReordered: ((_ fromIndex: Int, _ beforeChildIndex: Int?) -> Void)?
+    var onCollapsibleToggled: ((_ index: Int, _ open: Bool) -> Void)?
     /// Loads preview content for a tapped `api/attachments/{id}/…` link.
     var loadAttachmentPreview: ((String) async -> AttachmentPreviewItem?)?
     /// Serves the `trinote-img://` images in `html`, and the full-resolution bytes the full-screen
@@ -26,6 +28,8 @@ struct HTMLNoteView: View {
     var taskStateCycleEnabled: Bool = false
     /// When false, skip drag-reorder handles even if list interaction is on (Markdown preview).
     var allowListReorder: Bool = true
+    /// When false, skip collapsible-section drag handles (Markdown preview / non-text surfaces).
+    var allowCollapsibleReorder: Bool = true
 
     @State private var contentHeight: CGFloat = 200
     @State private var fullScreenImage: FullScreenImagePayload?
@@ -69,6 +73,10 @@ struct HTMLNoteView: View {
             onCheckboxToggled: onCheckboxToggled,
             onTaskStateCycled: onTaskStateCycled,
             onCheckboxReordered: onCheckboxReordered,
+            onCollapsibleReordered: onCollapsibleReordered,
+            onCollapsibleToggled: onCollapsibleToggled,
+            collapsibleReorderEnabled: allowCollapsibleReorder,
+            collapsibleTogglePersistEnabled: onCollapsibleToggled != nil,
             onAttachmentLinkTapped: { attachmentId in
                 guard let loadAttachmentPreview else { return }
                 Task { @MainActor in
@@ -122,6 +130,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
     var onTaskStateCycled: ((_ index: Int) -> Void)?
     var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
+    var onCollapsibleReordered: ((_ fromIndex: Int, _ beforeChildIndex: Int?) -> Void)?
+    var onCollapsibleToggled: ((_ index: Int, _ open: Bool) -> Void)?
+    var collapsibleReorderEnabled: Bool = false
+    var collapsibleTogglePersistEnabled: Bool = false
     var onAttachmentLinkTapped: ((String) -> Void)?
     var imageBytes: TriliumImageSchemeHandler.ByteProvider?
     var findControl: FindOnPageControl?
@@ -135,6 +147,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             onCheckboxToggled: onCheckboxToggled,
             onTaskStateCycled: onTaskStateCycled,
             onCheckboxReordered: onCheckboxReordered,
+            onCollapsibleReordered: onCollapsibleReordered,
+            onCollapsibleToggled: onCollapsibleToggled,
             onAttachmentLinkTapped: onAttachmentLinkTapped,
             imageBytes: imageBytes,
             onHeightChanged: onHeightChanged,
@@ -153,6 +167,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         contentController.add(handler, name: "checkboxReorder")
         contentController.add(handler, name: "checkboxDragScroll")
         contentController.add(handler, name: "checkboxDragState")
+        contentController.add(handler, name: "collapsibleReorder")
+        contentController.add(handler, name: "collapsibleToggle")
         contentController.add(handler, name: "debugLog")
         contentController.add(handler, name: "imagePreview")
 
@@ -188,6 +204,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         handler.webView = webView
         handler.themeColors = themeColors
         handler.checkboxReorderEnabled = checkboxReorderEnabled
+        handler.collapsibleReorderEnabled = collapsibleReorderEnabled
         handler.listInteractionEnabled = listInteractionEnabled
         handler.taskStateCycleEnabled = taskStateCycleEnabled
         handler.checkboxOnlyRevision = checkboxOnlyRevision
@@ -200,6 +217,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
             taskStateCycleEnabled: taskStateCycleEnabled,
+            collapsibleReorderEnabled: collapsibleReorderEnabled,
+            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
             phase: "makeUIView"
         )
         handler.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
@@ -218,6 +237,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.onCheckboxToggled = onCheckboxToggled
         coordinator.onTaskStateCycled = onTaskStateCycled
         coordinator.onCheckboxReordered = onCheckboxReordered
+        coordinator.onCollapsibleReordered = onCollapsibleReordered
+        coordinator.onCollapsibleToggled = onCollapsibleToggled
         coordinator.onAttachmentLinkTapped = onAttachmentLinkTapped
         coordinator.imageBytes = imageBytes
         coordinator.onHeightChanged = onHeightChanged
@@ -239,6 +260,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let htmlChanged = html != coordinator.loadedHTML
         let themeChanged = themeColors != coordinator.themeColors
         let reorderChanged = checkboxReorderEnabled != coordinator.checkboxReorderEnabled
+            || collapsibleReorderEnabled != coordinator.collapsibleReorderEnabled
         let listInteractionChanged = listInteractionEnabled != coordinator.listInteractionEnabled
         let cycleChanged = taskStateCycleEnabled != coordinator.taskStateCycleEnabled
         let compareMs = CheckboxPerf.ms(tCompare)
@@ -274,6 +296,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.loadedHTML = html
         coordinator.themeColors = themeColors
         coordinator.checkboxReorderEnabled = checkboxReorderEnabled
+        coordinator.collapsibleReorderEnabled = collapsibleReorderEnabled
         coordinator.listInteractionEnabled = listInteractionEnabled
         coordinator.taskStateCycleEnabled = taskStateCycleEnabled
         coordinator.checkboxOnlyRevision = checkboxOnlyRevision
@@ -283,6 +306,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
             taskStateCycleEnabled: taskStateCycleEnabled,
+            collapsibleReorderEnabled: collapsibleReorderEnabled,
+            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
             phase: "updateUIView-reload"
         )
         coordinator.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
@@ -303,6 +328,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "checkboxReorder")
         uc.removeScriptMessageHandler(forName: "checkboxDragScroll")
         uc.removeScriptMessageHandler(forName: "checkboxDragState")
+        uc.removeScriptMessageHandler(forName: "collapsibleReorder")
+        uc.removeScriptMessageHandler(forName: "collapsibleToggle")
         uc.removeScriptMessageHandler(forName: "debugLog")
         uc.removeScriptMessageHandler(forName: "imagePreview")
     }
@@ -320,6 +347,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         checkboxReorderEnabled: Bool,
         listInteractionEnabled: Bool,
         taskStateCycleEnabled: Bool,
+        collapsibleReorderEnabled: Bool,
+        collapsibleTogglePersistEnabled: Bool,
         phase: String
     ) -> String {
         let t0 = CFAbsoluteTimeGetCurrent()
@@ -328,7 +357,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             theme: theme,
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
-            taskStateCycleEnabled: taskStateCycleEnabled
+            taskStateCycleEnabled: taskStateCycleEnabled,
+            collapsibleReorderEnabled: collapsibleReorderEnabled,
+            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
         )
         CheckboxPerf.log(
             "wrapHTML phase=\(phase) bodyUtf16=\(body.utf16.count) wrappedUtf16=\(wrapped.utf16.count) ms=\(CheckboxPerf.ms(t0))"
@@ -341,7 +372,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         theme: HTMLThemeColors,
         checkboxReorderEnabled: Bool = false,
         listInteractionEnabled: Bool = true,
-        taskStateCycleEnabled: Bool = false
+        taskStateCycleEnabled: Bool = false,
+        collapsibleReorderEnabled: Bool = false,
+        collapsibleTogglePersistEnabled: Bool = false
     ) -> String {
         """
         <!DOCTYPE html>
@@ -497,6 +530,107 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
         @media (prefers-color-scheme: dark) {
           aside.admonition, .tiptap-callout, div[data-callout-type] { background: rgba(255,255,255,0.05); }
+        }
+        /* Trilium collapsible blocks */
+        details.trilium-collapsible,
+        details:has(> summary) {
+          position: relative;
+          margin: 10px 0;
+          border-radius: 10px;
+          overflow: hidden;
+          background: rgba(128,128,128,0.08);
+        }
+        details.trilium-collapsible > summary,
+        details:has(> summary) > summary {
+          list-style: none;
+          cursor: pointer;
+          font-weight: 500;
+          padding: 10px 40px 10px 36px;
+          background: rgba(128,128,128,0.12);
+          outline: none;
+          position: relative;
+          min-height: 1.35em;
+          -webkit-user-select: none;
+          user-select: none;
+        }
+        details.trilium-collapsible > summary::-webkit-details-marker,
+        details:has(> summary) > summary::-webkit-details-marker { display: none; }
+        details.trilium-collapsible > summary::marker,
+        details:has(> summary) > summary::marker { content: none; display: none; }
+        details.trilium-collapsible > summary::before,
+        details:has(> summary) > summary::before {
+          content: "";
+          position: absolute;
+          left: 14px;
+          top: 50%;
+          width: 0;
+          height: 0;
+          margin-top: -4px;
+          border-top: 5px solid transparent;
+          border-bottom: 5px solid transparent;
+          border-left: 7px solid currentColor;
+          opacity: 0.85;
+          pointer-events: none;
+          transform: rotate(0deg);
+          transform-origin: 35% 50%;
+          transition: transform 0.15s ease;
+        }
+        details.trilium-collapsible[open] > summary::before,
+        details:has(> summary)[open] > summary::before {
+          transform: rotate(90deg);
+        }
+        details.trilium-collapsible[open] > summary,
+        details:has(> summary)[open] > summary {
+          border-bottom: 1px solid var(--border);
+        }
+        details.trilium-collapsible > *:not(summary),
+        details:has(> summary) > *:not(summary) {
+          margin-left: 12px;
+          margin-right: 12px;
+        }
+        details.trilium-collapsible > *:not(summary):first-of-type,
+        details:has(> summary) > *:not(summary):first-of-type { margin-top: 10px; }
+        details.trilium-collapsible > *:not(summary):last-child,
+        details:has(> summary) > *:not(summary):last-child { margin-bottom: 10px; }
+        details.trilium-collapsible + details.trilium-collapsible,
+        details:has(> summary) + details:has(> summary) {
+          margin-top: 3px;
+        }
+        .trinote-collapsible-drag-handle {
+          position: absolute;
+          right: 4px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0.45;
+          -webkit-user-select: none;
+          user-select: none;
+          touch-action: none;
+          -webkit-touch-callout: none;
+          cursor: grab;
+          z-index: 3;
+        }
+        .trinote-collapsible-drag-handle svg { width: 16px; height: 16px; fill: currentColor; }
+        .trinote-collapsible-drag-handle:active { opacity: 0.8; }
+        details.trinote-collapsible-dragging { opacity: 0.4; }
+        .trinote-collapsible-insert-line {
+          position: absolute;
+          left: 16px;
+          right: 16px;
+          height: 3px;
+          border-radius: 2px;
+          background: \(theme.lightLink);
+          pointer-events: none;
+          z-index: 10000;
+          display: none;
+          box-shadow: 0 0 0 1px rgba(0,0,0,0.08);
+        }
+        @media (prefers-color-scheme: dark) {
+          .trinote-collapsible-insert-line { background: \(theme.darkLink); box-shadow: 0 0 0 1px rgba(255,255,255,0.12); }
         }
         h1, h2, h3, h4, h5, h6 { margin-top: 1em; margin-bottom: 0.5em; }
         /* Paragraphs + lists: match editor spacing; CKEditor/Trilium often use empty <p> for “double break” between lists */
@@ -1408,6 +1542,238 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             });
         })();
 
+        // Collapsible blocks: persist open state + optional drag-reorder among sibling lines
+        (function() {
+            var reorderEnabled = \(collapsibleReorderEnabled ? "true" : "false");
+            var persistEnabled = \(collapsibleTogglePersistEnabled ? "true" : "false");
+            if (!reorderEnabled && !persistEnabled) return;
+
+            function isInclude(el) {
+                return !!(el && el.closest && el.closest('.trinote-include'));
+            }
+            function siblingBlocks(el) {
+                var parent = el.parentElement;
+                if (!parent) return [];
+                return Array.prototype.filter.call(parent.children, function(c) {
+                    var t = c.tagName;
+                    return t !== 'SUMMARY' && t !== 'SCRIPT' && t !== 'STYLE' && t !== 'LINK' && t !== 'META';
+                });
+            }
+            function detailsIndex(el) {
+                if (!el || el.dataset.detailsIndex == null) return null;
+                return parseInt(el.dataset.detailsIndex, 10);
+            }
+            function postDragState(active) {
+                try { window.webkit.messageHandlers.checkboxDragState.postMessage({ active: !!active }); } catch (e) {}
+            }
+            function postDragScroll(clientY) {
+                try { window.webkit.messageHandlers.checkboxDragScroll.postMessage({ clientY: clientY }); } catch (e) {}
+            }
+            function postReorder(fromIndex, beforeChildIndex) {
+                try {
+                    window.webkit.messageHandlers.collapsibleReorder.postMessage({
+                        fromIndex: fromIndex,
+                        beforeChildIndex: (beforeChildIndex == null ? null : beforeChildIndex)
+                    });
+                } catch (e) {}
+            }
+
+            var insertLine = document.createElement('div');
+            insertLine.className = 'trinote-collapsible-insert-line';
+            document.body.appendChild(insertLine);
+
+            var drag = null;
+            function hideInsertLine() { insertLine.style.display = 'none'; }
+            function showInsertLineAt(y) {
+                insertLine.style.display = 'block';
+                insertLine.style.top = Math.max(0, y - 1) + 'px';
+            }
+            function updateInsertTarget(clientY) {
+                if (!drag) return;
+                var siblings = drag.siblings;
+                var beforeEl = null;
+                var lineY = null;
+                for (var i = 0; i < siblings.length; i++) {
+                    var s = siblings[i];
+                    if (s === drag.el) continue;
+                    var rect = s.getBoundingClientRect();
+                    var mid = rect.top + rect.height / 2;
+                    if (clientY < mid) {
+                        beforeEl = s;
+                        lineY = window.scrollY + rect.top;
+                        break;
+                    }
+                }
+                if (!beforeEl) {
+                    var last = null;
+                    for (var j = siblings.length - 1; j >= 0; j--) {
+                        if (siblings[j] !== drag.el) { last = siblings[j]; break; }
+                    }
+                    if (last) {
+                        var lastRect = last.getBoundingClientRect();
+                        lineY = window.scrollY + lastRect.bottom;
+                    } else {
+                        var selfRect = drag.el.getBoundingClientRect();
+                        lineY = window.scrollY + selfRect.bottom;
+                    }
+                }
+                drag.beforeEl = beforeEl;
+                if (lineY != null) showInsertLineAt(lineY);
+            }
+            function endDrag(commit) {
+                if (!drag) return;
+                var state = drag;
+                drag = null;
+                hideInsertLine();
+                state.el.classList.remove('trinote-collapsible-dragging');
+                state.el._trinoteDragging = false;
+                postDragState(false);
+                if (state.usePointer) {
+                    document.removeEventListener('pointermove', onPointerMove, true);
+                    document.removeEventListener('pointerup', onPointerUp, true);
+                    document.removeEventListener('pointercancel', onPointerCancel, true);
+                } else {
+                    document.removeEventListener('touchmove', onTouchMove, { capture: true });
+                    document.removeEventListener('touchend', onTouchEnd, { capture: true });
+                    document.removeEventListener('touchcancel', onTouchCancel, { capture: true });
+                }
+                if (!commit) return;
+                var beforeChildIndex = state.beforeEl ? state.siblings.indexOf(state.beforeEl) : null;
+                var next = state.el.nextElementSibling;
+                while (next && (next.tagName === 'SUMMARY' || next.tagName === 'SCRIPT' || next.tagName === 'STYLE')) {
+                    next = next.nextElementSibling;
+                }
+                var alreadyThere = (state.beforeEl == null && next == null)
+                    || (state.beforeEl != null && next === state.beforeEl);
+                if (alreadyThere) return;
+                if (state.beforeEl) state.parent.insertBefore(state.el, state.beforeEl);
+                else state.parent.appendChild(state.el);
+                postReorder(state.fromIndex, beforeChildIndex);
+                try { if (typeof reportHeight === 'function') reportHeight(); } catch (e2) {}
+            }
+            function onTouchMove(e) {
+                if (!drag) return;
+                if (e.cancelable) e.preventDefault();
+                var t = e.touches[0];
+                if (!t) return;
+                updateInsertTarget(t.clientY);
+                postDragScroll(t.clientY);
+            }
+            function onTouchEnd(e) {
+                if (!drag) return;
+                if (e.cancelable) e.preventDefault();
+                endDrag(true);
+            }
+            function onTouchCancel() { endDrag(false); }
+            function onPointerMove(e) {
+                if (!drag || drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+                if (e.cancelable) e.preventDefault();
+                updateInsertTarget(e.clientY);
+                postDragScroll(e.clientY);
+            }
+            function onPointerUp(e) {
+                if (!drag || drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+                endDrag(true);
+            }
+            function onPointerCancel(e) {
+                if (!drag || drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+                endDrag(false);
+            }
+            function beginDrag(el, fromIndex, pointerId, usePointer) {
+                if (drag) return;
+                var parent = el.parentElement;
+                if (!parent) return;
+                var siblings = siblingBlocks(el);
+                if (siblings.length < 2) return;
+                drag = {
+                    el: el,
+                    parent: parent,
+                    siblings: siblings,
+                    fromIndex: fromIndex,
+                    beforeEl: null,
+                    pointerId: pointerId,
+                    usePointer: !!usePointer
+                };
+                el.classList.add('trinote-collapsible-dragging');
+                el._trinoteDragging = true;
+                postDragState(true);
+                if (usePointer) {
+                    document.addEventListener('pointermove', onPointerMove, true);
+                    document.addEventListener('pointerup', onPointerUp, true);
+                    document.addEventListener('pointercancel', onPointerCancel, true);
+                } else {
+                    document.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+                    document.addEventListener('touchend', onTouchEnd, { capture: true, passive: false });
+                    document.addEventListener('touchcancel', onTouchCancel, { capture: true });
+                }
+            }
+
+            var handleSvg = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+                + '<path d="M12 3.2L7.8 8h8.4L12 3.2z"/>'
+                + '<circle cx="7.5" cy="10.5" r="1.15"/><circle cx="12" cy="10.5" r="1.15"/><circle cx="16.5" cy="10.5" r="1.15"/>'
+                + '<circle cx="7.5" cy="13.5" r="1.15"/><circle cx="12" cy="13.5" r="1.15"/><circle cx="16.5" cy="13.5" r="1.15"/>'
+                + '<path d="M12 20.8L16.2 16H7.8L12 20.8z"/>'
+                + '</svg>';
+            var supportsPointer = typeof window.PointerEvent !== 'undefined';
+
+            var all = document.querySelectorAll('details');
+            var idx = 0;
+            all.forEach(function(d) {
+                if (isInclude(d)) return;
+                d.classList.add('trilium-collapsible');
+                d.dataset.detailsIndex = String(idx);
+                var fromIndex = idx;
+                idx += 1;
+
+                if (persistEnabled) {
+                    d.addEventListener('toggle', function() {
+                        if (d._trinoteDragging) return;
+                        try {
+                            window.webkit.messageHandlers.collapsibleToggle.postMessage({
+                                index: fromIndex,
+                                open: !!d.open
+                            });
+                        } catch (err) {}
+                    });
+                }
+
+                if (!reorderEnabled) return;
+                var summary = d.querySelector(':scope > summary');
+                if (!summary) return;
+                if (summary.querySelector(':scope > .trinote-collapsible-drag-handle')) return;
+                var handle = document.createElement('span');
+                handle.className = 'trinote-collapsible-drag-handle';
+                handle.setAttribute('role', 'button');
+                handle.setAttribute('aria-label', 'Reorder collapsible block');
+                handle.innerHTML = handleSvg;
+                summary.appendChild(handle);
+
+                if (supportsPointer) {
+                    handle.addEventListener('pointerdown', function(e) {
+                        if (e.button != null && e.button !== 0) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        beginDrag(d, fromIndex, e.pointerId, true);
+                        updateInsertTarget(e.clientY);
+                        postDragScroll(e.clientY);
+                    }, true);
+                } else {
+                    handle.addEventListener('touchstart', function(e) {
+                        if (!e.touches || !e.touches[0]) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        beginDrag(d, fromIndex, null, false);
+                        updateInsertTarget(e.touches[0].clientY);
+                        postDragScroll(e.touches[0].clientY);
+                    }, { capture: true, passive: false });
+                }
+                handle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }, true);
+            });
+        })();
+
         // Wrap tables in a horizontally-scrollable container.
         // If a table is inside <figure class="table">, wrap the whole figure.
         (function() {
@@ -1667,6 +2033,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var loadHTMLStartedAt: CFAbsoluteTime?
         var themeColors: HTMLThemeColors?
         var checkboxReorderEnabled: Bool = false
+        var collapsibleReorderEnabled: Bool = false
         var listInteractionEnabled: Bool = true
         var taskStateCycleEnabled: Bool = false
         var checkboxOnlyRevision: Int = 0
@@ -1676,6 +2043,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
         var onTaskStateCycled: ((_ index: Int) -> Void)?
         var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
+        var onCollapsibleReordered: ((_ fromIndex: Int, _ beforeChildIndex: Int?) -> Void)?
+        var onCollapsibleToggled: ((_ index: Int, _ open: Bool) -> Void)?
         var onAttachmentLinkTapped: ((String) -> Void)?
         var imageBytes: TriliumImageSchemeHandler.ByteProvider?
         /// Held so the handler outlives the configuration that registered it.
@@ -1701,6 +2070,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?,
             onTaskStateCycled: ((_ index: Int) -> Void)?,
             onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?,
+            onCollapsibleReordered: ((_ fromIndex: Int, _ beforeChildIndex: Int?) -> Void)?,
+            onCollapsibleToggled: ((_ index: Int, _ open: Bool) -> Void)?,
             onAttachmentLinkTapped: ((String) -> Void)?,
             imageBytes: TriliumImageSchemeHandler.ByteProvider?,
             onHeightChanged: ((CGFloat) -> Void)?,
@@ -1710,6 +2081,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             self.onCheckboxToggled = onCheckboxToggled
             self.onTaskStateCycled = onTaskStateCycled
             self.onCheckboxReordered = onCheckboxReordered
+            self.onCollapsibleReordered = onCollapsibleReordered
+            self.onCollapsibleToggled = onCollapsibleToggled
             self.onAttachmentLinkTapped = onAttachmentLinkTapped
             self.imageBytes = imageBytes
             self.onHeightChanged = onHeightChanged
@@ -1766,6 +2139,23 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     beforeIndex = Self.intFromScriptValue(dict["beforeIndex"])
                 }
                 onCheckboxReordered?(fromIndex, beforeIndex)
+            case "collapsibleReorder":
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                      let fromIndex = Self.intFromScriptValue(dict["fromIndex"])
+                else { return }
+                let beforeChildIndex: Int?
+                if dict["beforeChildIndex"] == nil || dict["beforeChildIndex"] is NSNull {
+                    beforeChildIndex = nil
+                } else {
+                    beforeChildIndex = Self.intFromScriptValue(dict["beforeChildIndex"])
+                }
+                onCollapsibleReordered?(fromIndex, beforeChildIndex)
+            case "collapsibleToggle":
+                guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
+                      let index = Self.intFromScriptValue(dict["index"]),
+                      let open = Self.boolFromScriptValue(dict["open"])
+                else { return }
+                onCollapsibleToggled?(index, open)
             case "checkboxDragState":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
                       let active = Self.boolFromScriptValue(dict["active"])

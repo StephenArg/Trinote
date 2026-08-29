@@ -29,10 +29,11 @@ settings:
     DEVELOPMENT_TEAM: R6WYB662P7
     CODE_SIGN_STYLE: Automatic
     SWIFT_STRICT_CONCURRENCY: complete
-    # Version source of truth for XcodeGen. After changing Version/Build in Xcode,
-    # build once (or run Scripts/sync_project_yml_version.sh) to write back here.
-    MARKETING_VERSION: "1.19.8"
-    CURRENT_PROJECT_VERSION: "16"
+    VERSIONING_SYSTEM: apple-generic
+    # Source of truth for XcodeGen. Identity Version/Build is applied on the next
+    # build (Scripts/sync_project_yml_version.sh writes the values back here).
+    MARKETING_VERSION: "1.20.1"
+    CURRENT_PROJECT_VERSION: "19"
 
 packages:
   Highlightr:
@@ -89,14 +90,16 @@ targets:
         embed: true
         codeSign: true
     preBuildScripts:
-      - name: Sync Version to project.yml
-        path: Scripts/sync_project_yml_version.sh
+      - name: Apply Identity Version
+        script: |
+          bash "${SRCROOT}/Scripts/sync_project_yml_version.sh"
         basedOnDependencyAnalysis: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.trinote
         INFOPLIST_FILE: Trinote/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: false
+        ENABLE_USER_SCRIPT_SANDBOXING: false
         CODE_SIGN_ENTITLEMENTS: Trinote/Trinote.entitlements
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "Apple Development"
@@ -114,12 +117,18 @@ targets:
           - "**/*.entitlements"
           - "Info.plist"
       - path: TrinoteShared
+    preBuildScripts:
+      - name: Apply Identity Version
+        script: |
+          bash "${SRCROOT}/Scripts/sync_project_yml_version.sh"
+        basedOnDependencyAnalysis: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.trinote.fileshare
         PRODUCT_NAME: TrinoteShare
         INFOPLIST_FILE: TrinoteShare/Info.plist
         GENERATE_INFOPLIST_FILE: false
+        ENABLE_USER_SCRIPT_SANDBOXING: false
         CODE_SIGN_ENTITLEMENTS: TrinoteShare/TrinoteShare.entitlements
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "Apple Development"

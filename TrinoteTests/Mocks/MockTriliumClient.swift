@@ -21,6 +21,8 @@ actor MockTriliumClient: TriliumClientProtocol {
     var convertAttachmentToNoteResult: Result<ConvertAttachmentToNoteResponse, Error>?
     var attachmentOCRTextResult: Result<AttachmentOCRTextResponse, Error>?
     var processAttachmentOCRResult: Result<ProcessAttachmentOCRResponse, Error>?
+    var noteOfficePreviewResults: [String: Result<OfficePreviewResponse, Error>] = [:]
+    var attachmentOfficePreviewResults: [String: Result<OfficePreviewResponse, Error>] = [:]
     var syncCheckResult: Result<SyncCheckResponse, Error> = .success(SyncCheckResponse())
     var syncPullResult: Result<SyncPullResponse, Error> = .success(SyncPullResponse(
         entityChanges: [], maxEntityChangeId: 0, outstandingPullCount: 0,
@@ -371,5 +373,15 @@ actor MockTriliumClient: TriliumClientProtocol {
             success: true,
             result: ProcessAttachmentOCRResponse.OCRResult(text: "ocr text", confidence: 0.9)
         )
+    }
+
+    func getNoteOfficePreview(_ noteId: String) async throws -> OfficePreviewResponse {
+        if let result = noteOfficePreviewResults[noteId] { return try result.get() }
+        throw APIError.notFound("office-preview \(noteId)")
+    }
+
+    func getAttachmentOfficePreview(_ attachmentId: String) async throws -> OfficePreviewResponse {
+        if let result = attachmentOfficePreviewResults[attachmentId] { return try result.get() }
+        throw APIError.notFound("office-preview \(attachmentId)")
     }
 }
