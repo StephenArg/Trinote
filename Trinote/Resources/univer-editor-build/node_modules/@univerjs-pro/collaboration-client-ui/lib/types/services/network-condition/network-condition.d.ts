@@ -1,0 +1,12 @@
+import type { INetworkConditionService } from '@univerjs-pro/collaboration-client';
+import type { Observable } from 'rxjs';
+import { Disposable } from '@univerjs/core';
+export declare class BrowserNetworkConditionService extends Disposable implements INetworkConditionService {
+    private readonly _online$;
+    readonly online$: Observable<boolean>;
+    get online(): boolean;
+    constructor();
+    dispose(): void;
+    private _listenToOnlineEvent;
+    private _listenToOfflineEvent;
+}

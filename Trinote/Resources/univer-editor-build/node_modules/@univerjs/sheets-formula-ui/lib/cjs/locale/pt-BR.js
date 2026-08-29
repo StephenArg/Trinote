@@ -1,0 +1,72 @@
+
+//#region src/locale/pt-BR.ts
+const locale = { "sheets-formula-ui": {
+	shortcut: { "quick-sum": "Soma Rápida" },
+	insert: {
+		tooltip: "Funções",
+		common: "Funções Comuns"
+	},
+	prompt: {
+		helpExample: "EXEMPLO",
+		helpAbstract: "SOBRE",
+		required: "Obrigatório.",
+		optional: "Opcional."
+	},
+	error: {
+		title: "Erro",
+		divByZero: "Erro de divisão por zero",
+		name: "Erro de nome inválido",
+		value: "Erro no valor",
+		num: "Erro numérico",
+		na: "Erro de valor não disponível",
+		cycle: "Erro de referência circular",
+		ref: "Erro de referência de célula inválida",
+		spill: "O intervalo de derramamento não está em branco",
+		calc: "Erro de cálculo",
+		error: "Erro",
+		connect: "Obtendo dados",
+		null: "Erro Nulo"
+	},
+	functionType: {
+		financial: "Financeira",
+		date: "Data e Hora",
+		math: "Matemática e Trigonométrica",
+		statistical: "Estatística",
+		lookup: "Procura e Referência",
+		database: "Banco de Dados",
+		text: "Texto",
+		logical: "Lógica",
+		information: "Informação",
+		engineering: "Engenharia",
+		cube: "Cubo",
+		compatibility: "Compatibilidade",
+		web: "Web",
+		array: "Matriz",
+		univer: "Univer",
+		user: "Definida pelo Usuário",
+		definedname: "Nome Definido"
+	},
+	moreFunctions: {
+		confirm: "Confirmar",
+		prev: "Anterior",
+		next: "Próxima",
+		searchFunctionPlaceholder: "Pesquisar função",
+		allFunctions: "Todas as Funções",
+		syntax: "SINTAXE"
+	},
+	operation: {
+		copyFormulaOnly: "Copiar Apenas Fórmula",
+		pasteFormula: "Colar Fórmula"
+	},
+	rangeSelector: {
+		title: "Selecionar um intervalo de dados",
+		addAnotherRange: "Adicionar intervalo",
+		buttonTooltip: "Selecionar intervalo de dados",
+		placeHolder: "Selecione o intervalo ou digite.",
+		confirm: "Confirmar",
+		cancel: "Cancelar"
+	}
+} };
+
+//#endregion
+module.exports = locale;

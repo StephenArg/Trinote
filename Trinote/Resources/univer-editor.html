@@ -17,10 +17,14 @@
             height: 100%;
             width: 100%;
             background: var(--univer-bg-color, #ffffff);
-            color-scheme: light dark;
+            color-scheme: light;
             -webkit-user-select: none;
             -webkit-touch-callout: none;
             overscroll-behavior: none;
+        }
+        html.univer-dark, html.univer-dark body {
+            background: #1c1c1e;
+            color-scheme: dark;
         }
         body {
             /*
@@ -40,7 +44,26 @@
         }
 
         @media (prefers-color-scheme: dark) {
-            html, body { background: #1c1c1e; }
+            html:not(.univer-dark) { color-scheme: light; }
+        }
+
+        /*
+            After drag-fill, Univer shows a small autofill options chip (copy / series /
+            format only / no format). Enlarge it on touch devices and always show the
+            expand chevron — desktop relies on hover to reveal it.
+        */
+        @media (hover: none), (pointer: coarse) {
+            .univer-z-10.univer-size-0 .univer-flex.univer-items-center.univer-gap-2 {
+                min-height: 36px;
+                min-width: 36px;
+                padding: 8px 10px !important;
+                border: 1px solid rgba(128, 128, 128, 0.35);
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+            }
+            .univer-z-10.univer-size-0 svg.univer-fill-primary-600 + svg {
+                display: inline-block !important;
+            }
         }
     </style>
 </head>

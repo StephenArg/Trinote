@@ -1,0 +1,4 @@
+import type { IToggleGridlinesMutationParams } from '@univerjs/sheets';
+import type { IMutationTransformAlgorithm } from '../../../../services/transform/transform.service';
+export declare const ToggleGridlinesWithSelf: IMutationTransformAlgorithm<IToggleGridlinesMutationParams, IToggleGridlinesMutationParams>;
+export declare const GridlinesAlgorithms: Array<IMutationTransformAlgorithm>;

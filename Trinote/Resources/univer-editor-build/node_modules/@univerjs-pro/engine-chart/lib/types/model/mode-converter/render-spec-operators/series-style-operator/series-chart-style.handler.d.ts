@@ -1,0 +1,2 @@
+import type { SeriesItemHandler } from './series-style-operator';
+export declare const seriesChartStyleHandler: SeriesItemHandler;

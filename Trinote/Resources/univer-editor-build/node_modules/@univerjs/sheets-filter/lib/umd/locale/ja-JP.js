@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsFilterJaJP=t())})(this,function(){return{"sheets-filter":{command:{"not-valid-filter-range":`選択範囲に1行しか含まれていないため、フィルタを適用できません。`},msg:{"filter-header-forbidden":`フィルタヘッダー行は移動できません。`}}}});

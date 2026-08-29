@@ -1,0 +1,12 @@
+import type { IChangeset } from '@univerjs-pro/collaboration';
+import { ITransformService } from '@univerjs-pro/collaboration';
+import { IRenderManagerService } from '@univerjs/engine-render';
+export declare class DocTransformIMECacheService {
+    private readonly _transformService;
+    private readonly _renderManagerService;
+    constructor(_transformService: ITransformService, _renderManagerService: IRenderManagerService);
+    transformIMECache(changeset: IChangeset): void;
+    transformRemoteChangeset(changeset: IChangeset): IChangeset;
+    private _transformUndoRedoStack;
+    private _transformPreviousActiveRange;
+}

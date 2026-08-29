@@ -119,6 +119,12 @@ class DeflateHandler extends CompressionHandler {
       let totalLength = 0;
       const messageParts: Buffer[] = [];
       const decompresser = zlib.createInflate();
+      decompresser.on('error', (error: Error) => {
+        reject({
+          code: Status.INTERNAL,
+          details: 'Failed to decompress deflate-encoded message'
+        });
+      });
       decompresser.on('data', (chunk: Buffer) => {
         messageParts.push(chunk);
         totalLength += chunk.byteLength;
@@ -161,6 +167,12 @@ class GzipHandler extends CompressionHandler {
       let totalLength = 0;
       const messageParts: Buffer[] = [];
       const decompresser = zlib.createGunzip();
+      decompresser.on('error', (error: Error) => {
+        reject({
+          code: Status.INTERNAL,
+          details: 'Failed to decompress gzip-encoded message'
+        });
+      });
       decompresser.on('data', (chunk: Buffer) => {
         messageParts.push(chunk);
         totalLength += chunk.byteLength;

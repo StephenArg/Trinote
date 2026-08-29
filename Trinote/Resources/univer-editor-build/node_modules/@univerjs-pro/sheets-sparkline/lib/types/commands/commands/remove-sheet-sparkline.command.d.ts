@@ -1,0 +1,6 @@
+import type { ICommand, IRange } from '@univerjs/core';
+export interface IRemoveSheetSparklineCommandProps {
+    isSingle?: boolean;
+    ranges?: IRange[];
+}
+export declare const RemoveSheetSparklineCommand: ICommand<IRemoveSheetSparklineCommandProps>;

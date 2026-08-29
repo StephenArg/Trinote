@@ -2050,7 +2050,12 @@ struct NoteDetailView: View {
                 MindMapNoteView(json: json)
             }
         case .spreadsheet:
-            SpreadsheetNoteView(json: vm.contentString)
+            SpreadsheetNoteView(
+                json: vm.contentString,
+                imageBytes: { routeType, entityId in
+                    await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+                }
+            )
         case .geoMap:
             GeoMapNoteView(
                 viewportJSON: geoMapInitialViewportJSON.isEmpty
@@ -2421,6 +2426,9 @@ struct NoteDetailView: View {
                 initialJSON: vm.editableContent,
                 bridge: spreadsheetEditorBridge,
                 colorScheme: colorScheme,
+                imageBytes: { routeType, entityId in
+                    await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+                },
                 onWorkbookChanged: { spreadsheetHasUnsavedChanges = true }
             )
             .onAppear {
@@ -2483,6 +2491,9 @@ struct NoteDetailView: View {
                 initialJSON: vm.editableContent,
                 bridge: spreadsheetEditorBridge,
                 colorScheme: colorScheme,
+                imageBytes: { routeType, entityId in
+                    await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+                },
                 onWorkbookChanged: { spreadsheetHasUnsavedChanges = true }
             )
             .ignoresSafeArea(edges: .bottom)

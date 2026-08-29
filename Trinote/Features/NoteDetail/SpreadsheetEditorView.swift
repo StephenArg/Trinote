@@ -24,6 +24,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
     let initialJSON: String
     let bridge: SpreadsheetEditorBridge
     var colorScheme: ColorScheme
+    var imageBytes: TriliumImageSchemeHandler.ByteProvider?
     var onWorkbookChanged: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -38,6 +39,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
         contentController.add(coordinator, name: "univerReady")
         contentController.add(coordinator, name: "workbookChanged")
         contentController.add(coordinator, name: "univerLog")
+        contentController.add(coordinator, name: "trinoteImageRequest")
 
         let consoleScript = WKUserScript(source: """
             (function() {
@@ -51,10 +53,29 @@ struct SpreadsheetEditorView: UIViewRepresentable {
             })();
             """, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         contentController.addUserScript(consoleScript)
+        let isDark = colorScheme == .dark
+        let themeScript = WKUserScript(source: """
+            (function() {
+                var on = \(isDark ? "true" : "false");
+                document.documentElement.classList.toggle('univer-dark', on);
+                document.documentElement.style.colorScheme = on ? 'dark' : 'light';
+                if (document.body) {
+                    document.body.classList.toggle('univer-dark', on);
+                    document.body.style.colorScheme = on ? 'dark' : 'light';
+                }
+            })();
+            """, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        contentController.addUserScript(themeScript)
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        if let imageBytes {
+            config.setURLSchemeHandler(
+                TriliumImageSchemeHandler(provider: imageBytes),
+                forURLScheme: TriliumImageScheme.scheme
+            )
+        }
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = coordinator
@@ -78,10 +99,13 @@ struct SpreadsheetEditorView: UIViewRepresentable {
         }
 
         coordinator.webView = webView
+        coordinator.imageBytes = imageBytes
         coordinator.lastAppliedDarkMode = (colorScheme == .dark)
 
         if let fileURL = Bundle.main.url(forResource: "univer-editor", withExtension: "html") {
             webView.loadFileURL(fileURL, allowingReadAccessTo: Bundle.main.bundleURL)
+        } else {
+            Log.api.error("Univer editor HTML not found in app bundle")
         }
 
         return webView
@@ -89,6 +113,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onWorkbookChanged = onWorkbookChanged
+        context.coordinator.imageBytes = imageBytes
         context.coordinator.applyDarkModeIfChanged(colorScheme == .dark)
     }
 
@@ -97,6 +122,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "univerReady")
         uc.removeScriptMessageHandler(forName: "workbookChanged")
         uc.removeScriptMessageHandler(forName: "univerLog")
+        uc.removeScriptMessageHandler(forName: "trinoteImageRequest")
     }
 
     // MARK: - Coordinator
@@ -104,6 +130,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var onWorkbookChanged: (() -> Void)?
+        var imageBytes: TriliumImageSchemeHandler.ByteProvider?
         var lastAppliedDarkMode: Bool = false
 
         private let initialJSON: String
@@ -114,10 +141,15 @@ struct SpreadsheetEditorView: UIViewRepresentable {
             self.onWorkbookChanged = onWorkbookChanged
         }
 
+        private func editorWorkbookJSON(from canonicalJSON: String) -> String {
+            SpreadsheetWorkbookImageURLs.decorateForEditor(canonicalJSON)
+        }
+
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "univerReady":
                 univerReady = true
+                Log.api.info("Univer editor ready")
                 loadWorkbook(initialJSON)
                 applyDarkMode(lastAppliedDarkMode)
 
@@ -128,7 +160,22 @@ struct SpreadsheetEditorView: UIViewRepresentable {
 
             case "univerLog":
                 if let msg = message.body as? String {
-                    Log.api.debug("UniverJS: \(msg)")
+                    if msg.localizedCaseInsensitiveContains("error") {
+                        Log.api.error("UniverJS: \(msg)")
+                    } else if msg.hasPrefix("boot ") {
+                        Log.api.info("UniverJS: \(msg)")
+                    } else {
+                        Log.api.debug("UniverJS: \(msg)")
+                    }
+                }
+
+            case "trinoteImageRequest":
+                guard let body = message.body as? [String: Any],
+                      let id = body["id"] as? String,
+                      let url = body["url"] as? String else { break }
+                Log.api.debug("Univer image request id=\(id) url=\(url)")
+                Task { @MainActor [weak self] in
+                    await self?.resolveNativeImageRequest(id: id, url: url)
                 }
 
             default:
@@ -136,22 +183,68 @@ struct SpreadsheetEditorView: UIViewRepresentable {
             }
         }
 
+        @MainActor
+        private func resolveNativeImageRequest(id: String, url: String) async {
+            guard let webView else { return }
+            let dataURL = await Self.dataURL(forImageURL: url, imageBytes: imageBytes)
+            if dataURL == nil {
+                Log.api.error("Univer image unavailable id=\(id) url=\(url) hasProvider=\(self.imageBytes != nil)")
+            }
+            // `callAsyncJavaScript` binds dictionary keys as named locals (`id`, `dataUrl`, `error`),
+            // not as `arguments.id`.
+            var arguments: [String: Any] = ["id": id]
+            if let dataURL {
+                arguments["dataUrl"] = dataURL
+                arguments["error"] = NSNull()
+            } else {
+                arguments["dataUrl"] = NSNull()
+                arguments["error"] = "image unavailable"
+            }
+            webView.callAsyncJavaScript(
+                "window.__trinoteResolveImage(id, dataUrl, error);",
+                arguments: arguments,
+                in: nil,
+                in: .page
+            ) { result in
+                if case .failure(let error) = result {
+                    Log.api.error("trinoteImageRequest callback failed: \(error)")
+                }
+            }
+        }
+
+        private static func dataURL(
+            forImageURL urlString: String,
+            imageBytes: TriliumImageSchemeHandler.ByteProvider?
+        ) async -> String? {
+            if urlString.hasPrefix("data:") { return urlString }
+
+            let reference: (routeType: String, entityId: String)?
+            if let schemeRef = TriliumImageScheme.reference(fromURLString: urlString) {
+                reference = schemeRef
+            } else if let parsed = TriliumAttachmentURLParser.entityReference(in: urlString) {
+                reference = parsed
+            } else {
+                reference = nil
+            }
+
+            guard let reference, let imageBytes else { return nil }
+            guard let data = await imageBytes(reference.routeType, reference.entityId),
+                  data.isPlausibleInlineImagePayload else { return nil }
+            return "data:\(data.detectImageMIME());base64,\(data.base64EncodedString())"
+        }
+
         func loadWorkbook(_ json: String) {
             guard univerReady, let webView else { return }
-            // Round-trip through JSON-encoded JS string literal to avoid escaping bugs
-            // on quotes, backslashes, newlines, and tab characters in cell content.
-            let payload = json.isEmpty ? "{}" : json
-            let argument: String
-            if let data = try? JSONSerialization.data(withJSONObject: [payload], options: []),
-               let arrLiteral = String(data: data, encoding: .utf8) {
-                // arrLiteral is e.g. `["{\"version\":1,...}"]`; strip the brackets to get a quoted string literal.
-                let trimmed = arrLiteral.dropFirst().dropLast()
-                argument = String(trimmed)
-            } else {
-                argument = "''"
-            }
-            webView.evaluateJavaScript("window.univerBridge.loadWorkbook(\(argument));") { _, error in
-                if let error { Log.api.error("Failed to load Univer workbook: \(error)") }
+            let payload = json.isEmpty ? "{}" : editorWorkbookJSON(from: json)
+            webView.callAsyncJavaScript(
+                "return await window.univerBridge.loadWorkbook(json);",
+                arguments: ["json": payload],
+                in: nil,
+                in: .page
+            ) { result in
+                if case .failure(let error) = result {
+                    Log.api.error("Failed to load Univer workbook: \(error)")
+                }
             }
         }
 
@@ -201,6 +294,10 @@ struct SpreadsheetEditorView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             Log.api.error("Univer WKWebView provisional navigation failed: \(error)")
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            Log.api.info("Univer WKWebView finished loading univer-editor.html")
         }
     }
 }

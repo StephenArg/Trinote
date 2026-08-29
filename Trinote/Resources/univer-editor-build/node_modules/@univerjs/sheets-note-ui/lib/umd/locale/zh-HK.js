@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsNoteUiZhHK=t())})(this,function(){return{"sheets-note-ui":{note:{placeholder:`在此輸入`},rightClick:{addNote:`添加批註`,deleteNote:`刪除批註`,toggleNote:`顯示/隱藏批註`}}}});

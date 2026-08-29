@@ -1,0 +1,2 @@
+export { ReleaseType } from './type';
+export { getDocFeatureLimit, getSheetFeatureLimit, isFeatureAuthorizedWithinTime, isLocalCheck, renderWaterMark, unshiftString } from './util';

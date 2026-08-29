@@ -1,0 +1,61 @@
+
+//#region src/locale/es-ES.ts
+const locale = { "sheets-drawing-ui": {
+	title: "Imagen",
+	upload: {
+		float: "Imagen flotante",
+		cell: "Imagen de celda"
+	},
+	panel: { title: "Editar imagen" },
+	save: {
+		title: "Guardar imágenes de celda",
+		menuLabel: "Guardar imágenes de celda",
+		imageCount: "Cantidad de imágenes",
+		fileNameConfig: "Nombre del archivo",
+		useRowCol: "Usar dirección de celda (A1, B2...)",
+		useColumnValue: "Usar valor de columna",
+		selectColumn: "Seleccionar columna",
+		cancel: "Cancelar",
+		confirm: "Guardar",
+		saving: "Guardando...",
+		error: "Error al guardar las imágenes de celda"
+	},
+	"image-popup": {
+		replace: "Reemplazar",
+		delete: "Eliminar",
+		edit: "Editar",
+		crop: "Recortar",
+		reset: "Restablecer tamaño",
+		flipH: "Voltear horizontalmente",
+		flipV: "Voltear verticalmente"
+	},
+	"update-status": {
+		exceedMaxSize: "El tamaño de la imagen supera el límite, el límite es {0}M",
+		invalidImageType: "Tipo de imagen no válido",
+		exceedMaxCount: "Solo se pueden subir {0} imágenes a la vez",
+		invalidImage: "Imagen no válida"
+	},
+	"drawing-anchor": {
+		title: "Propiedades de anclaje",
+		both: "Mover y cambiar tamaño con las celdas",
+		position: "Mover pero no cambiar tamaño con las celdas",
+		none: "No mover ni cambiar tamaño con las celdas"
+	},
+	"cell-image": {
+		pasteTitle: "Pegar como imagen de celda",
+		pasteContent: "Pegar una imagen de celda sobrescribirá el contenido existente de la celda, continuar pegando",
+		pasteError: "La copia y pegado de imágenes de celda de hoja no está soportada en esta unidad"
+	},
+	permission: { dialog: { editErr: "El rango está protegido y no tienes permiso de edición. Para editar, contacta al creador." } },
+	shortcut: {
+		"drawing-view": "Vista de dibujo",
+		"drawing-move-down": "Mover dibujo hacia abajo",
+		"drawing-move-up": "Mover dibujo hacia arriba",
+		"drawing-move-left": "Mover dibujo a la izquierda",
+		"drawing-move-right": "Mover dibujo a la derecha",
+		"drawing-delete": "Eliminar dibujo"
+	}
+} };
+
+//#endregion
+module.exports = locale;

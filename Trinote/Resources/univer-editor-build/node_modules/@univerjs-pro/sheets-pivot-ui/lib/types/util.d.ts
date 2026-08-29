@@ -1,0 +1,8 @@
+import type { PivotView } from '@univerjs-pro/engine-pivot';
+export declare function getPivotRowColCount(view: PivotView, startCell: {
+    row: number;
+    col: number;
+}, isEmpty: boolean): {
+    rowCount: number;
+    colCount: number;
+};

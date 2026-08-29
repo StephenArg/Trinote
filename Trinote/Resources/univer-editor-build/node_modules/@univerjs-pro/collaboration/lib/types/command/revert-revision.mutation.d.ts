@@ -1,0 +1,6 @@
+import type { IMutation } from '@univerjs/core';
+export interface IRevertRevisionMutationParams {
+    unitId: string;
+    revision: number;
+}
+export declare const RevertRevisionMutation: IMutation<IRevertRevisionMutationParams>;

@@ -1,0 +1,13 @@
+import type { Meta, StoryObj } from '@storybook/react';
+import { CollaborationStatusDisplay } from './CollabStatus';
+declare const meta: Meta<typeof CollaborationStatusDisplay>;
+export default meta;
+type Story = StoryObj<typeof CollaborationStatusDisplay>;
+export declare const Synced: Story;
+export declare const Syncing: Story;
+export declare const Offline: Story;
+export declare const Conflict: Story;
+export declare const NotCollaborating: Story;
+export declare const FetchMiss: Story;
+export declare const InteractiveDemo: Story;
+export declare const AllStatuses: Story;

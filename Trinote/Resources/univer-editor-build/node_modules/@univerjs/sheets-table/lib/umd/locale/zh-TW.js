@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsTableZhTW=t())})(this,function(){return{"sheets-table":{columnPrefix:`列`,tablePrefix:`表格`,tableNameError:`表格名稱不能包含空格， 不能以數字開頭，不能和已有表格名稱重複`}}});

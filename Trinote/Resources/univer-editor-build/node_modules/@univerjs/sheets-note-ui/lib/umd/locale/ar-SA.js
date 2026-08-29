@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsNoteUiArSA=t())})(this,function(){return{"sheets-note-ui":{note:{placeholder:`اكتب هنا`},rightClick:{addNote:`إضافة ملاحظة`,deleteNote:`حذف الملاحظة`,toggleNote:`إظهار/إخفاء الملاحظة`}}}});

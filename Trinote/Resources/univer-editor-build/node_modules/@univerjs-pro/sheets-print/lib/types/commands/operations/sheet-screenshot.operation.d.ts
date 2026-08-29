@@ -1,0 +1,3 @@
+import type { ICommand } from '@univerjs/core';
+export declare function convertDataURL2File(data: string, type: string): Blob;
+export declare const SheetScreenShotOperation: ICommand;

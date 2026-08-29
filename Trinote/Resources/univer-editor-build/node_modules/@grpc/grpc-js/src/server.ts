@@ -1336,6 +1336,13 @@ export class Server {
     stream: http2.ServerHttp2Stream,
     headers: http2.IncomingHttpHeaders
   ) {
+    stream.once('error', (err: ServerErrorResponse) => {
+      /* We need an error handler to avoid uncaught error event exceptions, but
+       * there is nothing we can reasonably do here. Any error event should
+       * have a corresponding close event, which handles emitting the cancelled
+       * event. And the stream is now in a bad state, so we can't reasonably
+       * expect to be able to send an error over it. */
+    });
     // for handling idle timeout
     this.onStreamOpened(stream);
 
@@ -1420,6 +1427,13 @@ export class Server {
     stream: http2.ServerHttp2Stream,
     headers: http2.IncomingHttpHeaders
   ) {
+    stream.once('error', (err: ServerErrorResponse) => {
+      /* We need an error handler to avoid uncaught error event exceptions, but
+       * there is nothing we can reasonably do here. Any error event should
+       * have a corresponding close event, which handles emitting the cancelled
+       * event. And the stream is now in a bad state, so we can't reasonably
+       * expect to be able to send an error over it. */
+    });
     // for handling idle timeout
     this.onStreamOpened(stream);
 

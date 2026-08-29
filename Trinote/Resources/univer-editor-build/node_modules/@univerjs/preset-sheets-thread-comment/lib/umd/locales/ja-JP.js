@@ -1,0 +1,8 @@
+// @univerjs/thread-comment-ui/locale/ja-JP
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverThreadCommentUiJaJP=t())})(this,function(){return{"thread-comment-ui":{panel:{title:`コメント管理`,empty:`まだコメントはありません`,filterEmpty:`一致する結果がありません`,reset:`フィルタをリセット`,addComment:`コメントを追加`,solved:`解決済み`},editor:{placeholder:`返信または@で他のユーザーを追加`,reply:`返信`,cancel:`キャンセル`,save:`保存`},item:{edit:`編集`,delete:`コメントを削除`},filter:{sheet:{all:`すべてのシート`,current:`現在のシート`},status:{all:`すべてのコメント`,resolved:`解決済み`,unsolved:`未解決`,concernMe:`自分に関連`}}}}});
+
+// @univerjs/sheets-thread-comment-ui/locale/ja-JP
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsThreadCommentUiJaJP=t())})(this,function(){return{"sheets-thread-comment-ui":{panel:{title:`コメント管理`},menu:{addComment:`コメントを追加`,commentManagement:`コメント管理`}}}});
+
+// locale/ja-JP
+(function(e,n){typeof exports=="object"&&typeof module<"u"?module.exports=n(require("@univerjs/core"),require("@univerjs/sheets-thread-comment-ui/locale/ja-JP"),require("@univerjs/thread-comment-ui/locale/ja-JP")):typeof define=="function"&&define.amd?define(["@univerjs/core","@univerjs/sheets-thread-comment-ui/locale/ja-JP","@univerjs/thread-comment-ui/locale/ja-JP"],n):(e=typeof globalThis<"u"?globalThis:e||self,e.UniverPresetSheetsThreadCommentJaJP=n(e.UniverCore,e.UniverSheetsThreadCommentUiJaJP,e.UniverThreadCommentUiJaJP))})(this,(function(e,n,i){"use strict";return e.mergeLocales(n,i)}));

@@ -1,0 +1,3 @@
+import type { IMoveColumnsMutationParams } from '@univerjs/sheets';
+import type { IMutationTransformAlgorithm } from '../../../../services/transform/transform.service';
+export declare const moveColMutationWithSelf: IMutationTransformAlgorithm<IMoveColumnsMutationParams, IMoveColumnsMutationParams>;

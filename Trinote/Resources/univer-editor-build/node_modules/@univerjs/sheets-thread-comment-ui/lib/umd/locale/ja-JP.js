@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsThreadCommentUiJaJP=t())})(this,function(){return{"sheets-thread-comment-ui":{panel:{title:`コメント管理`},menu:{addComment:`コメントを追加`,commentManagement:`コメント管理`}}}});

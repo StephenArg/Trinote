@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsFilterZhHK=t())})(this,function(){return{"sheets-filter":{command:{"not-valid-filter-range":`選取的區域只有一列，無法進行篩選`},msg:{"filter-header-forbidden":`無法移動篩選列頭`}}}});

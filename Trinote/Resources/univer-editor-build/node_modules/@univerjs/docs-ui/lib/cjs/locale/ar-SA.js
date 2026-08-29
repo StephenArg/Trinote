@@ -1,0 +1,124 @@
+
+//#region src/locale/ar-SA.ts
+const locale = { "docs-ui": {
+	toolbar: {
+		undo: "تراجع",
+		redo: "إعادة",
+		font: "خط",
+		fontSize: "حجم الخط",
+		bold: "غامق",
+		italic: "مائل",
+		strikethrough: "يتوسطه خط",
+		subscript: "منخفض",
+		superscript: "مرتفع",
+		underline: "تسطير",
+		textColor: { main: "لون النص" },
+		fillColor: { main: "لون خلفية النص" },
+		table: {
+			main: "جدول",
+			insert: "إدراج جدول",
+			colCount: "عدد الأعمدة",
+			rowCount: "عدد الصفوف"
+		},
+		resetColor: "إعادة تعيين",
+		order: "قائمة مرقمة",
+		unorder: "قائمة نقطية",
+		checklist: "قائمة مهام",
+		documentFlavor: "الوضع الحديث",
+		alignLeft: "محاذاة لليسار",
+		alignCenter: "محاذاة للوسط",
+		alignRight: "محاذاة لليمين",
+		alignJustify: "ضبط",
+		horizontalLine: "خط أفقي",
+		headerFooter: "رأس وتذييل",
+		pageSetup: "إعداد الصفحة"
+	},
+	table: {
+		insert: "إدراج",
+		insertRowAbove: "إدراج صف أعلى",
+		insertRowBelow: "إدراج صف أسفل",
+		insertColumnLeft: "إدراج عمود على اليسار",
+		insertColumnRight: "إدراج عمود على اليمين",
+		delete: "حذف الجدول",
+		deleteRows: "حذف الصف",
+		deleteColumns: "حذف العمود",
+		deleteTable: "حذف الجدول"
+	},
+	headerFooter: {
+		header: "رأس",
+		footer: "تذييل",
+		panel: "إعدادات الرأس والتذييل",
+		firstPageCheckBox: "صفحة أولى مختلفة",
+		oddEvenCheckBox: "صفحات فردية وزوجية مختلفة",
+		headerTopMargin: "هامش أعلى الرأس (بكسل)",
+		footerBottomMargin: "هامش أسفل التذييل (بكسل)",
+		closeHeaderFooter: "إغلاق الرأس والتذييل",
+		disableText: "إعدادات الرأس والتذييل معطلة"
+	},
+	doc: {
+		menu: { paragraphSetting: "إعدادات الفقرة" },
+		slider: { paragraphSetting: "إعدادات الفقرة" },
+		paragraphSetting: {
+			alignment: "محاذاة",
+			indentation: "إزاحة",
+			left: "يسار",
+			right: "يمين",
+			firstLine: "السطر الأول",
+			hanging: "معلق",
+			spacing: "تباعد",
+			before: "قبل",
+			after: "بعد",
+			lineSpace: "تباعد الأسطر",
+			multiSpace: "تباعد متعدد",
+			fixedValue: "قيمة ثابتة (بكسل)"
+		}
+	},
+	rightClick: {
+		copy: "نسخ",
+		cut: "قص",
+		paste: "لصق",
+		delete: "حذف",
+		bulletList: "قائمة نقطية",
+		orderList: "قائمة مرقمة",
+		checkList: "قائمة مهام",
+		insertBellow: "إدراج أدناه"
+	},
+	"page-settings": {
+		"document-setting": "إعداد المستند",
+		mode: "الوضع",
+		"modern-mode": "حديث",
+		"classic-mode": "كلاسيكي",
+		"modern-width": "عرض المحتوى",
+		"modern-width-narrow": "ضيق",
+		"modern-width-medium": "متوسط",
+		"modern-width-wide": "واسع",
+		"paper-size": "حجم الورق",
+		"page-size": {
+			main: "حجم الورق",
+			a4: "A4",
+			a3: "A3",
+			a5: "A5",
+			b4: "B4",
+			b5: "B5",
+			letter: "Letter",
+			legal: "Legal",
+			tabloid: "Tabloid",
+			statement: "Statement",
+			executive: "Executive",
+			folio: "Folio"
+		},
+		orientation: "الاتجاه",
+		portrait: "عمودي",
+		landscape: "أفقي",
+		"custom-paper-size": "حجم ورق مخصص",
+		top: "أعلى",
+		bottom: "أسفل",
+		left: "يسار",
+		right: "يمين",
+		cancel: "إلغاء",
+		confirm: "تأكيد"
+	}
+} };
+
+//#endregion
+module.exports = locale;

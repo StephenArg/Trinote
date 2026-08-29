@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsNoteUiItIT=t())})(this,function(){return{"sheets-note-ui":{note:{placeholder:`Scrivi qui`},rightClick:{addNote:`Aggiungi nota`,deleteNote:`Elimina nota`,toggleNote:`Mostra/Nascondi nota`}}}});

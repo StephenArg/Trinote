@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsNoteUiJaJP=t())})(this,function(){return{"sheets-note-ui":{note:{placeholder:`ここに入力`},rightClick:{addNote:`コメントを追加`,deleteNote:`コメントを削除`,toggleNote:`コメントの表示/非表示`}}}});

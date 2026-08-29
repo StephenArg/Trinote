@@ -1,0 +1,2 @@
+import type { IRange } from '@univerjs/core';
+export declare function isMergeCell(range: IRange): boolean;

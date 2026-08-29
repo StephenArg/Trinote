@@ -1,0 +1,3 @@
+import type { IAddRangeProtectionMutationParams, IMoveRangeMutationParams } from '@univerjs/sheets';
+import type { IMutationTransformAlgorithm } from '../../../../services/transform/transform.service';
+export declare const addRangeProtectionWithMoveRange: IMutationTransformAlgorithm<IAddRangeProtectionMutationParams, IMoveRangeMutationParams>;

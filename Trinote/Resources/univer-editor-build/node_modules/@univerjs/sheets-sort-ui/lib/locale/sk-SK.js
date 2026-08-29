@@ -1,0 +1,33 @@
+//#region src/locale/sk-SK.ts
+const locale = { "sheets-sort-ui": {
+	general: {
+		sort: "Triediť",
+		"sort-asc": "Vzostupne",
+		"sort-desc": "Zostupne",
+		"sort-custom": "Vlastné triedenie",
+		"sort-asc-ext": "Rozšíriť vzostupne",
+		"sort-desc-ext": "Rozšíriť zostupne",
+		"sort-asc-cur": "Vzostupne",
+		"sort-desc-cur": "Zostupne"
+	},
+	error: {
+		"merge-size": "Vybraný rozsah obsahuje zlúčené bunky rôznych veľkostí, ktoré nie je možné triediť.",
+		empty: "Vybraný rozsah nemá žiadny obsah a nedá sa triediť.",
+		single: "Vybraný rozsah má iba jeden riadok a nedá sa triediť.",
+		"formula-array": "Vybraný rozsah obsahuje maticové vzorce a nedá sa triediť."
+	},
+	dialog: {
+		"sort-reminder": "Upozornenie na triedenie",
+		"sort-reminder-desc": "Rozšíriť triedenie rozsahu alebo zachovať triedenie rozsahu?",
+		"sort-reminder-ext": "Rozšíriť triedenie rozsahu",
+		"sort-reminder-no": "Zachovať triedenie rozsahu",
+		"first-row-check": "Prvý riadok sa nezúčastňuje triedenia",
+		"add-condition": "Pridať podmienku",
+		cancel: "Zrušiť",
+		confirm: "Potvrdiť"
+	},
+	info: { tooltip: "Bublinový tip" }
+} };
+
+//#endregion
+export { locale as default };

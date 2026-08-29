@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsTableJaJP=t())})(this,function(){return{"sheets-table":{columnPrefix:`列`,tablePrefix:`表`,tableNameError:`表の名前は空白を含めることはできず、数字で始めることはできず、既存の表名と重複できません`}}});

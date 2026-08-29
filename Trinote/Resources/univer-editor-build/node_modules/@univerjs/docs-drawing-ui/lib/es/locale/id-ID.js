@@ -1,0 +1,65 @@
+//#region src/locale/id-ID.ts
+const locale = { "docs-drawing-ui": {
+	title: "Gambar",
+	upload: { float: "Sisipkan Gambar" },
+	panel: { title: "Edit Gambar" },
+	"image-popup": {
+		replace: "Ganti",
+		delete: "Hapus",
+		edit: "Edit",
+		crop: "Pangkas",
+		reset: "Atur Ulang Ukuran"
+	},
+	"image-text-wrap": {
+		title: "Pembungkus Teks",
+		wrappingStyle: "Gaya Pembungkus",
+		square: "Kotak",
+		topAndBottom: "Atas dan Bawah",
+		inline: "Sejajar dengan teks",
+		behindText: "Di belakang teks",
+		inFrontText: "Di depan teks",
+		wrapText: "Bungkus teks",
+		bothSide: "Kedua sisi",
+		leftOnly: "Kiri saja",
+		rightOnly: "Kanan saja",
+		distanceFromText: "Jarak dari teks",
+		top: "Atas(px)",
+		left: "Kiri(px)",
+		bottom: "Bawah(px)",
+		right: "Kanan(px)"
+	},
+	"image-position": {
+		title: "Posisi",
+		horizontal: "Horizontal",
+		vertical: "Vertikal",
+		absolutePosition: "Posisi Absolut(px)",
+		relativePosition: "Posisi Relatif",
+		toTheRightOf: "di sebelah kanan",
+		relativeTo: "relatif terhadap",
+		bellow: "di bawah",
+		options: "Opsi",
+		moveObjectWithText: "Pindahkan objek dengan teks",
+		column: "Kolom",
+		margin: "Margin",
+		page: "Halaman",
+		line: "Baris",
+		paragraph: "Paragraf"
+	},
+	"update-status": {
+		exceedMaxSize: "Ukuran gambar melebihi batas, batasnya adalah {0}M",
+		invalidImageType: "Jenis gambar tidak valid",
+		exceedMaxCount: "Hanya {0} gambar yang dapat diunggah dalam satu waktu",
+		invalidImage: "Gambar tidak valid"
+	},
+	shortcut: {
+		"drawing-view": "Tampilan Gambar",
+		"drawing-move-down": "Pindahkan Gambar ke Bawah",
+		"drawing-move-up": "Pindahkan Gambar ke Atas",
+		"drawing-move-left": "Pindahkan Gambar ke Kiri",
+		"drawing-move-right": "Pindahkan Gambar ke Kanan",
+		"drawing-delete": "Hapus Gambar"
+	}
+} };
+
+//#endregion
+export { locale as default };

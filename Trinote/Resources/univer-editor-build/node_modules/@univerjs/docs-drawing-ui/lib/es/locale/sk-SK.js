@@ -1,0 +1,65 @@
+//#region src/locale/sk-SK.ts
+const locale = { "docs-drawing-ui": {
+	title: "Obrázok",
+	upload: { float: "Vložiť obrázok" },
+	panel: { title: "Upraviť obrázok" },
+	"image-popup": {
+		replace: "Nahradiť",
+		delete: "Odstrániť",
+		edit: "Upraviť",
+		crop: "Orezať",
+		reset: "Obnoviť veľkosť"
+	},
+	"image-text-wrap": {
+		title: "Obtekanie textu",
+		wrappingStyle: "Štýl obtekania",
+		square: "Obdĺžnikové",
+		topAndBottom: "Hore a dole",
+		inline: "V riadku s textom",
+		behindText: "Za textom",
+		inFrontText: "Pred textom",
+		wrapText: "Obtekať text",
+		bothSide: "Obe strany",
+		leftOnly: "Len ľavá",
+		rightOnly: "Len pravá",
+		distanceFromText: "Vzdialenosť od textu",
+		top: "Hore (px)",
+		left: "Vľavo (px)",
+		bottom: "Dole (px)",
+		right: "Vpravo (px)"
+	},
+	"image-position": {
+		title: "Pozícia",
+		horizontal: "Vodorovne",
+		vertical: "Zvisle",
+		absolutePosition: "Absolútna pozícia (px)",
+		relativePosition: "Relatívna pozícia",
+		toTheRightOf: "vpravo od",
+		relativeTo: "vzhľadom na",
+		bellow: "pod",
+		options: "Možnosti",
+		moveObjectWithText: "Presunúť objekt s textom",
+		column: "Stĺpec",
+		margin: "Okraj",
+		page: "Strana",
+		line: "Riadok",
+		paragraph: "Odsek"
+	},
+	"update-status": {
+		exceedMaxSize: "Veľkosť obrázka prekračuje limit, limit je {0}M",
+		invalidImageType: "Neplatný typ obrázka",
+		exceedMaxCount: "Naraz možno nahrať iba {0} obrázkov",
+		invalidImage: "Neplatný obrázok"
+	},
+	shortcut: {
+		"drawing-view": "Zobrazenie kresby",
+		"drawing-move-down": "Posunúť kresbu nadol",
+		"drawing-move-up": "Posunúť kresbu nahor",
+		"drawing-move-left": "Posunúť kresbu doľava",
+		"drawing-move-right": "Posunúť kresbu doprava",
+		"drawing-delete": "Odstrániť kresbu"
+	}
+} };
+
+//#endregion
+export { locale as default };

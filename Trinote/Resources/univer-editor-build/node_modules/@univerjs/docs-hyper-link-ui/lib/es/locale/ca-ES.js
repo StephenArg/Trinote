@@ -1,0 +1,23 @@
+//#region src/locale/ca-ES.ts
+const locale = { "docs-hyper-link-ui": {
+	edit: {
+		confirm: "Confirma",
+		cancel: "Cancel·la",
+		title: "Enllaç",
+		address: "Enllaç",
+		placeholder: "Si us plau, introdueix una URL",
+		addressError: "La URL no és vàlida!",
+		label: "Etiqueta",
+		labelError: "Si us plau, introdueix l'etiqueta de l'enllaç"
+	},
+	info: {
+		copy: "Copia",
+		edit: "Edita",
+		cancel: "Elimina l'enllaç",
+		coped: "Enllaç copiat al porta-retalls"
+	},
+	menu: { tooltip: "Afegeix enllaç" }
+} };
+
+//#endregion
+export { locale as default };

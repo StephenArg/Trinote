@@ -1,0 +1,6 @@
+import type { ICommentUpdate } from '@univerjs/protocol';
+export declare class CommentService {
+    private readonly _commentUpdate$;
+    readonly commentUpdate$: import("rxjs").Observable<ICommentUpdate>;
+    onCommentUpdate(data: ICommentUpdate): void;
+}

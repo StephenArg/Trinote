@@ -1,0 +1,66 @@
+
+//#region src/locale/ar-SA.ts
+const locale = { "docs-drawing-ui": {
+	title: "صورة",
+	upload: { float: "إدراج صورة" },
+	panel: { title: "تحرير الصورة" },
+	"image-popup": {
+		replace: "استبدال",
+		delete: "حذف",
+		edit: "تحرير",
+		crop: "قص",
+		reset: "إعادة تعيين الحجم"
+	},
+	"image-text-wrap": {
+		title: "التفاف النص",
+		wrappingStyle: "نمط التفاف",
+		square: "مربع",
+		topAndBottom: "أعلى وأسفل",
+		inline: "في نفس السطر مع النص",
+		behindText: "خلف النص",
+		inFrontText: "أمام النص",
+		wrapText: "تفاف النص",
+		bothSide: "كلا الجانبين",
+		leftOnly: "يسار فقط",
+		rightOnly: "يمين فقط",
+		distanceFromText: "المسافة من النص",
+		top: "أعلى(بكسل)",
+		left: "يسار(بكسل)",
+		bottom: "أسفل(بكسل)",
+		right: "يمين(بكسل)"
+	},
+	"image-position": {
+		title: "موضع",
+		horizontal: "أفقي",
+		vertical: "عمودي",
+		absolutePosition: "موضع مطلق(بكسل)",
+		relativePosition: "موضع نسبي",
+		toTheRightOf: "إلى يمين",
+		relativeTo: "بالنسبة إلى",
+		bellow: "أسفل",
+		options: "خيارات",
+		moveObjectWithText: "نقل الكائن مع النص",
+		column: "عمود",
+		margin: "هامش",
+		page: "صفحة",
+		line: "سطر",
+		paragraph: "فقرة"
+	},
+	"update-status": {
+		exceedMaxSize: "حجم الصورة يتجاوز الحد، الحد هو {0}م",
+		invalidImageType: "نوع الصورة غير صالح",
+		exceedMaxCount: "يمكن رفع {0} صور فقط في المرة الواحدة",
+		invalidImage: "صورة غير صالحة"
+	},
+	shortcut: {
+		"drawing-view": "عرض الرسم",
+		"drawing-move-down": "نقل الرسم لأسفل",
+		"drawing-move-up": "نقل الرسم لأعلى",
+		"drawing-move-left": "نقل الرسم لليسار",
+		"drawing-move-right": "نقل الرسم لليمين",
+		"drawing-delete": "حذف الرسم"
+	}
+} };
+
+//#endregion
+module.exports = locale;

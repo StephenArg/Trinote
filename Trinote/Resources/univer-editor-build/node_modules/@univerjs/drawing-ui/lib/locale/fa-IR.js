@@ -1,0 +1,73 @@
+//#region src/locale/fa-IR.ts
+const locale = { "drawing-ui": {
+	"image-cropper": { error: "کراپ کردن اشیاء غیرتصویری امکان‌پذیر نیست." },
+	"image-panel": {
+		arrange: {
+			title: "ترتیب‌دهی",
+			forward: "آوردن به جلو",
+			backward: "فرستادن به عقب",
+			front: "آوردن به جلوی همه",
+			back: "فرستادن به پشت همه"
+		},
+		transform: {
+			title: "تبدیل",
+			rotate: "چرخش (°)",
+			x: "X (px)",
+			y: "Y (px)",
+			width: "عرض (px)",
+			height: "ارتفاع (px)",
+			lock: "قفل نسبت (%)"
+		},
+		crop: {
+			title: "کراپ",
+			start: "شروع کراپ",
+			mode: "آزاد"
+		},
+		group: {
+			title: "گروه",
+			group: "گروه‌بندی",
+			unGroup: "لغو گروه‌بندی"
+		},
+		align: {
+			title: "تراز",
+			default: "انتخاب نوع تراز",
+			left: "تراز چپ",
+			center: "تراز وسط",
+			right: "تراز راست",
+			top: "تراز بالا",
+			middle: "تراز وسط",
+			bottom: "تراز پایین",
+			horizon: "توزیع افقی",
+			vertical: "توزیع عمودی"
+		},
+		null: "هیچ شیئی انتخاب نشده است"
+	},
+	"image-text-wrap": {
+		title: "پیچش متن",
+		wrappingStyle: "سبک پیچش",
+		square: "مربع",
+		topAndBottom: "بالا و پایین",
+		inline: "در یک خط با متن",
+		behindText: "پشت متن",
+		inFrontText: "جلوی متن",
+		wrapText: "پیچش متن",
+		bothSide: "هر دو طرف",
+		leftOnly: "فقط سمت چپ",
+		rightOnly: "فقط سمت راست",
+		distanceFromText: "فاصله از متن",
+		top: "بالا(px)",
+		left: "چپ(px)",
+		bottom: "پایین(px)",
+		right: "راست(px)"
+	},
+	"image-popup": {
+		replace: "تعویض",
+		delete: "حذف",
+		edit: "ویرایش",
+		crop: "کراپ",
+		reset: "بازنشانی اندازه"
+	}
+} };
+
+//#endregion
+export { locale as default };

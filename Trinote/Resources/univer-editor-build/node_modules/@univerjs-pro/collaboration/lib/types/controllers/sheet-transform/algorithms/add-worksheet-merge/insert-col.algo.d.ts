@@ -1,0 +1,5 @@
+import type { IMutationInfo } from '@univerjs/core';
+import type { IAddWorksheetMergeMutationParams, IInsertColMutationParams, IInsertRowMutationParams, IMoveRangeMutationParams, IRemoveColMutationParams, IRemoveRowsMutationParams, IRemoveWorksheetMergeMutationParams } from '@univerjs/sheets';
+import type { IMutationTransformAlgorithm } from '../../../../services/transform/transform.service';
+export type IMutationInfoArrWithMergeAndRowCol = Array<IMutationInfo<IInsertRowMutationParams> | IMutationInfo<IInsertColMutationParams> | IMutationInfo<IRemoveRowsMutationParams> | IMutationInfo<IRemoveColMutationParams> | IMutationInfo<IAddWorksheetMergeMutationParams> | IMutationInfo<IRemoveWorksheetMergeMutationParams> | IMutationInfo<IMoveRangeMutationParams>>;
+export declare const addWorksheetMergeMutationWithInsertColMutation: IMutationTransformAlgorithm<IAddWorksheetMergeMutationParams, IInsertColMutationParams>;

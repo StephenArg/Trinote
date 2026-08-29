@@ -1,0 +1,2 @@
+import type { IMutationTransformAlgorithm } from '../../../../services/transform/transform.service';
+export declare const removeSheetMutationWithRemoveWorksheetMerge: IMutationTransformAlgorithm;

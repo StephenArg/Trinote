@@ -1,0 +1,5 @@
+import type { IRange } from '@univerjs/core';
+import { ObjectMatrix } from '@univerjs/core';
+export declare function isTargetRangesValid(resetType: 'item' | 'group' | 'none', sourceRanges: IRange[], targetRanges?: IRange[]): boolean;
+export declare function countCells(ranges: IRange[]): number;
+export declare function getSparklinePlacement(sourceRange: IRange, targetRanges: IRange[]): ObjectMatrix<string>;

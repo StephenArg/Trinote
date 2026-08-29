@@ -1,0 +1,8 @@
+// @univerjs/sheets-hyper-link/locale/ja-JP
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsHyperLinkJaJP=t())})(this,function(){return{"sheets-hyper-link":{message:{refError:`無効な範囲です`}}}});
+
+// @univerjs/sheets-hyper-link-ui/locale/ja-JP
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsHyperLinkUiJaJP=t())})(this,function(){return{"sheets-hyper-link-ui":{form:{editTitle:`リンクの編集`,addTitle:`リンクの挿入`,label:`表示文字列`,type:`種類`,link:`リンク`,linkPlaceholder:`リンクを入力`,range:`範囲`,worksheet:`ワークシート`,definedName:`定義済みの名前`,ok:`OK`,cancel:`キャンセル`,labelPlaceholder:`表示する文字列を入力`,inputError:`値を入力してください`,selectError:`選択してください`,linkError:`有効なリンクを入力してください`},menu:{add:`リンクの挿入`},message:{noSheet:`対象のワークシートが削除されました`,refError:`無効な範囲です`,hiddenSheet:`リンクを開けません。参照先のワークシートが非表示です`,coped:`リンクがクリップボードにコピーされました`},popup:{copy:`リンクをコピー`,edit:`リンクの編集`,cancel:`リンク解除`}}}});
+
+// locale/ja-JP
+(function(e,i){typeof exports=="object"&&typeof module<"u"?module.exports=i(require("@univerjs/core"),require("@univerjs/sheets-hyper-link/locale/ja-JP"),require("@univerjs/sheets-hyper-link-ui/locale/ja-JP")):typeof define=="function"&&define.amd?define(["@univerjs/core","@univerjs/sheets-hyper-link/locale/ja-JP","@univerjs/sheets-hyper-link-ui/locale/ja-JP"],i):(e=typeof globalThis<"u"?globalThis:e||self,e.UniverPresetSheetsHyperLinkJaJP=i(e.UniverCore,e.UniverSheetsHyperLinkJaJP,e.UniverSheetsHyperLinkUiJaJP))})(this,(function(e,i,n){"use strict";return e.mergeLocales(i,n)}));

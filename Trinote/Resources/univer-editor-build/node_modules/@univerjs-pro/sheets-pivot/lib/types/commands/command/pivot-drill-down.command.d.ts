@@ -1,0 +1,6 @@
+import type { ICommand } from '@univerjs/core';
+export interface IPivotDrillDownCommandParams {
+    row: number;
+    col: number;
+}
+export declare const PivotDrillDownCommand: ICommand<IPivotDrillDownCommandParams>;

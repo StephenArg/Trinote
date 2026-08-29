@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsThreadCommentUiEnUS=t())})(this,function(){return{"sheets-thread-comment-ui":{panel:{title:`Comment Management`},menu:{addComment:`Add Comment`,commentManagement:`Comment Management`}}}});

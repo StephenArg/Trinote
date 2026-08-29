@@ -1,0 +1,3 @@
+import type { ICombRequestEvent, ICombResponseEvent } from '@univerjs-pro/collaboration';
+export declare function deserializeToCombResponse(event: MessageEvent): ICombResponseEvent;
+export declare function serializeCombRequest(event: ICombRequestEvent): string;

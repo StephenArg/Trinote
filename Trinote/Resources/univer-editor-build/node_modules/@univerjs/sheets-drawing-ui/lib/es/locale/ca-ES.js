@@ -1,0 +1,60 @@
+//#region src/locale/ca-ES.ts
+const locale = { "sheets-drawing-ui": {
+	title: "Imatge",
+	upload: {
+		float: "Imatge flotant",
+		cell: "Imatge de cel·la"
+	},
+	panel: { title: "Edita la imatge" },
+	save: {
+		title: "Desa les imatges de cel·la",
+		menuLabel: "Desa les imatges de cel·la",
+		imageCount: "Nombre d'imatges",
+		fileNameConfig: "Nom del fitxer",
+		useRowCol: "Utilitza l'adreça de la cel·la (A1, B2...)",
+		useColumnValue: "Utilitza el valor de la columna",
+		selectColumn: "Selecciona la columna",
+		cancel: "Cancel·la",
+		confirm: "Desa",
+		saving: "Desant...",
+		error: "No s'han pogut desar les imatges de cel·la"
+	},
+	"image-popup": {
+		replace: "Reemplaça",
+		delete: "Elimina",
+		edit: "Edita",
+		crop: "Retalla",
+		reset: "Restableix la mida",
+		flipH: "Gira horizontalmente",
+		flipV: "Gira verticalmente"
+	},
+	"update-status": {
+		exceedMaxSize: "La mida de la imatge supera el límit, el límit és {0}M",
+		invalidImageType: "Tipus d’imatge no vàlid",
+		exceedMaxCount: "Només es poden pujar {0} imatges alhora",
+		invalidImage: "Imatge no vàlida"
+	},
+	"drawing-anchor": {
+		title: "Propietats d’ancoratge",
+		both: "Mou i canvia la mida amb les cel·les",
+		position: "Mou però no canviïs la mida amb les cel·les",
+		none: "No moguis ni canviïs la mida amb les cel·les"
+	},
+	"cell-image": {
+		pasteTitle: "Enganxa com a imatge de cel·la",
+		pasteContent: "Enganxar una imatge de cel·la sobreescriurà el contingut existent de la cel·la, continuar enganxant",
+		pasteError: "La còpia i enganxat d’imatges de cel·la de full no està suportada en aquesta unitat"
+	},
+	permission: { dialog: { editErr: "L'interval està protegit i no teniu permís d'edició. Per editar, contacteu amb el creador." } },
+	shortcut: {
+		"drawing-view": "Vista del dibuix",
+		"drawing-move-down": "Mou el dibuix cap avall",
+		"drawing-move-up": "Mou el dibuix cap amunt",
+		"drawing-move-left": "Mou el dibuix a l’esquerra",
+		"drawing-move-right": "Mou el dibuix a la dreta",
+		"drawing-delete": "Elimina el dibuix"
+	}
+} };
+
+//#endregion
+export { locale as default };

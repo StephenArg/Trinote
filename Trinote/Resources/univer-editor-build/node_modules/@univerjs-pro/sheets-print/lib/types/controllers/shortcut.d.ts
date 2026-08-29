@@ -1,0 +1,2 @@
+import type { IShortcutItem } from '@univerjs/ui';
+export declare const PrintShortcut: IShortcutItem;

@@ -1,0 +1,73 @@
+//#region src/locale/fr-FR.ts
+const locale = { "drawing-ui": {
+	"image-cropper": { error: "Impossible de rogner des objets non image." },
+	"image-panel": {
+		arrange: {
+			title: "Arranger",
+			forward: "Avancer",
+			backward: "Reculer",
+			front: "Mettre au premier plan",
+			back: "Mettre à l'arrière-plan"
+		},
+		transform: {
+			title: "Transformer",
+			rotate: "Pivoter (°)",
+			x: "X (px)",
+			y: "Y (px)",
+			width: "Largeur (px)",
+			height: "Hauteur (px)",
+			lock: "Verrouiller le ratio (%)"
+		},
+		crop: {
+			title: "Rogner",
+			start: "Commencer à rogner",
+			mode: "Libre"
+		},
+		group: {
+			title: "Grouper",
+			group: "Grouper",
+			unGroup: "Dégrouper"
+		},
+		align: {
+			title: "Aligner",
+			default: "Sélectionner le type d'alignement",
+			left: "Aligner à gauche",
+			center: "Aligner au centre",
+			right: "Aligner à droite",
+			top: "Aligner en haut",
+			middle: "Aligner au milieu",
+			bottom: "Aligner en bas",
+			horizon: "Distribuer horizontalement",
+			vertical: "Distribuer verticalement"
+		},
+		null: "Aucune sélection d'objet"
+	},
+	"image-text-wrap": {
+		title: "Habillage du texte",
+		wrappingStyle: "Style d'habillage",
+		square: "Carré",
+		topAndBottom: "Haut et bas",
+		inline: "Aligné avec le texte",
+		behindText: "Derrière le texte",
+		inFrontText: "Devant le texte",
+		wrapText: "Habiller le texte",
+		bothSide: "Des deux côtés",
+		leftOnly: "Seulement à gauche",
+		rightOnly: "Seulement à droite",
+		distanceFromText: "Distance du texte",
+		top: "Haut(px)",
+		left: "Gauche(px)",
+		bottom: "Bas(px)",
+		right: "Droite(px)"
+	},
+	"image-popup": {
+		replace: "Remplacer",
+		delete: "Supprimer",
+		edit: "Modifier",
+		crop: "Rogner",
+		reset: "Réinitialiser la taille"
+	}
+} };
+
+//#endregion
+export { locale as default };

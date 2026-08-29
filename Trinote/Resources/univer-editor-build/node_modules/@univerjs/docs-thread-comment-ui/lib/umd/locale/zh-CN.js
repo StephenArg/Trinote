@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverDocsThreadCommentUiZhCN=t())})(this,function(){return{"docs-thread-comment-ui":{panel:{title:`评论管理`,addComment:`添加评论`}}}});

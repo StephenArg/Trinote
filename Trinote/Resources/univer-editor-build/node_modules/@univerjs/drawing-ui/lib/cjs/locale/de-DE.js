@@ -1,0 +1,74 @@
+
+//#region src/locale/de-DE.ts
+const locale = { "drawing-ui": {
+	"image-cropper": { error: "Nicht-Bildobjekte können nicht zugeschnitten werden." },
+	"image-panel": {
+		arrange: {
+			title: "Anordnen",
+			forward: "Eine Ebene nach vorne",
+			backward: "Eine Ebene nach hinten",
+			front: "In den Vordergrund",
+			back: "In den Hintergrund"
+		},
+		transform: {
+			title: "Transformieren",
+			rotate: "Drehen (°)",
+			x: "X (px)",
+			y: "Y (px)",
+			width: "Breite (px)",
+			height: "Höhe (px)",
+			lock: "Verhältnis sperren (%)"
+		},
+		crop: {
+			title: "Zuschneiden",
+			start: "Zuschneiden starten",
+			mode: "Frei"
+		},
+		group: {
+			title: "Gruppe",
+			group: "Gruppieren",
+			unGroup: "Gruppierung aufheben"
+		},
+		align: {
+			title: "Ausrichten",
+			default: "Ausrichtungstyp auswählen",
+			left: "Linksbündig",
+			center: "Zentriert",
+			right: "Rechtsbündig",
+			top: "Oben bündig",
+			middle: "Mittig",
+			bottom: "Unten bündig",
+			horizon: "Horizontal verteilen",
+			vertical: "Vertikal verteilen"
+		},
+		null: "Keine Objektauswahl"
+	},
+	"image-text-wrap": {
+		title: "Textumbruch",
+		wrappingStyle: "Umbruchstil",
+		square: "Quadratisch",
+		topAndBottom: "Oben und unten",
+		inline: "Im Textfluss",
+		behindText: "Hinter dem Text",
+		inFrontText: "Vor dem Text",
+		wrapText: "Text umbrechen",
+		bothSide: "Beide Seiten",
+		leftOnly: "Nur links",
+		rightOnly: "Nur rechts",
+		distanceFromText: "Abstand vom Text",
+		top: "Oben(px)",
+		left: "Links(px)",
+		bottom: "Unten(px)",
+		right: "Rechts(px)"
+	},
+	"image-popup": {
+		replace: "Ersetzen",
+		delete: "Löschen",
+		edit: "Bearbeiten",
+		crop: "Zuschneiden",
+		reset: "Größe zurücksetzen"
+	}
+} };
+
+//#endregion
+module.exports = locale;

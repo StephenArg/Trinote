@@ -1,0 +1,36 @@
+
+//#region src/locale/pt-BR.ts
+const locale = { "sheets-hyper-link-ui": {
+	form: {
+		editTitle: "Editar Link",
+		addTitle: "Inserir Link",
+		label: "Rótulo",
+		type: "Tipo",
+		link: "Link",
+		linkPlaceholder: "Digite o link",
+		range: "Intervalo",
+		worksheet: "Planilha",
+		definedName: "Nome Definido",
+		ok: "Confirmar",
+		cancel: "Cancelar",
+		labelPlaceholder: "Digite o rótulo",
+		inputError: "Por favor, digite",
+		selectError: "Por favor, selecione",
+		linkError: "Por favor, digite um link válido"
+	},
+	menu: { add: "Inserir Link" },
+	message: {
+		noSheet: "A planilha de destino foi excluída",
+		refError: "Intervalo Inválido",
+		hiddenSheet: "Não é possível abrir o link porque a planilha vinculada está oculta",
+		coped: "Link copiado para a área de transferência"
+	},
+	popup: {
+		copy: "Copiar Link",
+		edit: "Editar Link",
+		cancel: "Cancelar Link"
+	}
+} };
+
+//#endregion
+module.exports = locale;

@@ -1,0 +1,2 @@
+import type { IMutationInfo } from '@univerjs/core';
+export declare const EmptyMutationInfo: IMutationInfo;

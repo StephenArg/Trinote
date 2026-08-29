@@ -1815,7 +1815,9 @@ final class NoteDetailViewModel {
             showSaveError = true
             return
         }
-        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = SpreadsheetWorkbookImageURLs.undecorateFromEditor(
+            json.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         guard !trimmed.isEmpty else {
             // Bridge returned nothing — likely Univer hadn't booted. Don't blow away the cached note.
             saveError = String(localized: "Spreadsheet editor wasn't ready. Try again.", comment: "Spreadsheet save with empty payload")

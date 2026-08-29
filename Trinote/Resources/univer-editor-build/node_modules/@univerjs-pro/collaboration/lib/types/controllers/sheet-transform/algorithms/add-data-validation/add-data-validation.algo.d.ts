@@ -1,0 +1,16 @@
+import type { IDataValidationRule, IMutationInfo } from '@univerjs/core';
+import type { IAddDataValidationMutationParams, IRemoveDataValidationMutationParams, IUpdateDataValidationMutationParams } from '@univerjs/data-validation';
+import type { IMutationTransformAlgorithm } from '../../../../services/transform/transform.service';
+export declare function applyAddMutationTransform(unitId: string, subUnitId: string, origin: IDataValidationRule[], patch: IDataValidationRule[]): IMutationInfo<IRemoveDataValidationMutationParams | IUpdateDataValidationMutationParams>[];
+export declare function mergeAddMutation(m1: IMutationInfo<IAddDataValidationMutationParams>, mutations: (IMutationInfo<IRemoveDataValidationMutationParams> | IMutationInfo<IUpdateDataValidationMutationParams>)[]): {
+    params: {
+        rule: IDataValidationRule[];
+        index?: number;
+        source?: import("@univerjs/data-validation").DataValidationChangeSource;
+        unitId: string;
+        subUnitId: string;
+    };
+    id: string;
+    type?: import("@univerjs/core").CommandType.MUTATION;
+}[];
+export declare const addDataValidationMutationWithSelf: IMutationTransformAlgorithm<IAddDataValidationMutationParams, IAddDataValidationMutationParams>;

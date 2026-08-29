@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsThreadCommentUiKoKR=t())})(this,function(){return{"sheets-thread-comment-ui":{panel:{title:`댓글 관리`},menu:{addComment:`댓글 추가`,commentManagement:`댓글 관리`}}}});

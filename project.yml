@@ -137,9 +137,9 @@ targets:
       - path: TrinoteTests
         excludes:
           - Fixtures/**
-    resources:
       - path: TrinoteTests/Fixtures
         type: folder
+        buildPhase: resources
     dependencies:
       - target: Trinote
     settings:

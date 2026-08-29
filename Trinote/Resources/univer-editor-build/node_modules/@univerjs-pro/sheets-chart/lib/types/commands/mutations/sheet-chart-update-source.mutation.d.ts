@@ -1,0 +1,8 @@
+import type { IMutation } from '@univerjs/core';
+import type { IChartSourceMultiRangeItem, ISheetChartSourceSingleRange } from '../../models/types';
+export interface IChartUpdateSourceConfigMutationParams {
+    unitId: string;
+    chartModelId: string;
+    rangeInfo: ISheetChartSourceSingleRange | IChartSourceMultiRangeItem[];
+}
+export declare const ChartUpdateSourceConfigMutation: IMutation<IChartUpdateSourceConfigMutationParams>;

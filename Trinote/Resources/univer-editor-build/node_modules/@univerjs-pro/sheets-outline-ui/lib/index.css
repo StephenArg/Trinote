@@ -1,0 +1,19 @@
+.univer-flex {
+  display: flex;
+}
+
+.univer-grid {
+  display: grid;
+}
+
+.univer-justify-end {
+  justify-content: flex-end;
+}
+
+.univer-gap-2 {
+  gap: .5rem;
+}
+
+.univer-gap-4 {
+  gap: 1rem;
+}

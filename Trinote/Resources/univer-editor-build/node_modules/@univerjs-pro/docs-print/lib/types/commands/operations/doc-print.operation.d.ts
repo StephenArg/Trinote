@@ -1,0 +1,2 @@
+import type { ICommand } from '@univerjs/core';
+export declare const DocPrintOperation: ICommand;

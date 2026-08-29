@@ -6,8 +6,19 @@ import XCTest
 /// and the read-only preview parser must still handle whatever shape the editor round-trips back.
 ///
 /// The JS bundle ships in a WKWebView so we can't actually call it from XCTest; instead we exercise
-/// the parser against payloads that mirror what Univer's `workbook.save()` returns at v0.22.1.
+/// the parser against payloads that mirror what Univer's `workbook.save()` returns at v0.25.1.
 final class SpreadsheetSavePayloadTests: XCTestCase {
+
+    private func fixtureData(_ name: String) throws -> Data {
+        let bundle = Bundle(for: SpreadsheetSavePayloadTests.self)
+        let candidates: [URL?] = [
+            bundle.url(forResource: name, withExtension: "json", subdirectory: "Fixtures"),
+            bundle.url(forResource: name, withExtension: "json"),
+            bundle.resourceURL?.appendingPathComponent("Fixtures/\(name).json"),
+        ]
+        let url = try XCTUnwrap(candidates.compactMap { $0 }.first)
+        return try Data(contentsOf: url)
+    }
 
     /// Trilium-style envelope produced by `univerBridge.getWorkbook`: `JSON.stringify({ version: 1, workbook: ... })`.
     private func wrap(_ workbook: String) -> Data {
@@ -49,7 +60,7 @@ final class SpreadsheetSavePayloadTests: XCTestCase {
         XCTAssertNotNil(obj["workbook"], "Saved payload must keep the workbook wrapper — the read-only parser unwraps it.")
 
         let parsed = try XCTUnwrap(UniverWorkbookPreview.parse(data: payload))
-        XCTAssertEqual(parsed.sheets[0].rows.first?.values[0], "Hello")
+        XCTAssertEqual(parsed.sheets[0].rows.first?.values[0]?.text, "Hello")
     }
 
     func testSavePayloadWithStyleAndFormulaCellsParses() throws {
@@ -98,12 +109,12 @@ final class SpreadsheetSavePayloadTests: XCTestCase {
         let parsed = try XCTUnwrap(UniverWorkbookPreview.parse(data: payload))
         XCTAssertEqual(parsed.sheets.count, 2)
         XCTAssertEqual(parsed.sheets[0].name, "Numbers")
-        XCTAssertEqual(parsed.sheets[0].rows.first?.values[0], "Quantity")
+        XCTAssertEqual(parsed.sheets[0].rows.first?.values[0]?.text, "Quantity")
         // Formula cell with cached value `v` should prefer the cached value over the formula string —
         // matches what users see in the desktop client.
-        XCTAssertEqual(parsed.sheets[0].rows[1].values[2], "37.5")
+        XCTAssertEqual(parsed.sheets[0].rows[1].values[2]?.text, "37.5")
         // Rich text dataStream loses trailing control chars.
-        XCTAssertEqual(parsed.sheets[0].rows[2].values[0], "Bold cell")
+        XCTAssertEqual(parsed.sheets[0].rows[2].values[0]?.text, "Bold cell")
         // Empty sheets still surface (preserves Univer sheetOrder for the picker).
         XCTAssertEqual(parsed.sheets[1].name, "Empty")
     }
@@ -128,7 +139,7 @@ final class SpreadsheetSavePayloadTests: XCTestCase {
         """.data(using: .utf8)!
 
         let parsed = try XCTUnwrap(UniverWorkbookPreview.parse(data: bare))
-        XCTAssertEqual(parsed.sheets[0].rows.first?.values[0], "ok")
+        XCTAssertEqual(parsed.sheets[0].rows.first?.values[0]?.text, "ok")
     }
 
     func testSpreadsheetNoteTypeIsEditable() {
@@ -136,5 +147,17 @@ final class SpreadsheetSavePayloadTests: XCTestCase {
         // Regressing this would silently strip the Edit button without a build error.
         XCTAssertTrue(NoteType.spreadsheet.isEditable)
         XCTAssertEqual(NoteType.spreadsheet.creationMime, "application/json")
+    }
+
+    func testV0105FixturePreservesEnvelopeAndIgnoresUnknownResourceKeys() throws {
+        let data = try fixtureData("spreadsheet-v0.105-sample")
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(obj["version"] as? Int, 1)
+        let workbook = try XCTUnwrap(obj["workbook"] as? [String: Any])
+        XCTAssertNotNil(workbook["resources"], "v0.105 workbooks carry preset plugin resources the preview parser ignores.")
+        XCTAssertNotNil(workbook["styles"])
+
+        let parsed = try XCTUnwrap(UniverWorkbookPreview.parse(data: data))
+        XCTAssertEqual(parsed.sheets[0].rows[1].values[2]?.text, "1.25")
     }
 }

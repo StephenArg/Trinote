@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "workbook": {
+    "id": "v0105-sample",
+    "name": "Trilium v0.105 QA Sheet",
+    "appVersion": "0.25.1",
+    "locale": "en-US",
+    "sheetOrder": ["sheet-budget", "sheet-notes"],
+    "styles": {
+      "hdr": { "ff": "Inter", "bl": 1, "fs": 11 },
+      "currency": { "n": { "pattern": "$#,##0.00" } }
+    },
+    "sheets": {
+      "sheet-budget": {
+        "id": "sheet-budget",
+        "name": "Budget",
+        "rowCount": 100,
+        "columnCount": 26,
+        "cellData": {
+          "0": {
+            "0": { "v": "Item", "s": "hdr" },
+            "1": { "v": "Qty", "s": "hdr" },
+            "2": { "v": "Price", "s": "hdr" },
+            "3": { "v": "Total", "s": "hdr" }
+          },
+          "1": {
+            "0": { "v": "Apples" },
+            "1": { "v": 3 },
+            "2": { "v": 1.25, "s": "currency" },
+            "3": { "f": "=B2*C2", "v": 3.75, "s": "currency" }
+          },
+          "2": {
+            "0": { "v": "Bananas" },
+            "1": { "v": 5 },
+            "2": { "v": 0.89, "s": "currency" },
+            "3": { "f": "=B3*C3", "v": 4.45, "s": "currency" }
+          },
+          "3": {
+            "0": { "p": { "body": { "dataStream": "Rich memo\r\n" } } }
+          },
+          "4": {
+            "0": { "v": "https://triliumnotes.org" }
+          }
+        }
+      },
+      "sheet-notes": {
+        "id": "sheet-notes",
+        "name": "Notes",
+        "rowCount": 50,
+        "columnCount": 10,
+        "cellData": {
+          "0": { "0": { "v": "Validated dropdown" } },
+          "1": { "0": { "v": "Option A" } }
+        }
+      }
+    },
+    "resources": [
+      {
+        "name": "SHEET_FILTER_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DATA_VALIDATION_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DRAWING_PLUGIN",
+        "data": "{}"
+      }
+    ]
+  }
+}

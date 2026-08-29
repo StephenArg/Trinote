@@ -1,0 +1,73 @@
+//#region src/locale/ja-JP.ts
+const locale = { "drawing-ui": {
+	"image-cropper": { error: "画像以外のオブジェクトはトリミングできません。" },
+	"image-panel": {
+		arrange: {
+			title: "配置",
+			forward: "前面へ移動",
+			backward: "背面へ移動",
+			front: "最前面へ移動",
+			back: "最背面へ移動"
+		},
+		transform: {
+			title: "変形",
+			rotate: "回転 (°)",
+			x: "X座標 (px)",
+			y: "Y座標 (px)",
+			width: "幅 (px)",
+			height: "高さ (px)",
+			lock: "縦横比を固定 (%)"
+		},
+		crop: {
+			title: "トリミング",
+			start: "トリミングを開始",
+			mode: "自由モード"
+		},
+		group: {
+			title: "グループ",
+			group: "グループ化",
+			unGroup: "グループ解除"
+		},
+		align: {
+			title: "整列",
+			default: "整列タイプを選択",
+			left: "左揃え",
+			center: "中央揃え",
+			right: "右揃え",
+			top: "上揃え",
+			middle: "中央揃え",
+			bottom: "下揃え",
+			horizon: "水平間隔を均等に配分",
+			vertical: "垂直間隔を均等に配分"
+		},
+		null: "選択されたオブジェクトがありません"
+	},
+	"image-text-wrap": {
+		title: "文字列の折り返し",
+		wrappingStyle: "折り返しのスタイル",
+		square: "四角形",
+		topAndBottom: "上下",
+		inline: "行内",
+		behindText: "文字列の背面",
+		inFrontText: "文字列の前面",
+		wrapText: "文字列の折り返し",
+		bothSide: "両側",
+		leftOnly: "左のみ",
+		rightOnly: "右のみ",
+		distanceFromText: "文字列からの距離",
+		top: "上(px)",
+		left: "左(px)",
+		bottom: "下(px)",
+		right: "右(px)"
+	},
+	"image-popup": {
+		replace: "置換",
+		delete: "削除",
+		edit: "編集",
+		crop: "トリミング",
+		reset: "サイズをリセット"
+	}
+} };
+
+//#endregion
+export { locale as default };

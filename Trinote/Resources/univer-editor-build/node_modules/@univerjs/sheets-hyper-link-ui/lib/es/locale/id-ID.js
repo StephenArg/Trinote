@@ -1,0 +1,35 @@
+//#region src/locale/id-ID.ts
+const locale = { "sheets-hyper-link-ui": {
+	form: {
+		editTitle: "Edit Tautan",
+		addTitle: "Sisipkan Tautan",
+		label: "Label",
+		type: "Tipe",
+		link: "Tautan",
+		linkPlaceholder: "Masukkan tautan",
+		range: "Rentang",
+		worksheet: "Lembar Kerja",
+		definedName: "Nama yang Ditentukan",
+		ok: "Konfirmasi",
+		cancel: "Batal",
+		labelPlaceholder: "Masukkan label",
+		inputError: "Silakan masukkan",
+		selectError: "Silakan pilih",
+		linkError: "Silakan masukkan tautan yang valid"
+	},
+	menu: { add: "Sisipkan Tautan" },
+	message: {
+		noSheet: "Lembar target telah dihapus",
+		refError: "Rentang Tidak Valid",
+		hiddenSheet: "Tidak dapat membuka tautan karena lembar yang ditautkan tersembunyi",
+		coped: "Tautan disalin ke clipboard"
+	},
+	popup: {
+		copy: "Salin Tautan",
+		edit: "Edit Tautan",
+		cancel: "Batalkan Tautan"
+	}
+} };
+
+//#endregion
+export { locale as default };

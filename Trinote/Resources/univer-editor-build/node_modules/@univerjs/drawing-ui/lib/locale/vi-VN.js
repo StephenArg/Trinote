@@ -1,0 +1,73 @@
+//#region src/locale/vi-VN.ts
+const locale = { "drawing-ui": {
+	"image-cropper": { error: "Không thể cắt phần tử không phải hình ảnh" },
+	"image-panel": {
+		arrange: {
+			title: "Sắp xếp",
+			forward: "Di chuyển lên một lớp",
+			backward: "Di chuyển xuống một lớp",
+			front: "Đưa lên trên cùng",
+			back: "Đưa xuống dưới cùng"
+		},
+		transform: {
+			title: "Biến đổi",
+			rotate: "Xoay (°)",
+			x: "X (px)",
+			y: "Y (px)",
+			width: "Chiều rộng (px)",
+			height: "Chiều cao (px)",
+			lock: "Khóa tỷ lệ (%)"
+		},
+		crop: {
+			title: "Cắt",
+			start: "Bắt đầu cắt",
+			mode: "Cắt tự do tỷ lệ"
+		},
+		group: {
+			title: "Nhóm",
+			group: "Nhóm",
+			unGroup: "Hủy nhóm"
+		},
+		align: {
+			title: "Căn chỉnh",
+			default: "Chọn cách căn chỉnh",
+			left: "Căn trái",
+			center: "Căn giữa theo chiều ngang",
+			right: "Căn phải",
+			top: "Căn trên",
+			middle: "Căn giữa theo chiều dọc",
+			bottom: "Căn dưới",
+			horizon: "Phân phối theo chiều ngang",
+			vertical: "Phân phối theo chiều dọc"
+		},
+		null: "Không có đối tượng nào được chọn"
+	},
+	"image-text-wrap": {
+		title: "Text Wrapping",
+		wrappingStyle: "Wrapping Style",
+		square: "Square",
+		topAndBottom: "Top and Bottom",
+		inline: "In line with text",
+		behindText: "Behind text",
+		inFrontText: "In front of text",
+		wrapText: "Wrap text",
+		bothSide: "Both sides",
+		leftOnly: "Left only",
+		rightOnly: "Right only",
+		distanceFromText: "Distance from text",
+		top: "Top(px)",
+		left: "Left(px)",
+		bottom: "Bottom(px)",
+		right: "Right(px)"
+	},
+	"image-popup": {
+		replace: "Thay thế",
+		delete: "Xóa",
+		edit: "Chỉnh sửa",
+		crop: "Cắt",
+		reset: "Đặt lại kích thước"
+	}
+} };
+
+//#endregion
+export { locale as default };

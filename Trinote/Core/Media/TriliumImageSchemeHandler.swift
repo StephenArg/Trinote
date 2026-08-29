@@ -85,12 +85,21 @@ final class TriliumImageSchemeHandler: NSObject, WKURLSchemeHandler {
             task.didFailWithError(URLError(.badServerResponse))
             return
         }
-        let response = URLResponse(
+        let mime = data.detectImageMIME()
+        let headers = [
+            "Content-Type": mime,
+            "Content-Length": "\(data.count)",
+            "Access-Control-Allow-Origin": "*",
+        ]
+        guard let response = HTTPURLResponse(
             url: url,
-            mimeType: data.detectImageMIME(),
-            expectedContentLength: data.count,
-            textEncodingName: nil
-        )
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: headers
+        ) else {
+            task.didFailWithError(URLError(.badServerResponse))
+            return
+        }
         task.didReceive(response)
         task.didReceive(data)
         task.didFinish()

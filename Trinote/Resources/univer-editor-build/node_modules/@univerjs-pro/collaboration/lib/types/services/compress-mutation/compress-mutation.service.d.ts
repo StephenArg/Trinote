@@ -1,0 +1,23 @@
+import type { IMutationInfo, IUniverInstanceService } from '@univerjs/core';
+import { InterceptorManager } from '@univerjs/core';
+/**
+ * During transmission, compression is performed for a specific operation,referencing during transport.
+ * Before send -> compress -> transmission -> ... -> node apply -> decompression -> apply.
+ * Before send -> compress -> transmission -> ... -> node transform -> decompression -> apply.
+ * Before send -> compress -> transmission -> ... -> take from server -> decompression -> apply.
+ * Before send -> compress -> save to local -> ... -> take from local -> decompression -> apply.
+ * @export
+ * @class CompressMutationService
+ */
+export declare class CompressMutationService {
+    interceptor: InterceptorManager<{
+        COMPRESS_MUTATION_APPLY: import("@univerjs/core").IInterceptor<IMutationInfo<object>[], null>;
+        COMPRESS_MUTATION_SEND: import("@univerjs/core").IInterceptor<IMutationInfo<object>[], IUniverInstanceService>;
+    }>;
+    constructor();
+    private _init;
+    private _initSetRangeValues;
+    private _handleInsertSheetCompressMutationSend;
+    private _handleCompressNumberMapMutationSend;
+    private _handleDecompressNumberMapMutationApply;
+}

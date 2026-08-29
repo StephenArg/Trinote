@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsThreadCommentUiViVN=t())})(this,function(){return{"sheets-thread-comment-ui":{panel:{title:`Quản lý bình luận`},menu:{addComment:`Thêm bình luận`,commentManagement:`Quản lý bình luận`}}}});
