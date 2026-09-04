@@ -27,6 +27,7 @@ struct SettingsView: View {
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @AppStorage("highlightCurrentNoteInTree") private var highlightCurrentNoteInTree: Bool = true
     @AppStorage(SSOLoginPreferences.showSetupWarningKey) private var showSSOSetupWarning = true
+    @AppStorage(SettingsTabPreferences.lastOpenedTabKey) private var lastOpenedTabRaw: String = SettingsTab.appearance.rawValue
     @State private var showClearCacheConfirm = false
     @State private var showClearAllInstancesCacheConfirm = false
     @State private var showResetColorsConfirm = false
@@ -50,17 +51,42 @@ struct SettingsView: View {
 
     var body: some View {
         List {
-            appearanceSection
-            treeViewSection
-            noteEditorSection
-            securitySection
-            instancesSection
-            ssoSection
-            connectionSection
-            cacheSection
-            aboutSection
+            switch selectedTab {
+            case .appearance:
+                appearanceSection
+                treeViewSection
+                noteEditorSection
+            case .account:
+                securitySection
+                instancesSection
+                ssoSection
+                connectionSection
+            case .data:
+                cacheSection
+                aboutSection
+            }
         }
+        .listStyle(.insetGrouped)
+        .contentMargins(.top, 0, for: .scrollContent)
         .navigationTitle(String(localized: "Settings", comment: "Settings screen title"))
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Picker(
+                String(localized: "Settings section", comment: "VoiceOver: Settings category picker"),
+                selection: selectedTabBinding
+            ) {
+                ForEach(SettingsTab.allCases) { tab in
+                    Text(tab.localizedTitle)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
         .task { await loadDiagnostics() }
         .sheet(isPresented: $showPinSetup) {
             PinSetupSheet(isCurrentlyEnabled: appPinEnabled) {}
@@ -98,6 +124,17 @@ struct SettingsView: View {
         .onChange(of: appPinEnabled) { _, isOn in
             if !isOn { appBiometricEnabled = false }
         }
+    }
+
+    private var selectedTab: SettingsTab {
+        SettingsTab(rawValue: lastOpenedTabRaw) ?? .appearance
+    }
+
+    private var selectedTabBinding: Binding<SettingsTab> {
+        Binding(
+            get: { selectedTab },
+            set: { lastOpenedTabRaw = $0.rawValue }
+        )
     }
 
     private var appearanceSection: some View {
