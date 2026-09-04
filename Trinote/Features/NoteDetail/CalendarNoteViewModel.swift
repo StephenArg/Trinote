@@ -5,9 +5,18 @@ enum CalendarViewMode: String, CaseIterable {
     case week, month, year
 }
 
-struct DayNoteInfo: Sendable {
+struct DayNoteInfo: Sendable, Equatable, Identifiable {
     let noteId: String
     let title: String
+    let childNotes: [DayNoteInfo]
+
+    var id: String { noteId }
+
+    init(noteId: String, title: String, childNotes: [DayNoteInfo] = []) {
+        self.noteId = noteId
+        self.title = title
+        self.childNotes = childNotes
+    }
 }
 
 @Observable
@@ -16,7 +25,9 @@ final class CalendarNoteViewModel {
     let calendarRootId: String
 
     var currentDate = Date()
-    var viewMode: CalendarViewMode = .month
+    var viewMode: CalendarViewMode = .month {
+        didSet { UserDefaults.standard.set(viewMode.rawValue, forKey: Self.viewModeStorageKey) }
+    }
     var dayNoteMap: [String: DayNoteInfo] = [:]
     var isLoading = false
     var isCreating = false
@@ -26,6 +37,8 @@ final class CalendarNoteViewModel {
 
     /// Coalesces concurrent `ensureDayNote` calls for the same ISO date (double-taps / racing tasks).
     private var ensureDayNoteTasks: [String: Task<String?, Never>] = [:]
+
+    static let viewModeStorageKey = "calendarJournalViewMode"
 
     private let appState: AppState
     private let persistence = PersistenceManager.shared
@@ -41,9 +54,26 @@ final class CalendarNoteViewModel {
         return f
     }()
 
-    init(calendarRootId: String, appState: AppState) {
+    init(calendarRootId: String, appState: AppState, defaults: UserDefaults = .standard) {
         self.calendarRootId = calendarRootId
         self.appState = appState
+        self.viewMode = Self.initialViewMode(defaults: defaults)
+    }
+
+    /// When “Default open to month tab” is on, always start on Month. Otherwise restore the last Week/Month/Year tab.
+    /// Init does not write `viewMode` to disk (`didSet` is skipped), so a forced Month does not overwrite the last tab.
+    static func initialViewMode(defaults: UserDefaults = .standard) -> CalendarViewMode {
+        if defaults.bool(forKey: CalendarJournalSettings.defaultOpenToMonthTab) {
+            return .month
+        }
+        return persistedViewMode(defaults: defaults)
+    }
+
+    static func persistedViewMode(defaults: UserDefaults = .standard) -> CalendarViewMode {
+        guard let raw = defaults.string(forKey: viewModeStorageKey),
+              let mode = CalendarViewMode(rawValue: raw)
+        else { return .month }
+        return mode
     }
 
     // MARK: - Navigation
@@ -108,84 +138,286 @@ final class CalendarNoteViewModel {
     // MARK: - Loading
 
     func loadVisibleDayNotes() async {
-        isLoading = true
         error = nil
+        let months = Self.visibleYearMonths(for: currentDate, viewMode: viewMode)
+
+        var cacheMap: [String: DayNoteInfo] = [:]
+        if let profileId = serverProfileId {
+            cacheMap = Self.buildDayNoteMapFromCache(
+                calendarRootId: calendarRootId,
+                months: months,
+                profileId: profileId,
+                persistence: persistence
+            )
+        }
+        if viewMode == .week, let profileId = serverProfileId {
+            cacheMap = Self.attachCachedChildren(
+                to: cacheMap,
+                profileId: profileId,
+                persistence: persistence
+            )
+        }
+        dayNoteMap = cacheMap
+
+        guard isOnline, let apiClient = client else { return }
+
+        isLoading = true
         defer { isLoading = false }
 
-        let cal = Calendar.current
-
-        let yearRange: ClosedRange<Int>
-        let monthRange: ClosedRange<Int>
-
-        switch viewMode {
-        case .year:
-            let year = cal.component(.year, from: currentDate)
-            yearRange = year...year
-            monthRange = 1...12
-        case .month:
-            let year = cal.component(.year, from: currentDate)
-            let month = cal.component(.month, from: currentDate)
-            yearRange = year...year
-            monthRange = month...month
-        case .week:
-            let year = cal.component(.year, from: currentDate)
-            let month = cal.component(.month, from: currentDate)
-            yearRange = year...year
-            monthRange = month...month
-        }
-
-        guard isOnline, let apiClient = client else {
-            if let profileId = serverProfileId {
-                dayNoteMap = Self.buildDayNoteMapFromCache(
-                    calendarRootId: calendarRootId,
-                    yearRange: yearRange,
-                    monthRange: monthRange,
-                    profileId: profileId,
-                    persistence: persistence
-                )
-            }
-            return
-        }
-
-        do {
-            var map: [String: DayNoteInfo] = [:]
-
-            for year in yearRange {
-                for month in monthRange {
-                    let prefix = String(format: "%04d-%02d", year, month)
-                    let query = "#dateNote =* \(prefix) note.ancestors.noteId = \(calendarRootId)"
-                    let result = try await apiClient.searchNotes(
-                        query: query,
-                        fastSearch: true,
-                        includeArchived: false,
-                        ancestorNoteId: calendarRootId,
-                        orderBy: nil,
-                        orderDirection: nil,
-                        limit: 50
-                    )
-                    for note in result.results {
-                        let item = NoteItem(from: note)
-                        if let dateVal = item.dateNoteValue, dateVal.count == 10 {
-                            map[dateVal] = DayNoteInfo(noteId: item.noteId, title: item.title)
-                        }
+        var dateToNoteId: [String: String] = [:]
+        var fetchFailed = false
+        await withTaskGroup(of: Result<[String: String], Error>.self) { group in
+            for (year, month) in months {
+                let monthKey = String(format: "%04d-%02d", year, month)
+                let rootId = calendarRootId
+                group.addTask {
+                    do {
+                        return .success(try await apiClient.getDayNotesForMonth(month: monthKey, calendarRootId: rootId))
+                    } catch {
+                        return .failure(error)
                     }
                 }
             }
-
-            dayNoteMap = map
-        } catch {
-            self.error = error.localizedDescription
-            Log.api.error("Failed to load calendar day notes: \(error)")
-            if let profileId = serverProfileId {
-                dayNoteMap = Self.buildDayNoteMapFromCache(
-                    calendarRootId: calendarRootId,
-                    yearRange: yearRange,
-                    monthRange: monthRange,
-                    profileId: profileId,
-                    persistence: persistence
-                )
+            for await result in group {
+                switch result {
+                case .success(let ids):
+                    for (date, noteId) in ids {
+                        dateToNoteId[date] = noteId
+                    }
+                case .failure(let error):
+                    fetchFailed = true
+                    Log.api.error("Failed to load calendar day notes: \(error)")
+                }
             }
         }
+
+        if Task.isCancelled { return }
+
+        if dateToNoteId.isEmpty && fetchFailed { return }
+
+        var titlesByNoteId: [String: String] = [:]
+        if let profileId = serverProfileId {
+            for noteId in Set(dateToNoteId.values) {
+                if let title = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId)?.title,
+                   !title.isEmpty {
+                    titlesByNoteId[noteId] = title
+                }
+            }
+        }
+        let missingTitleIds = Set(dateToNoteId.values).subtracting(titlesByNoteId.keys)
+        if !missingTitleIds.isEmpty {
+            if let tree = try? await apiClient.batchTreeLoad(noteIds: Array(missingTitleIds)) {
+                for row in tree.notes where !row.title.isEmpty {
+                    titlesByNoteId[row.noteId] = row.title
+                }
+            }
+        }
+
+        if Task.isCancelled { return }
+
+        var map = Self.overlayServerDayNotes(
+            cache: cacheMap,
+            dateToNoteId: dateToNoteId,
+            titlesByNoteId: titlesByNoteId
+        )
+        if viewMode == .week {
+            map = await attachChildNotes(to: map, client: apiClient)
+        }
+        if Task.isCancelled { return }
+        dayNoteMap = map
+    }
+
+    /// Year/month pairs that must be loaded for the current view (week may span two months).
+    static func visibleYearMonths(
+        for date: Date,
+        viewMode: CalendarViewMode,
+        calendar: Calendar = .current
+    ) -> [(year: Int, month: Int)] {
+        switch viewMode {
+        case .year:
+            let year = calendar.component(.year, from: date)
+            return (1...12).map { (year, $0) }
+        case .month:
+            return [(calendar.component(.year, from: date), calendar.component(.month, from: date))]
+        case .week:
+            var seen = Set<Int>()
+            var out: [(year: Int, month: Int)] = []
+            for day in weekDates(for: date, calendar: calendar) {
+                let year = calendar.component(.year, from: day)
+                let month = calendar.component(.month, from: day)
+                let key = year * 100 + month
+                if seen.insert(key).inserted {
+                    out.append((year, month))
+                }
+            }
+            return out
+        }
+    }
+
+    /// Server `#dateNote` map overlaid on the cache map. Cache-only days (title fallback / pending create) are kept.
+    static func overlayServerDayNotes(
+        cache: [String: DayNoteInfo],
+        dateToNoteId: [String: String],
+        titlesByNoteId: [String: String]
+    ) -> [String: DayNoteInfo] {
+        var map = cache
+        for (date, noteId) in dateToNoteId {
+            guard isoFormatter.date(from: date) != nil else { continue }
+            let title = titlesByNoteId[noteId]
+                ?? cache[date]?.title
+                ?? displayTitle(forISODate: date)
+            let children = cache[date]?.noteId == noteId ? (cache[date]?.childNotes ?? []) : []
+            map[date] = DayNoteInfo(noteId: noteId, title: title, childNotes: children)
+        }
+        return map
+    }
+
+    static func displayTitle(forISODate iso: String) -> String {
+        guard let date = isoFormatter.date(from: iso) else { return iso }
+        let f = DateFormatter()
+        f.dateFormat = "dd - EEEE"
+        f.locale = .current
+        return f.string(from: date)
+    }
+
+    /// `"29 - Friday"` / `"29"` under a known year-month → `yyyy-MM-dd`, or nil if not a day title.
+    static func isoDateFromDayNoteTitle(
+        _ title: String,
+        year: Int,
+        month: Int,
+        calendar: Calendar = .current
+    ) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix: String
+        if let dash = trimmed.firstIndex(of: "-") {
+            prefix = trimmed[..<dash].trimmingCharacters(in: .whitespaces)
+        } else {
+            prefix = trimmed
+        }
+        guard let day = Int(prefix), (1...31).contains(day) else { return nil }
+        var comps = DateComponents()
+        comps.year = year
+        comps.month = month
+        comps.day = day
+        guard let date = calendar.date(from: comps),
+              calendar.component(.year, from: date) == year,
+              calendar.component(.month, from: date) == month,
+              calendar.component(.day, from: date) == day
+        else { return nil }
+        return String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    /// Day journal note followed by its direct children (week agenda cards).
+    func notesOnDay(_ date: Date) -> [DayNoteInfo] {
+        guard let info = dayNoteMap[isoString(for: date)] else { return [] }
+        return [DayNoteInfo(noteId: info.noteId, title: info.title)] + info.childNotes
+    }
+
+    static func attachCachedChildren(
+        to map: [String: DayNoteInfo],
+        profileId: String,
+        persistence: PersistenceManager
+    ) -> [String: DayNoteInfo] {
+        var next = map
+        for (date, info) in map {
+            next[date] = DayNoteInfo(
+                noteId: info.noteId,
+                title: info.title,
+                childNotes: cachedChildNotes(parentNoteId: info.noteId, profileId: profileId, persistence: persistence)
+            )
+        }
+        return next
+    }
+
+    static func cachedChildNotes(
+        parentNoteId: String,
+        profileId: String,
+        persistence: PersistenceManager
+    ) -> [DayNoteInfo] {
+        guard let pairs = try? persistence.fetchCachedChildren(parentNoteId: parentNoteId, serverProfileId: profileId) else {
+            return []
+        }
+        return pairs.map { DayNoteInfo(noteId: $0.1.noteId, title: $0.1.title) }
+    }
+
+    /// Direct children of loaded day notes from `tree/load` (cache titles first, then the tree payload).
+    static func childNotesByParent(
+        from tree: TreeLoadResponse,
+        parentNoteIds: Set<String>,
+        titlesByNoteId: [String: String]
+    ) -> [String: [DayNoteInfo]] {
+        var childrenByParent: [String: [(position: Int, noteId: String)]] = [:]
+        for branch in tree.branches {
+            guard parentNoteIds.contains(branch.parentNoteId), branch.isDeleted != true else { continue }
+            childrenByParent[branch.parentNoteId, default: []].append((branch.notePosition, branch.noteId))
+        }
+        var titles = titlesByNoteId
+        for row in tree.notes where row.isDeleted != true && !row.title.isEmpty {
+            titles[row.noteId] = row.title
+        }
+        var result: [String: [DayNoteInfo]] = [:]
+        for (parentId, rows) in childrenByParent {
+            let ordered = rows.sorted { $0.position < $1.position }
+            result[parentId] = ordered.map { row in
+                DayNoteInfo(noteId: row.noteId, title: titles[row.noteId] ?? row.noteId)
+            }
+        }
+        return result
+    }
+
+    private func attachChildNotes(
+        to map: [String: DayNoteInfo],
+        client: any TriliumClientProtocol
+    ) async -> [String: DayNoteInfo] {
+        var next = map
+        if let profileId = serverProfileId {
+            next = Self.attachCachedChildren(to: next, profileId: profileId, persistence: persistence)
+        }
+
+        let parentIds = Array(Set(next.values.map(\.noteId)))
+        guard !parentIds.isEmpty else { return next }
+
+        guard let tree = try? await client.batchTreeLoad(noteIds: parentIds) else { return next }
+
+        var titlesByNoteId: [String: String] = [:]
+        if let profileId = serverProfileId {
+            let childIds = tree.branches
+                .filter { parentIds.contains($0.parentNoteId) && $0.isDeleted != true }
+                .map(\.noteId)
+            for noteId in Set(childIds) {
+                if let title = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId)?.title,
+                   !title.isEmpty {
+                    titlesByNoteId[noteId] = title
+                }
+            }
+        }
+
+        let missing = Set(
+            tree.branches
+                .filter { parentIds.contains($0.parentNoteId) && $0.isDeleted != true }
+                .map(\.noteId)
+        ).subtracting(titlesByNoteId.keys).subtracting(Set(tree.notes.map(\.noteId)))
+
+        var combinedTree = tree
+        if !missing.isEmpty, let extra = try? await client.batchTreeLoad(noteIds: Array(missing)) {
+            combinedTree = TreeLoadResponse(
+                notes: tree.notes + extra.notes,
+                branches: tree.branches + extra.branches,
+                attributes: tree.attributes + extra.attributes
+            )
+        }
+
+        let childrenByParent = Self.childNotesByParent(
+            from: combinedTree,
+            parentNoteIds: Set(parentIds),
+            titlesByNoteId: titlesByNoteId
+        )
+        for (date, info) in next {
+            if let children = childrenByParent[info.noteId] {
+                next[date] = DayNoteInfo(noteId: info.noteId, title: info.title, childNotes: children)
+            }
+        }
+        return next
     }
 
     // MARK: - Day note creation (year -> month -> day chain)
@@ -380,29 +612,30 @@ final class CalendarNoteViewModel {
         return nil
     }
 
-    private static func buildDayNoteMapFromCache(
+    static func buildDayNoteMapFromCache(
         calendarRootId: String,
-        yearRange: ClosedRange<Int>,
-        monthRange: ClosedRange<Int>,
+        months: [(year: Int, month: Int)],
         profileId: String,
         persistence: PersistenceManager
     ) -> [String: DayNoteInfo] {
         var map: [String: DayNoteInfo] = [:]
-        for year in yearRange {
+        for (year, month) in months {
             guard let yearId = findCachedYearNoteId(calendarRootId: calendarRootId, year: year, profileId: profileId, persistence: persistence)
             else { continue }
-            for month in monthRange {
-                let monthStr = String(format: "%04d-%02d", year, month)
-                guard let monthId = findCachedMonthNoteId(
-                    parentYearId: yearId, year: year, month: month, monthStr: monthStr, profileId: profileId, persistence: persistence
-                ) else { continue }
-                guard let dayPairs = try? persistence.fetchCachedChildren(parentNoteId: monthId, serverProfileId: profileId) else { continue }
-                for (_, note) in dayPairs {
-                    let attrs = (try? persistence.fetchCachedAttributes(noteId: note.noteId, serverProfileId: profileId)) ?? []
-                    guard let dateVal = attrs.first(where: { $0.type == "label" && $0.name == "dateNote" })?.value,
-                          dateVal.count == 10
-                    else { continue }
+            let monthStr = String(format: "%04d-%02d", year, month)
+            guard let monthId = findCachedMonthNoteId(
+                parentYearId: yearId, year: year, month: month, monthStr: monthStr, profileId: profileId, persistence: persistence
+            ) else { continue }
+            guard let dayPairs = try? persistence.fetchCachedChildren(parentNoteId: monthId, serverProfileId: profileId) else { continue }
+            for (_, note) in dayPairs {
+                let attrs = (try? persistence.fetchCachedAttributes(noteId: note.noteId, serverProfileId: profileId)) ?? []
+                if let dateVal = attrs.first(where: { $0.type == "label" && $0.name == "dateNote" })?.value,
+                   isoFormatter.date(from: dateVal) != nil {
                     map[dateVal] = DayNoteInfo(noteId: note.noteId, title: note.title)
+                    continue
+                }
+                if let iso = isoDateFromDayNoteTitle(note.title, year: year, month: month) {
+                    map[iso] = DayNoteInfo(noteId: note.noteId, title: note.title)
                 }
             }
         }
@@ -411,25 +644,66 @@ final class CalendarNoteViewModel {
 
     // MARK: - Calendar helpers
 
-    static func daysInMonth(for date: Date) -> [Date] {
-        let cal = Calendar.current
-        guard let range = cal.range(of: .day, in: .month, for: date),
-              let firstOfMonth = cal.date(from: cal.dateComponents([.year, .month], from: date))
+    /// Compact English weekday labels indexed by `Calendar` weekday (Sunday = 1).
+    private static let compactWeekdaySymbolsSundayFirst = ["Su", "M", "Tu", "W", "Th", "F", "Sa"]
+
+    static func daysInMonth(for date: Date, calendar: Calendar = .current) -> [Date] {
+        guard let range = calendar.range(of: .day, in: .month, for: date),
+              let firstOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: date))
         else { return [] }
-        return range.compactMap { cal.date(byAdding: .day, value: $0 - 1, to: firstOfMonth) }
+        return range.compactMap { calendar.date(byAdding: .day, value: $0 - 1, to: firstOfMonth) }
     }
 
-    static func firstWeekdayOffset(for date: Date) -> Int {
-        let cal = Calendar.current
-        guard let firstOfMonth = cal.date(from: cal.dateComponents([.year, .month], from: date)) else { return 0 }
-        let weekday = cal.component(.weekday, from: firstOfMonth)
-        return (weekday - cal.firstWeekday + 7) % 7
+    static func visibleMonthDates(for date: Date, hideWeekends: Bool, calendar: Calendar = .current) -> [Date] {
+        let days = daysInMonth(for: date, calendar: calendar)
+        guard hideWeekends else { return days }
+        return days.filter { !calendar.isDateInWeekend($0) }
     }
 
-    static func weekDates(for date: Date) -> [Date] {
-        let cal = Calendar.current
-        guard let startOfWeek = cal.dateInterval(of: .weekOfYear, for: date)?.start else { return [] }
-        return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: startOfWeek) }
+    static func isWeekendWeekday(_ weekday: Int, calendar: Calendar) -> Bool {
+        let now = Date()
+        let current = calendar.component(.weekday, from: now)
+        guard let date = calendar.date(byAdding: .day, value: weekday - current, to: now) else { return false }
+        return calendar.isDateInWeekend(date)
+    }
+
+    /// Weekday numbers (1–7) in header order, optionally omitting weekend weekdays.
+    static func visibleWeekdays(hideWeekends: Bool, calendar: Calendar = .current) -> [Int] {
+        let first = calendar.firstWeekday
+        let ordered = (0..<7).map { (first - 1 + $0) % 7 + 1 }
+        if !hideWeekends { return ordered }
+        return ordered.filter { !isWeekendWeekday($0, calendar: calendar) }
+    }
+
+    static func weekdayColumnCount(hideWeekends: Bool, calendar: Calendar = .current) -> Int {
+        visibleWeekdays(hideWeekends: hideWeekends, calendar: calendar).count
+    }
+
+    static func weekdayHeaderSymbols(hideWeekends: Bool, calendar: Calendar = .current) -> [String] {
+        visibleWeekdays(hideWeekends: hideWeekends, calendar: calendar).map { weekday in
+            compactWeekdaySymbolsSundayFirst[weekday - 1]
+        }
+    }
+
+    static func firstWeekdayOffset(for date: Date, hideWeekends: Bool = false, calendar: Calendar = .current) -> Int {
+        guard let firstOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) else { return 0 }
+        if !hideWeekends {
+            let weekday = calendar.component(.weekday, from: firstOfMonth)
+            return (weekday - calendar.firstWeekday + 7) % 7
+        }
+        let days = daysInMonth(for: date, calendar: calendar)
+        guard let firstVisible = days.first(where: { !calendar.isDateInWeekend($0) }) else { return 0 }
+        let weekday = calendar.component(.weekday, from: firstVisible)
+        return visibleWeekdays(hideWeekends: true, calendar: calendar).firstIndex(of: weekday) ?? 0
+    }
+
+    static func weekDates(for date: Date, hideWeekends: Bool = false, calendar: Calendar = .current) -> [Date] {
+        guard let startOfWeek = calendar.dateInterval(of: .weekOfYear, for: date)?.start else { return [] }
+        let all = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: startOfWeek) }
+        if hideWeekends {
+            return all.filter { !calendar.isDateInWeekend($0) }
+        }
+        return all
     }
 
     func isoString(for date: Date) -> String {

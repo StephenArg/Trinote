@@ -104,6 +104,8 @@ final class NoteDetailViewModel {
     // Child notes
     var childNotes: [ChildNoteSummary] = []
     var isLoadingChildren = false
+    /// Other notes last edited on this journal day (`#dateNote`). Empty when this is not a day note.
+    var notesEditedOnDay: [NoteIdTitle] = []
     /// Bumped when `childNotes` reloads so SwiftUI re-evaluates geo-map routing (uses cached child attributes).
     private(set) var geoMapDetectionTick = 0
 
@@ -335,6 +337,8 @@ final class NoteDetailViewModel {
 
         rebuildBreadcrumbsFromCache()
 
+        await loadNotesEditedOnDay()
+
         // Pending local creates are not on the server yet — same stall as offline when interface is “up”.
         if nid.isOfflineLocalNoteId {
             return
@@ -348,6 +352,7 @@ final class NoteDetailViewModel {
         // Background server refresh
         guard client != nil else { return }
         await startOrGetMetadataRefresh().value
+        await loadNotesEditedOnDay()
     }
 
     /// Returns the in-flight metadata-refresh task, starting one if none is running. Both `load()`
@@ -1363,6 +1368,7 @@ final class NoteDetailViewModel {
             }
             await applyIncludeNoteResolutionIfNeeded()
             await loadChildNotes()
+            await loadNotesEditedOnDay()
             return
         }
 
@@ -1407,6 +1413,7 @@ final class NoteDetailViewModel {
 
         guard let data = fetchedData else {
             await loadChildNotes()
+            await loadNotesEditedOnDay()
             return
         }
         self.content = data
@@ -1430,6 +1437,7 @@ final class NoteDetailViewModel {
         self.checkForDraft()
 
         await loadChildNotes()
+        await loadNotesEditedOnDay()
     }
 
     func loadAttachments() async {
@@ -3037,6 +3045,48 @@ final class NoteDetailViewModel {
     /// Use after geo-map pin changes or when child titles may have changed on the server.
     func refreshDirectChildrenMetadataFromServer() async {
         await fetchDirectChildrenFromServer()
+    }
+
+    /// Journal day notes: other notes created or modified on this `#dateNote` day (`GET /api/edited-notes/{date}`).
+    func loadNotesEditedOnDay() async {
+        guard let day = note?.dateNoteValue, JournalDayEditedNotes.isISODay(day) else {
+            if !notesEditedOnDay.isEmpty {
+                notesEditedOnDay = []
+            }
+            return
+        }
+
+        let canFetch = isOnline && client != nil && !noteId.isOfflineLocalNoteId
+        let cached: [NoteIdTitle] = {
+            guard let profileId = serverProfileId else { return [] }
+            return (try? persistence.fetchCachedNotesEditedOnISODay(
+                dayISO: day,
+                excludingNoteId: noteId,
+                serverProfileId: profileId,
+                limit: JournalDayEditedNotes.resultLimit
+            )) ?? []
+        }()
+
+        if !canFetch {
+            if notesEditedOnDay != cached {
+                notesEditedOnDay = cached
+            }
+            return
+        }
+
+        guard let client else { return }
+        do {
+            let hits = try await client.getEditedNotes(onISODay: day)
+            let list = JournalDayEditedNotes.displayList(from: hits, excludingNoteId: noteId)
+            if notesEditedOnDay != list {
+                notesEditedOnDay = list
+            }
+        } catch {
+            if notesEditedOnDay.isEmpty, !cached.isEmpty {
+                notesEditedOnDay = cached
+            }
+            Log.api.debug("Notes edited on day request failed: \(error.localizedDescription)")
+        }
     }
 
     /// Loads sub-notes from cache first; when online, fills gaps from the server (required for cache-excluded subtrees).

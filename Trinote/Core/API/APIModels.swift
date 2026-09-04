@@ -592,6 +592,33 @@ struct SearchResponse: Decodable {
     }
 }
 
+/// Title-only search hit (calendar “edited that day” chips, etc.).
+struct NoteIdTitle: Sendable, Equatable, Identifiable {
+    let noteId: String
+    let title: String
+    let isProtected: Bool
+
+    var id: String { noteId }
+}
+
+/// One row from `GET /api/edited-notes/{yyyy-MM-dd}` (desktop Edited Notes ribbon).
+struct EditedNoteHit: Decodable, Sendable {
+    let noteId: String
+    let isDeleted: Bool
+    let title: String?
+
+    enum CodingKeys: String, CodingKey {
+        case noteId, isDeleted, title
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        noteId = try c.decode(String.self, forKey: .noteId)
+        isDeleted = (try? c.decode(Bool.self, forKey: .isDeleted)) ?? false
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+    }
+}
+
 // MARK: - History
 
 struct RecentChange: Decodable {

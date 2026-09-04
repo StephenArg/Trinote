@@ -100,6 +100,66 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(item.uiNoteTypeDisplayName, NoteType.book.displayName)
     }
 
+    func testFlattenOmitsCalendarRootDescendantsWhenHidingChildren() {
+        let yearNote = NoteItem(
+            noteId: "year2026", title: "2026", type: .book, mime: "text/html",
+            isProtected: false, dateCreated: "", dateModified: "",
+            parentNoteIds: ["journal"], childNoteIds: [], parentBranchIds: ["b-year"], childBranchIds: [],
+            attributes: []
+        )
+        let yearNode = TreeNode(
+            branch: BranchItem(branchId: "b-year", noteId: "year2026", parentNoteId: "journal", prefix: nil, notePosition: 10, isExpanded: true),
+            note: yearNote
+        )
+        let journalNote = NoteItem(
+            noteId: "journal", title: "Journal", type: .book, mime: "text/html",
+            isProtected: false, dateCreated: "", dateModified: "",
+            parentNoteIds: ["root"], childNoteIds: ["year2026"], parentBranchIds: ["b-journal"], childBranchIds: ["b-year"],
+            attributes: [
+                AttributeItem(
+                    attributeId: "cal", noteId: "journal", type: .label, name: "calendarRoot",
+                    value: "", position: 0, isInheritable: false
+                )
+            ]
+        )
+        let journalNode = TreeNode(
+            branch: BranchItem(branchId: "b-journal", noteId: "journal", parentNoteId: "root", prefix: nil, notePosition: 10, isExpanded: true),
+            note: journalNote,
+            children: [yearNode]
+        )
+        let otherNote = NoteItem(
+            noteId: "other", title: "Other", type: .text, mime: "text/html",
+            isProtected: false, dateCreated: "", dateModified: "",
+            parentNoteIds: ["root"], childNoteIds: [], parentBranchIds: ["b-other"], childBranchIds: [],
+            attributes: []
+        )
+        let otherNode = TreeNode(
+            branch: BranchItem(branchId: "b-other", noteId: "other", parentNoteId: "root", prefix: nil, notePosition: 20, isExpanded: false),
+            note: otherNote
+        )
+
+        let hidden = TreeViewModel.flatten([journalNode, otherNode], hideCalendarRootChildren: true)
+        XCTAssertEqual(hidden.map { $0.node.note.noteId }, ["journal", "other"])
+
+        let shown = TreeViewModel.flatten([journalNode, otherNode], hideCalendarRootChildren: false)
+        XCTAssertEqual(shown.map { $0.node.note.noteId }, ["journal", "year2026", "other"])
+    }
+
+    func testShowsExpandChevronTreatsCalendarRootAsLeafWhenHidingChildren() {
+        XCTAssertFalse(
+            TreeViewModel.showsExpandChevron(hasChildren: true, isCalendarRoot: true, hideCalendarRootChildren: true)
+        )
+        XCTAssertTrue(
+            TreeViewModel.showsExpandChevron(hasChildren: true, isCalendarRoot: true, hideCalendarRootChildren: false)
+        )
+        XCTAssertTrue(
+            TreeViewModel.showsExpandChevron(hasChildren: true, isCalendarRoot: false, hideCalendarRootChildren: true)
+        )
+        XCTAssertFalse(
+            TreeViewModel.showsExpandChevron(hasChildren: false, isCalendarRoot: true, hideCalendarRootChildren: false)
+        )
+    }
+
     func testNativeGeoMapTypeIsSemanticGeoMap() {
         let response = TestFixtures.noteResponse(id: "g1", title: "G", type: "geoMap", mime: "application/json")
         let item = NoteItem(from: response)

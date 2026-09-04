@@ -119,6 +119,7 @@ struct TreeView: View {
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
     @AppStorage("treeLightSelectedNoteColor") private var treeLightSelectedNoteColor: String = "#E0EFFF"
     @AppStorage("treeDarkSelectedNoteColor") private var treeDarkSelectedNoteColor: String = "#192739"
+    @AppStorage(CalendarJournalSettings.hideChildNotesInTree) private var hideCalendarChildNotesInTree = false
 
     private var treeTextColor: Color? {
         guard useCustomTreeColors else { return nil }
@@ -470,12 +471,18 @@ struct TreeView: View {
         .task {
             if viewModel == nil {
                 let vm = TreeViewModel(appState: appState, parentNoteId: parentNoteId)
+                applyCalendarTreePreference(to: vm)
                 viewModel = vm
                 await vm.loadTree()
             }
             loadFavoriteIds()
             lastActiveOpenTabIdForBar = LastActiveOpenTabStore.get(profileId: appState.activeProfile?.id)
             autoRestoreOpenTabOnLaunchIfNeeded()
+        }
+        .onChange(of: hideCalendarChildNotesInTree) { _, _ in
+            if let viewModel {
+                applyCalendarTreePreference(to: viewModel)
+            }
         }
         .onChange(of: appState.activeProfile?.id) { _, _ in
             loadFavoriteIds()
@@ -484,6 +491,7 @@ struct TreeView: View {
             resetNavigationStackBeforeServerProfileChange()
             Task { @MainActor in
                 let vm = TreeViewModel(appState: appState, parentNoteId: parentNoteId)
+                applyCalendarTreePreference(to: vm)
                 viewModel = vm
                 await vm.loadTree()
                 if parentNoteId == "root" {
@@ -1298,6 +1306,11 @@ struct TreeView: View {
         }
     }
 
+    /// Parent/move pickers keep year/month/day notes visible so notes can still be filed under a day.
+    private func applyCalendarTreePreference(to vm: TreeViewModel) {
+        vm.hidesCalendarRootChildrenInTree = onPickParent == nil && hideCalendarChildNotesInTree
+    }
+
     private func buildTreeNodeRow(node: TreeNode, depth: Int, vm: TreeViewModel) -> TreeNodeRow {
         let noteId = node.note.noteId
         return TreeNodeRow(
@@ -1495,7 +1508,7 @@ struct TreeNodeRow: View {
 
     @ViewBuilder
     private var expandChevron: some View {
-        if node.note.hasChildren {
+        if viewModel.showsExpandChevron(for: node.note) {
             Button {
                 if shouldDrillDown {
                     onDrillDown(node.note.noteId, node.displayTitle(protectedSessionActive: appState.protectedSessionActive))

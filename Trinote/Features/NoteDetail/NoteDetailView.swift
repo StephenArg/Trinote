@@ -137,6 +137,8 @@ struct NoteDetailView: View {
     @State private var showMoveParentPicker = false
     @State private var showAppearancePicker = false
     @State private var showShareLocally = false
+    @State private var showNoteOverflowMenu = false
+    @State private var showCalendarJournalSettings = false
     @State private var moveNoteDetailConfirm: MoveNoteDetailConfirm?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.noteDetails.rawValue
@@ -149,6 +151,8 @@ struct NoteDetailView: View {
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     /// When `true`, Image–Code block tools appear in a top toolbar below the nav header instead of the bottom bar.
     @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
+    /// Journal day notes: “Notes edited on that day” pill row starts collapsed.
+    @AppStorage("journalNotesEditedOnDayExpanded") private var notesEditedOnDayExpanded: Bool = false
     @State private var activeOpenTabId: String?
     @State private var openNoteTabListNonEmpty: Bool = false
     @State private var isTabBarReordering = false
@@ -271,6 +275,31 @@ struct NoteDetailView: View {
             formatted = note.dateModified
         }
         return String(localized: "Last changed \(formatted)", comment: "Subtitle under note title; formatted is date/time")
+    }
+
+    @ViewBuilder
+    private func lastChangedCaptionRow(note: NoteItem, modified: String, leadingPadding: CGFloat) -> some View {
+        HStack(alignment: .center, spacing: 6) {
+            Text(modified)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(String(localized: "Last changed \(modified)", comment: "Accessibility"))
+            if note.isCalendarRoot {
+                Button {
+                    showCalendarJournalSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 28, minHeight: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(String(localized: "Calendar settings", comment: "Opens calendar journal settings"))
+            }
+        }
+        .padding(.leading, leadingPadding)
     }
 
     /// `contentOffset` / `scrollTop` at or below this (including small negative bounce) counts as “at top of content” — always show the floating edit (read mode) and save (editing) chips; typing does not hide the save chip in this range.
@@ -1363,6 +1392,7 @@ struct NoteDetailView: View {
                     breadcrumbsBar(vm)
                     titleSection(vm, note: note)
                     Divider()
+                    notesEditedOnDaySection(vm)
                     noteBody(vm, note: note, findControl: findControl)
                     childNotesSection(vm)
 
@@ -1516,6 +1546,7 @@ struct NoteDetailView: View {
                     AnyView(
                         VStack(spacing: 0) {
                             editorStatusBanner(vm)
+                            notesEditedOnDaySection(vm, compact: true)
                             richTextEditingView(vm)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         }
@@ -1525,6 +1556,7 @@ struct NoteDetailView: View {
                     AnyView(
                         VStack(spacing: 0) {
                             editorStatusBanner(vm)
+                            notesEditedOnDaySection(vm, compact: true)
                             codeEditingView(vm)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         }
@@ -1611,6 +1643,10 @@ struct NoteDetailView: View {
                     }
                 )
             }
+            .sheet(isPresented: $showCalendarJournalSettings) {
+                CalendarJournalSettingsSheet()
+                    .presentationDetents([.medium])
+            }
             .fullScreenCover(isPresented: Binding(
                 get: { vm.isEditing && note.type == .spreadsheet && horizontalSizeClass != .regular },
                 set: { newValue in
@@ -1655,6 +1691,9 @@ struct NoteDetailView: View {
                     ShareLocallyView(note: note, client: vm.client)
                         .environment(appState)
                 }
+            }
+            .sheet(isPresented: $showNoteOverflowMenu) {
+                noteOverflowActionsSheet(vm: vm, note: note)
             }
             .alert(
                 String(localized: "Move Note", comment: "Move confirmation title"),
@@ -1896,38 +1935,43 @@ struct NoteDetailView: View {
                                 .controlSize(.small)
                         }
                         if let modified = lastChangedCaption(for: note) {
-                            Text(modified)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .accessibilityLabel(String(localized: "Last changed \(modified)", comment: "Accessibility"))
+                            lastChangedCaptionRow(note: note, modified: modified, leadingPadding: 0)
                         }
                     }
                 }
             } else {
                 HStack(alignment: .top, spacing: 0) {
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .firstTextBaseline, spacing: titleIconSpacing) {
+                        let titleRow = HStack(alignment: .firstTextBaseline, spacing: titleIconSpacing) {
                             noteTitleIconButton(vm: vm, note: note, width: titleIconColumnWidth)
                             Text(uiTitle(for: note))
                                 .font(.title2.bold())
                                 .foregroundStyle(noteDetailTitleForegroundColor(for: note))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        if note.isCalendarRoot {
+                            titleRow.onTapGesture {
+                                vm.editedTitle = note.title
+                                vm.editingTitle = true
+                            }
+                        } else {
+                            titleRow
+                        }
                         if let modified = lastChangedCaption(for: note) {
-                            Text(modified)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.leading, titleIconColumnWidth + titleIconSpacing)
-                                .accessibilityLabel(String(localized: "Last changed \(modified)", comment: "Accessibility"))
+                            lastChangedCaptionRow(
+                                note: note,
+                                modified: modified,
+                                leadingPadding: titleIconColumnWidth + titleIconSpacing
+                            )
                         }
                     }
                     Spacer(minLength: 0)
                 }
-                .onTapGesture {
-                    vm.editedTitle = note.title
-                    vm.editingTitle = true
+                .if(!note.isCalendarRoot) { view in
+                    view.onTapGesture {
+                        vm.editedTitle = note.title
+                        vm.editingTitle = true
+                    }
                 }
                 .accessibilityLabel(String(localized: "Note title: \(uiTitle(for: note)). Tap to edit.", comment: "VoiceOver note title"))
             }
@@ -2112,6 +2156,91 @@ struct NoteDetailView: View {
             }
         default:
             UnsupportedNoteView(note: note, serverURL: appState.activeProfile?.normalizedBaseURL)
+        }
+    }
+
+    @ViewBuilder
+    private func notesEditedOnDaySection(_ vm: NoteDetailViewModel, compact: Bool = false) -> some View {
+        if !vm.notesEditedOnDay.isEmpty {
+            VStack(alignment: .leading, spacing: compact ? 6 : 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        notesEditedOnDayExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(notesEditedOnDayExpanded ? 90 : 0))
+                        Text(String(localized: "Notes edited on that day", comment: "Journal day note: notes last modified on this calendar day"))
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        if !notesEditedOnDayExpanded {
+                            Text("\(vm.notesEditedOnDay.count)")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.tertiary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Notes edited on that day", comment: "Journal day note: notes last modified on this calendar day"))
+                .accessibilityValue(
+                    notesEditedOnDayExpanded
+                        ? String(localized: "Expanded", comment: "Journal edited-notes section is expanded")
+                        : String(localized: "Collapsed", comment: "Journal edited-notes section is collapsed")
+                )
+                .accessibilityHint(
+                    notesEditedOnDayExpanded
+                        ? String(localized: "Collapses the list", comment: "Journal edited-notes section collapse hint")
+                        : String(localized: "Expands the list", comment: "Journal edited-notes section expand hint")
+                )
+
+                if notesEditedOnDayExpanded {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(vm.notesEditedOnDay) { edited in
+                                Button {
+                                    navigateToNoteId = edited.noteId
+                                } label: {
+                                    Text(
+                                        NoteItem.maskedStoredTitle(
+                                            edited.title,
+                                            isProtected: edited.isProtected,
+                                            protectedSessionActive: appState.protectedSessionActive
+                                        )
+                                    )
+                                    .font(.subheadline)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(Color.blue.opacity(0.12), in: Capsule())
+                                    .foregroundStyle(.primary)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(
+                                    NoteItem.maskedStoredTitle(
+                                        edited.title,
+                                        isProtected: edited.isProtected,
+                                        protectedSessionActive: appState.protectedSessionActive
+                                    )
+                                )
+                                .accessibilityHint(String(localized: "Opens this note", comment: "Journal day edited-note pill hint"))
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+            }
+            .padding(.top, compact ? 8 : 12)
+            .padding(.bottom, compact ? 8 : 10)
+
+            if notesEditedOnDayExpanded {
+                Divider()
+            }
         }
     }
 
@@ -3525,223 +3654,305 @@ struct NoteDetailView: View {
                 .accessibilityLabel(toolbarQuickActionAccessibilityLabel(quick, vm: vm, note: note))
             }
 
-            Menu {
-                if note.type.isEditable {
-                    Button {
-                        if vm.isEditing {
-                            switch note.type {
-                            case .canvas:
-                                saveCanvasContent(vm: vm)
-                            case .spreadsheet:
-                                saveSpreadsheetContent(vm: vm)
-                            default:
-                                saveRichTextContent(vm: vm)
-                            }
-                        } else {
-                            vm.startEditing()
-                        }
-                    } label: {
-                        if vm.isEditing {
-                            Label(
-                                String(localized: "Save", comment: "Save note from editor overflow menu"),
-                                systemImage: "checkmark.circle"
-                            )
-                        } else {
-                            Label {
-                                Text(String(localized: "Edit Note", comment: "Open note editor"))
-                            } icon: {
-                                Image("EditNoteFloating")
-                                    .renderingMode(.template)
-                            }
-                        }
-                    }
-                    .disabled(vm.needsProtectedSession || (vm.isEditing && vm.isSaving))
-                }
-
-                if vm.isEditing {
-                    Button {
-                        cancelNoteEditing(vm: vm, note: note)
-                    } label: {
-                        Label(
-                            String(localized: "Cancel Editing", comment: "Leave note editor from overflow menu"),
-                            systemImage: "xmark"
-                        )
-                    }
-                } else {
-                    Button {
-                        recordToolbarQuickAction(.newChild)
-                        vm.showCreateChild = true
-                    } label: {
-                        Label(String(localized: "New Child Note", comment: "Note overflow menu"), systemImage: "plus")
-                    }
-                }
-
-                if !note.isProtected || appState.protectedSessionActive {
-                    Button {
-                        recordToolbarQuickAction(.duplicate)
-                        Task {
-                            if let dup = await vm.duplicateNote() {
-                                navigateToNoteId = dup.noteId
-                            }
-                        }
-                    } label: {
-                        Label(String(localized: "Duplicate", comment: "Note overflow menu"), systemImage: "doc.on.doc")
-                    }
-                    .disabled(vm.isSaving)
-                }
-
-                if note.noteId != TriliumTreeConstants.rootNoteId, !note.isProtected || appState.protectedSessionActive {
-                    Button {
-                        showMoveParentPicker = true
-                    } label: {
-                        Label(String(localized: "Move", comment: "Note overflow: move under another parent"), systemImage: "arrow.forward.folder")
-                    }
-                    .disabled(vm.client == nil || vm.isSaving)
-                }
-
-                Button {
-                    vm.editedTitle = note.title
-                    vm.editingTitle = true
-                } label: {
-                    Label(String(localized: "Rename", comment: "Note overflow menu"), systemImage: "pencil")
-                }
-
-                if canChangeNoteAppearance(note) {
-                    Button {
-                        showAppearancePicker = true
-                    } label: {
-                        Label(
-                            String(localized: "Change Icon/Color", comment: "Note overflow menu: open appearance picker"),
-                            systemImage: "paintpalette"
-                        )
-                    }
-                    .disabled(vm.isSaving)
-                }
-
-                Divider()
-
-                Button {
-                    recordToolbarQuickAction(.noteDetails)
-                    withAnimation { vm.showDetails.toggle() }
-                } label: {
-                    Label(
-                        vm.showDetails
-                            ? String(localized: "Hide Details", comment: "Note overflow toggle details")
-                            : String(localized: "Note Details", comment: "Note overflow toggle details"),
-                        systemImage: vm.showDetails ? "info.circle.fill" : "info.circle"
-                    )
-                }
-
-                Divider()
-
-                if note.isProtected || vm.needsProtectedSession {
-                    Button {
-                    } label: {
-                        Label(
-                            String(localized: "Share locally unavailable (protected note)", comment: "Local share disabled"),
-                            systemImage: "lock.fill"
-                        )
-                    }
-                    .disabled(true)
-                } else {
-                    Button {
-                        showShareLocally = true
-                    } label: {
-                        Label(
-                            String(localized: "Share locally", comment: "Note overflow: nearby device transfer"),
-                            systemImage: "square.and.arrow.up"
-                        )
-                    }
-                }
-
-                if note.isProtected || vm.needsProtectedSession {
-                    Button {
-                    } label: {
-                        Label(
-                            String(localized: "Sharing unavailable (protected note)", comment: "Share menu disabled"),
-                            systemImage: "lock.fill"
-                        )
-                    }
-                    .disabled(true)
-                } else if vm.client == nil {
-                    Button {
-                    } label: {
-                        Label(
-                            String(localized: "Sharing requires connection", comment: "Share menu offline"),
-                            systemImage: "wifi.slash"
-                        )
-                    }
-                    .disabled(true)
-                } else {
-                    Button {
-                        Task { await vm.setNoteSharing(enabled: !vm.isSharedPublicly) }
-                    } label: {
-                        // `Menu` often ignores arbitrary views in `Label`’s title (e.g. `HStack` + `Image`); use a single
-                        // concatenated `Text` so the checkmark is part of the rendered title string.
-                        Label {
-                            if vm.isSharedPublicly {
-                                Text(String(localized: "Sharing ✓", comment: "Note overflow: public link when enabled"))
-                                    .font(.body.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text(String(localized: "Share", comment: "Note overflow: public link when disabled"))
-                            }
-                        } icon: {
-                            Image(systemName: "scale.3d")
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(vm.isUpdatingShare)
-                    .accessibilityAddTraits(vm.isSharedPublicly ? .isSelected : [])
-                    .applyMenuKeepOpenOnAction()
-
-                    if vm.isSharedPublicly {
-                        noteDetailShareLinkButtons(vm: vm)
-                    }
-                }
-
-                if appState.activeProfile != nil {
-                    Button {
-                        recordToolbarQuickAction(.favorite)
-                        toggleFavorite(note: note, isFavorite: favoriteNoteIds.contains(note.noteId))
-                    } label: {
-                        if favoriteNoteIds.contains(note.noteId) {
-                            Label(String(localized: "Remove from Favorites", comment: "Note overflow"), systemImage: "star.slash")
-                        } else {
-                            Label(String(localized: "Add to Favorites", comment: "Note overflow"), systemImage: "star")
-                        }
-                    }
-                }
-
-                if !vm.isEditing && note.type.supportsReadOnlyOnPageFind {
-                    Button {
-                        recordToolbarQuickAction(.findOnPage)
-                        if findControl.isPresented {
-                            findControl.close()
-                        } else {
-                            findControl.isPresented = true
-                        }
-                    } label: {
-                        Label(
-                            findControl.isPresented
-                                ? String(localized: "Hide Find Bar", comment: "Close in-page search")
-                                : String(localized: "Find on Page", comment: "Open in-page search for read-only note"),
-                            systemImage: "magnifyingglass"
-                        )
-                    }
-                }
-
-                Divider()
-
-                Button(role: .destructive) {
-                    vm.showDeleteConfirm = true
-                } label: {
-                    Label(String(localized: "Delete Note", comment: "Note overflow"), systemImage: "trash")
-                }
+            Button {
+                showNoteOverflowMenu = true
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
             .accessibilityLabel(String(localized: "Note actions", comment: "Overflow menu"))
+        }
+    }
+
+    @ViewBuilder
+    private func noteOverflowActionsSheet(vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        VStack(spacing: 0) {
+            noteOverflowActionButtons(vm: vm, note: note)
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 28)
+        .modifier(NoteOverflowSheetSizingModifier())
+    }
+
+    @ViewBuilder
+    private func noteOverflowActionButtons(vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        if note.type.isEditable {
+            Button {
+                dismissNoteOverflow()
+                if vm.isEditing {
+                    switch note.type {
+                    case .canvas:
+                        saveCanvasContent(vm: vm)
+                    case .spreadsheet:
+                        saveSpreadsheetContent(vm: vm)
+                    default:
+                        saveRichTextContent(vm: vm)
+                    }
+                } else {
+                    vm.startEditing()
+                }
+            } label: {
+                if vm.isEditing {
+                    noteOverflowLabel(
+                        String(localized: "Save", comment: "Save note from editor overflow menu"),
+                        systemImage: "checkmark.circle"
+                    )
+                } else {
+                    Label {
+                        Text(String(localized: "Edit Note", comment: "Open note editor"))
+                    } icon: {
+                        Image("EditNoteFloating")
+                            .renderingMode(.template)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.needsProtectedSession || (vm.isEditing && vm.isSaving))
+        }
+
+        if vm.isEditing {
+            Button {
+                dismissNoteOverflow()
+                cancelNoteEditing(vm: vm, note: note)
+            } label: {
+                noteOverflowLabel(
+                    String(localized: "Cancel Editing", comment: "Leave note editor from overflow menu"),
+                    systemImage: "xmark"
+                )
+            }
+            .buttonStyle(.plain)
+        } else {
+            Button {
+                recordToolbarQuickAction(.newChild)
+                dismissNoteOverflowThen { vm.showCreateChild = true }
+            } label: {
+                noteOverflowLabel(String(localized: "New Child Note", comment: "Note overflow menu"), systemImage: "plus")
+            }
+            .buttonStyle(.plain)
+        }
+
+        if !note.isProtected || appState.protectedSessionActive {
+            Button {
+                recordToolbarQuickAction(.duplicate)
+                dismissNoteOverflow()
+                Task {
+                    if let dup = await vm.duplicateNote() {
+                        navigateToNoteId = dup.noteId
+                    }
+                }
+            } label: {
+                noteOverflowLabel(String(localized: "Duplicate", comment: "Note overflow menu"), systemImage: "doc.on.doc")
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.isSaving)
+        }
+
+        if note.noteId != TriliumTreeConstants.rootNoteId, !note.isProtected || appState.protectedSessionActive {
+            Button {
+                dismissNoteOverflowThen { showMoveParentPicker = true }
+            } label: {
+                noteOverflowLabel(
+                    String(localized: "Move", comment: "Note overflow: move under another parent"),
+                    systemImage: "arrow.forward.folder"
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.client == nil || vm.isSaving)
+        }
+
+        Button {
+            dismissNoteOverflow()
+            vm.editedTitle = note.title
+            vm.editingTitle = true
+        } label: {
+            noteOverflowLabel(String(localized: "Rename", comment: "Note overflow menu"), systemImage: "pencil")
+        }
+        .buttonStyle(.plain)
+
+        if canChangeNoteAppearance(note) {
+            Button {
+                dismissNoteOverflowThen { showAppearancePicker = true }
+            } label: {
+                noteOverflowLabel(
+                    String(localized: "Change Icon/Color", comment: "Note overflow menu: open appearance picker"),
+                    systemImage: "paintpalette"
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.isSaving)
+        }
+
+        Divider().padding(.leading, 20)
+
+        Button {
+            recordToolbarQuickAction(.noteDetails)
+            dismissNoteOverflow()
+            withAnimation { vm.showDetails.toggle() }
+        } label: {
+            noteOverflowLabel(
+                vm.showDetails
+                    ? String(localized: "Hide Details", comment: "Note overflow toggle details")
+                    : String(localized: "Note Details", comment: "Note overflow toggle details"),
+                systemImage: vm.showDetails ? "info.circle.fill" : "info.circle"
+            )
+        }
+        .buttonStyle(.plain)
+
+        Divider().padding(.leading, 20)
+
+        if note.isProtected || vm.needsProtectedSession {
+            noteOverflowLabel(
+                String(localized: "Share locally unavailable (protected note)", comment: "Local share disabled"),
+                systemImage: "lock.fill"
+            )
+            .foregroundStyle(.secondary)
+            .disabled(true)
+        } else {
+            Button {
+                dismissNoteOverflowThen { showShareLocally = true }
+            } label: {
+                noteOverflowLabel(
+                    String(localized: "Share locally", comment: "Note overflow: nearby device transfer"),
+                    systemImage: "square.and.arrow.up"
+                )
+            }
+            .buttonStyle(.plain)
+        }
+
+        if note.isProtected || vm.needsProtectedSession {
+            noteOverflowLabel(
+                String(localized: "Sharing unavailable (protected note)", comment: "Share menu disabled"),
+                systemImage: "lock.fill"
+            )
+            .foregroundStyle(.secondary)
+            .disabled(true)
+        } else if vm.client == nil {
+            noteOverflowLabel(
+                String(localized: "Sharing requires connection", comment: "Share menu offline"),
+                systemImage: "wifi.slash"
+            )
+            .foregroundStyle(.secondary)
+            .disabled(true)
+        } else {
+            Button {
+                Task { await vm.setNoteSharing(enabled: !vm.isSharedPublicly) }
+            } label: {
+                Label {
+                    if vm.isSharedPublicly {
+                        Text(String(localized: "Sharing ✓", comment: "Note overflow: public link when enabled"))
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(String(localized: "Share", comment: "Note overflow: public link when disabled"))
+                    }
+                } icon: {
+                    Image(systemName: "scale.3d")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.isUpdatingShare)
+            .accessibilityAddTraits(vm.isSharedPublicly ? .isSelected : [])
+
+            if vm.isSharedPublicly {
+                Button {
+                    if let u = vm.shareURLForCurrentNote() {
+                        UIPasteboard.general.string = u.absoluteString
+                    }
+                } label: {
+                    noteOverflowLabel(
+                        String(localized: "Copy share link", comment: "Copy public Trilium URL"),
+                        systemImage: "doc.on.doc"
+                    )
+                    .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.shareURLForCurrentNote() == nil)
+
+                Button {
+                    if let u = vm.shareURLForCurrentNote() {
+                        dismissNoteOverflowThen { scheduleNoteDetailShareURLSheet(url: u) }
+                    }
+                } label: {
+                    noteOverflowLabel(
+                        String(localized: "Share link…", comment: "System share sheet for URL"),
+                        systemImage: "square.and.arrow.up"
+                    )
+                    .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.shareURLForCurrentNote() == nil)
+            }
+        }
+
+        if appState.activeProfile != nil {
+            Button {
+                recordToolbarQuickAction(.favorite)
+                dismissNoteOverflow()
+                toggleFavorite(note: note, isFavorite: favoriteNoteIds.contains(note.noteId))
+            } label: {
+                if favoriteNoteIds.contains(note.noteId) {
+                    noteOverflowLabel(String(localized: "Remove from Favorites", comment: "Note overflow"), systemImage: "star.slash")
+                } else {
+                    noteOverflowLabel(String(localized: "Add to Favorites", comment: "Note overflow"), systemImage: "star")
+                }
+            }
+            .buttonStyle(.plain)
+        }
+
+        if !vm.isEditing && note.type.supportsReadOnlyOnPageFind {
+            Button {
+                recordToolbarQuickAction(.findOnPage)
+                dismissNoteOverflow()
+                if findControl.isPresented {
+                    findControl.close()
+                } else {
+                    findControl.isPresented = true
+                }
+            } label: {
+                noteOverflowLabel(
+                    findControl.isPresented
+                        ? String(localized: "Hide Find Bar", comment: "Close in-page search")
+                        : String(localized: "Find on Page", comment: "Open in-page search for read-only note"),
+                    systemImage: "magnifyingglass"
+                )
+            }
+            .buttonStyle(.plain)
+        }
+
+        Divider().padding(.leading, 20)
+
+        Button(role: .destructive) {
+            dismissNoteOverflowThen { vm.showDeleteConfirm = true }
+        } label: {
+            noteOverflowLabel(String(localized: "Delete Note", comment: "Note overflow"), systemImage: "trash")
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func noteOverflowLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+    }
+
+    private func dismissNoteOverflow() {
+        showNoteOverflowMenu = false
+    }
+
+    private func dismissNoteOverflowThen(_ work: @escaping () -> Void) {
+        showNoteOverflowMenu = false
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            work()
         }
     }
 
@@ -3865,36 +4076,6 @@ struct NoteDetailView: View {
         } catch {
             Log.persistence.error("Failed to load favorite IDs: \(error.localizedDescription)")
         }
-    }
-
-    @ViewBuilder
-    private func noteDetailShareLinkButtons(vm: NoteDetailViewModel) -> some View {
-        let shareURL = vm.shareURLForCurrentNote()
-        Button {
-            if let u = shareURL {
-                UIPasteboard.general.string = u.absoluteString
-            }
-        } label: {
-            Label(
-                String(localized: "Copy share link", comment: "Copy public Trilium URL"),
-                systemImage: "doc.on.doc"
-            )
-            .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
-        }
-        .disabled(shareURL == nil)
-
-        Button {
-            if let u = shareURL {
-                scheduleNoteDetailShareURLSheet(url: u)
-            }
-        } label: {
-            Label(
-                String(localized: "Share link…", comment: "System share sheet for URL"),
-                systemImage: "square.and.arrow.up"
-            )
-            .padding(.leading, NoteDetailView.sharingSubmenuTitleLeadingInset)
-        }
-        .disabled(shareURL == nil)
     }
 
     private func scheduleNoteDetailShareURLSheet(url: URL) {
@@ -4038,15 +4219,37 @@ struct CreateChildNoteSheet: View {
     }
 }
 
-private extension View {
-    /// Keeps the ⋯ menu open after this action (iOS 17+).
-    @ViewBuilder
-    func applyMenuKeepOpenOnAction() -> some View {
-        if #available(iOS 17.0, *) {
-            self.menuActionDismissBehavior(.disabled)
-        } else {
-            self
-        }
+private struct NoteOverflowSheetHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat { 0 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Sizes the ⋯ actions sheet to its full content so rows are not clipped behind a short system menu.
+private struct NoteOverflowSheetSizingModifier: ViewModifier {
+    @State private var contentHeight: CGFloat = 740
+
+    func body(content: Content) -> some View {
+        let maxHeight = UIScreen.main.bounds.height * 0.92
+        let detentHeight = min(max(contentHeight, 280), maxHeight)
+        content
+            .frame(maxWidth: .infinity)
+            .fixedSize(horizontal: false, vertical: true)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: NoteOverflowSheetHeightKey.self, value: proxy.size.height)
+                }
+            }
+            .onPreferenceChange(NoteOverflowSheetHeightKey.self) { measured in
+                guard measured > 100 else { return }
+                let padded = measured + 20
+                if abs(contentHeight - padded) > 1 {
+                    contentHeight = padded
+                }
+            }
+            .presentationDetents([.height(detentHeight)])
+            .presentationDragIndicator(.visible)
     }
 }
 

@@ -345,6 +345,164 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(res.results.count, 0)
     }
 
+    func testSearchNoteIdTitlesUsesSearchThenSingleTreeLoad() async throws {
+        var treeLoadCount = 0
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"x","device":"desktop"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("/api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            if path.contains("/api/search/") {
+                let decoded = request.url?.lastPathComponent.removingPercentEncoding
+                XCTAssertEqual(decoded, "note.dateModified =* 2026-08-29")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        Data(#"["meeting","emptyTitle","deletedNote","day"]"#.utf8))
+            }
+            if path.hasSuffix("/api/tree/load") {
+                treeLoadCount += 1
+                XCTAssertEqual(request.httpMethod, "POST")
+                let tree = #"{"notes":[{"noteId":"meeting","title":"Standup","isProtected":false,"type":"text","mime":"text/html","blobId":"b1"},{"noteId":"emptyTitle","title":"","isProtected":false,"type":"text","mime":"text/html","blobId":"b2"},{"noteId":"deletedNote","title":"Gone","isProtected":false,"type":"text","mime":"text/html","blobId":"b3","isDeleted":true},{"noteId":"day","title":"29 - Friday","isProtected":false,"type":"text","mime":"text/html","blobId":"b4"}],"branches":[],"attributes":[]}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(tree.utf8))
+            }
+            if path.contains("/api/notes/") {
+                XCTFail("searchNoteIdTitles must not GET /api/notes")
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        let rows = try await client.searchNoteIdTitles(query: "note.dateModified =* 2026-08-29", limit: 30)
+        XCTAssertEqual(treeLoadCount, 1)
+        XCTAssertEqual(rows.map(\.noteId), ["meeting", "day"])
+        XCTAssertEqual(rows.map(\.title), ["Standup", "29 - Friday"])
+        XCTAssertEqual(rows.map(\.isProtected), [false, false])
+    }
+
+    func testSearchNoteIdTitlesEmptySearchSkipsTreeLoad() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"x","device":"desktop"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("/api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            if path.contains("/api/search/") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("[]".utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        let rows = try await client.searchNoteIdTitles(query: "note.dateModified =* 2026-08-29", limit: 30)
+        XCTAssertTrue(rows.isEmpty)
+    }
+
+    func testGetEditedNotesUsesEditedNotesPathAndSkipsDeleted() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"x","device":"desktop"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("/api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            if path.hasSuffix("/api/edited-notes/2026-08-29") {
+                let body = #"[{"noteId":"meeting","isDeleted":false,"title":"Standup"},{"noteId":"gone","isDeleted":true,"title":"Deleted"},{"noteId":"blank","isDeleted":false,"title":"  "},{"noteId":"day","isDeleted":false,"title":"29 - Friday"}]"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        let rows = try await client.getEditedNotes(onISODay: "2026-08-29")
+        XCTAssertEqual(rows.map(\.noteId), ["meeting", "day"])
+        XCTAssertEqual(rows.map(\.title), ["Standup", "29 - Friday"])
+    }
+
+    func testGetEditedNotesRejectsInvalidDay() async {
+        let client = makeClient()
+        do {
+            _ = try await client.getEditedNotes(onISODay: "../etc")
+            XCTFail("Expected invalid day to throw")
+        } catch {
+            // Path must not be requested; throwing locally is enough.
+        }
+    }
+
+    func testGetEditedNotesEmptyArray() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"x","device":"desktop"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("/api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            if path.hasSuffix("/api/edited-notes/2026-09-05") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("[]".utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        let rows = try await client.getEditedNotes(onISODay: "2026-09-05")
+        XCTAssertTrue(rows.isEmpty)
+    }
+
+    func testGetDayNotesForMonthUsesSpecialNotesPathAndCalendarRootQuery() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"x","device":"desktop"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("/api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            if path.contains("/api/special-notes/notes-for-month/") {
+                XCTAssertTrue(path.hasSuffix("/api/special-notes/notes-for-month/2026-08"))
+                let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                XCTAssertEqual(items.first(where: { $0.name == "calendarRoot" })?.value, "journalRoot")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"2026-08-01":"d1","2026-08-29":"d29"}"#.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        let map = try await client.getDayNotesForMonth(month: "2026-08", calendarRootId: "journalRoot")
+        XCTAssertEqual(map["2026-08-01"], "d1")
+        XCTAssertEqual(map["2026-08-29"], "d29")
+        XCTAssertEqual(map.count, 2)
+    }
+
+    func testGetDayNotesForMonthRejectsInvalidMonth() async {
+        let client = makeClient()
+        do {
+            _ = try await client.getDayNotesForMonth(month: "../etc", calendarRootId: "journalRoot")
+            XCTFail("Expected invalid month to throw")
+        } catch {
+            // Path must not be requested; throwing locally is enough.
+        }
+    }
+
     // MARK: - Sync check JSON shape
 
     func testSyncCheckResponseDecodesNestedEntityHashes() throws {

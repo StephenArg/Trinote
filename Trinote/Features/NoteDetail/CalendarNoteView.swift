@@ -7,6 +7,7 @@ struct CalendarNoteView: View {
     @State private var navigateToNoteId: String?
     @State private var showYearPicker = false
     @State private var pickerYear = Calendar.current.component(.year, from: Date())
+    @AppStorage(CalendarJournalSettings.hideWeekends) private var hideWeekends = false
 
     var body: some View {
         Group {
@@ -132,21 +133,17 @@ struct CalendarNoteView: View {
 
     // MARK: - Month View
 
-    private let weekdaySymbols: [String] = {
-        let ordered = ["Su", "M", "Tu", "W", "Th", "F", "Sa"]
-        let first = Calendar.current.firstWeekday // 1 = Sunday
-        return (0..<7).map { ordered[($0 + first - 1) % 7] }
-    }()
-
     @ViewBuilder
     private func monthView(_ vm: CalendarNoteViewModel) -> some View {
-        let days = CalendarNoteViewModel.daysInMonth(for: vm.currentDate)
-        let offset = CalendarNoteViewModel.firstWeekdayOffset(for: vm.currentDate)
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
+        let days = CalendarNoteViewModel.visibleMonthDates(for: vm.currentDate, hideWeekends: hideWeekends)
+        let offset = CalendarNoteViewModel.firstWeekdayOffset(for: vm.currentDate, hideWeekends: hideWeekends)
+        let symbols = CalendarNoteViewModel.weekdayHeaderSymbols(hideWeekends: hideWeekends)
+        let columnCount = CalendarNoteViewModel.weekdayColumnCount(hideWeekends: hideWeekends)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: columnCount)
 
         ScrollView {
             LazyVGrid(columns: columns, spacing: 0) {
-                ForEach(weekdaySymbols, id: \.self) { symbol in
+                ForEach(Array(symbols.enumerated()), id: \.offset) { _, symbol in
                     Text(symbol)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -171,27 +168,113 @@ struct CalendarNoteView: View {
 
     @ViewBuilder
     private func weekView(_ vm: CalendarNoteViewModel) -> some View {
-        let weekDates = CalendarNoteViewModel.weekDates(for: vm.currentDate)
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
-
-        VStack(spacing: 0) {
-            LazyVGrid(columns: columns, spacing: 0) {
-                ForEach(weekdaySymbols, id: \.self) { symbol in
-                    Text(symbol)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-
-                ForEach(weekDates, id: \.self) { date in
-                    dayCell(date: date, vm: vm, compact: false)
-                        .frame(minHeight: 100)
+        let weekDates = CalendarNoteViewModel.weekDates(for: vm.currentDate, hideWeekends: hideWeekends)
+        GeometryReader { _ in
+            VStack(spacing: 0) {
+                ForEach(Array(weekDates.enumerated()), id: \.element) { index, date in
+                    weekDayRow(date: date, vm: vm)
+                        .frame(maxHeight: .infinity)
+                    if index < weekDates.count - 1 {
+                        Divider()
+                    }
                 }
             }
-            .padding(.horizontal, 4)
+        }
+    }
 
-            Spacer()
+    @ViewBuilder
+    private func weekDayRow(date: Date, vm: CalendarNoteViewModel) -> some View {
+        let notes = vm.notesOnDay(date)
+        let today = vm.isToday(date)
+        let weekday = date.formatted(.dateTime.weekday(.abbreviated))
+        let dateLabel = date.formatted(.dateTime.month(.abbreviated).day())
+
+        HStack(alignment: .center, spacing: 10) {
+            Button {
+                openDay(date, vm: vm)
+            } label: {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(weekday)
+                        .font(.subheadline.weight(today ? .semibold : .medium))
+                        .foregroundStyle(today ? .blue : .primary)
+                    Text(dateLabel)
+                        .font(.caption)
+                        .foregroundStyle(today ? Color.blue.opacity(0.85) : Color.secondary)
+                }
+                .frame(width: 58, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                today
+                    ? String(localized: "Today, \(weekday) \(dateLabel)", comment: "Week calendar today date column")
+                    : "\(weekday) \(dateLabel)"
+            )
+            .accessibilityHint(String(localized: "Opens this day’s note", comment: "Week calendar date column hint"))
+
+            if notes.isEmpty {
+                Button {
+                    openDay(date, vm: vm)
+                } label: {
+                    Text(String(localized: "No notes", comment: "Week calendar empty day placeholder"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color(.separator).opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Create note for \(weekday) \(dateLabel)", comment: "Week calendar empty day accessibility label"))
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(notes) { note in
+                            weekNoteCard(note)
+                        }
+                    }
+                    .frame(maxHeight: .infinity)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(today ? Color.blue.opacity(0.06) : Color.clear)
+    }
+
+    @ViewBuilder
+    private func weekNoteCard(_ note: DayNoteInfo) -> some View {
+        Button {
+            navigateToNoteId = note.noteId
+        } label: {
+            Text(note.title)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.blue.opacity(0.10))
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(note.title)
+        .accessibilityHint(String(localized: "Opens this note", comment: "Week calendar note card hint"))
+    }
+
+    private func openDay(_ date: Date, vm: CalendarNoteViewModel) {
+        let iso = vm.isoString(for: date)
+        let existingId = vm.dayNoteMap[iso]?.noteId
+        Task {
+            if let noteId = existingId {
+                navigateToNoteId = noteId
+            } else if let noteId = await vm.ensureDayNote(for: date) {
+                navigateToNoteId = noteId
+            }
         }
     }
 
@@ -217,9 +300,10 @@ struct CalendarNoteView: View {
     private func yearMonthMiniGrid(year: Int, month: Int, vm: CalendarNoteViewModel) -> some View {
         let cal = Calendar.current
         let monthDate = cal.date(from: DateComponents(year: year, month: month, day: 1))!
-        let days = CalendarNoteViewModel.daysInMonth(for: monthDate)
-        let offset = CalendarNoteViewModel.firstWeekdayOffset(for: monthDate)
-        let miniColumns = Array(repeating: GridItem(.flexible(), spacing: 1), count: 7)
+        let days = CalendarNoteViewModel.visibleMonthDates(for: monthDate, hideWeekends: hideWeekends)
+        let offset = CalendarNoteViewModel.firstWeekdayOffset(for: monthDate, hideWeekends: hideWeekends)
+        let columnCount = CalendarNoteViewModel.weekdayColumnCount(hideWeekends: hideWeekends)
+        let miniColumns = Array(repeating: GridItem(.flexible(), spacing: 1), count: columnCount)
 
         let monthName = DateFormatter().shortMonthSymbols[month - 1]
 
@@ -287,13 +371,7 @@ struct CalendarNoteView: View {
         let today = vm.isToday(date)
 
         Button {
-            Task {
-                if let noteId = info?.noteId {
-                    navigateToNoteId = noteId
-                } else if let noteId = await vm.ensureDayNote(for: date) {
-                    navigateToNoteId = noteId
-                }
-            }
+            openDay(date, vm: vm)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 HStack {

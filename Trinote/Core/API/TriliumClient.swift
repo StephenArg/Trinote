@@ -41,6 +41,13 @@ protocol TriliumClientProtocol: Actor, Sendable {
     /// New child with arbitrary body (text in `createNote`, binary via `updateNoteContent` when needed).
     func createChildNoteWithContent(parentNoteId: String, title: String, noteType: String, mime: String, body: Data) async throws -> CreateNoteResponse
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse
+    /// Search note ids, then one `tree/load` for titles (no per-note `GET /api/notes`).
+    func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle]
+    /// Existing journal day notes for `yyyy-MM` under `calendarRootId`. Does not create notes.
+    /// `GET /api/special-notes/notes-for-month/{month}?calendarRoot=`
+    func getDayNotesForMonth(month: String, calendarRootId: String) async throws -> [String: String]
+    /// Notes created or modified on this local calendar day. Same as desktop Edited Notes: `GET /api/edited-notes/{yyyy-MM-dd}`.
+    func getEditedNotes(onISODay day: String) async throws -> [NoteIdTitle]
 
     func getBranch(_ branchId: String, parentNoteId: String) async throws -> BranchResponse
     func placeBranchInSiblingOrder(_ branchId: String, orderedSiblingBranchIds: [String]) async throws
@@ -1122,6 +1129,53 @@ actor TriliumClient: TriliumClientProtocol {
         let slice = Array(ids.prefix(max))
         let entries = try await fullSyncFetchTreeBatch(noteIds: slice)
         return SearchResponse(results: entries.map(\.note), debugInfo: nil)
+    }
+
+    func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle] {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "/").inverted) ?? query
+        let ids: [String] = try await get("/api/search/\(encoded)", csrf: false)
+        let slice = Array(ids.prefix(max(0, limit)))
+        guard !slice.isEmpty else { return [] }
+        let tree = try await batchTreeLoad(noteIds: slice)
+        var titleById: [String: (title: String, isProtected: Bool)] = [:]
+        titleById.reserveCapacity(tree.notes.count)
+        for row in tree.notes {
+            if row.isDeleted == true { continue }
+            titleById[row.noteId] = (row.title, row.isProtected)
+        }
+        return slice.compactMap { id in
+            guard let info = titleById[id], !info.title.isEmpty else { return nil }
+            return NoteIdTitle(noteId: id, title: info.title, isProtected: info.isProtected)
+        }
+    }
+
+    func getDayNotesForMonth(month: String, calendarRootId: String) async throws -> [String: String] {
+        let parts = month.split(separator: "-")
+        guard parts.count == 2,
+              parts[0].count == 4, parts[1].count == 2,
+              parts[0].allSatisfy(\.isNumber),
+              parts[1].allSatisfy(\.isNumber)
+        else {
+            throw APIError.unknown("Invalid journal month \(month)")
+        }
+        return try await get(
+            "/api/special-notes/notes-for-month/\(month)",
+            queryParams: ["calendarRoot": calendarRootId],
+            csrf: false
+        )
+    }
+
+    func getEditedNotes(onISODay day: String) async throws -> [NoteIdTitle] {
+        guard JournalDayEditedNotes.isISODay(day) else {
+            throw APIError.unknown("Invalid journal day \(day)")
+        }
+        let hits: [EditedNoteHit] = try await get("/api/edited-notes/\(day)", csrf: false)
+        return hits.compactMap { hit in
+            if hit.isDeleted { return nil }
+            let title = hit.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !title.isEmpty else { return nil }
+            return NoteIdTitle(noteId: hit.noteId, title: title, isProtected: false)
+        }
     }
 
     /// Returns template note IDs from Trilium's built-in endpoint used by desktop/web clients.

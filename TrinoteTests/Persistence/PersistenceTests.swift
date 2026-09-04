@@ -448,4 +448,27 @@ final class PersistenceTests: XCTestCase {
         XCTAssertNil(try persistence.fetchCachedNote(id: "child", serverProfileId: "s1"))
         XCTAssertNil(try persistence.fetchCachedImage(entityId: "att99", entityType: "attachments", serverProfileId: "s1"))
     }
+
+    func testFetchCachedNotesEditedOnISODay() throws {
+        try cacheNoteWithUTC(id: "day", title: "29 - Friday", utc: "2026-08-29T08:00:00.000Z")
+        try cacheNoteWithUTC(id: "alpha", title: "Alpha", utc: "2026-08-29T18:00:00.000Z")
+        try cacheNoteWithUTC(id: "beta", title: "Beta", utc: "2026-08-29 09:00:00.000Z")
+        try cacheNoteWithUTC(id: "next", title: "Next day", utc: "2026-08-30T00:00:00.000Z")
+        try cacheNoteWithUTC(id: "blank", title: "   ", utc: "2026-08-29T12:00:00.000Z")
+        try cacheNoteWithUTC(id: "other", title: "Other profile", utc: "2026-08-29T12:00:00.000Z", profile: "s2")
+
+        let hits = try persistence.fetchCachedNotesEditedOnISODay(
+            dayISO: "2026-08-29",
+            excludingNoteId: "day",
+            serverProfileId: "server1",
+            limit: 10
+        )
+        XCTAssertEqual(hits.map(\.noteId), ["alpha", "beta"])
+        XCTAssertEqual(hits.map(\.title), ["Alpha", "Beta"])
+    }
+
+    private func cacheNoteWithUTC(id: String, title: String, utc: String, profile: String = "server1") throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: id, title: title), serverProfileId: profile)
+        try persistence.cacheNoteContent(id, content: Data("<p></p>".utf8), serverProfileId: profile, utcDateModified: utc)
+    }
 }

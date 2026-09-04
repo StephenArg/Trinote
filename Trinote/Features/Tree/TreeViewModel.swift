@@ -27,6 +27,13 @@ final class TreeViewModel {
     private var _rootChildren: [TreeNode] = []
     /// When true, `rootChildren` updates rebuild `visibleNodes` without animation (reveal-in-tree).
     private var suppressVisibleNodeAnimation = false
+    /// Main Notes tree only: calendar-root rows hide their descendants and expand chevron.
+    var hidesCalendarRootChildrenInTree = false {
+        didSet {
+            guard oldValue != hidesCalendarRootChildrenInTree else { return }
+            rebuildVisibleNodes(animated: true)
+        }
+    }
 
     private let appState: AppState
     private let parentNoteId: String
@@ -50,8 +57,7 @@ final class TreeViewModel {
     }
 
     private func rebuildVisibleNodes(animated: Bool = true) {
-        var result: [FlatTreeNode] = []
-        flatten(_rootChildren, depth: 0, into: &result)
+        let result = Self.flatten(_rootChildren, hideCalendarRootChildren: hidesCalendarRootChildrenInTree)
         if animated {
             withAnimation(.easeInOut(duration: 0.15)) {
                 visibleNodes = result
@@ -59,6 +65,51 @@ final class TreeViewModel {
         } else {
             visibleNodes = result
         }
+    }
+
+    /// Emits visible tree rows. When `hideCalendarRootChildren` is on, calendar roots are leaves (descendants omitted).
+    nonisolated static func flatten(
+        _ nodes: [TreeNode],
+        depth: Int = 0,
+        hideCalendarRootChildren: Bool = false
+    ) -> [FlatTreeNode] {
+        var result: [FlatTreeNode] = []
+        appendFlattened(nodes, depth: depth, hideCalendarRootChildren: hideCalendarRootChildren, into: &result)
+        return result
+    }
+
+    nonisolated private static func appendFlattened(
+        _ nodes: [TreeNode],
+        depth: Int,
+        hideCalendarRootChildren: Bool,
+        into result: inout [FlatTreeNode]
+    ) {
+        for node in nodes {
+            result.append(FlatTreeNode(node: node, depth: depth))
+            if hideCalendarRootChildren && node.note.isCalendarRoot {
+                continue
+            }
+            if let children = node.children {
+                appendFlattened(children, depth: depth + 1, hideCalendarRootChildren: hideCalendarRootChildren, into: &result)
+            }
+        }
+    }
+
+    nonisolated static func showsExpandChevron(
+        hasChildren: Bool,
+        isCalendarRoot: Bool,
+        hideCalendarRootChildren: Bool
+    ) -> Bool {
+        if hideCalendarRootChildren && isCalendarRoot { return false }
+        return hasChildren
+    }
+
+    func showsExpandChevron(for note: NoteItem) -> Bool {
+        Self.showsExpandChevron(
+            hasChildren: note.hasChildren,
+            isCalendarRoot: note.isCalendarRoot,
+            hideCalendarRootChildren: hidesCalendarRootChildrenInTree
+        )
     }
 
     /// Updates one note’s metadata everywhere it appears (e.g. `parentNoteIds` after share) without reloading the whole tree.
@@ -107,15 +158,6 @@ final class TreeViewModel {
                 return TreeNode(branch: node.branch, note: newNote, children: nextChildren, isLoading: node.isLoading)
             }
             return TreeNode(branch: node.branch, note: node.note, children: nextChildren, isLoading: node.isLoading)
-        }
-    }
-
-    private func flatten(_ nodes: [TreeNode], depth: Int, into result: inout [FlatTreeNode]) {
-        for node in nodes {
-            result.append(FlatTreeNode(node: node, depth: depth))
-            if let children = node.children {
-                flatten(children, depth: depth + 1, into: &result)
-            }
         }
     }
 
@@ -361,6 +403,7 @@ final class TreeViewModel {
     }
 
     func toggleExpand(_ node: TreeNode) async {
+        if hidesCalendarRootChildrenInTree && node.note.isCalendarRoot { return }
         let branchId = node.branch.branchId
         if expandedBranches.contains(branchId) {
             expandedBranches.remove(branchId)
@@ -629,6 +672,9 @@ final class TreeViewModel {
     /// Re-attaches cached subtrees for branch IDs still marked expanded (used after `reloadFromCache`).
     private func attachExpandedCachedChildren(nodes: [TreeNode]) -> [TreeNode] {
         nodes.map { node in
+            if hidesCalendarRootChildrenInTree && node.note.isCalendarRoot {
+                return node
+            }
             guard expandedBranches.contains(node.branch.branchId), node.note.hasChildren else {
                 return node
             }
@@ -701,6 +747,7 @@ final class TreeViewModel {
     // MARK: - Child Loading
 
     private func loadChildren(of note: NoteItem, client: any TriliumClientProtocol) async throws -> [TreeNode] {
+        if hidesCalendarRootChildrenInTree && note.isCalendarRoot { return [] }
         guard !note.childBranchIds.isEmpty else { return [] }
 
         var localBranchCache = branchCache

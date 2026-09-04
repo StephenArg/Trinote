@@ -12,6 +12,10 @@ actor MockTriliumClient: TriliumClientProtocol {
     var noteContentResults: [String: Result<Data, Error>] = [:]
     var branchResults: [String: Result<BranchResponse, Error>] = [:]
     var searchResult: Result<SearchResponse, Error> = .success(SearchResponse(results: [], debugInfo: nil))
+    var searchNoteIdTitlesResult: Result<[NoteIdTitle], Error> = .success([])
+    var editedNotesResult: Result<[NoteIdTitle], Error> = .success([])
+    var dayNotesForMonthResult: Result<[String: String], Error> = .success([:])
+    var dayNotesForMonthByMonth: [String: [String: String]] = [:]
     var createNoteResult: Result<CreateNoteResponse, Error>?
     var updateNoteResult: Result<NoteResponse, Error>?
     var deleteNoteError: Error?
@@ -38,6 +42,9 @@ actor MockTriliumClient: TriliumClientProtocol {
     var updateNoteContentCalls: [(String, Data)] = []
     var deleteNoteCalls: [String] = []
     var searchCalls: [String] = []
+    var searchNoteIdTitlesCalls: [(query: String, limit: Int)] = []
+    var editedNotesCalls: [String] = []
+    var dayNotesForMonthCalls: [(month: String, calendarRootId: String)] = []
     var getBranchCalls: [(String, String)] = []
     var createAttributeCalls: [CreateAttributeRequest] = []
     var deleteAttributeCalls: [(noteId: String, attributeId: String)] = []
@@ -229,6 +236,24 @@ actor MockTriliumClient: TriliumClientProtocol {
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse {
         searchCalls.append(query)
         return try searchResult.get()
+    }
+
+    func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle] {
+        searchNoteIdTitlesCalls.append((query, limit))
+        return try searchNoteIdTitlesResult.get()
+    }
+
+    func getEditedNotes(onISODay day: String) async throws -> [NoteIdTitle] {
+        editedNotesCalls.append(day)
+        return try editedNotesResult.get()
+    }
+
+    func getDayNotesForMonth(month: String, calendarRootId: String) async throws -> [String: String] {
+        dayNotesForMonthCalls.append((month, calendarRootId))
+        if let byMonth = dayNotesForMonthByMonth[month] {
+            return byMonth
+        }
+        return try dayNotesForMonthResult.get()
     }
 
     func getBranch(_ branchId: String, parentNoteId: String) async throws -> BranchResponse {

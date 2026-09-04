@@ -178,6 +178,31 @@ final class PersistenceManager {
         return try context.fetch(descriptor).first
     }
 
+    /// Cached notes whose `utcDateModified` falls on `dayISO` (`yyyy-MM-dd`). UTC-day only — prefer `GET /api/edited-notes/{date}` when online.
+    func fetchCachedNotesEditedOnISODay(
+        dayISO: String,
+        excludingNoteId: String,
+        serverProfileId: String,
+        limit: Int
+    ) throws -> [NoteIdTitle] {
+        guard JournalDayEditedNotes.isISODay(dayISO) else { return [] }
+        let pid = serverProfileId
+        let exclude = excludingNoteId
+        let rows = try context.fetch(
+            FetchDescriptor<CachedNote>(
+                predicate: #Predicate { $0.serverProfileId == pid && $0.noteId != exclude }
+            )
+        )
+        let matches = rows.compactMap { cached -> NoteIdTitle? in
+            guard let utc = cached.utcDateModified,
+                  JournalDayEditedNotes.utcDateModifiedFallsOnDay(utc, dayISO: dayISO)
+            else { return nil }
+            return NoteIdTitle(noteId: cached.noteId, title: cached.title, isProtected: cached.isProtected)
+        }
+        .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        return JournalDayEditedNotes.displayList(from: matches, excludingNoteId: exclude, limit: limit)
+    }
+
     // MARK: - Batch Cache (no save per-item; caller calls commitBatch)
 
     func cacheNoteBatch(from response: NoteResponse, serverProfileId: String) throws {
