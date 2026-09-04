@@ -25,6 +25,10 @@ struct NoteTabsBar: View {
     private static let tabGap: CGFloat = 5
     /// Slightly more than 3 “full” columns so the last tab peeks (scroll affordance).
     private static let visibleTabSlots: CGFloat = 3.3
+    /// Handle + icon + paddings + close control; title width is added on top.
+    private static let tabChromeWidth: CGFloat = reorderHandleWidth + 2 + 16 + 4 + 22
+    private static let titleWidthSlack: CGFloat = 4
+    private static let minTabWidth: CGFloat = 64
     /// Outer bar height; matches the original single-line look while still fitting 2 wrapped lines of footnote text.
     private static let barHeight: CGFloat = 50
     /// Inner cell height — leaves a small vertical pad inside the bar.
@@ -37,15 +41,17 @@ struct NoteTabsBar: View {
             } else {
                 GeometryReader { geo in
                     let scrollW = max(0, geo.size.width - Self.addButtonWidth)
-                    let tabW = tabWidth(scrollInnerWidth: scrollW)
-                    let contentW = tabsContentWidth(tabWidth: tabW, count: tabs.count)
+                    let titles = tabs.map { displayTitle(for: $0) }
+                    let maxTabW = maxTabWidth(scrollInnerWidth: scrollW, tabCount: tabs.count)
+                    let tabWidths = fittedTabWidths(titles: titles, maxWidth: maxTabW)
+                    let contentW = tabsContentWidth(tabWidths: tabWidths)
                     HStack(alignment: .center, spacing: 0) {
                         NoteTabsHorizontalScrollView(
                             contentWidth: contentW,
                             isScrollEnabled: draggingTabId == nil,
                             activeTabId: currentOpenTabId,
                             tabIds: tabs.map(\.id),
-                            tabWidth: tabW,
+                            tabWidths: tabWidths,
                             tabGap: Self.tabGap,
                             horizontalPadding: Self.horizontalPadding,
                             reorderHandleWidth: Self.reorderHandleWidth,
@@ -70,7 +76,7 @@ struct NoteTabsBar: View {
                                 }
                                 guard let draggedId = draggingTabId,
                                       let from = tabs.firstIndex(where: { $0.id == draggedId }) else { return }
-                                let to = dropIndex(movingFrom: from, translation: translation, tabWidth: tabW)
+                                let to = dropIndex(movingFrom: from, translation: translation, tabWidths: tabWidths)
                                 guard from != to else { return }
                                 applyTabReorder(from: from, to: to)
                             },
@@ -82,8 +88,8 @@ struct NoteTabsBar: View {
                             }
                         ) {
                             HStack(spacing: Self.tabGap) {
-                                ForEach(tabs) { tab in
-                                    let title = displayTitle(for: tab)
+                                ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                                    let title = titles[index]
                                     let icon = rowIconContext(for: tab)
                                     let isDragging = draggingTabId == tab.id
                                     NoteTabCell(
@@ -91,7 +97,7 @@ struct NoteTabsBar: View {
                                         iconClass: icon.iconClass,
                                         fallbackNoteType: icon.fallbackNoteType,
                                         isActive: currentOpenTabId != nil && tab.id == currentOpenTabId,
-                                        width: tabW,
+                                        width: tabWidths[index],
                                         reorderHandleWidth: Self.reorderHandleWidth,
                                         onTap: {
                                             guard draggingTabId == nil, !suppressTabSelection else { return }
@@ -155,18 +161,43 @@ struct NoteTabsBar: View {
         .accessibilityLabel(String(localized: "Add open tab", comment: "A11y: add note to tab bar"))
     }
 
-    /// Width of one tab column: ~3.3 “slots” in the scroll area, with a little space for the gaps.
-    private func tabWidth(scrollInnerWidth: CGFloat) -> CGFloat {
+    /// Upper bound for one tab: ~3.3 “slots” in the scroll area, with a little space for the gaps.
+    /// Fewer tabs may use a wider cap so longer titles stay readable.
+    private func maxTabWidth(scrollInnerWidth: CGFloat, tabCount: Int) -> CGFloat {
         let inner = max(0, scrollInnerWidth)
-        let w = (inner - Self.tabGap * 2) / Self.visibleTabSlots
-        return max(64, w)
+        let base = max(Self.minTabWidth, (inner - Self.tabGap * 2) / Self.visibleTabSlots)
+        switch tabCount {
+        case 1: return base * 2
+        case 2: return base * 1.5
+        case 3: return base * 1.25
+        default: return base
+        }
     }
 
-    private func tabsContentWidth(tabWidth: CGFloat, count: Int) -> CGFloat {
-        guard count > 0 else { return 0 }
+    /// Size each tab to its title, clamped between the chrome minimum and `maxWidth`.
+    private func fittedTabWidths(titles: [String], maxWidth: CGFloat) -> [CGFloat] {
+        titles.map { title in
+            let ideal = Self.tabChromeWidth + ceil(Self.measuredTitleWidth(title)) + Self.titleWidthSlack
+            return min(max(ideal, Self.minTabWidth), maxWidth)
+        }
+    }
+
+    private static func measuredTitleWidth(_ title: String) -> CGFloat {
+        let font = UIFont.preferredFont(forTextStyle: .footnote)
+        let bounds = (title as NSString).boundingRect(
+            with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font],
+            context: nil
+        )
+        return bounds.width
+    }
+
+    private func tabsContentWidth(tabWidths: [CGFloat]) -> CGFloat {
+        guard !tabWidths.isEmpty else { return 0 }
         return Self.horizontalPadding
-            + CGFloat(count) * tabWidth
-            + CGFloat(count - 1) * Self.tabGap
+            + tabWidths.reduce(0, +)
+            + CGFloat(tabWidths.count - 1) * Self.tabGap
     }
 
     private func reload() {
@@ -209,11 +240,28 @@ struct NoteTabsBar: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: reset)
     }
 
-    private func dropIndex(movingFrom source: Int, translation: CGFloat, tabWidth: CGFloat) -> Int {
-        let slot = tabWidth + Self.tabGap
-        guard slot > 0 else { return source }
-        let delta = Int(round(translation / slot))
-        return min(max(source + delta, 0), tabs.count - 1)
+    private func dropIndex(movingFrom source: Int, translation: CGFloat, tabWidths: [CGFloat]) -> Int {
+        guard tabs.indices.contains(source), tabWidths.count == tabs.count else { return source }
+        let draggedCenter = tabMinX(index: source, tabWidths: tabWidths) + tabWidths[source] / 2 + translation
+        var best = source
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for index in tabs.indices {
+            let center = tabMinX(index: index, tabWidths: tabWidths) + tabWidths[index] / 2
+            let distance = abs(draggedCenter - center)
+            if distance < bestDistance {
+                bestDistance = distance
+                best = index
+            }
+        }
+        return best
+    }
+
+    private func tabMinX(index: Int, tabWidths: [CGFloat]) -> CGFloat {
+        var x = Self.horizontalPadding
+        for i in 0..<index {
+            x += tabWidths[i] + Self.tabGap
+        }
+        return x
     }
 
     private func applyTabReorder(from source: Int, to destination: Int) {
@@ -272,7 +320,7 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
     let isScrollEnabled: Bool
     let activeTabId: String?
     let tabIds: [String]
-    let tabWidth: CGFloat
+    let tabWidths: [CGFloat]
     let tabGap: CGFloat
     let horizontalPadding: CGFloat
     let reorderHandleWidth: CGFloat
@@ -325,7 +373,7 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
         context.coordinator.hostingController?.rootView = content()
         context.coordinator.widthConstraint?.constant = contentWidth
         context.coordinator.tabCount = tabIds.count
-        context.coordinator.tabWidth = tabWidth
+        context.coordinator.tabWidths = tabWidths
         context.coordinator.tabGap = tabGap
         context.coordinator.horizontalPadding = horizontalPadding
         context.coordinator.reorderHandleWidth = reorderHandleWidth
@@ -339,13 +387,14 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
             scrollView.isScrollEnabled = isScrollEnabled
         }
 
-        let scrollSignature = "\(activeTabId ?? "")|\(tabIds.joined(separator: ","))"
+        let widthsSignature = tabWidths.map { String(format: "%.1f", $0) }.joined(separator: ",")
+        let scrollSignature = "\(activeTabId ?? "")|\(tabIds.joined(separator: ","))|\(widthsSignature)"
         if scrollSignature != context.coordinator.lastScrollSignature {
             context.coordinator.lastScrollSignature = scrollSignature
             context.coordinator.scrollToActiveTab(
                 activeTabId: activeTabId,
                 tabIds: tabIds,
-                tabWidth: tabWidth,
+                tabWidths: tabWidths,
                 tabGap: tabGap,
                 horizontalPadding: horizontalPadding
             )
@@ -359,7 +408,7 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
         var lastScrollSignature = ""
 
         var tabCount = 0
-        var tabWidth: CGFloat = 0
+        var tabWidths: [CGFloat] = []
         var tabGap: CGFloat = 0
         var horizontalPadding: CGFloat = 0
         var reorderHandleWidth: CGFloat = 0
@@ -444,13 +493,14 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
         }
 
         private func tabIndex(at x: CGFloat) -> Int? {
-            guard x >= horizontalPadding, tabWidth > 0, tabCount > 0 else { return nil }
+            guard x >= horizontalPadding, tabCount > 0, tabWidths.count == tabCount else { return nil }
             var cursor = horizontalPadding
             for index in 0..<tabCount {
-                if x >= cursor, x < cursor + tabWidth {
+                let width = tabWidths[index]
+                if width > 0, x >= cursor, x < cursor + width {
                     return index
                 }
-                cursor += tabWidth + tabGap
+                cursor += width + tabGap
             }
             return nil
         }
@@ -458,14 +508,18 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
         func scrollToActiveTab(
             activeTabId: String?,
             tabIds: [String],
-            tabWidth: CGFloat,
+            tabWidths: [CGFloat],
             tabGap: CGFloat,
             horizontalPadding: CGFloat
         ) {
-            guard let scrollView, let activeTabId, let index = tabIds.firstIndex(of: activeTabId) else { return }
+            guard let scrollView, let activeTabId, let index = tabIds.firstIndex(of: activeTabId),
+                  tabWidths.indices.contains(index) else { return }
             scrollView.layoutIfNeeded()
-            let slot = tabWidth + tabGap
-            let tabCenter = horizontalPadding + CGFloat(index) * slot + tabWidth / 2
+            var origin = horizontalPadding
+            for i in 0..<index {
+                origin += tabWidths[i] + tabGap
+            }
+            let tabCenter = origin + tabWidths[index] / 2
             let targetX = max(0, tabCenter - scrollView.bounds.width / 2)
             let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
             UIView.animate(withDuration: 0.2) {
