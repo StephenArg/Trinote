@@ -17,6 +17,8 @@ struct TreeListRowContextMenuModel {
     var onPresentShareSheet: (URL) -> Void
     var onSharingError: (String) -> Void
     var onShareLocally: () -> Void
+    var onCopyToAnotherInstance: () -> Void
+    var showsCopyToAnotherInstance: Bool
     var onMove: () -> Void
 }
 
@@ -175,18 +177,30 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
                 return []
             }
             if note.isProtected {
-                return [
+                var disabled: [UIMenuElement] = [
                     UIAction(
                         title: String(localized: "Share locally unavailable (protected note)", comment: "Local share disabled"),
                         image: UIImage(systemName: "lock.fill"),
                         attributes: .disabled
                     ) { _ in },
+                ]
+                if model.showsCopyToAnotherInstance {
+                    disabled.append(
+                        UIAction(
+                            title: String(localized: "Copy to Instance unavailable (protected note)", comment: "Copy to instance disabled"),
+                            image: UIImage(systemName: "lock.fill"),
+                            attributes: .disabled
+                        ) { _ in }
+                    )
+                }
+                disabled.append(
                     UIAction(
                         title: String(localized: "Sharing unavailable (protected note)", comment: "Share menu disabled"),
                         image: UIImage(systemName: "lock.fill"),
                         attributes: .disabled
-                    ) { _ in },
-                ]
+                    ) { _ in }
+                )
+                return disabled
             }
 
             var elements: [UIMenuElement] = [
@@ -200,6 +214,19 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
                     }
                 },
             ]
+            if model.showsCopyToAnotherInstance {
+                elements.append(
+                    UIAction(
+                        title: String(localized: "Copy to Instance…", comment: "Tree context menu: copy note to another signed-in instance"),
+                        image: UIImage(systemName: "square.on.square")
+                    ) { [weak self] _ in
+                        guard let self else { return }
+                        DispatchQueue.main.async {
+                            self.model.onCopyToAnotherInstance()
+                        }
+                    }
+                )
+            }
             if model.client == nil {
                 return elements + [
                     UIAction(

@@ -34,7 +34,8 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func getNoteContent(_ noteId: String) async throws -> Data
     func updateNote(_ noteId: String, request: UpdateNoteRequest) async throws -> NoteResponse
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws
-    func deleteNote(_ noteId: String) async throws
+    /// Soft-deletes by default (`eraseNotes: false`). When `eraseNotes` is true, Trilium erases the note and its subtree instead of sending them to Trash.
+    func deleteNote(_ noteId: String, eraseNotes: Bool) async throws
     func createNote(_ request: CreateNoteRequest) async throws -> CreateNoteResponse
     /// New note under `parentNoteId` with copied title, type, mime, and body (child notes are not copied).
     func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse
@@ -969,17 +970,56 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws {
-        let asString = String(data: content, encoding: .utf8) ?? ""
-        struct Body: Encodable { let content: String }
-        try await putJSONVoid("/api/notes/\(noteId)/data", body: Body(content: asString), csrf: true)
+        if TriliumNoteBodyEncoding.usesUTF8JSONContent(mime: contentType, data: content) {
+            let asString = String(data: content, encoding: .utf8) ?? ""
+            struct Body: Encodable { let content: String }
+            try await putJSONVoid("/api/notes/\(noteId)/data", body: Body(content: asString), csrf: true)
+            return
+        }
+        do {
+            try await uploadNoteFile(noteId: noteId, data: content, contentType: contentType)
+        } catch {
+            let api = APIError.from(error)
+            if case .notFound = api {
+                // Older servers: carry raw bytes as ISO-8859-1 in JSON `{ content }`.
+                let latin1 = String(data: content, encoding: .isoLatin1) ?? ""
+                struct Body: Encodable { let content: String }
+                try await putJSONVoid("/api/notes/\(noteId)/data", body: Body(content: latin1), csrf: true)
+                return
+            }
+            throw error
+        }
     }
 
-    func deleteNote(_ noteId: String) async throws {
+    /// Trilium native file/image body upload (`PUT /api/notes/:id/file`).
+    private func uploadNoteFile(noteId: String, data: Data, contentType: String) async throws {
+        let ext = Self.filenameExtension(forMIME: contentType)
+        _ = try await uploadMultipartAttachment(
+            path: "/api/notes/\(noteId)/file",
+            method: "PUT",
+            data: data,
+            filename: "content.\(ext)",
+            contentType: contentType
+        )
+    }
+
+    private nonisolated static func filenameExtension(forMIME mime: String) -> String {
+        switch mime.lowercased() {
+        case "image/png": return "png"
+        case "image/jpeg", "image/jpg": return "jpg"
+        case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        case "application/pdf": return "pdf"
+        default: return "bin"
+        }
+    }
+
+    func deleteNote(_ noteId: String, eraseNotes: Bool) async throws {
         let taskId = String(UUID().uuidString.prefix(12))
         let q: [String: String] = [
             "taskId": taskId,
             "last": "true",
-            "eraseNotes": "false"
+            "eraseNotes": eraseNotes ? "true" : "false"
         ]
         try await delete("/api/notes/\(noteId)", queryParams: q, csrf: true)
     }
@@ -1092,13 +1132,8 @@ actor TriliumClient: TriliumClientProtocol {
 
     /// UTF-8 text for `createNote`, or empty with `needsBinaryUpload` when body should be sent via `updateNoteContent`.
     private static func initialCreateContentForDuplicate(data: Data, type: String, mime: String) -> (String, Bool) {
-        let textLike = mime.hasPrefix("text/")
-            || mime.contains("json")
-            || type == "code"
-            || type == "text"
-            || type == "relation"
-            || type == "mermaid"
-        if textLike, let s = String(data: data, encoding: .utf8) {
+        if TriliumNoteBodyEncoding.usesUTF8JSONContent(type: type, mime: mime),
+           let s = String(data: data, encoding: .utf8) {
             return (s, false)
         }
         if data.isEmpty {

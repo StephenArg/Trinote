@@ -88,6 +88,18 @@ final class PersistenceManager {
         return try context.fetch(descriptor)
     }
 
+    /// True when more than one Trilium instance is signed in on this device.
+    func hasMultipleServerProfiles() -> Bool {
+        ((try? fetchServerProfiles())?.count ?? 0) > 1
+    }
+
+    /// Signed-in instances other than `activeId` (the current session).
+    func otherServerProfiles(excluding activeId: String?) -> [ServerProfile] {
+        let all = (try? fetchServerProfiles()) ?? []
+        guard let activeId, !activeId.isEmpty else { return all }
+        return all.filter { $0.id != activeId }
+    }
+
     func activeProfile() throws -> ServerProfile? {
         var descriptor = FetchDescriptor<ServerProfile>(predicate: #Predicate { $0.isActive })
         descriptor.fetchLimit = 1
@@ -1701,7 +1713,7 @@ final class PersistenceManager {
 
     /// Queues a note for server-side deletion when connectivity returns.
     /// If the note was created offline (`ol_` prefix), cancels the pending creation instead.
-    func enqueueOfflineNoteDeletion(noteId: String, serverProfileId: String) throws {
+    func enqueueOfflineNoteDeletion(noteId: String, serverProfileId: String, eraseNotes: Bool = false) throws {
         let profileId = serverProfileId
 
         if noteId.hasPrefix("ol_") {
@@ -1746,7 +1758,8 @@ final class PersistenceManager {
 
         let pending = PendingNoteDeletion(
             serverProfileId: profileId,
-            noteId: noteId
+            noteId: noteId,
+            eraseNotes: eraseNotes
         )
         context.insert(pending)
         try context.save()

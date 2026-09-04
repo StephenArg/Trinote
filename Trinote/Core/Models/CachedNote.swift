@@ -299,17 +299,21 @@ final class PendingNoteDeletion {
     var serverProfileId: String
     var noteId: String
     var queuedAt: Date
+    /// When true, flush with Trilium `eraseNotes=true` (skip Trash). Defaults to false for older rows.
+    var eraseNotes: Bool = false
 
     init(
         id: String = UUID().uuidString,
         serverProfileId: String,
         noteId: String,
-        queuedAt: Date = .now
+        queuedAt: Date = .now,
+        eraseNotes: Bool = false
     ) {
         self.id = id
         self.serverProfileId = serverProfileId
         self.noteId = noteId
         self.queuedAt = queuedAt
+        self.eraseNotes = eraseNotes
     }
 }
 

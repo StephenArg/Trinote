@@ -137,8 +137,10 @@ struct NoteDetailView: View {
     @State private var showMoveParentPicker = false
     @State private var showAppearancePicker = false
     @State private var showShareLocally = false
+    @State private var showCopyToInstance = false
     @State private var showNoteOverflowMenu = false
     @State private var showCalendarJournalSettings = false
+    @State private var eraseNotesOnDelete = false
     @State private var moveNoteDetailConfirm: MoveNoteDetailConfirm?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.noteDetails.rawValue
@@ -1692,6 +1694,12 @@ struct NoteDetailView: View {
                         .environment(appState)
                 }
             }
+            .sheet(isPresented: $showCopyToInstance) {
+                if let note = vm.note {
+                    CopyToInstanceSheet(note: note, sourceClient: vm.client)
+                        .environment(appState)
+                }
+            }
             .sheet(isPresented: $showNoteOverflowMenu) {
                 noteOverflowActionsSheet(vm: vm, note: note)
             }
@@ -1725,21 +1733,19 @@ struct NoteDetailView: View {
                     )
                 }
             }
-            .alert(String(localized: "Delete Note?", comment: "Delete confirm title"), isPresented: $vm.showDeleteConfirm) {
-                Button(String(localized: "Cancel", comment: "Cancel delete"), role: .cancel) {}
-                Button(String(localized: "Delete", comment: "Confirm delete"), role: .destructive) {
+            .noteDeleteConfirmationAlert(
+                isPresented: $vm.showDeleteConfirm,
+                title: String(localized: "Delete Note?", comment: "Delete confirm title"),
+                message: NoteDeleteConfirmationCopy.singleNoteMessage(title: uiTitle(for: note)),
+                erasePermanently: $eraseNotesOnDelete,
+                onConfirm: {
+                    let erase = eraseNotesOnDelete
                     Task {
-                        if await vm.deleteNote() { dismiss() }
+                        if await vm.deleteNote(eraseNotes: erase) { dismiss() }
                     }
-                }
-            } message: {
-                Text(
-                    String(
-                        localized: "This will delete “\(uiTitle(for: note))” and all its sub-notes. This cannot be undone easily.",
-                        comment: "Delete confirmation; note title"
-                    )
-                )
-            }
+                },
+                onCancel: { eraseNotesOnDelete = false }
+            )
             .confirmationDialog(String(localized: "Unsaved Draft", comment: "Draft dialog title"), isPresented: $vm.showDiscardDraft) {
                 Button(String(localized: "Restore Draft", comment: "Draft dialog")) { vm.restoreDraft() }
                 Button(String(localized: "Discard Draft", comment: "Draft dialog"), role: .destructive) { vm.discardDraft() }
@@ -3822,6 +3828,27 @@ struct NoteDetailView: View {
             .buttonStyle(.plain)
         }
 
+        if CrossInstanceCopyAvailability.shouldShowMenuItem(noteId: note.noteId) {
+            if note.isProtected || vm.needsProtectedSession {
+                noteOverflowLabel(
+                    String(localized: "Copy to Instance unavailable (protected note)", comment: "Copy to instance disabled"),
+                    systemImage: "lock.fill"
+                )
+                .foregroundStyle(.secondary)
+                .disabled(true)
+            } else {
+                Button {
+                    dismissNoteOverflowThen { showCopyToInstance = true }
+                } label: {
+                    noteOverflowLabel(
+                        String(localized: "Copy to Instance…", comment: "Note overflow: copy to another signed-in instance"),
+                        systemImage: "square.on.square"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+
         if note.isProtected || vm.needsProtectedSession {
             noteOverflowLabel(
                 String(localized: "Sharing unavailable (protected note)", comment: "Share menu disabled"),
@@ -3929,7 +3956,10 @@ struct NoteDetailView: View {
         Divider().padding(.leading, 20)
 
         Button(role: .destructive) {
-            dismissNoteOverflowThen { vm.showDeleteConfirm = true }
+            dismissNoteOverflowThen {
+                eraseNotesOnDelete = false
+                vm.showDeleteConfirm = true
+            }
         } label: {
             noteOverflowLabel(String(localized: "Delete Note", comment: "Note overflow"), systemImage: "trash")
         }

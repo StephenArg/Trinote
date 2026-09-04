@@ -29,6 +29,11 @@ private struct ShareLocallySheetContext: Identifiable {
     let note: NoteItem
 }
 
+private struct CopyToInstanceSheetContext: Identifiable {
+    var id: String { note.noteId }
+    let note: NoteItem
+}
+
 private struct MoveNoteSheetContext: Identifiable {
     let id = UUID()
     let sourceBranchId: String
@@ -87,10 +92,13 @@ struct TreeView: View {
     @State private var createSheetContext: CreateNoteSheetContext?
     @State private var navigateToNoteForEdit: NoteEditTarget?
     @State private var noteToDelete: (note: NoteItem, vm: TreeViewModel)?
+    @State private var eraseNotesOnDelete = false
     @State private var favoriteNoteIds: Set<String> = []
     @State private var showSharedNotesManagement = false
+    @State private var showSwitchUserSheet = false
     @State private var treeShareSheetPayload: TreeShareSheetPayload?
     @State private var shareLocallySheetContext: ShareLocallySheetContext?
+    @State private var copyToInstanceSheetContext: CopyToInstanceSheetContext?
     @State private var treeSharingError: String?
     @State private var moveNoteSheetContext: MoveNoteSheetContext?
     @State private var moveNoteConfirmPayload: MoveNoteConfirmPayload?
@@ -106,6 +114,7 @@ struct TreeView: View {
     @State private var isSelectMode = false
     @State private var selectedIds: Set<String> = []
     @State private var showBulkDeleteConfirm = false
+    @State private var eraseNotesOnBulkDelete = false
     @State private var isBulkDeleting = false
     @State private var bulkDeleteError: String?
 
@@ -214,7 +223,30 @@ struct TreeView: View {
 
     private var treeViewCommonSheetsAndAlerts: some View {
         treeViewChromeAndDestinations
-            .alert(String(localized: "Delete Note", comment: "Tree delete alert title"), isPresented: noteToDeleteBinding, actions: deleteNoteActions, message: deleteNoteMessage)
+            .noteDeleteConfirmationAlert(
+                isPresented: noteToDeleteBinding,
+                title: String(localized: "Delete Note", comment: "Tree delete alert title"),
+                message: noteToDelete.map {
+                    NoteDeleteConfirmationCopy.singleNoteMessage(
+                        title: $0.note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+                    )
+                } ?? "",
+                confirmTitle: String(localized: "Delete Note and Subnotes", comment: "Tree delete confirm"),
+                erasePermanently: $eraseNotesOnDelete,
+                onConfirm: {
+                    guard let (note, treeVm) = noteToDelete else { return }
+                    let erase = eraseNotesOnDelete
+                    let noteId = note.noteId
+                    noteToDelete = nil
+                    Task {
+                        _ = await treeVm.deleteNoteAndSubnotes(noteId: noteId, eraseNotes: erase)
+                    }
+                },
+                onCancel: {
+                    eraseNotesOnDelete = false
+                    noteToDelete = nil
+                }
+            )
             .onReceive(NotificationCenter.default.publisher(for: .noteDeleted)) { _ in
                 triggerSyncAndReload()
             }
@@ -227,9 +259,17 @@ struct TreeView: View {
                 SharedNotesManagementView()
                     .environment(appState)
             }
+            .sheet(isPresented: $showSwitchUserSheet) {
+                SwitchUserSheet()
+                    .environment(appState)
+            }
             .sheet(item: $treeShareSheetPayload, content: treeShareSheet)
             .sheet(item: $shareLocallySheetContext) { ctx in
                 ShareLocallyView(note: ctx.note, client: appState.client)
+                    .environment(appState)
+            }
+            .sheet(item: $copyToInstanceSheetContext) { ctx in
+                CopyToInstanceSheet(note: ctx.note, sourceClient: appState.client)
                     .environment(appState)
             }
             .alert(
@@ -247,7 +287,7 @@ struct TreeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .trinoteWillSwitchServerProfile)) { _ in
                 resetNavigationStackBeforeServerProfileChange()
             }
-            .sheet(isPresented: $showBulkDeleteConfirm) {
+            .sheet(isPresented: $showBulkDeleteConfirm, onDismiss: { eraseNotesOnBulkDelete = false }) {
                 treeBulkDeleteConfirmSheet
             }
             .alert(
@@ -284,18 +324,18 @@ struct TreeView: View {
         NavigationStack {
             List {
                 Section {
+                    PermanentlyDeleteNotesToggle(isOn: $eraseNotesOnBulkDelete)
+                } footer: {
+                    Text(NoteDeleteConfirmationCopy.eraseFooter(erasePermanently: eraseNotesOnBulkDelete))
+                }
+                Section {
                     ForEach(bulkDeleteConfirmPaths, id: \.self) { path in
                         Text(path)
                             .font(.body.monospaced())
                             .textSelection(.enabled)
                     }
                 } header: {
-                    Text(
-                        String(
-                            localized: "The following notes will be permanently deleted. This cannot be undone.",
-                            comment: "Tree bulk delete sheet header"
-                        )
-                    )
+                    Text(NoteDeleteConfirmationCopy.bulkListHeader(erasePermanently: eraseNotesOnBulkDelete))
                     .textCase(nil)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -361,7 +401,7 @@ struct TreeView: View {
 
         var failures = 0
         for noteId in idsToDelete {
-            let ok = await vm.deleteNoteAndSubnotes(noteId: noteId)
+            let ok = await vm.deleteNoteAndSubnotes(noteId: noteId, eraseNotes: eraseNotesOnBulkDelete)
             if !ok { failures += 1 }
         }
 
@@ -560,6 +600,7 @@ struct TreeView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
+                    eraseNotesOnBulkDelete = false
                     showBulkDeleteConfirm = true
                 } label: {
                     Image(systemName: "trash")
@@ -582,6 +623,18 @@ struct TreeView: View {
                 )
 
                 Menu {
+                    if onPickParent == nil, PersistenceManager.shared.hasMultipleServerProfiles() {
+                        Button {
+                            showSwitchUserSheet = true
+                        } label: {
+                            Label(
+                                String(localized: "Switch user", comment: "Tree menu: switch signed-in instance"),
+                                systemImage: "person.2"
+                            )
+                        }
+                        Divider()
+                    }
+
                     if onPickParent == nil {
                         Button {
                             isSelectMode = true
@@ -637,7 +690,7 @@ struct TreeView: View {
                 .accessibilityLabel(String(localized: "More", comment: "Root tree overflow menu"))
             }
         } else {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     triggerSyncAndReload()
                 } label: {
@@ -649,6 +702,22 @@ struct TreeView: View {
                         ? String(localized: "Syncing…", comment: "Accessibility: tree sync in progress")
                         : String(localized: "Refresh tree", comment: "Toolbar sync subtree")
                 )
+
+                if onPickParent == nil, PersistenceManager.shared.hasMultipleServerProfiles() {
+                    Menu {
+                        Button {
+                            showSwitchUserSheet = true
+                        } label: {
+                            Label(
+                                String(localized: "Switch user", comment: "Tree menu: switch signed-in instance"),
+                                systemImage: "person.2"
+                            )
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel(String(localized: "More", comment: "Subtree overflow menu"))
+                }
             }
         }
     }
@@ -658,32 +727,6 @@ struct TreeView: View {
             get: { noteToDelete != nil },
             set: { if !$0 { noteToDelete = nil } }
         )
-    }
-
-    @ViewBuilder
-    private func deleteNoteActions() -> some View {
-        Button(String(localized: "Delete Note and Subnotes", comment: "Tree delete confirm"), role: .destructive) {
-            guard let (note, treeVm) = noteToDelete else { return }
-            Task {
-                _ = await treeVm.deleteNoteAndSubnotes(noteId: note.noteId)
-            }
-            noteToDelete = nil
-        }
-        Button(String(localized: "Cancel", comment: "Tree delete alert"), role: .cancel) {
-            noteToDelete = nil
-        }
-    }
-
-    @ViewBuilder
-    private func deleteNoteMessage() -> some View {
-        if let (note, _) = noteToDelete {
-            Text(
-                String(
-                    localized: "“\(note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive))” and all its subnotes will be permanently deleted. This cannot be undone.",
-                    comment: "Tree delete message"
-                )
-            )
-        }
     }
 
     private func handleTreeShouldRefresh(_ notification: Notification) {
@@ -923,6 +966,7 @@ struct TreeView: View {
         treeShareSheetPayload = nil
         noteToDelete = nil
         showSharedNotesManagement = false
+        showSwitchUserSheet = false
         exitSelectMode()
         appState.localTransfer.cancelStagedIncomingOffer()
         appState.localTransfer.setReceiveMode(false)
@@ -1357,6 +1401,7 @@ struct TreeView: View {
                 toggleFavorite(flat.node.note, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
             },
             onDelete: {
+                eraseNotesOnDelete = false
                 noteToDelete = (flat.node.note, vm)
             },
             onPresentShareSheet: { scheduleTreeShareSheet(url: $0) },
@@ -1364,6 +1409,12 @@ struct TreeView: View {
             onShareLocally: {
                 shareLocallySheetContext = ShareLocallySheetContext(note: flat.node.note)
             },
+            onCopyToAnotherInstance: {
+                copyToInstanceSheetContext = CopyToInstanceSheetContext(note: flat.node.note)
+            },
+            showsCopyToAnotherInstance: CrossInstanceCopyAvailability.shouldShowMenuItem(
+                noteId: flat.node.note.noteId
+            ),
             onMove: {
                 moveNoteSheetContext = MoveNoteSheetContext(
                     sourceBranchId: flat.node.branch.branchId,

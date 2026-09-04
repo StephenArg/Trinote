@@ -320,6 +320,38 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(call, 2)
     }
 
+    func testDeleteNoteSendsEraseNotesQueryFlag() async throws {
+        var capturedErase: String?
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"csrf_test","device":"desktop"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            if path.hasSuffix("/api/notes/n1") {
+                XCTAssertEqual(request.httpMethod, "DELETE")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "x-csrf-token"), "csrf_test")
+                capturedErase = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                    .queryItems?
+                    .first { $0.name == "eraseNotes" }?
+                    .value
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data())
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        try await client.deleteNote("n1", eraseNotes: false)
+        XCTAssertEqual(capturedErase, "false")
+        try await client.deleteNote("n1", eraseNotes: true)
+        XCTAssertEqual(capturedErase, "true")
+    }
+
     // MARK: - Search
 
     func testSearchUsesNativePath() async throws {

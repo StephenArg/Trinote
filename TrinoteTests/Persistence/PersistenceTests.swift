@@ -285,6 +285,22 @@ final class PersistenceTests: XCTestCase {
         XCTAssertNil(try persistence.fetchCachedNote(id: "n1", serverProfileId: "s1"))
         XCTAssertTrue(GhostNoteTracker.shared.contains("n1", serverProfileId: "s1"))
         XCTAssertEqual(try persistence.pendingDeletionNoteIds(serverProfileId: "s1"), ["n1"])
+        XCTAssertEqual(try persistence.fetchPendingNoteDeletions(serverProfileId: "s1").first?.eraseNotes, false)
+    }
+
+    func testOfflineQueuedDeletionCanRequestPermanentErase() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n1", title: "Note"), serverProfileId: "s1")
+        try persistence.cacheBranch(
+            from: TestFixtures.branchResponse(branchId: "b1", noteId: "n1", parentNoteId: "root"),
+            serverProfileId: "s1"
+        )
+        try persistence.commitBatch()
+
+        try persistence.enqueueOfflineNoteDeletion(noteId: "n1", serverProfileId: "s1", eraseNotes: true)
+
+        let pending = try persistence.fetchPendingNoteDeletions(serverProfileId: "s1")
+        XCTAssertEqual(pending.map(\.noteId), ["n1"])
+        XCTAssertEqual(pending.first?.eraseNotes, true)
     }
 
     func testPruneStaleBranchesUnderParentRemovesOrphanedNote() throws {

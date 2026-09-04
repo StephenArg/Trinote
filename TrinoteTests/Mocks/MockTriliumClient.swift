@@ -17,10 +17,14 @@ actor MockTriliumClient: TriliumClientProtocol {
     var dayNotesForMonthResult: Result<[String: String], Error> = .success([:])
     var dayNotesForMonthByMonth: [String: [String: String]] = [:]
     var createNoteResult: Result<CreateNoteResponse, Error>?
+    var createNoteCalls: [CreateNoteRequest] = []
+    var createNoteFailureAfterCount: Int?
     var updateNoteResult: Result<NoteResponse, Error>?
     var deleteNoteError: Error?
     var attachmentsResult: Result<[AttachmentResponse], Error> = .success([])
+    var attachmentsByNoteId: [String: [AttachmentResponse]] = [:]
     var attachmentContentResult: Result<Data, Error>?
+    var attachmentContentById: [String: Data] = [:]
     var createAttachmentResult: Result<AttachmentResponse, Error>?
     var convertAttachmentToNoteResult: Result<ConvertAttachmentToNoteResponse, Error>?
     var attachmentOCRTextResult: Result<AttachmentOCRTextResponse, Error>?
@@ -40,7 +44,7 @@ actor MockTriliumClient: TriliumClientProtocol {
     var getNoteContentCalls: [String] = []
     var updateNoteCalls: [(String, UpdateNoteRequest)] = []
     var updateNoteContentCalls: [(String, Data)] = []
-    var deleteNoteCalls: [String] = []
+    var deleteNoteCalls: [(noteId: String, eraseNotes: Bool)] = []
     var searchCalls: [String] = []
     var searchNoteIdTitlesCalls: [(query: String, limit: Int)] = []
     var editedNotesCalls: [String] = []
@@ -52,6 +56,7 @@ actor MockTriliumClient: TriliumClientProtocol {
     var deleteBranchWithTaskCalls: [String] = []
     var branchIdLookupCalls: [(parent: String, child: String)] = []
     var moveBranchToParentCalls: [(branchId: String, parentBranchId: String)] = []
+    var uploadNoteAttachmentCalls: [(noteId: String, filename: String, contentType: String)] = []
 
     init(baseURL: URL = URL(string: "https://test.trilium.local")!) {
         self.baseURL = baseURL
@@ -71,6 +76,14 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func setAttachmentContentResult(_ result: Result<Data, Error>) {
         attachmentContentResult = result
+    }
+
+    func setAttachments(noteId: String, _ list: [AttachmentResponse]) {
+        attachmentsByNoteId[noteId] = list
+    }
+
+    func setAttachmentBytes(id: String, _ data: Data) {
+        attachmentContentById[id] = data
     }
 
     func exportSessionCookieData() -> Data? { nil }
@@ -158,7 +171,28 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func batchTreeLoad(noteIds: [String]) async throws -> TreeLoadResponse {
         batchTreeLoadCalls.append(noteIds)
-        return TreeLoadResponse(notes: [], branches: [], attributes: [])
+        var notes: [TreeLoadNoteRow] = []
+        notes.reserveCapacity(noteIds.count)
+        for id in noteIds {
+            let note: NoteResponse
+            if let result = noteResults[id] {
+                note = try result.get()
+            } else {
+                continue
+            }
+            notes.append(
+                TreeLoadNoteRow(
+                    noteId: note.noteId,
+                    title: note.title,
+                    isProtected: note.isProtected,
+                    type: note.type,
+                    mime: note.mime,
+                    blobId: note.blobId,
+                    isDeleted: note.isDeleted
+                )
+            )
+        }
+        return TreeLoadResponse(notes: notes, branches: [], attributes: [])
     }
 
     func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry] {
@@ -188,12 +222,16 @@ actor MockTriliumClient: TriliumClientProtocol {
         updateNoteContentCalls.append((noteId, content))
     }
 
-    func deleteNote(_ noteId: String) async throws {
-        deleteNoteCalls.append(noteId)
+    func deleteNote(_ noteId: String, eraseNotes: Bool) async throws {
+        deleteNoteCalls.append((noteId, eraseNotes))
         if let error = deleteNoteError { throw error }
     }
 
     func createNote(_ request: CreateNoteRequest) async throws -> CreateNoteResponse {
+        createNoteCalls.append(request)
+        if let limit = createNoteFailureAfterCount, createNoteCalls.count > limit {
+            throw APIError.unknown("forced createNote failure")
+        }
         if let result = createNoteResult { return try result.get() }
         let note = TestFixtures.noteResponse(id: "new-\(UUID().uuidString.prefix(8))", title: request.title, type: request.type)
         let branch = TestFixtures.branchResponse(noteId: note.noteId, parentNoteId: request.parentNoteId)
@@ -216,13 +254,25 @@ actor MockTriliumClient: TriliumClientProtocol {
     }
 
     func createChildNoteWithContent(parentNoteId: String, title: String, noteType: String, mime: String, body: Data) async throws -> CreateNoteResponse {
-        let content = String(data: body, encoding: .utf8) ?? ""
+        let initial: String
+        let needsBinary: Bool
+        if TriliumNoteBodyEncoding.usesUTF8JSONContent(type: noteType, mime: mime),
+           let s = String(data: body, encoding: .utf8) {
+            initial = s
+            needsBinary = false
+        } else if body.isEmpty {
+            initial = ""
+            needsBinary = false
+        } else {
+            initial = ""
+            needsBinary = true
+        }
         let req = CreateNoteRequest(
             parentNoteId: parentNoteId,
             title: title,
             type: noteType,
             mime: mime,
-            content: content,
+            content: initial,
             notePosition: nil,
             prefix: nil,
             isProtected: false,
@@ -230,7 +280,11 @@ actor MockTriliumClient: TriliumClientProtocol {
             branchId: nil,
             templateNoteId: nil
         )
-        return try await createNote(req)
+        let response = try await createNote(req)
+        if needsBinary {
+            try await updateNoteContent(response.note.noteId, content: body, contentType: mime)
+        }
+        return response
     }
 
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse {
@@ -344,7 +398,8 @@ actor MockTriliumClient: TriliumClientProtocol {
     }
 
     func getNoteAttachments(_ noteId: String) async throws -> [AttachmentResponse] {
-        try attachmentsResult.get()
+        if let list = attachmentsByNoteId[noteId] { return list }
+        return try attachmentsResult.get()
     }
 
     func getAttachment(_ attachmentId: String) async throws -> AttachmentResponse {
@@ -352,6 +407,7 @@ actor MockTriliumClient: TriliumClientProtocol {
     }
 
     func getAttachmentContent(_ attachmentId: String) async throws -> Data {
+        if let data = attachmentContentById[attachmentId] { return data }
         if let result = attachmentContentResult { return try result.get() }
         return Data("file-content".utf8)
     }
@@ -359,10 +415,11 @@ actor MockTriliumClient: TriliumClientProtocol {
     func uploadAttachmentContent(_ attachmentId: String, data: Data, contentType: String) async throws {}
 
     func uploadNoteAttachment(noteId: String, data: Data, filename: String, contentType: String) async throws -> String {
+        uploadNoteAttachmentCalls.append((noteId: noteId, filename: filename, contentType: contentType))
         if let result = createAttachmentResult {
             return try result.get().attachmentId
         }
-        return TestFixtures.attachmentResponse(ownerId: noteId, title: filename).attachmentId
+        return "dest-att-\(uploadNoteAttachmentCalls.count)"
     }
 
     func createAttachment(_ request: CreateAttachmentRequest) async throws -> AttachmentResponse {

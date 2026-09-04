@@ -2491,14 +2491,14 @@ final class NoteDetailViewModel {
         NotificationCenter.default.post(name: .noteDeleted, object: nil, userInfo: ["noteId": noteId])
     }
 
-    func deleteNote() async -> Bool {
+    func deleteNote(eraseNotes: Bool = false) async -> Bool {
         let nid = self.noteId
         self.isSaving = true
         defer { self.isSaving = false }
 
         if let client, isOnline {
             do {
-                try await client.deleteNote(nid)
+                try await client.deleteNote(nid, eraseNotes: eraseNotes)
                 if let profileId = serverProfileId {
                     GhostNoteTracker.shared.add(nid, serverProfileId: profileId)
                     persistence.removeFavoritesForCachedSubtree(rootNoteId: nid, serverProfileId: profileId)
@@ -2516,7 +2516,7 @@ final class NoteDetailViewModel {
 
         guard let profileId = serverProfileId else { return false }
         do {
-            try persistence.enqueueOfflineNoteDeletion(noteId: nid, serverProfileId: profileId)
+            try persistence.enqueueOfflineNoteDeletion(noteId: nid, serverProfileId: profileId, eraseNotes: eraseNotes)
             appState.backgroundSyncPendingChanges()
             NotificationCenter.default.post(name: .noteDeleted, object: nil)
             return true
@@ -2544,7 +2544,7 @@ final class NoteDetailViewModel {
 
         if let client, isOnline {
             do {
-                try await client.deleteNote(childNoteId)
+                try await client.deleteNote(childNoteId, eraseNotes: false)
                 if let profileId = serverProfileId {
                     GhostNoteTracker.shared.add(childNoteId, serverProfileId: profileId)
                     persistence.removeFavoritesForCachedSubtree(rootNoteId: childNoteId, serverProfileId: profileId)

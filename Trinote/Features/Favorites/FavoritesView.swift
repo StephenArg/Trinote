@@ -38,6 +38,7 @@ struct FavoritesView: View {
 
     @State private var confirmRemoveFromFavorites = false
     @State private var confirmBulkDelete = false
+    @State private var eraseNotesOnBulkDelete = false
     @State private var confirmOpenDuplicatePicker = false
     @State private var confirmRunDuplicate = false
     @State private var showDuplicateParentPicker = false
@@ -145,14 +146,17 @@ struct FavoritesView: View {
             } message: {
                 Text(String(localized: "Remove \(selectedCount) note(s) from Favorites? They will not be deleted from the server.", comment: "Favorites bulk remove"))
             }
-            .alert(String(localized: "Delete Notes?", comment: "Favorites bulk delete"), isPresented: $confirmBulkDelete) {
-                Button(String(localized: "Cancel", comment: "Favorites alert"), role: .cancel) {}
-                Button(String(localized: "Delete", comment: "Favorites alert"), role: .destructive) {
-                    Task { await performBulkDeleteNotes() }
-                }
-            } message: {
-                Text(String(localized: "Permanently delete \(selectedCount) note(s) and all of their sub-notes? This cannot be undone easily.", comment: "Favorites bulk delete"))
-            }
+            .noteDeleteConfirmationAlert(
+                isPresented: $confirmBulkDelete,
+                title: String(localized: "Delete Notes?", comment: "Favorites bulk delete"),
+                message: NoteDeleteConfirmationCopy.bulkMessage(count: selectedCount),
+                erasePermanently: $eraseNotesOnBulkDelete,
+                onConfirm: {
+                    let erase = eraseNotesOnBulkDelete
+                    Task { await performBulkDeleteNotes(eraseNotes: erase) }
+                },
+                onCancel: { eraseNotesOnBulkDelete = false }
+            )
             .alert(String(localized: "Duplicate Notes", comment: "Favorites duplicate flow"), isPresented: $confirmOpenDuplicatePicker) {
                 Button(String(localized: "Cancel", comment: "Favorites alert"), role: .cancel) {}
                 Button(String(localized: "Continue", comment: "Favorites duplicate")) {
@@ -351,6 +355,7 @@ struct FavoritesView: View {
                         .disabled(isBulkWorking)
 
                         Button(role: .destructive) {
+                            eraseNotesOnBulkDelete = false
                             confirmBulkDelete = true
                         } label: {
                             Label(String(localized: "Delete Notes", comment: "Favorites bulk menu"), systemImage: "trash")
@@ -565,7 +570,7 @@ struct FavoritesView: View {
         }
     }
 
-    private func performBulkDeleteNotes() async {
+    private func performBulkDeleteNotes(eraseNotes: Bool) async {
         guard appState.client != nil, appState.activeProfile?.id != nil else {
             deleteError = "Cannot delete while offline."
             return
@@ -575,9 +580,10 @@ struct FavoritesView: View {
         let ids = Array(selectedIds)
         for noteId in ids where noteId != "root" {
             if let fav = favorites.first(where: { $0.noteId == noteId }) {
-                await deleteFavoriteNoteOnServer(fav, postSync: false)
+                await deleteFavoriteNoteOnServer(fav, postSync: false, eraseNotes: eraseNotes)
             }
         }
+        confirmBulkDelete = false
         selectedIds.removeAll()
         isEditMode = false
         loadFavorites()
@@ -630,17 +636,17 @@ struct FavoritesView: View {
     }
 
     private func deleteNote(_ fav: FavoriteNote) async {
-        await deleteFavoriteNoteOnServer(fav, postSync: true)
+        await deleteFavoriteNoteOnServer(fav, postSync: true, eraseNotes: false)
     }
 
-    private func deleteFavoriteNoteOnServer(_ fav: FavoriteNote, postSync: Bool) async {
+    private func deleteFavoriteNoteOnServer(_ fav: FavoriteNote, postSync: Bool, eraseNotes: Bool) async {
         guard let client = appState.client, let profileId = appState.activeProfile?.id else {
             if postSync { deleteError = "Cannot delete while offline." }
             return
         }
         guard fav.noteId != "root" else { return }
         do {
-            try await client.deleteNote(fav.noteId)
+            try await client.deleteNote(fav.noteId, eraseNotes: eraseNotes)
             GhostNoteTracker.shared.add(fav.noteId, serverProfileId: profileId)
             PersistenceManager.shared.removeFavoritesForCachedSubtree(rootNoteId: fav.noteId, serverProfileId: profileId)
             try? PersistenceManager.shared.deleteCachedNotes(noteIds: [fav.noteId], serverProfileId: profileId)

@@ -564,12 +564,12 @@ final class TreeViewModel {
         await loadTree()
     }
 
-    func deleteNoteAndSubnotes(noteId: String) async -> Bool {
+    func deleteNoteAndSubnotes(noteId: String, eraseNotes: Bool = false) async -> Bool {
         guard noteId != "root" else { return false }
 
         if let client, appState.isOnline {
             do {
-                try await client.deleteNote(noteId)
+                try await client.deleteNote(noteId, eraseNotes: eraseNotes)
                 if let profileId = serverProfileId {
                     GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
                     persistence.removeFavoritesForCachedSubtree(rootNoteId: noteId, serverProfileId: profileId)
@@ -586,7 +586,7 @@ final class TreeViewModel {
 
         guard let profileId = serverProfileId else { return false }
         do {
-            try persistence.enqueueOfflineNoteDeletion(noteId: noteId, serverProfileId: profileId)
+            try persistence.enqueueOfflineNoteDeletion(noteId: noteId, serverProfileId: profileId, eraseNotes: eraseNotes)
             appState.backgroundSyncPendingChanges()
             await refresh()
             return true

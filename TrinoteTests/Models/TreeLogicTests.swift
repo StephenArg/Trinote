@@ -672,3 +672,17 @@ final class TreeLogicTests: XCTestCase {
         return TreeNode(branch: branch, note: note)
     }
 }
+
+final class NoteDeleteConfirmationCopyTests: XCTestCase {
+    func testSingleNoteMessageIncludesTitle() {
+        let message = NoteDeleteConfirmationCopy.singleNoteMessage(title: "Meeting")
+        XCTAssertTrue(message.contains("Meeting"))
+        XCTAssertFalse(message.localizedCaseInsensitiveContains("permanently"))
+    }
+
+    func testBulkMessageIncludesCount() {
+        let message = NoteDeleteConfirmationCopy.bulkMessage(count: 3)
+        XCTAssertTrue(message.contains("3"))
+        XCTAssertFalse(message.localizedCaseInsensitiveContains("permanently"))
+    }
+}

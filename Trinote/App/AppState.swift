@@ -485,7 +485,7 @@ final class AppState {
         var didAny = false
         for row in pending {
             do {
-                try await client.deleteNote(row.noteId)
+                try await client.deleteNote(row.noteId, eraseNotes: row.eraseNotes)
                 try persistence.deletePendingNoteDeletion(id: row.id, serverProfileId: profileId)
                 GhostNoteTracker.shared.add(row.noteId, serverProfileId: profileId)
                 try? persistence.deleteCachedNotes(noteIds: [row.noteId], serverProfileId: profileId, clearGhost: false)
@@ -789,6 +789,41 @@ final class AppState {
             cloudflareAccessCredentials: cfCredentials,
             skipBootstrapWithoutOIDCSession: skipBootstrap
         )
+    }
+
+    /// Short-lived client for another signed-in profile. Does not change `activeProfile`, sync, or UI.
+    func makeRestoredClient(for profile: ServerProfile) async throws -> TriliumClient {
+        guard let url = profile.url else { throw APIError.invalidURL }
+        let cookieData = try await keychain.loadSessionCookies(forServer: profile.id)
+        guard let cookieData, !cookieData.isEmpty else { throw APIError.noToken }
+        let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: cookieData)
+        try await restoreSessionWithTimeout(client: newClient, seconds: 12)
+        let exported = await newClient.exportSessionCookieData()
+        try? await keychain.saveSessionCookies(exported, forServer: profile.id)
+        return newClient
+    }
+
+    /// Switches instance after the current UI (sheet/alert) has dismissed. The work is owned by `AppState` so tearing down `NavigationStack`s cannot cancel it.
+    func scheduleActivateProfile(id profileId: String, after milliseconds: Int = 350) {
+        Task { @MainActor in
+            if milliseconds > 0 {
+                try? await Task.sleep(for: .milliseconds(milliseconds))
+            }
+            guard let profile = (try? persistence.fetchServerProfiles())?.first(where: { $0.id == profileId }) else {
+                connectionError = String(
+                    localized: "That instance is no longer signed in.",
+                    comment: "Scheduled profile switch missing instance"
+                )
+                return
+            }
+            do {
+                try await activateProfile(profile)
+            } catch {
+                let api = APIError.from(error)
+                if case .cancelled = api { return }
+                connectionError = api.localizedDescription
+            }
+        }
     }
 
     func hasCloudflareAccessCredentials(for profile: ServerProfile) async -> Bool {
