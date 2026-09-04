@@ -26,6 +26,7 @@ struct SettingsView: View {
     @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @AppStorage("highlightCurrentNoteInTree") private var highlightCurrentNoteInTree: Bool = true
+    @AppStorage(SSOLoginPreferences.showSetupWarningKey) private var showSSOSetupWarning = true
     @State private var showClearCacheConfirm = false
     @State private var showClearAllInstancesCacheConfirm = false
     @State private var showResetColorsConfirm = false
@@ -54,6 +55,7 @@ struct SettingsView: View {
             noteEditorSection
             securitySection
             instancesSection
+            ssoSection
             connectionSection
             cacheSection
             aboutSection
@@ -514,6 +516,24 @@ struct SettingsView: View {
                     )
                 )
             }
+        }
+    }
+
+    private var ssoSection: some View {
+        Section {
+            Toggle(
+                String(localized: "Show SSO setup warning", comment: "Settings: show JS Backend handler reminder before SSO"),
+                isOn: $showSSOSetupWarning
+            )
+        } header: {
+            Text(String(localized: "SSO", comment: "Settings section"))
+        } footer: {
+            Text(
+                String(
+                    localized: "Before Sign in with SSO, confirm that the JS Backend handler is installed on Trilium. Turn this off after you have set it up.",
+                    comment: "Settings footer for SSO setup warning"
+                )
+            )
         }
     }
 

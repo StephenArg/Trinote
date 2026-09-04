@@ -34,14 +34,8 @@ struct LoginFormContent: View {
         } message: {
             Text(viewModel.errorMessage ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
         }
-        .fullScreenCover(isPresented: $viewModel.isWaitingForSafariHandoff) {
-            SSOSafariHandoffWaitingView(
-                onOpenSafariAgain: { viewModel.reopenSSOSafari() },
-                onCopySetupScript: {
-                    UIPasteboard.general.string = TriliumSSOHandoff.handlerNoteSource
-                },
-                onCancel: { viewModel.cancelSSOLogin() }
-            )
+        .fullScreenCover(isPresented: ssoFlowPresented) {
+            SSOFlowCover(viewModel: viewModel, appState: appState)
         }
         .sheet(isPresented: $viewModel.showTotpEntry) {
             TotpEntrySheet(viewModel: viewModel, appState: appState)
@@ -54,6 +48,17 @@ struct LoginFormContent: View {
                 }
             }
         }
+    }
+
+    private var ssoFlowPresented: Binding<Bool> {
+        Binding(
+            get: { viewModel.ssoFlowPresentation != nil },
+            set: { presented in
+                if !presented {
+                    viewModel.cancelSSOLogin()
+                }
+            }
+        )
     }
 
     private var header: some View {
@@ -225,9 +230,36 @@ struct LoginFormContent: View {
                 .accessibilityLabel(String(localized: "Connect to server", comment: "VoiceOver"))
             }
 
-            Text(String(localized: "Opens Safari for Authelia, Authentik, Keycloak, and other providers (Face ID and security keys work). After your notes load, return here and tap Continue. Requires a one-time custom request handler on your server.", comment: "SSO login hint"))
+            Text(String(localized: "Opens Safari for Authelia, Authentik, Keycloak, and other providers (Face ID and security keys work). After your notes load, return here and tap Continue.", comment: "SSO login hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - SSO flow cover (setup warning → Safari waiting)
+
+private struct SSOFlowCover: View {
+    @Bindable var viewModel: AuthViewModel
+    let appState: AppState
+
+    var body: some View {
+        switch viewModel.ssoFlowPresentation {
+        case .setupWarning:
+            SSOSetupWarningView(
+                onContinue: { skipFutureWarnings in
+                    viewModel.confirmSSOSetupWarning(appState: appState, skipFutureWarnings: skipFutureWarnings)
+                },
+                onCancel: { viewModel.cancelSSOLogin() }
+            )
+        case .waitingForSafari, nil:
+            SSOSafariHandoffWaitingView(
+                onOpenSafariAgain: { viewModel.reopenSSOSafari() },
+                onCopySetupScript: {
+                    UIPasteboard.general.string = TriliumSSOHandoff.handlerNoteSource
+                },
+                onCancel: { viewModel.cancelSSOLogin() }
+            )
         }
     }
 }
@@ -512,9 +544,12 @@ private struct SSOSafariHandoffWaitingView: View {
                         .frame(maxWidth: .infinity)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(String(localized: "First-time setup", comment: "SSO handoff setup heading"))
-                            .font(.headline)
-                        Text(String(localized: "If Safari says “No handler matched”, create a JS Backend note in Trilium, add the label below, paste the script, then try again.", comment: "SSO handoff setup steps"))
+                        Label(
+                            String(localized: "If Safari says “No handler matched”", comment: "SSO waiting troubleshooting heading"),
+                            systemImage: "wrench.and.screwdriver"
+                        )
+                        .font(.subheadline.weight(.semibold))
+                        Text(String(localized: "The JS Backend handler is missing on Trilium. Create that note, add the label below, paste the script, then tap Continue.", comment: "SSO waiting troubleshooting body"))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         Text("#customRequestHandler=trinote-sso-handoff")
@@ -530,6 +565,9 @@ private struct SSOSafariHandoffWaitingView: View {
                         }
                         .buttonStyle(.bordered)
                     }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 12))
                 }
                 .padding()
             }

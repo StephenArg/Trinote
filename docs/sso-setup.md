@@ -43,7 +43,7 @@ This tells Trilium to run the note when something requests:
 Copy the handler script from one of these places:
 
 - This repository: [`docs/trinote-sso-handoff.js`](trinote-sso-handoff.js)
-- The Trinote app: tap **Sign in with SSO** → on the waiting screen, tap **Copy handler script**
+- The Trinote app: tap **Sign in with SSO** → on the setup warning (or the waiting screen), tap **Copy handler script**
 
 Paste the full script into the JS backend note and save.
 
@@ -68,9 +68,10 @@ If you see **“No handler matched”**, the label or note type is wrong, or the
 
 1. Open Trinote and enter your **server URL** (same host you use in the browser).
 2. Tap **Sign in with SSO**.
-3. Safari opens. Complete Face ID / your SSO provider if asked.
-4. When your Trilium notes appear in Safari, **switch back to Trinote**.
-5. On the waiting screen, tap **Continue**.
+3. Read the **Set up Trilium first** screen and confirm you already added the JS Backend handler. You can copy the script there. Turn the reminder off on that screen, or later in **Settings → SSO**.
+4. Safari opens. Complete Face ID / your SSO provider if asked.
+5. When your Trilium notes appear in Safari, **switch back to Trinote**.
+6. On the waiting screen, tap **Continue**.
 
 Trinote imports your session and connects.
 

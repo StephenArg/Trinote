@@ -20,8 +20,14 @@ final class AuthViewModel {
     /// Set to `true` after a successful `login` / `submitTotp` / SSO so sheets (e.g. Add Instance) can dismiss.
     var didFinishSuccessfulLogin = false
 
-    /// Waiting for Safari to redirect back via `trinote://sso-complete`.
-    var isWaitingForSafariHandoff = false
+    /// Full-screen SSO flow: handler setup warning, then Safari waiting.
+    var ssoFlowPresentation: SSOFlowPresentation?
+
+    enum SSOFlowPresentation: Equatable {
+        case setupWarning
+        case waitingForSafari
+    }
+
     /// Context for the in-progress Safari SSO login.
     var ssoBaseURL: URL?
     var ssoCloudflareCredentials: CloudflareAccessCredentials?
@@ -118,7 +124,7 @@ final class AuthViewModel {
         ssoCloudflareCredentials = cloudflareCredentialsFromForm()
         ssoRejectIfServerAlreadyAdded = rejectIfServerAlreadyAdded
 
-        Task { await runSSO(appState: appState) }
+        Task { await startSSOOrShowWarning(appState: appState) }
     }
 
     func beginSSOLogin(for profile: ServerProfile, appState: AppState) async {
@@ -129,28 +135,43 @@ final class AuthViewModel {
         ssoCloudflareCredentials = cloudflareCredentialsFromForm()
         ssoRejectIfServerAlreadyAdded = false
 
-        guard let url = profile.url else {
+        guard profile.url != nil else {
             errorMessage = APIError.invalidURL.localizedDescription
             showError = true
             return
         }
 
-        await runSSO(appState: appState)
+        await startSSOOrShowWarning(appState: appState)
+    }
+
+    func confirmSSOSetupWarning(appState: AppState, skipFutureWarnings: Bool) {
+        if skipFutureWarnings {
+            SSOLoginPreferences.showSetupWarning = false
+        }
+        Task { await runSSO(appState: appState) }
     }
 
     func reopenSSOSafari() {
         activeSSOService?.reopenSafari()
     }
 
+    private func startSSOOrShowWarning(appState: AppState) async {
+        if SSOLoginPreferences.showSetupWarning {
+            ssoFlowPresentation = .setupWarning
+            return
+        }
+        await runSSO(appState: appState)
+    }
+
     private func runSSO(appState: AppState) async {
         guard let url = ssoBaseURL else { return }
 
-        isWaitingForSafariHandoff = true
+        ssoFlowPresentation = .waitingForSafari
         errorMessage = nil
         var keepWaitingCover = false
         defer {
             if !keepWaitingCover {
-                isWaitingForSafariHandoff = false
+                ssoFlowPresentation = nil
                 activeSSOService = nil
             }
         }
@@ -224,10 +245,11 @@ final class AuthViewModel {
 
     func cancelSSOLogin() {
         activeSSOService?.cancel()
-        isWaitingForSafariHandoff = false
+        ssoFlowPresentation = nil
         ssoBaseURL = nil
         ssoCloudflareCredentials = nil
         ssoPendingProfile = nil
+        ssoRejectIfServerAlreadyAdded = false
     }
 
     func login(appState: AppState, rejectIfServerAlreadyAdded: Bool = false) async {
