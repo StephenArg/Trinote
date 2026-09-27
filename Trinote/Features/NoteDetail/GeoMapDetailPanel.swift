@@ -5,6 +5,7 @@ struct GeoMapDetailPanel: View {
     let selection: GeoMapSelection
     let pin: GeoMapPin?
     let track: GeoMapTrack?
+    var shape: GeoMapShape? = nil
     let pinHTML: String?
     let gpxStats: GeoMapGPXParser.Stats?
     let onClose: () -> Void
@@ -18,10 +19,11 @@ struct GeoMapDetailPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            if selection.kind == .pin {
-                pinBody
-            } else {
+            if selection.kind == .track {
                 trackBody
+            } else {
+                // A shape is a text note like a pin: its body is its description.
+                pinBody
             }
         }
         .padding(.top, 12)
@@ -35,6 +37,8 @@ struct GeoMapDetailPanel: View {
             HStack(alignment: .top, spacing: 10) {
                 if selection.kind == .pin {
                     pinHeaderIcon
+                } else if selection.kind == .shape {
+                    shapeHeaderIcon
                 }
                 Text(titleText)
                     .font(.headline)
@@ -60,6 +64,20 @@ struct GeoMapDetailPanel: View {
             if selection.kind == .pin, let pin {
                 coordinatesActionRow(lat: pin.lat, lng: pin.lng) {
                     pinActionRow
+                }
+            } else if selection.kind == .shape, let shape {
+                Text(shapeDescription(shape))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let coordinate = shape.focusCoordinate {
+                    coordinatesActionRow(lat: coordinate.lat, lng: coordinate.lng) {
+                        trackActionRow
+                    }
+                } else {
+                    HStack {
+                        Spacer(minLength: 0)
+                        trackActionRow
+                    }
                 }
             } else if selection.kind == .track, let track {
                 if let coordinate = track.mapsFocusCoordinate {
@@ -91,6 +109,36 @@ struct GeoMapDetailPanel: View {
                     }
                 }
                 .accessibilityHidden(true)
+        }
+    }
+
+    @ViewBuilder
+    private var shapeHeaderIcon: some View {
+        if let shape {
+            NoteIconView(
+                iconClass: NoteIconClassResolver.geoDefaultIconClass(isTextNote: true) { name in
+                    name == GeoMapShape.label ? shape.kind.rawValue + ":" : nil
+                },
+                fallbackNoteType: .text,
+                size: .title,
+                foregroundStyle: shape.color.flatMap { TriliumNoteColorMapper.swiftUIColor(for: $0) } ?? .accentColor
+            )
+            .frame(width: 28, height: 28, alignment: .center)
+            .accessibilityHidden(true)
+        }
+    }
+
+    private func shapeDescription(_ shape: GeoMapShape) -> String {
+        switch shape.kind {
+        case .line:
+            return String(localized: "Line", comment: "Geo map shape kind")
+        case .polygon:
+            return String(localized: "Area", comment: "Geo map shape kind")
+        case .circle:
+            let radius = shape.radiusMeters ?? 0
+            let formatted = Measurement(value: radius, unit: UnitLength.meters)
+                .formatted(.measurement(width: .abbreviated, usage: .road))
+            return String(localized: "Circle · \(formatted)", comment: "Geo map shape kind with its radius")
         }
     }
 
@@ -343,6 +391,7 @@ struct GeoMapDetailPanel: View {
         switch selection.kind {
         case .pin: return pin?.title ?? selection.noteId
         case .track: return track?.summaryTitle ?? track?.title ?? selection.noteId
+        case .shape: return shape?.title ?? selection.noteId
         }
     }
 
@@ -353,6 +402,8 @@ struct GeoMapDetailPanel: View {
             return (pin.lat, pin.lng)
         case .track:
             return track?.mapsFocusCoordinate
+        case .shape:
+            return shape?.focusCoordinate
         }
     }
 

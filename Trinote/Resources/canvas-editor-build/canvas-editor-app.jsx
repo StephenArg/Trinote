@@ -180,7 +180,7 @@ window.canvasBridge = {
 
     let svgString = "";
     try {
-      const svg = await exportToSvg({ elements, appState, exportPadding: 5, files });
+      const svg = await exportToSvg({ elements, appState, exportPadding: previewPadding(elements), files });
       svgString = svg.outerHTML;
     } catch (e) {
       console.error("SVG export error:", e);
@@ -212,9 +212,26 @@ window.canvasBridge = {
   }
 };
 
+// Space around the drawing in the saved preview (canvas-export.svg), which is cropped to the drawing: 5% of its
+// larger side, at least 16 and at most 96 units, so shapes keep clear of the preview's edge however far a large
+// drawing is scaled down to fit. (Trilium's own editor uses a fixed 5.)
+function previewPadding(elements) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const el of elements) {
+    if (!el || el.isDeleted) continue;
+    minX = Math.min(minX, el.x, el.x + el.width);
+    maxX = Math.max(maxX, el.x, el.x + el.width);
+    minY = Math.min(minY, el.y, el.y + el.height);
+    maxY = Math.max(maxY, el.y, el.y + el.height);
+  }
+  if (!isFinite(minX)) return 16;
+  const size = Math.max(maxX - minX, maxY - minY);
+  return Math.round(Math.min(96, Math.max(16, size * 0.05)));
+}
+
 // Expose exportToSvg for the read-only canvas viewer (canvas-viewer.html)
 // which loads this same bundle but has no #root element.
-window.ExcalidrawUtils = { exportToSvg };
+window.ExcalidrawUtils = { exportToSvg, previewPadding };
 
 const rootEl = document.getElementById("root");
 if (rootEl) {

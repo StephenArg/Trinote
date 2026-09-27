@@ -6,6 +6,7 @@ struct GeoMapNoteView: View {
     let viewportJSON: String
     let markers: [GeoMapPin]
     let tracks: [GeoMapTrack]
+    let shapes: [GeoMapShape]
     let settingsJSON: String
     var onOpenPinNote: ((String) -> Void)?
     var onFeatureSelected: ((String, GeoMapFeatureKind, GeoMapMarkFocus?) -> Void)?
@@ -15,6 +16,7 @@ struct GeoMapNoteView: View {
         viewportJSON: String,
         markers: [GeoMapPin],
         tracks: [GeoMapTrack] = [],
+        shapes: [GeoMapShape] = [],
         settingsJSON: String = "{}",
         onOpenPinNote: ((String) -> Void)? = nil,
         onFeatureSelected: ((String, GeoMapFeatureKind, GeoMapMarkFocus?) -> Void)? = nil,
@@ -23,6 +25,7 @@ struct GeoMapNoteView: View {
         self.viewportJSON = viewportJSON
         self.markers = markers
         self.tracks = tracks
+        self.shapes = shapes
         self.settingsJSON = settingsJSON
         self.onOpenPinNote = onOpenPinNote
         self.onFeatureSelected = onFeatureSelected
@@ -34,6 +37,7 @@ struct GeoMapNoteView: View {
             viewportJSON: viewportJSON,
             markers: markers,
             tracks: tracks,
+            shapes: shapes,
             settingsJSON: settingsJSON,
             onOpenPinNote: onOpenPinNote,
             onFeatureSelected: onFeatureSelected,
@@ -46,6 +50,7 @@ private struct GeoMapWebView: UIViewRepresentable {
     let viewportJSON: String
     let markers: [GeoMapPin]
     let tracks: [GeoMapTrack]
+    let shapes: [GeoMapShape]
     let settingsJSON: String
     let onOpenPinNote: ((String) -> Void)?
     let onFeatureSelected: ((String, GeoMapFeatureKind, GeoMapMarkFocus?) -> Void)?
@@ -82,6 +87,7 @@ private struct GeoMapWebView: UIViewRepresentable {
         context.coordinator.viewportJSON = viewportJSON
         context.coordinator.markers = markers
         context.coordinator.tracks = tracks
+        context.coordinator.shapes = shapes
         context.coordinator.settingsJSON = settingsJSON
         context.coordinator.onOpenPinNote = onOpenPinNote
         context.coordinator.onFeatureSelected = onFeatureSelected
@@ -108,6 +114,7 @@ private struct GeoMapWebView: UIViewRepresentable {
     func updateUIView(_ container: UIView, context: Context) {
         context.coordinator.markers = markers
         context.coordinator.tracks = tracks
+        context.coordinator.shapes = shapes
         context.coordinator.viewportJSON = viewportJSON
         context.coordinator.settingsJSON = settingsJSON
         context.coordinator.onOpenPinNote = onOpenPinNote
@@ -133,6 +140,8 @@ private struct GeoMapWebView: UIViewRepresentable {
         var viewportJSON = ""
         var markers: [GeoMapPin] = []
         var tracks: [GeoMapTrack] = []
+        var shapes: [GeoMapShape] = []
+        private var lastShapes: [GeoMapShape] = []
         var settingsJSON = "{}"
         var onOpenPinNote: ((String) -> Void)?
         var onFeatureSelected: ((String, GeoMapFeatureKind, GeoMapMarkFocus?) -> Void)?
@@ -182,7 +191,8 @@ private struct GeoMapWebView: UIViewRepresentable {
         func runJSInitOnce() {
             guard let webView, ready, !mapReady else { return }
             guard let markersJSON = Self.markersJSON(markers),
-                  let tracksJSON = Self.tracksJSON(tracks) else {
+                  let tracksJSON = Self.tracksJSON(tracks),
+                  let shapesJSON = shapes.bridgeJSONArray() else {
                 Log.geoMap.error("geoMapViewer init JSON encoding failed")
                 return
             }
@@ -190,6 +200,7 @@ private struct GeoMapWebView: UIViewRepresentable {
             window.geoMapViewer.init(\(viewportJSON), \(settingsJSON));
             window.geoMapViewer.loadMarkersData(\(markersJSON));
             window.geoMapViewer.loadTracksData(\(tracksJSON));
+            window.geoMapViewer.loadShapesData(\(shapesJSON));
             """
             Log.geoMap.info(
                 "[markers] Swift viewer init pins=\(GeoMapBridgeLogging.markersSummary(self.markers)) tracks=\(GeoMapBridgeLogging.tracksSummary(self.tracks))"
@@ -201,6 +212,7 @@ private struct GeoMapWebView: UIViewRepresentable {
                 self.mapReady = true
                 self.lastMarkersFP = Self.markersFingerprint(self.markers)
                 self.lastTracksFP = Self.tracksFingerprint(self.tracks)
+                self.lastShapes = self.shapes
                 self.lastSettingsJSON = self.settingsJSON
                 if error == nil {
                     GeoMapBridgeLogging.requestMarkerStateDump(webView: webView, api: "geoMapViewer")
@@ -224,6 +236,12 @@ private struct GeoMapWebView: UIViewRepresentable {
                 Log.geoMap.info("[markers] Swift viewer sync tracks → JS \(GeoMapBridgeLogging.tracksSummary(self.tracks))")
                 if let tracksJSON = Self.tracksJSON(tracks) {
                     webView.evaluateJavaScript("window.geoMapViewer.loadTracksData(\(tracksJSON));")
+                }
+            }
+            if shapes != lastShapes {
+                lastShapes = shapes
+                if let shapesJSON = shapes.bridgeJSONArray() {
+                    webView.evaluateJavaScript("window.geoMapViewer.loadShapesData(\(shapesJSON));")
                 }
             }
             if settingsJSON != lastSettingsJSON {

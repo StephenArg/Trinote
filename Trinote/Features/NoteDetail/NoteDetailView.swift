@@ -218,6 +218,7 @@ struct NoteDetailView: View {
     @StateObject private var geoMapEditorBridge = GeoMapEditorBridge()
     @State private var geoMapPins: [GeoMapPin] = []
     @State private var geoMapTracks: [GeoMapTrack] = []
+    @State private var geoMapShapes: [GeoMapShape] = []
     @State private var geoMapDisplaySettings = GeoMapDisplaySettings()
     @State private var geoMapCachedSettingsJSON = GeoMapDisplaySettings().bridgeJSON()
     @State private var geoMapInitialViewportJSON = ""
@@ -2124,6 +2125,7 @@ struct NoteDetailView: View {
                     : geoMapInitialViewportJSON,
                 markers: geoMapPins,
                 tracks: geoMapTracks,
+                shapes: geoMapShapes,
                 settingsJSON: geoMapCachedSettingsJSON,
                 onOpenPinNote: { navigateToNoteId = $0 }
             )
@@ -2142,6 +2144,7 @@ struct NoteDetailView: View {
                     : geoMapInitialViewportJSON,
                     markers: geoMapPins,
                     tracks: geoMapTracks,
+                    shapes: geoMapShapes,
                     settingsJSON: geoMapCachedSettingsJSON,
                     onOpenPinNote: { navigateToNoteId = $0 }
                 )
@@ -2877,6 +2880,7 @@ struct NoteDetailView: View {
                     : geoMapInitialViewportJSON,
                 markers: geoMapPins,
                 tracks: geoMapTracks,
+                shapes: geoMapShapes,
                 settingsJSON: geoMapCachedSettingsJSON,
                 bridge: geoMapEditorBridge,
                 onCreatePin: { lat, lng in
@@ -2939,6 +2943,7 @@ struct NoteDetailView: View {
         .onChange(of: note.noteId) { _, _ in
             geoMapPins = []
             geoMapTracks = []
+            geoMapShapes = []
             clearGeoMapSelection()
             geoMapDisplaySettings = GeoMapDisplaySettings(from: note)
             geoMapCachedSettingsJSON = geoMapDisplaySettings.bridgeJSON()
@@ -3056,6 +3061,7 @@ struct NoteDetailView: View {
                             selection: selection,
                             pin: geoMapPins.first(where: { $0.noteId == selection.noteId }),
                             track: geoMapTracks.first(where: { $0.noteId == selection.noteId }),
+                            shape: geoMapShapes.first(where: { $0.noteId == selection.noteId }),
                             pinHTML: geoMapDetailHTML,
                             gpxStats: geoMapDetailGPXStats,
                             onClose: { clearGeoMapSelection() },
@@ -3137,22 +3143,25 @@ struct NoteDetailView: View {
         Task { @MainActor in
             let pins: [GeoMapPin]
             let tracks: [GeoMapTrack]
+            let shapes: [GeoMapShape]
             if vm.client != nil, vm.isOnline {
-                async let serverPins = vm.fetchGeoMapPinsFromServer(note: note)
+                async let serverPinsAndShapes = vm.fetchGeoMapPinsAndShapesFromServer(note: note)
                 async let serverTracks = vm.fetchGeoMapTracksFromServer(note: note)
-                pins = await serverPins
+                (pins, shapes) = await serverPinsAndShapes
                 tracks = await serverTracks
             } else {
                 pins = vm.geoMapPinsFromCache()
                 tracks = vm.geoMapTracksFromCache()
+                shapes = vm.geoMapShapesFromCache()
             }
-            if pins == geoMapPins, tracks == geoMapTracks {
+            if pins == geoMapPins, tracks == geoMapTracks, shapes == geoMapShapes {
                 return
             }
             geoMapPins = pins
             geoMapTracks = tracks
+            geoMapShapes = shapes
             Log.geoMap.info(
-                "[geo-map-debug] loadGeoMapData pins=\(pins.count) tracks=\(tracks.count) online=\(vm.isOnline)"
+                "[geo-map-debug] loadGeoMapData pins=\(pins.count) tracks=\(tracks.count) shapes=\(shapes.count) online=\(vm.isOnline)"
             )
         }
     }
@@ -3215,12 +3224,12 @@ struct NoteDetailView: View {
         if nextMarkId != geoMapLastScrolledMarkId {
             geoMapLastScrolledMarkId = nil
         }
-        if !isSameNote || kind == .pin {
+        if !isSameNote || kind != .track {
             geoMapDetailHTML = nil
             geoMapDetailGPXStats = nil
         }
         Task {
-            if kind == .pin {
+            if kind == .pin || kind == .shape {
                 geoMapDetailHTML = await vm.geoMapChildHTML(for: noteId)
             } else if let track = geoMapTracks.first(where: { $0.noteId == noteId }) {
                 geoMapDetailGPXStats = GeoMapGPXParser.parse(track.gpxXML)
@@ -3292,10 +3301,14 @@ struct NoteDetailView: View {
                     mime: "text/html",
                     initialContent: "",
                     serverProfileId: profileId,
-                    initialAttributes: [
-                        NoteCreationAttribute(type: "label", name: "geolocation", value: "\(lat),\(lng)"),
-                        NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-map-pin")
-                    ]
+                    // v0.106 writes no #iconClass on new markers, so a template's or #child:iconClass icon applies and
+                    // the default pin shows otherwise; older servers show a plain note icon without one.
+                    initialAttributes: [NoteCreationAttribute(type: "label", name: "geolocation", value: "\(lat),\(lng)")]
+                        + (TriliumServerCompatibility.supportsGeoNoteIcons(appState.serverAppInfo)
+                            ? []
+                            : [NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-map-pin")]),
+                    // "New Location" is a placeholder: a map's #titleTemplate names new markers, as on the web.
+                    useParentTitleTemplate: true
                 )
 
                 let pin = GeoMapPin(noteId: newNoteId, title: title, lat: lat, lng: lng)

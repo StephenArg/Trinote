@@ -9,6 +9,7 @@ struct MermaidEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var renderSource: String = ""
     @State private var debounceTask: Task<Void, Never>?
+    @State private var sourceEditor = MermaidSourceEditorController()
 
     /// True when the user hasn't typed anything (and hasn't picked a sample yet). Drives the
     /// starter-chooser-vs-preview swap in the upper pane. Trimmed so a stray newline doesn't
@@ -36,17 +37,18 @@ struct MermaidEditorView: View {
 
                 ZStack(alignment: .bottomTrailing) {
                     VStack(alignment: .leading, spacing: 0) {
-                        HStack {
+                        HStack(spacing: 0) {
                             Text(String(localized: "Source", comment: "Mermaid editor label"))
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
-                            Spacer()
+                            Spacer(minLength: 8)
+                            sourceTools
                         }
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                        .padding(.bottom, 4)
+                        .padding(.leading)
+                        .padding(.trailing, 8)
+                        .padding(.top, 4)
 
-                        MermaidSourceTextView(text: $editableContent)
+                        MermaidSourceTextView(text: $editableContent, controller: sourceEditor)
                     }
 
                     saveChip
@@ -62,6 +64,73 @@ struct MermaidEditorView: View {
         .onChange(of: editableContent) { _, newValue in
             scheduleRender(newValue)
         }
+    }
+
+    /// Small editing tools on the Source bar (the iOS keyboard has no Tab, brackets or `-->` within easy reach).
+    private var sourceTools: some View {
+        HStack(spacing: 0) {
+            toolButton("arrow.uturn.backward", String(localized: "Undo", comment: "Mermaid editor undo")) {
+                sourceEditor.undo()
+            }
+            .disabled(!sourceEditor.canUndo)
+            toolButton("arrow.uturn.forward", String(localized: "Redo", comment: "Mermaid editor redo")) {
+                sourceEditor.redo()
+            }
+            .disabled(!sourceEditor.canRedo)
+            toolButton("decrease.indent", String(localized: "Outdent", comment: "Mermaid editor remove indentation")) {
+                sourceEditor.outdent()
+            }
+            toolButton("increase.indent", String(localized: "Indent", comment: "Mermaid editor add indentation")) {
+                sourceEditor.indent()
+            }
+            toolButton("percent", String(localized: "Comment Out Lines", comment: "Mermaid editor toggle %% comment")) {
+                sourceEditor.toggleComment()
+            }
+            insertMenu
+        }
+        .font(.system(size: 15))
+    }
+
+    private func toolButton(_ systemImage: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 32, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(label)
+    }
+
+    /// Syntax that takes several keyboard switches to type; the caret lands where the text goes.
+    private var insertMenu: some View {
+        Menu {
+            Button("-->  " + String(localized: "Arrow", comment: "Mermaid insert arrow")) {
+                sourceEditor.insert(" --> ")
+            }
+            Button("-- … -->  " + String(localized: "Arrow with Text", comment: "Mermaid insert labelled arrow")) {
+                sourceEditor.insert(" -- text --> ", select: NSRange(location: 4, length: 4))
+            }
+            Button("[ ]  " + String(localized: "Box", comment: "Mermaid insert rectangle node")) {
+                sourceEditor.insert("[]", select: NSRange(location: 1, length: 0))
+            }
+            Button("( )  " + String(localized: "Rounded Box", comment: "Mermaid insert rounded node")) {
+                sourceEditor.insert("()", select: NSRange(location: 1, length: 0))
+            }
+            Button("{ }  " + String(localized: "Decision", comment: "Mermaid insert rhombus node")) {
+                sourceEditor.insert("{}", select: NSRange(location: 1, length: 0))
+            }
+            Button("subgraph … end  " + String(localized: "Group", comment: "Mermaid insert subgraph")) {
+                sourceEditor.insert("subgraph title\n    \nend", select: NSRange(location: 9, length: 5))
+            }
+            Button("<br>  " + String(localized: "Line Break", comment: "Mermaid insert line break in a label")) {
+                sourceEditor.insert("<br>")
+            }
+        } label: {
+            Image(systemName: "plus.square")
+                .frame(width: 32, height: 30)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(String(localized: "Insert", comment: "Mermaid editor insert syntax menu"))
     }
 
     private func scheduleRender(_ source: String) {
@@ -105,13 +174,14 @@ struct MermaidEditorView: View {
 /// and cannot scroll the last line above the keyboard; `UITextView` gives us both knobs.
 private struct MermaidSourceTextView: UIViewRepresentable {
     @Binding var text: String
+    let controller: MermaidSourceEditorController
 
     /// Extra space under the last line, on top of chip clearance, so the caret can sit
     /// above the keyboard / save chip.
     private static let extraScrollBelowLastLine: CGFloat = 48
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, controller: controller)
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -144,17 +214,25 @@ private struct MermaidSourceTextView: UIViewRepresentable {
         tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         tv.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         context.coordinator.textView = tv
+        controller.textView = tv
+        controller.onTextChanged = { [coordinator = context.coordinator] newText in
+            coordinator.text.wrappedValue = newText
+        }
         context.coordinator.observeKeyboard()
         return tv
     }
 
     func updateUIView(_ uiView: UITextView, context: Context) {
         context.coordinator.textView = uiView
+        controller.textView = uiView
         if uiView.text != text {
             let selected = uiView.selectedRange
             uiView.text = text
+            // Text replaced from outside (a starter sample) leaves nothing the undo steps could apply to.
+            uiView.undoManager?.removeAllActions()
             let maxLocation = (text as NSString).length
             uiView.selectedRange = NSRange(location: min(selected.location, maxLocation), length: 0)
+            controller.refreshUndoState()
         }
     }
 
@@ -175,15 +253,18 @@ private struct MermaidSourceTextView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var text: Binding<String>
+        let controller: MermaidSourceEditorController
         weak var textView: UITextView?
         private var keyboardTokens: [NSObjectProtocol] = []
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, controller: MermaidSourceEditorController) {
             self.text = text
+            self.controller = controller
         }
 
         func textViewDidChange(_ textView: UITextView) {
             text.wrappedValue = textView.text ?? ""
+            controller.refreshUndoStateSoon()
         }
 
         func observeKeyboard() {
@@ -234,6 +315,130 @@ private struct MermaidSourceTextView: UIViewRepresentable {
                 apply()
             }
         }
+    }
+}
+
+// MARK: - Source bar tools
+
+/// Runs the Source bar's tools on the mermaid `UITextView`. Edits go through `replace(_:withText:)`, so each is one
+/// step on the text view's own undo stack, next to the typing around it.
+@MainActor
+@Observable
+final class MermaidSourceEditorController {
+    @ObservationIgnored weak var textView: UITextView?
+    /// Hands the edited text to the note's binding.
+    @ObservationIgnored var onTextChanged: ((String) -> Void)?
+    private(set) var canUndo = false
+    private(set) var canRedo = false
+
+    static let indentUnit = "    "
+
+    func refreshUndoState() {
+        let undoManager = textView?.undoManager
+        if canUndo != (undoManager?.canUndo ?? false) { canUndo = undoManager?.canUndo ?? false }
+        if canRedo != (undoManager?.canRedo ?? false) { canRedo = undoManager?.canRedo ?? false }
+    }
+
+    /// Typing is grouped per run loop, so the undo stack settles just after the change is reported.
+    func refreshUndoStateSoon() {
+        refreshUndoState()
+        DispatchQueue.main.async { [weak self] in self?.refreshUndoState() }
+    }
+
+    func undo() {
+        textView?.undoManager?.undo()
+        textDidChange()
+    }
+
+    func redo() {
+        textView?.undoManager?.redo()
+        textDidChange()
+    }
+
+    /// Puts `snippet` over the selection, then selects `select` within it (the caret at its end when `nil`).
+    func insert(_ snippet: String, select: NSRange? = nil) {
+        guard let textView, let range = textView.selectedTextRange else { return }
+        let start = textView.offset(from: textView.beginningOfDocument, to: range.start)
+        textView.replace(range, withText: snippet)
+        let placed = select ?? NSRange(location: (snippet as NSString).length, length: 0)
+        textView.selectedRange = NSRange(location: start + placed.location, length: placed.length)
+        textDidChange()
+    }
+
+    func toggleComment() { transformSelectedLines(Self.togglingComment) }
+    /// With a bare caret the line is indented even when blank, as Tab would; a selection leaves its blank lines alone.
+    func indent() {
+        let caretOnly = textView?.selectedRange.length == 0
+        transformSelectedLines { Self.indenting($0, includingBlankLines: caretOnly) }
+    }
+    func outdent() { transformSelectedLines(Self.outdenting) }
+
+    /// `%% ` after each line's indentation, or off again when every non-blank line already has it.
+    nonisolated static func togglingComment(_ lines: [String]) -> [String] {
+        let written = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let allCommented = !written.isEmpty && written.allSatisfy { $0.trimmingCharacters(in: .whitespaces).hasPrefix("%%") }
+        return lines.map { line in
+            let indent = line.prefix { $0 == " " || $0 == "\t" }
+            let body = line.dropFirst(indent.count)
+            if allCommented {
+                guard body.hasPrefix("%%") else { return line }
+                var rest = body.dropFirst(2)
+                if rest.hasPrefix(" ") { rest = rest.dropFirst() }
+                return String(indent) + rest
+            }
+            return body.isEmpty ? line : String(indent) + "%% " + body
+        }
+    }
+
+    nonisolated static func indenting(_ lines: [String], includingBlankLines: Bool = false) -> [String] {
+        lines.map { $0.isEmpty && !includingBlankLines ? $0 : indentUnit + $0 }
+    }
+
+    /// Removes one tab or up to one indent's worth of spaces.
+    nonisolated static func outdenting(_ lines: [String]) -> [String] {
+        lines.map { line in
+            if line.hasPrefix("\t") { return String(line.dropFirst()) }
+            let spaces = line.prefix(indentUnit.count).prefix { $0 == " " }.count
+            return String(line.dropFirst(spaces))
+        }
+    }
+
+    /// Rewrites the lines the selection touches in one replacement (one undo step), keeping the caret on its line or
+    /// selecting the rewritten lines.
+    private func transformSelectedLines(_ transform: ([String]) -> [String]) {
+        guard let textView else { return }
+        let text = (textView.text ?? "") as NSString
+        let selected = textView.selectedRange
+        // A selection ending at the start of a line does not take that line in.
+        var probe = selected
+        if probe.length > 0, text.character(at: probe.location + probe.length - 1) == 10 { probe.length -= 1 }
+        var lineRange = text.lineRange(for: probe)
+        if lineRange.length > 0, text.character(at: lineRange.location + lineRange.length - 1) == 10 { lineRange.length -= 1 }
+
+        let block = text.substring(with: lineRange)
+        let lines = (block as NSString).components(separatedBy: "\n")
+        let rewritten = transform(lines).joined(separator: "\n")
+        guard rewritten != block,
+              let start = textView.position(from: textView.beginningOfDocument, offset: lineRange.location),
+              let end = textView.position(from: start, offset: lineRange.length),
+              let range = textView.textRange(from: start, to: end)
+        else { return }
+
+        textView.replace(range, withText: rewritten)
+        let newLength = (rewritten as NSString).length
+        if selected.length == 0 && lines.count == 1 {
+            let caret = max(lineRange.location, selected.location + newLength - lineRange.length)
+            textView.selectedRange = NSRange(location: caret, length: 0)
+        } else {
+            textView.selectedRange = NSRange(location: lineRange.location, length: newLength)
+        }
+        textDidChange()
+    }
+
+    private func textDidChange() {
+        guard let textView else { return }
+        onTextChanged?(textView.text ?? "")
+        refreshUndoStateSoon()
     }
 }
 

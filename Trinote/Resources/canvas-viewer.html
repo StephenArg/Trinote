@@ -49,7 +49,9 @@ window.canvasViewer = {
                     exportWithDarkMode: window.matchMedia('(prefers-color-scheme: dark)').matches,
                     viewBackgroundColor: 'transparent'
                 },
-                exportPadding: 20
+                exportPadding: window.ExcalidrawUtils.previewPadding
+                    ? window.ExcalidrawUtils.previewPadding(elements)
+                    : 20
             });
 
             statusEl.style.display = 'none';

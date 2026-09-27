@@ -17,6 +17,7 @@ desktop / web client.
 
 | Trilium release | Mermaid version | Source URL |
 |-----------------|-----------------|------------|
+| v0.106.0        | 12.0.0          | `https://cdn.jsdelivr.net/npm/mermaid@12.0.0/dist/mermaid.min.js` |
 | v0.105.0        | 11.16.1         | `https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js` |
 | v0.103.0        | 11.15.0         | `https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js` |
 | v0.102.x        | 10.9.3          | `https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js` |
@@ -29,6 +30,14 @@ Scripts/bump_vendor.sh mermaid <VERSION>
 
 The bundle declares `globalThis.mermaid = …` at the end, which is what
 the HTML files consume via `window.mermaid.initialize`, `.run`, `.render`.
+
+Mermaid 12 bundles ELK and makes it the default layout, with a new `neo`
+default look. Every `mermaid.initialize` call (`mermaid-viewer.html`,
+`mermaid-editor.html`, `editor.html`, `HTMLNoteView.swift`) pins
+`layout: 'dagre'` and `look: 'classic'`, as Trilium v0.106 does, so stored
+diagrams keep their layout; a diagram's front matter can still ask for
+`layout: elk`. Mermaid 12 targets Safari 17.4+, which is why the app's
+deployment target is iOS 17.4.
 
 ## `MindElixir.iife.js` / `MindElixir.css`
 
@@ -68,7 +77,8 @@ Replaced by MapLibre GL for geo-map notes (see below).
 
 ## `maplibre-gl.js` / `maplibre-gl.css`
 
-MapLibre GL **5.24.0** for geo-map editor/viewer (`geomap-*.html`). Matches Trilium v0.105 desktop.
+MapLibre GL **5.24.0** for geo-map editor/viewer (`geomap-*.html`). Matches Trilium v0.105 desktop
+(v0.106 moved to MapLibre 6.10; the map's stored data is unchanged, so this bump is optional).
 
 ```bash
 curl -sSfL -o Trinote/Resources/vendor/maplibre-gl.js \
@@ -87,7 +97,18 @@ VersaTiles Colorful vector style JSON (`versatiles-colorful.json`), copied from 
 
 ## `katex/`
 
-Vendored KaTeX assets for inline math in HTML and mermaid notes.
+Vendored KaTeX **0.18.7** (`katex.min.js`, `katex.min.css`, `fonts/`) for
+inline math in HTML and mermaid notes. Matches Trilium v0.106.
+
+```bash
+curl -sSfL -o /tmp/katex.tgz https://registry.npmjs.org/katex/-/katex-0.18.7.tgz
+tar xzf /tmp/katex.tgz -C /tmp
+cp /tmp/package/dist/katex.min.{js,css} Trinote/Resources/vendor/katex/
+cp /tmp/package/dist/fonts/* Trinote/Resources/vendor/katex/fonts/
+```
+
+KaTeX 0.18 prefixes its internal CSS classes; Trinote only styles `.katex`
+and `.katex-display`, which keep their names.
 
 ## `images/`
 

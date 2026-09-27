@@ -133,7 +133,7 @@ final class CrossInstanceNoteCopyServiceTests: XCTestCase {
         let destCreates = await dest.createNoteCalls
         XCTAssertEqual(destCreates.count, 1)
         XCTAssertEqual(destCreates[0].parentNoteId, TriliumTreeConstants.rootNoteId)
-        let copiedTitle = destCreates[0].title
+        let copiedTitle = try XCTUnwrap(destCreates[0].title)
         XCTAssertTrue(copiedTitle.hasPrefix("Hello "))
         let suffix = copiedTitle.dropFirst("Hello ".count)
         XCTAssertEqual(suffix.count, 7)
@@ -178,7 +178,7 @@ final class CrossInstanceNoteCopyServiceTests: XCTestCase {
 
         let destCreates = await dest.createNoteCalls
         XCTAssertEqual(destCreates.count, 2)
-        XCTAssertTrue(destCreates[0].title.hasPrefix("Parent "))
+        XCTAssertTrue(destCreates[0].title?.hasPrefix("Parent ") == true)
         XCTAssertEqual(destCreates[1].title, "Child")
     }
 

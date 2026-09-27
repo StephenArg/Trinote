@@ -4799,6 +4799,10 @@ function trinoteRunMermaidInSlot(slot) {
       window.__trinoteEditorMermaidInited = true;
       window.mermaid.initialize({
         startOnLoad: false,
+        // Mermaid 12 defaults to the ELK layout and the `neo` look; pin the pre-12 ones as Trilium
+        // v0.106 does, so stored diagrams keep their layout. Front matter still overrides either.
+        layout: 'dagre',
+        look: 'classic',
         securityLevel: 'loose',
         theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
         themeVariables: window.matchMedia('(prefers-color-scheme: dark)').matches ? {

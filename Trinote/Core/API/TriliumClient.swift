@@ -29,7 +29,8 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func getNoteWithBranches(_ noteId: String) async throws -> (NoteResponse, [BranchResponse])
     /// Batched `POST /api/tree/load` for full-sync BFS (multiple note IDs per request).
     func batchTreeLoad(noteIds: [String]) async throws -> TreeLoadResponse
-    /// One batched `tree/load` plus parallel `GET /api/notes/:id` for each id, merged in request order.
+    /// One batched `tree/load` plus the notes' dates (one `POST /api/notes/metadata` on Trilium 0.106+, otherwise a
+    /// parallel `GET /api/notes/:id` per id), merged in request order.
     func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry]
     func getNoteContent(_ noteId: String) async throws -> Data
     func updateNote(_ noteId: String, request: UpdateNoteRequest) async throws -> NoteResponse
@@ -44,6 +45,11 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse
     /// Search note ids, then one `tree/load` for titles (no per-note `GET /api/notes`).
     func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle]
+    /// `GET /api/quick-search/:query` — per-result snippets and breadcrumbs (up to 200 results, archived notes excluded).
+    func quickSearchResults(query: String) async throws -> [QuickSearchResult]
+    /// Matching note ids only. `ancestorNoteId` limits the search to that subtree on Trilium 0.106+; older servers
+    /// ignore it, so callers that need the scope intersect with the notes they hold.
+    func searchNoteIds(query: String, ancestorNoteId: String?) async throws -> [String]
     /// Existing journal day notes for `yyyy-MM` under `calendarRootId`. Does not create notes.
     /// `GET /api/special-notes/notes-for-month/{month}?calendarRoot=`
     func getDayNotesForMonth(month: String, calendarRootId: String) async throws -> [String: String]
@@ -63,6 +69,8 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func deleteBranchWithNoProgressTask(_ branchId: String) async throws
     /// `PUT /api/notes/:noteId/clone-to-note/:parentNoteId` — same as Trilium’s “share” (clone under `_share`).
     func cloneNoteToParentNote(_ noteId: String, parentNoteId: String) async throws
+    /// The same clone, returning whether Trilium made it (and why not) instead of ignoring the answer.
+    func cloneNote(_ noteId: String, toParentNoteId parentNoteId: String) async throws -> CloneNoteResult
     /// Resolves the branch linking `childNoteId` as a child of `parentNoteId` (from `POST /api/tree/load`).
     func branchId(fromParentNoteId parentNoteId: String, toChildNoteId childNoteId: String) async throws -> String?
     /// `PUT /api/branches/:branchId/move-to/:parentBranchId` — moves the branch (tree placement) under the target parent’s branch.
@@ -891,7 +899,7 @@ actor TriliumClient: TriliumClientProtocol {
         var rowsById: [String: TreeLoadNoteRow] = [:]
         rowsById.reserveCapacity(tree.notes.count)
         for n in tree.notes { rowsById[n.noteId] = n }
-        let details = await fetchNativeNoteDetailsParallel(noteIds: noteIds, maxConcurrency: 8)
+        let details = await fetchNoteDetails(noteIds: noteIds, treeRows: rowsById)
         var entries: [FullSyncTreeBatchEntry] = []
         entries.reserveCapacity(noteIds.count)
         for noteId in noteIds {
@@ -909,6 +917,32 @@ actor TriliumClient: TriliumClientProtocol {
             entries.append(FullSyncTreeBatchEntry(note: note, childBranches: childBranches))
         }
         return entries
+    }
+
+    /// Each note's row with its dates. Trilium 0.106+ gives the dates of the whole batch in one `POST /api/notes/metadata`,
+    /// merged with the batch's `tree/load` rows; older servers, or a failed batch call, take one `GET` per note.
+    private func fetchNoteDetails(noteIds: [String], treeRows: [String: TreeLoadNoteRow]) async -> [String: NativeNoteDetailRow] {
+        if TriliumServerCompatibility.supportsBulkNoteMetadata(lastFetchedAppInfo) {
+            do {
+                let timestamps: [String: NoteTimestampsRow] = try await postJSON(
+                    "/api/notes/metadata",
+                    body: TreeLoadRequest(noteIds: noteIds),
+                    csrf: true
+                )
+                var details: [String: NativeNoteDetailRow] = [:]
+                details.reserveCapacity(noteIds.count)
+                // A note missing from either answer was deleted meanwhile, or tree/load left it out; callers handle both.
+                for noteId in noteIds {
+                    guard let row = treeRows[noteId], let dates = timestamps[noteId] else { continue }
+                    details[noteId] = Self.nativeDetailFallback(from: row, timestamps: dates)
+                }
+                return details
+            } catch {
+                if case .cancelled = APIError.from(error) { return [:] }
+                Log.api.warning("notes/metadata failed, loading notes one by one: \(error)")
+            }
+        }
+        return await fetchNativeNoteDetailsParallel(noteIds: noteIds, maxConcurrency: 8)
     }
 
     /// Parallel `GET /api/notes/:id` for full sync; failures return no key (caller may fall back to `tree.notes`).
@@ -1029,7 +1063,7 @@ actor TriliumClient: TriliumClientProtocol {
 
     func createNote(_ request: CreateNoteRequest) async throws -> CreateNoteResponse {
         struct Body: Encodable {
-            let title: String
+            let title: String?
             let type: String
             let mime: String?
             let content: String
@@ -1063,7 +1097,7 @@ actor TriliumClient: TriliumClientProtocol {
         Log.noteDiag.info(
             """
             NoteDiag CREATE api POST /api/notes/\(request.parentNoteId)/children
-              title=\(request.title) type=\(request.type) mime=\(request.mime ?? "nil") templateNoteId=\(request.templateNoteId ?? "nil")
+              title=\(request.title ?? "<from #titleTemplate>") type=\(request.type) mime=\(request.mime ?? "nil") templateNoteId=\(request.templateNoteId ?? "nil")
               content.len=\(request.content.count) content.preview=\(contentPreview)
               notePosition=\(request.notePosition.map(String.init) ?? "nil") branchId=\(request.branchId ?? "nil") clientNoteId=\(request.noteId ?? "nil") protected=\(request.isProtected.map(String.init) ?? "nil")
             """
@@ -1172,6 +1206,24 @@ actor TriliumClient: TriliumClientProtocol {
         return SearchResponse(results: entries.map(\.note), debugInfo: nil)
     }
 
+    func searchNoteIds(query: String, ancestorNoteId: String?) async throws -> [String] {
+        try await get(
+            "/api/search/\(Self.percentEncodePathSegment(query))",
+            queryParams: ancestorNoteId.map { ["ancestorNoteId": $0] },
+            csrf: false,
+            pathIsPercentEncoded: true
+        )
+    }
+
+    func quickSearchResults(query: String) async throws -> [QuickSearchResult] {
+        let response: QuickSearchResponse = try await get(
+            "/api/quick-search/\(Self.percentEncodePathSegment(query))",
+            csrf: false,
+            pathIsPercentEncoded: true
+        )
+        return response.searchResults ?? []
+    }
+
     func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle] {
         let ids: [String] = try await get(
             "/api/search/\(Self.percentEncodePathSegment(query))",
@@ -1257,11 +1309,25 @@ actor TriliumClient: TriliumClientProtocol {
         if idx == 0 {
             let rest = orderedSiblingBranchIds.filter { $0 != branchId }
             guard let before = rest.first else { return }
-            try await putEmpty("/api/branches/\(branchId)/move-before/\(before)", csrf: true)
+            try await putExpectingSuccess("/api/branches/\(branchId)/move-before/\(before)")
         } else {
             let after = orderedSiblingBranchIds[idx - 1]
             if after == branchId { return }
-            try await putEmpty("/api/branches/\(branchId)/move-after/\(after)", csrf: true)
+            try await putExpectingSuccess("/api/branches/\(branchId)/move-after/\(after)")
+        }
+    }
+
+    /// PUT without a body to a Trilium route that answers `{ success, message }` with HTTP 200 even when it refuses.
+    private func putExpectingSuccess(_ path: String) async throws {
+        let request = try buildRequest(path: path, method: "PUT", queryParams: nil, csrf: true, jsonBody: false)
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response, data: data)
+        struct Outcome: Decodable {
+            let success: Bool?
+            let message: String?
+        }
+        if let outcome = try? decoder.decode(Outcome.self, from: data), outcome.success == false {
+            throw APIError.rejected(outcome.message ?? "Trilium did not make the change.")
         }
     }
 
@@ -1312,6 +1378,24 @@ actor TriliumClient: TriliumClientProtocol {
             body: Body(),
             csrf: true
         )
+    }
+
+    func cloneNote(_ noteId: String, toParentNoteId parentNoteId: String) async throws -> CloneNoteResult {
+        struct Body: Encodable { var prefix: String? = nil }
+        var request = try buildRequest(
+            path: "/api/notes/\(noteId)/clone-to-note/\(parentNoteId)",
+            method: "PUT",
+            queryParams: nil,
+            csrf: true,
+            jsonBody: true
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(Body())
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response, data: data)
+        // Every supported server answers `{ success, … }`; anything else passed validation, so it is taken as done.
+        return (try? decoder.decode(CloneNoteResult.self, from: data))
+            ?? CloneNoteResult(success: true, branchId: nil, message: nil)
     }
 
     func branchId(fromParentNoteId parentNoteId: String, toChildNoteId childNoteId: String) async throws -> String? {
@@ -1872,7 +1956,7 @@ actor TriliumClient: TriliumClientProtocol {
         return body.code
     }
 
-    private static func nativeDetailFallback(from row: TreeLoadNoteRow) -> NativeNoteDetailRow {
+    private static func nativeDetailFallback(from row: TreeLoadNoteRow, timestamps: NoteTimestampsRow? = nil) -> NativeNoteDetailRow {
         NativeNoteDetailRow(
             noteId: row.noteId,
             title: row.title,
@@ -1881,10 +1965,10 @@ actor TriliumClient: TriliumClientProtocol {
             mime: row.mime,
             blobId: row.blobId,
             isDeleted: row.isDeleted,
-            dateCreated: nil,
-            dateModified: nil,
-            utcDateCreated: nil,
-            utcDateModified: nil
+            dateCreated: timestamps?.dateCreated,
+            dateModified: timestamps?.dateModified,
+            utcDateCreated: timestamps?.utcDateCreated,
+            utcDateModified: timestamps?.utcDateModified
         )
     }
 
@@ -2111,6 +2195,14 @@ private final class TriliumStopRedirectDelegate: NSObject, URLSessionTaskDelegat
 
 private struct TreeLoadRequest: Encodable {
     let noteIds: [String]
+}
+
+/// One note's entry in the `POST /api/notes/metadata` answer (Trilium 0.106+).
+private struct NoteTimestampsRow: Decodable {
+    let dateCreated: String?
+    let dateModified: String?
+    let utcDateCreated: String?
+    let utcDateModified: String?
 }
 
 private struct CreateNoteNativeResponse: Decodable {

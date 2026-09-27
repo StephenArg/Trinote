@@ -19,6 +19,8 @@ enum APIError: LocalizedError, Sendable {
     case noToken
     case connectionRefused
     case cancelled
+    /// Trilium answered `{ success: false, message }` (with HTTP 200), e.g. a move it would not make.
+    case rejected(String)
     case unknown(String)
 
     var errorDescription: String? {
@@ -47,13 +49,16 @@ enum APIError: LocalizedError, Sendable {
         case .totpRequired:
             return "This server requires a TOTP code. Please enter your authenticator code."
         case .totpInvalid:
-            return "TOTP code is incorrect. Please try again."
+            // Trilium v0.106+ accepts each code once (RFC 6238), so a code that just worked is refused on a retry.
+            return "TOTP code is incorrect or was already used. Wait for the next code and try again."
         case .noToken:
             return "Not signed in. Please log in with your Trilium password or SSO."
         case .connectionRefused:
             return "Connection refused. Check the server address and ensure Trilium is running."
         case .cancelled:
             return "Request was cancelled."
+        case .rejected(let message):
+            return message
         case .unknown(let detail):
             return "Unexpected error: \(detail)"
         }

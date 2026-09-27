@@ -47,6 +47,7 @@ actor MockTriliumClient: TriliumClientProtocol {
     var deleteNoteCalls: [(noteId: String, eraseNotes: Bool)] = []
     var searchCalls: [String] = []
     var renameBoardColumnCalls: [(boardNoteId: String, request: RenameBoardColumnRequest)] = []
+    var quickSearchResultsValue: [QuickSearchResult] = []
     var searchNoteIdTitlesCalls: [(query: String, limit: Int)] = []
     var editedNotesCalls: [String] = []
     var dayNotesForMonthCalls: [(month: String, calendarRootId: String)] = []
@@ -234,7 +235,7 @@ actor MockTriliumClient: TriliumClientProtocol {
             throw APIError.unknown("forced createNote failure")
         }
         if let result = createNoteResult { return try result.get() }
-        let note = TestFixtures.noteResponse(id: "new-\(UUID().uuidString.prefix(8))", title: request.title, type: request.type)
+        let note = TestFixtures.noteResponse(id: "new-\(UUID().uuidString.prefix(8))", title: request.title ?? "New note", type: request.type)
         let branch = TestFixtures.branchResponse(noteId: note.noteId, parentNoteId: request.parentNoteId)
         return CreateNoteResponse(note: note, branch: branch)
     }
@@ -322,6 +323,17 @@ actor MockTriliumClient: TriliumClientProtocol {
         _ = orderedSiblingBranchIds
     }
 
+    var searchNoteIdsValue: [String] = []
+    func searchNoteIds(query: String, ancestorNoteId: String?) async throws -> [String] {
+        searchCalls.append(query)
+        return searchNoteIdsValue
+    }
+
+    func quickSearchResults(query: String) async throws -> [QuickSearchResult] {
+        _ = query
+        return quickSearchResultsValue
+    }
+
     func renameBoardColumn(boardNoteId: String, request: RenameBoardColumnRequest) async throws {
         renameBoardColumnCalls.append((boardNoteId, request))
     }
@@ -342,6 +354,13 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func cloneNoteToParentNote(_ noteId: String, parentNoteId: String) async throws {
         cloneToParentCalls.append((noteId, parentNoteId))
+    }
+
+    var cloneNoteResult = CloneNoteResult(success: true, branchId: "brClone", message: nil)
+
+    func cloneNote(_ noteId: String, toParentNoteId parentNoteId: String) async throws -> CloneNoteResult {
+        cloneToParentCalls.append((noteId, parentNoteId))
+        return cloneNoteResult
     }
 
     func branchId(fromParentNoteId parentNoteId: String, toChildNoteId childNoteId: String) async throws -> String? {

@@ -407,6 +407,207 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(url.absoluteString, "https://trilium.test/sub/api/notes/a%20b")
     }
 
+    func testQuickSearchDecodesV0105AndV0106Shapes() throws {
+        let v105 = #"{"searchResultNoteIds":["n1"],"searchResults":[{"notePath":"root/p1/n1","noteTitle":"Note","notePathTitle":"Parent / Note","contentSnippet":"a match here","highlightedContentSnippet":"a <b>match</b> here","icon":"bx bx-note"}],"error":null}"#
+        let r105 = try JSONDecoder().decode(QuickSearchResponse.self, from: Data(v105.utf8))
+        XCTAssertEqual(r105.searchResults?.first?.resolvedNoteId, "n1")
+
+        let v106 = #"{"searchResultNoteIds":["n2"],"searchResults":[{"noteId":"n2","notePath":"root/n2","noteTitle":"N","notePathTitle":"N","icon":"bx bx-note"}],"highlightedTokens":["x"],"error":null}"#
+        let r106 = try JSONDecoder().decode(QuickSearchResponse.self, from: Data(v106.utf8))
+        XCTAssertEqual(r106.searchResults?.first?.resolvedNoteId, "n2")
+    }
+
+    func testSnippetFormatterUnescapesAndHighlightsMatches() throws {
+        let formatted = try XCTUnwrap(SearchSnippetFormatter.attributed(
+            highlightedHTML: "Tom &amp; <b>Jerry</b> &lt;3<br>next <b class=\"search-result-fuzzy\">line</b>",
+            plain: nil
+        ))
+        XCTAssertEqual(String(formatted.characters), "Tom & Jerry <3 next line")
+        let highlighted = formatted.runs.filter { $0.inlinePresentationIntent == .stronglyEmphasized }
+            .map { String(formatted[$0.range].characters) }
+        XCTAssertEqual(highlighted, ["Jerry", "line"])
+        XCTAssertNil(SearchSnippetFormatter.attributed(highlightedHTML: "  ", plain: nil))
+        XCTAssertEqual(
+            SearchSnippetFormatter.attributed(highlightedHTML: nil, plain: "two\nlines").map { String($0.characters) },
+            "two lines"
+        )
+    }
+
+    // MARK: - Sibling reorder
+
+    /// Every drag among five siblings, saved with one request, leaves the server in the dragged order. The fake server
+    /// applies `move-before` / `move-after` as Trilium's `branches.ts` does: shift the siblings at (or after) the
+    /// anchor's position by 10, then take the anchor's old position (or the one after it).
+    func testOneRequestPerDragLeavesTheServerInTheDraggedOrder() async throws {
+        final class Server: @unchecked Sendable {
+            var positions: [String: Int] = [:]
+            var requests = 0
+            var order: [String] { positions.keys.sorted { positions[$0]! < positions[$1]! } }
+
+            func apply(_ path: String) {
+                let parts = path.split(separator: "/").map(String.init)   // api, branches, id, move-before, anchor
+                guard parts.count == 5, let anchorPosition = positions[parts[4]] else { return }
+                requests += 1
+                let moved = parts[2]
+                if parts[3] == "move-before" {
+                    for key in positions.keys where positions[key]! >= anchorPosition { positions[key]! += 10 }
+                    positions[moved] = anchorPosition
+                } else {
+                    for key in positions.keys where positions[key]! > anchorPosition { positions[key]! += 10 }
+                    positions[moved] = anchorPosition + 10
+                }
+            }
+        }
+
+        let initial = ["A", "B", "C", "D", "E"]
+        let server = Server()
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(appInfoJSON) }
+            XCTAssertEqual(request.httpMethod, "PUT")
+            server.apply(path)
+            return ok(#"{"success":true}"#)
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        for from in initial.indices {
+            for to in initial.indices where to != from {
+                server.positions = Dictionary(uniqueKeysWithValues: initial.enumerated().map { ($1, ($0 + 1) * 10) })
+                server.requests = 0
+                var dragged = initial
+                let moved = dragged.remove(at: from)
+                dragged.insert(moved, at: to)
+
+                try await client.placeBranchInSiblingOrder(moved, orderedSiblingBranchIds: dragged)
+                XCTAssertEqual(server.order, dragged, "dragging \(moved) from \(from) to \(to)")
+                XCTAssertEqual(server.requests, 1)
+            }
+        }
+    }
+
+    // MARK: - Clone
+
+    func testCloneNoteReportsTriliumsAnswer() async throws {
+        var answer = #"{"success":true,"branchId":"br9","notePath":"root/board/n1"}"#
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(appInfoJSON) }
+            if path.hasSuffix("/api/notes/n1/clone-to-note/board") {
+                XCTAssertEqual(request.httpMethod, "PUT")
+                return ok(answer)
+            }
+            XCTFail("Unexpected path: \(path)")
+            return ok("{}")
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let made = try await client.cloneNote("n1", toParentNoteId: "board")
+        XCTAssertEqual(made, CloneNoteResult(success: true, branchId: "br9", message: nil))
+
+        answer = #"{"success":false,"message":"Moving/cloning note here would create cycle."}"#
+        let refused = try await client.cloneNote("n1", toParentNoteId: "board")
+        XCTAssertFalse(refused.success)
+        XCTAssertEqual(refused.message, "Moving/cloning note here would create cycle.")
+
+        answer = ""
+        let bare = try await client.cloneNote("n1", toParentNoteId: "board")
+        XCTAssertTrue(bare.success, "an answer without a body is taken as done")
+    }
+
+    // MARK: - Full sync batch dates (v0.106 POST /api/notes/metadata)
+
+    /// Serves a two-note `tree/load`, `/api/notes/metadata` (unless `metadataStatus` fails it) and per-note GETs,
+    /// counting which kind of date request the client made.
+    private final class BatchDateServer: @unchecked Sendable {
+        var metadataBodies: [[String]] = []
+        var noteGets: [String] = []
+        var metadataStatus = 200
+
+        func handler(appInfo: String) -> (URLRequest) throws -> (HTTPURLResponse, Data) {
+            { [self] request in
+                let path = request.url?.path ?? ""
+                func ok(_ json: String, status: Int = 200) -> (HTTPURLResponse, Data) {
+                    (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+                }
+                if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+                if path.contains("/api/app-info") { return ok(appInfo) }
+                if path.hasSuffix("/api/tree/load") {
+                    return ok(#"{"notes":[{"noteId":"n1","title":"One","isProtected":false,"type":"text","mime":"text/html","blobId":"b1"},{"noteId":"n2","title":"Two","isProtected":false,"type":"code","mime":"text/plain","blobId":"b2"}],"branches":[{"branchId":"root_n1","noteId":"n1","parentNoteId":"root","prefix":null,"notePosition":10,"isExpanded":false},{"branchId":"n1_n2","noteId":"n2","parentNoteId":"n1","prefix":null,"notePosition":10,"isExpanded":false}],"attributes":[]}"#)
+                }
+                if path.hasSuffix("/api/notes/metadata") {
+                    XCTAssertEqual(request.httpMethod, "POST")
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "x-csrf-token"), "x")
+                    let body = request.httpBody ?? request.httpBodyStream.map { stream in
+                        stream.open(); defer { stream.close() }
+                        var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+                        while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
+                        return data
+                    } ?? Data()
+                    let ids = (try? JSONSerialization.jsonObject(with: body) as? [String: [String]])?["noteIds"] ?? []
+                    metadataBodies.append(ids)
+                    guard metadataStatus == 200 else { return ok(#"{"message":"nope"}"#, status: metadataStatus) }
+                    // n2 was deleted before the request landed: the server leaves it out.
+                    return ok(#"{"n1":{"dateCreated":"2026-01-01 10:00:00.000+0100","utcDateCreated":"2026-01-01 09:00:00.000Z","dateModified":"2026-02-01 10:00:00.000+0100","utcDateModified":"2026-02-01 09:00:00.000Z"}}"#)
+                }
+                if path.hasPrefix("/api/notes/") {
+                    let id = request.url!.lastPathComponent
+                    noteGets.append(id)
+                    return ok(#"{"noteId":"\#(id)","title":"T","isProtected":false,"type":"text","mime":"text/html","blobId":"b","utcDateCreated":"2025-01-01 00:00:00.000Z","utcDateModified":"2025-06-01 00:00:00.000Z"}"#)
+                }
+                XCTFail("Unexpected path: \(path)")
+                return ok("{}", status: 404)
+            }
+        }
+    }
+
+    func testFullSyncBatchTakesDatesFromOneMetadataCallOnV0106() async throws {
+        let server = BatchDateServer()
+        MockURLProtocol.requestHandler = server.handler(appInfo: #"{"appVersion":"0.106.0","dbVersion":240}"#)
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let entries = try await client.fullSyncFetchTreeBatch(noteIds: ["n1", "n2"])
+        XCTAssertEqual(server.metadataBodies, [["n1", "n2"]])
+        XCTAssertEqual(server.noteGets, [])
+        XCTAssertEqual(entries.map(\.note.noteId), ["n1", "n2"])
+        XCTAssertEqual(entries[0].note.title, "One")
+        XCTAssertEqual(entries[0].note.utcDateModified, "2026-02-01 09:00:00.000Z")
+        XCTAssertEqual(entries[0].note.utcDateCreated, "2026-01-01 09:00:00.000Z")
+        XCTAssertEqual(entries[0].childBranches.map(\.branchId), ["n1_n2"])
+        XCTAssertEqual(entries[1].note.type, "code", "a note without dates still comes from its tree row")
+    }
+
+    func testFullSyncBatchGetsEachNoteOnOlderServersOrWhenMetadataFails() async throws {
+        let older = BatchDateServer()
+        MockURLProtocol.requestHandler = older.handler(appInfo: #"{"appVersion":"0.105.0","dbVersion":240}"#)
+        let olderClient = makeClient(persistedCookies: oidcSessionCookieData())
+        try await olderClient.restoreSession()
+        let olderEntries = try await olderClient.fullSyncFetchTreeBatch(noteIds: ["n1", "n2"])
+        XCTAssertEqual(older.metadataBodies, [])
+        XCTAssertEqual(Set(older.noteGets), ["n1", "n2"])
+        XCTAssertEqual(olderEntries.first?.note.utcDateModified, "2025-06-01 00:00:00.000Z")
+
+        let failing = BatchDateServer()
+        failing.metadataStatus = 500
+        MockURLProtocol.requestHandler = failing.handler(appInfo: #"{"appVersion":"0.106.0","dbVersion":240}"#)
+        let failingClient = makeClient(persistedCookies: oidcSessionCookieData())
+        try await failingClient.restoreSession()
+        let fallbackEntries = try await failingClient.fullSyncFetchTreeBatch(noteIds: ["n1", "n2"])
+        XCTAssertFalse(failing.metadataBodies.isEmpty)
+        XCTAssertEqual(Set(failing.noteGets), ["n1", "n2"])
+        XCTAssertEqual(fallbackEntries.count, 2)
+    }
+
     func testSearchNoteIdTitlesUsesSearchThenSingleTreeLoad() async throws {
         var treeLoadCount = 0
         MockURLProtocol.requestHandler = { [appInfoJSON] request in

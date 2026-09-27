@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import os
 import SwiftData
+import UIKit
 
 // MARK: - In-note match previews (file-level: not on any @Observable tracked property)
 
@@ -186,6 +187,90 @@ private enum SearchNoteMatchExtractor {
     }
 }
 
+// MARK: - Server snippets (quick search)
+
+/// Trilium's own snippet for a search result: the matched text around the query and the note's breadcrumb.
+struct SearchResultSnippet: Equatable, Sendable {
+    let pathTitle: String?
+    let content: AttributedString?
+    let attribute: AttributedString?
+
+    init?(_ result: QuickSearchResult) {
+        let path = result.notePathTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        pathTitle = path?.isEmpty == false ? path : nil
+        content = SearchSnippetFormatter.attributed(
+            highlightedHTML: result.highlightedContentSnippet,
+            plain: result.contentSnippet
+        )
+        attribute = SearchSnippetFormatter.attributed(
+            highlightedHTML: result.highlightedAttributeSnippet,
+            plain: result.attributeSnippet
+        )
+        if pathTitle == nil, content == nil, attribute == nil { return nil }
+    }
+}
+
+/// Turns Trilium's highlighted snippets (escaped text, `<b>` around matches, `<br>` between lines) into styled text.
+enum SearchSnippetFormatter {
+    private static let tagPattern = try? NSRegularExpression(pattern: #"<(/?)(b|br)\b([^>]*)>"#, options: [.caseInsensitive])
+
+    static func attributed(highlightedHTML: String?, plain: String?) -> AttributedString? {
+        if let html = highlightedHTML?.trimmingCharacters(in: .whitespacesAndNewlines), !html.isEmpty,
+           let tagPattern {
+            let result = NSMutableAttributedString()
+            var highlight: UIColor?
+            var cursor = html.startIndex
+            for match in tagPattern.matches(in: html, range: NSRange(html.startIndex..., in: html)) {
+                guard let range = Range(match.range, in: html) else { continue }
+                append(String(html[cursor..<range.lowerBound]), highlight: highlight, to: result)
+                cursor = range.upperBound
+                let isClosing = Range(match.range(at: 1), in: html).map { !html[$0].isEmpty } ?? false
+                let tag = Range(match.range(at: 2), in: html).map { html[$0].lowercased() } ?? ""
+                if tag == "br" {
+                    append(" ", highlight: nil, to: result)
+                } else if isClosing {
+                    highlight = nil
+                } else {
+                    let attributes = Range(match.range(at: 3), in: html).map { String(html[$0]) } ?? ""
+                    // v0.106 marks fuzzy matches with a class; they get a paler highlight than exact ones.
+                    highlight = attributes.contains("class=")
+                        ? UIColor.systemOrange.withAlphaComponent(0.25)
+                        : UIColor.systemYellow.withAlphaComponent(0.38)
+                }
+            }
+            append(String(html[cursor...]), highlight: highlight, to: result)
+            let text = result.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : AttributedString(result)
+        }
+        let text = plain?
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let text, !text.isEmpty else { return nil }
+        return AttributedString(text)
+    }
+
+    private static func append(_ escaped: String, highlight: UIColor?, to result: NSMutableAttributedString) {
+        let text = unescape(escaped)
+        guard !text.isEmpty else { return }
+        var attributes: [NSAttributedString.Key: Any] = [:]
+        if let highlight {
+            attributes[.backgroundColor] = highlight
+            attributes[.inlinePresentationIntent] = InlinePresentationIntent.stronglyEmphasized.rawValue
+        }
+        result.append(NSAttributedString(string: text, attributes: attributes))
+    }
+
+    private static func unescape(_ text: String) -> String {
+        guard text.contains("&") else { return text }
+        var out = text
+        for (entity, char) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&#039;", "'"),
+                               ("&#x27;", "'"), ("&nbsp;", " "), ("&amp;", "&")] {
+            out = out.replacingOccurrences(of: entity, with: char)
+        }
+        return out
+    }
+}
+
 @Observable
 @MainActor
 final class SearchViewModel {
@@ -196,6 +281,8 @@ final class SearchViewModel {
     var recentSearches: [RecentSearch] = []
     var hasSearched = false
     var isOfflineResults = false
+    /// Trilium's snippet and breadcrumb per result note, when the server provides them.
+    var snippetsByNoteId: [String: SearchResultSnippet] = [:]
 
     /// Disclosure rows: note IDs expanded to show in-note match lines.
     var expandedMatchNoteIds: Set<String> = []
@@ -251,10 +338,13 @@ final class SearchViewModel {
         error = nil
         hasSearched = true
         isOfflineResults = false
+        snippetsByNoteId = [:]
         clearMatchExpansionState()
         defer { isSearching = false }
 
         if let client {
+            // Snippets come from a second request so the result list and its ranking stay the full search's.
+            async let snippetFetch = Self.fetchSnippets(client: client, query: trimmed)
             do {
                 let response = try await client.searchNotes(query: trimmed, fastSearch: false, includeArchived: false, ancestorNoteId: nil, orderBy: nil, orderDirection: nil, limit: 50)
                 guard !Task.isCancelled else { return }
@@ -264,6 +354,10 @@ final class SearchViewModel {
                     try? persistence.recordRecentSearch(query: trimmed, serverProfileId: profileId)
                     loadRecentSearches()
                 }
+
+                let snippets = await snippetFetch
+                guard !Task.isCancelled, query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
+                snippetsByNoteId = snippets
             } catch {
                 guard !Task.isCancelled else { return }
                 let apiError = APIError.from(error)
@@ -278,6 +372,21 @@ final class SearchViewModel {
         } else {
             performOfflineSearch(trimmed)
         }
+    }
+
+    /// Empty when the server has no quick search or its results carry no snippets: rows then show as before.
+    nonisolated private static func fetchSnippets(
+        client: any TriliumClientProtocol,
+        query: String
+    ) async -> [String: SearchResultSnippet] {
+        guard let results = try? await client.quickSearchResults(query: query) else { return [:] }
+        var snippets: [String: SearchResultSnippet] = [:]
+        for result in results {
+            guard let noteId = result.resolvedNoteId, snippets[noteId] == nil,
+                  let snippet = SearchResultSnippet(result) else { continue }
+            snippets[noteId] = snippet
+        }
+        return snippets
     }
 
     private func performOfflineSearch(_ query: String) {
@@ -355,6 +464,7 @@ final class SearchViewModel {
     func clearSearch() {
         query = ""
         results = []
+        snippetsByNoteId = [:]
         hasSearched = false
         isOfflineResults = false
         clearMatchExpansionState()

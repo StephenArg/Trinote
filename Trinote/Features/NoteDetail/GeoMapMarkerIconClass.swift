@@ -10,9 +10,16 @@ enum GeoMapMarkerIconClass {
         type: NoteType,
         mime: String,
         iconClassLabel: String?,
-        childNoteCount: Int
+        childNoteCount: Int,
+        labelValue: (String) -> String? = { _ in nil }
     ) -> String {
-        let icon = resolvedIcon(type: type, mime: mime, iconClassLabel: iconClassLabel, childNoteCount: childNoteCount)
+        let icon = resolvedIcon(
+            type: type,
+            mime: mime,
+            iconClassLabel: iconClassLabel,
+            childNoteCount: childNoteCount,
+            labelValue: labelValue
+        )
         return "tn-icon \(icon)"
     }
 
@@ -21,7 +28,10 @@ enum GeoMapMarkerIconClass {
             type: note.type,
             mime: note.mime,
             iconClassLabel: note.iconClass,
-            childNoteCount: note.childNoteIds.count
+            childNoteCount: note.childNoteIds.count,
+            labelValue: { name in
+                note.attributes.first { $0.type == .label && $0.name == name }?.value
+            }
         )
     }
 
@@ -29,7 +39,8 @@ enum GeoMapMarkerIconClass {
         type: NoteType,
         mime: String,
         iconClassLabel: String?,
-        childNoteCount: Int
+        childNoteCount: Int,
+        labelValue: (String) -> String?
     ) -> String {
         if let label = sanitizedLabel(iconClassLabel), label != emptyIcon {
             return label
@@ -37,6 +48,9 @@ enum GeoMapMarkerIconClass {
 
         switch type {
         case .text:
+            if let geo = NoteIconClassResolver.geoDefaultIconClass(isTextNote: true, labelValue: labelValue) {
+                return geo
+            }
             return childNoteCount > 0 ? "bx bx-folder" : "bx bx-note"
         case .file:
             if mime == GeoMapDisplaySettings.gpxMIME {

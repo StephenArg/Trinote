@@ -145,6 +145,52 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(shown.map { $0.node.note.noteId }, ["journal", "year2026", "other"])
     }
 
+    // MARK: - Drag reorder
+
+    /// A (open: A1, A2 (open: A2x), A3), B
+    private func dragRows() -> [FlatTreeNode] {
+        func row(_ id: String, _ depth: Int) -> FlatTreeNode {
+            let note = NoteItem(
+                noteId: id, title: id, type: .text, mime: "text/html",
+                isProtected: false, dateCreated: "", dateModified: "",
+                parentNoteIds: [], childNoteIds: [], parentBranchIds: ["b-\(id)"], childBranchIds: [],
+                attributes: []
+            )
+            let branch = BranchItem(branchId: "b-\(id)", noteId: id, parentNoteId: "p", prefix: nil, notePosition: 0, isExpanded: true)
+            return FlatTreeNode(node: TreeNode(branch: branch, note: note), depth: depth)
+        }
+        return [row("A", 0), row("A1", 1), row("A2", 1), row("A2x", 2), row("A3", 1), row("B", 0)]
+    }
+
+    func testDraggingANestedNoteReordersItAmongItsSiblings() {
+        let rows = dragRows()
+        typealias Move = TreeViewModel.SiblingMove
+        // A3 above A1.
+        XCTAssertEqual(TreeViewModel.siblingMove(in: rows, from: 4, to: 1), Move(parentIndex: 0, fromSibling: 2, toSibling: 0))
+        // A1 below A2 (dropped before A3), and to the end of A's rows.
+        XCTAssertEqual(TreeViewModel.siblingMove(in: rows, from: 1, to: 4), Move(parentIndex: 0, fromSibling: 0, toSibling: 1))
+        XCTAssertEqual(TreeViewModel.siblingMove(in: rows, from: 1, to: 5), Move(parentIndex: 0, fromSibling: 0, toSibling: 2))
+        // Dropped between A2 and its open child: after A2.
+        XCTAssertEqual(TreeViewModel.siblingMove(in: rows, from: 1, to: 3), Move(parentIndex: 0, fromSibling: 0, toSibling: 1))
+        // A3 dropped just above itself (inside A2's rows): no change, so the caller puts the row back.
+        XCTAssertEqual(TreeViewModel.siblingMove(in: rows, from: 4, to: 3), Move(parentIndex: 0, fromSibling: 2, toSibling: 2))
+    }
+
+    func testDroppingOutsideTheParentIsNotAReorder() {
+        let rows = dragRows()
+        XCTAssertNil(TreeViewModel.siblingMove(in: rows, from: 1, to: 0), "above its own parent")
+        XCTAssertNil(TreeViewModel.siblingMove(in: rows, from: 1, to: 6), "below the next top-level note")
+        XCTAssertNil(TreeViewModel.siblingMove(in: rows, from: 3, to: 1), "into another level of the same parent")
+    }
+
+    func testDraggingTopLevelNotesSkipsOverOpenSubtrees() {
+        let rows = dragRows()
+        typealias Move = TreeViewModel.SiblingMove
+        XCTAssertEqual(TreeViewModel.siblingMove(in: rows, from: 5, to: 0), Move(parentIndex: nil, fromSibling: 1, toSibling: 0))
+        XCTAssertEqual(TreeViewModel.siblingMove(in: rows, from: 0, to: 6), Move(parentIndex: nil, fromSibling: 0, toSibling: 1))
+        XCTAssertEqual(TreeViewModel.siblingMove(in: rows, from: 5, to: 3), Move(parentIndex: nil, fromSibling: 1, toSibling: 1), "dropped inside A's rows: stays after A")
+    }
+
     func testShowsExpandChevronTreatsCalendarRootAsLeafWhenHidingChildren() {
         XCTAssertFalse(
             TreeViewModel.showsExpandChevron(hasChildren: true, isCalendarRoot: true, hideCalendarRootChildren: true)

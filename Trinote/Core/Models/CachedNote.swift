@@ -206,6 +206,9 @@ final class PendingNoteCreation {
     /// Format: `[{"type":"label","name":"geolocation","value":"lat,lng"}, ...]`; optional `"isInheritable": true`.
     var initialAttributesJSON: String
     var queuedAt: Date
+    /// When true, the create request leaves `title` out so the server fills it from the parent's `#titleTemplate`;
+    /// `title` is only the placeholder shown until then. Defaults to false for older rows.
+    var titleFromTemplate: Bool = false
 
     init(
         id: String = UUID().uuidString,
@@ -218,7 +221,8 @@ final class PendingNoteCreation {
         mime: String,
         initialContent: String,
         initialAttributesJSON: String = "[]",
-        queuedAt: Date = .now
+        queuedAt: Date = .now,
+        titleFromTemplate: Bool = false
     ) {
         self.id = id
         self.serverProfileId = serverProfileId
@@ -231,6 +235,7 @@ final class PendingNoteCreation {
         self.initialContent = initialContent
         self.initialAttributesJSON = initialAttributesJSON
         self.queuedAt = queuedAt
+        self.titleFromTemplate = titleFromTemplate
     }
 }
 

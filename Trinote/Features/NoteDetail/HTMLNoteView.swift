@@ -1858,6 +1858,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 : window.matchMedia('(prefers-color-scheme: dark)').matches;
               mermaid.initialize({
                 startOnLoad: false,
+                // Mermaid 12 defaults to the ELK layout and the `neo` look; pin the pre-12 ones as Trilium
+                // v0.106 does, so stored diagrams keep their layout. Front matter still overrides either.
+                layout: 'dagre',
+                look: 'classic',
                 securityLevel: 'strict',
                 theme: isDark ? 'dark' : 'default',
                 fontFamily: '-apple-system, system-ui, sans-serif',

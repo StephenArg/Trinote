@@ -125,6 +125,8 @@ final class NoteDetailViewModel {
     /// Shared, memoized task for the background metadata refresh so `load()` and `loadContent()`
     /// coordinate on a single `getNote` and both see a populated `serverUtcDateModified`.
     @ObservationIgnored private var metadataRefreshTask: Task<Void, Never>?
+    /// `board.json` as last loaded, for choices made later on the same board (the card template).
+    @ObservationIgnored private var lastKanbanConfig: KanbanBoardModels.BoardConfig?
     /// Blob id from the latest `getNote` response (used to skip redundant `getNoteContent` for empty notes).
     private var serverBlobId: String?
     /// Settings appearance (light/dark) so include-card mermaid SVGs can be re-baked without restarting.
@@ -154,7 +156,7 @@ final class NoteDetailViewModel {
     /// Called when `.trinoteOfflineNoteIdReplaced` swaps an offline `ol_*` id for a server id while this
     /// note is currently being viewed/edited. Updates the in-memory id and re-pulls the cached note from
     /// persistence (which has already been renamed by `applyOfflineNoteCreationServerResult`, including
-    /// drafts via `remapLocalNoteIdReferences`). Avoids destroying and rebuilding the view model, which
+    /// its draft, tabs, favorite and recents entry). Avoids destroying and rebuilding the view model, which
     /// otherwise causes a visible read-mode flash and aborts any in-progress edit setup.
     func migrateAfterOfflineIdReplacement(to newId: String) {
         guard newId != noteId else { return }
@@ -2467,7 +2469,8 @@ final class NoteDetailViewModel {
                 mime: mime,
                 initialContent: initial,
                 serverProfileId: profileId,
-                initialAttributes: attrs
+                initialAttributes: attrs,
+                useParentTitleTemplate: self.newNoteTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             )
             self.showCreateChild = false
             self.newNoteTitle = ""
@@ -2485,6 +2488,7 @@ final class NoteDetailViewModel {
     private func handleServerDeletedNote(noteId: String) {
         self.error = String(localized: "This note was deleted on the server.", comment: "Note detail when server note is gone")
         if let profileId = serverProfileId {
+            persistence.closeOpenNoteTabs(forDeletedNoteId: noteId, serverProfileId: profileId)
             try? persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
         }
         shouldDismissAfterServerDeletion = true
@@ -2502,6 +2506,7 @@ final class NoteDetailViewModel {
                 if let profileId = serverProfileId {
                     GhostNoteTracker.shared.add(nid, serverProfileId: profileId)
                     persistence.removeFavoritesForCachedSubtree(rootNoteId: nid, serverProfileId: profileId)
+                    persistence.closeOpenNoteTabs(forDeletedNoteId: nid, serverProfileId: profileId)
                     try? persistence.deleteCachedNotes(noteIds: [nid], serverProfileId: profileId)
                 }
                 NotificationCenter.default.post(name: .noteDeleted, object: nil)
@@ -2548,6 +2553,7 @@ final class NoteDetailViewModel {
                 if let profileId = serverProfileId {
                     GhostNoteTracker.shared.add(childNoteId, serverProfileId: profileId)
                     persistence.removeFavoritesForCachedSubtree(rootNoteId: childNoteId, serverProfileId: profileId)
+                    persistence.closeOpenNoteTabs(forDeletedNoteId: childNoteId, serverProfileId: profileId)
                     try? persistence.deleteCachedNotes(noteIds: [childNoteId], serverProfileId: profileId)
                     try? persistence.commitBatch()
                 }
@@ -3314,7 +3320,8 @@ final class NoteDetailViewModel {
                 type: cached.parsedType ?? .text,
                 mime: cached.mime,
                 iconClassLabel: iconClassLabel,
-                childNoteCount: cached.childNoteIds.count
+                childNoteCount: cached.childNoteIds.count,
+                labelValue: { name in attrs.first { $0.type == "label" && $0.name == name }?.value }
             )
             let color = attrs.first(where: { $0.type == "label" && $0.name.caseInsensitiveCompare("color") == .orderedSame })?.value
             pins.append(GeoMapPin(noteId: childId, title: title, lat: lat, lng: lng, iconClass: iconClass, color: color))
@@ -3322,16 +3329,48 @@ final class NoteDetailViewModel {
         return pins
     }
 
+    /// Shapes (`#geoShape` on direct children) from SwiftData. Used offline or when the API is unavailable.
+    func geoMapShapesFromCache() -> [GeoMapShape] {
+        guard let profileId = serverProfileId else { return [] }
+        var shapes: [GeoMapShape] = []
+        for childId in resolvedChildNoteIdsForDetail() {
+            guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
+            let attrs = (try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
+            guard let value = attrs.first(where: { $0.type == "label" && $0.name == GeoMapShape.label })?.value else { continue }
+            let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let color = attrs.first(where: { $0.type == "label" && $0.name.caseInsensitiveCompare("color") == .orderedSame })?.value
+            if let shape = GeoMapShape(noteId: childId, title: trimmedTitle.isEmpty ? childId : trimmedTitle, value: value, color: color) {
+                shapes.append(shape)
+            }
+        }
+        return shapes
+    }
+
     /// Fetches pin positions from the server (when online). Returns empty if there is no client or the app is offline.
     func fetchGeoMapPinsFromServer(note: NoteItem) async -> [GeoMapPin] {
-        guard let client, isOnline else { return [] }
+        await fetchGeoMapPinsAndShapesFromServer(note: note).pins
+    }
+
+    /// Pins (`#geolocation`) and shapes (`#geoShape`) among the map's children, read in one pass over them.
+    func fetchGeoMapPinsAndShapesFromServer(note: NoteItem) async -> (pins: [GeoMapPin], shapes: [GeoMapShape]) {
+        guard let client, isOnline else { return ([], []) }
         var pins: [GeoMapPin] = []
+        var shapes: [GeoMapShape] = []
         let parentNote = try? await client.getNote(note.noteId)
         let childIds = parentNote?.childNoteIds ?? note.childNoteIds
         for childId in childIds {
             do {
                 let childResp = try await client.getNote(childId)
                 let childItem = NoteItem(from: childResp)
+                if let shapeAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == GeoMapShape.label }),
+                   let shape = GeoMapShape(
+                       noteId: childId,
+                       title: childItem.title,
+                       value: shapeAttr.value,
+                       color: childItem.colorLabelValue
+                   ) {
+                    shapes.append(shape)
+                }
                 if let geoAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == "geolocation" }) {
                     let parts = geoAttr.value.split(separator: ",")
                     if parts.count == 2,
@@ -3350,7 +3389,7 @@ final class NoteDetailViewModel {
             } catch {
             }
         }
-        return pins
+        return (pins, shapes)
     }
 
     func geoMapTracksFromCache() -> [GeoMapTrack] {
@@ -3529,11 +3568,11 @@ final class NoteDetailViewModel {
     /// Loads Kanban cards + `board.json` columns.
     /// When online, merges server children with cache so freshly queued offline cards (`ol_*`) still appear
     /// before `backgroundSyncPendingChanges` finishes flushing them.
-    func loadKanbanBoard(for note: NoteItem) async -> (columns: [KanbanBoardModels.Column], groupBy: String) {
+    func loadKanbanBoard(for note: NoteItem) async -> KanbanBoardModels.BoardLoad {
         let groupBy = KanbanBoardModels.GroupBy(kanbanGroupByAttributeName(for: note))
         let showInbox = KanbanBoardModels.showsInbox(note.attributes)
         let cacheCards = kanbanCardsFromCache(groupBy: groupBy, showInbox: showInbox)
-        let cards: [KanbanBoardModels.Card]
+        var cards: [KanbanBoardModels.Card]
         if client != nil, isOnline {
             let serverCards = await fetchKanbanCardsFromServer(note: note, groupBy: groupBy, showInbox: showInbox)
             var byId: [String: KanbanBoardModels.Card] = [:]
@@ -3546,12 +3585,58 @@ final class NoteDetailViewModel {
             cards = cacheCards
         }
         let config = await loadBoardConfig(for: note)
+        lastKanbanConfig = config
+
+        // v0.106 "filter" narrows the board with a search. Offline, the board shows unfiltered.
+        let filterQuery = config?.fields["filterQuery"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var filterApplied = false
+        if let filterQuery, !filterQuery.isEmpty, let client, isOnline,
+           let matches = try? await client.searchNoteIds(query: filterQuery, ancestorNoteId: note.noteId) {
+            let matching = Set(matches)
+            cards = cards.filter { matching.contains($0.noteId) }
+            filterApplied = true
+        }
+
+        let cardProperties = KanbanBoardModels.cardProperties(
+            boardAttributes: note.attributes,
+            settings: config?.fields["promotedAttributes"],
+            groupBy: groupBy
+        )
+        let relationTitles = kanbanRelationTitles(for: cards)
         let stored = config?.columns(forKey: kanbanColumnsKey(for: groupBy, config: config))
-        var columns = KanbanBoardModels.buildColumns(storedColumns: stored, cards: cards, showInbox: showInbox)
+        let boardSort = KanbanBoardModels.boardSort(note.attributes)
+        var columns = KanbanBoardModels.buildColumns(
+            storedColumns: stored,
+            cards: cards,
+            showInbox: showInbox,
+            boardSort: boardSort,
+            relationTitle: { relationTitles[$0] }
+        )
         if groupBy.isRelation {
             columns = await titledRelationColumns(columns)
         }
-        return (columns, groupBy.rawValue)
+        return KanbanBoardModels.BoardLoad(
+            columns: columns,
+            groupBy: groupBy.rawValue,
+            columnWidth: note.attributes.first { $0.type == .label && $0.name == "board:columnWidth" }?.value,
+            filterQuery: filterApplied ? filterQuery : nil,
+            cardProperties: cardProperties,
+            relationTitles: relationTitles,
+            boardSort: boardSort
+        )
+    }
+
+    /// Titles of the notes cards point at through relations, for property values and relation sort keys.
+    private func kanbanRelationTitles(for cards: [KanbanBoardModels.Card]) -> [String: String] {
+        guard let profileId = serverProfileId else { return [:] }
+        var titles: [String: String] = [:]
+        for targetId in Set(cards.flatMap { $0.relations.values }) {
+            if let cached = try? persistence.fetchCachedNote(id: targetId, serverProfileId: profileId),
+               !cached.title.isEmpty {
+                titles[targetId] = cached.title
+            }
+        }
+        return titles
     }
 
     /// Where `board.json` keeps the columns of `groupBy`. A per-grouping list is only written for servers that
@@ -3607,6 +3692,7 @@ final class NoteDetailViewModel {
                 fallbackNoteType: cached.noteType,
                 serverProfileId: profileId
             )
+            let maps = KanbanBoardModels.Card.attributeMaps(attrs)
             cards.append(KanbanBoardModels.Card(
                 noteId: childId,
                 branchId: branchId,
@@ -3615,11 +3701,16 @@ final class NoteDetailViewModel {
                 notePosition: position,
                 iconClass: icon.iconClass,
                 fallbackNoteType: icon.fallbackNoteType,
-                colorLabel: persistence.cachedNoteColorLabel(noteId: childId, serverProfileId: profileId)
+                colorLabel: persistence.cachedNoteColorLabel(noteId: childId, serverProfileId: profileId),
+                labels: maps.labels,
+                relations: maps.relations,
+                parentNoteCount: max(1, cached.parentNoteIds.count)
             ))
         }
         return cards
     }
+
+    private static let kanbanCardBatchSize = 100
 
     func fetchKanbanCardsFromServer(
         note: NoteItem,
@@ -3642,31 +3733,42 @@ final class NoteDetailViewModel {
                 }
                 try? persistence.commitBatch()
             }
-            for branch in liveBranches.sorted(by: { $0.notePosition < $1.notePosition }) {
-                do {
-                    let childResp = try await client.getNote(branch.noteId)
-                    let childItem = NoteItem(from: childResp)
-                    if let profileId = serverProfileId {
-                        persistNoteResponse(childResp, profileId: profileId)
-                    }
-                    guard let column = KanbanBoardModels.columnValue(from: childItem.attributes, groupBy: groupBy)
-                        ?? (showInbox ? KanbanBoardModels.inboxColumnValue : nil)
-                    else {
-                        continue
-                    }
-                    cards.append(KanbanBoardModels.Card(
-                        noteId: childItem.noteId,
-                        branchId: branch.branchId,
-                        title: childItem.title,
-                        columnValue: column,
-                        notePosition: branch.notePosition,
-                        iconClass: effectiveIconClass(for: childItem),
-                        fallbackNoteType: childItem.iconFallbackNoteType,
-                        colorLabel: childItem.colorLabelValue
-                    ))
-                } catch {
+            // Cards load in batches (one tree/load, plus one metadata call on Trilium 0.106+) rather than a request per card.
+            let orderedBranches = liveBranches.sorted(by: { $0.notePosition < $1.notePosition })
+            let childIds = orderedBranches.map(\.noteId)
+            var responses: [String: NoteResponse] = [:]
+            for start in stride(from: 0, to: childIds.count, by: Self.kanbanCardBatchSize) {
+                let chunk = Array(childIds[start..<min(start + Self.kanbanCardBatchSize, childIds.count)])
+                for entry in try await client.fullSyncFetchTreeBatch(noteIds: chunk) {
+                    responses[entry.note.noteId] = entry.note
+                }
+            }
+            for branch in orderedBranches {
+                guard let childResp = responses.removeValue(forKey: branch.noteId) else { continue }
+                let childItem = NoteItem(from: childResp)
+                if let profileId = serverProfileId {
+                    persistNoteResponse(childResp, profileId: profileId)
+                }
+                guard let column = KanbanBoardModels.columnValue(from: childItem.attributes, groupBy: groupBy)
+                    ?? (showInbox ? KanbanBoardModels.inboxColumnValue : nil)
+                else {
                     continue
                 }
+                let maps = KanbanBoardModels.Card.attributeMaps(childItem.attributes)
+                cards.append(KanbanBoardModels.Card(
+                    noteId: childItem.noteId,
+                    branchId: branch.branchId,
+                    title: childItem.title,
+                    columnValue: column,
+                    notePosition: branch.notePosition,
+                    iconClass: effectiveIconClass(for: childItem),
+                    fallbackNoteType: childItem.iconFallbackNoteType,
+                    colorLabel: childItem.colorLabelValue,
+                    creationDate: childResp.utcDateCreated,
+                    labels: maps.labels,
+                    relations: maps.relations,
+                    parentNoteCount: max(1, childResp.parentNoteIds.count)
+                ))
             }
             try? persistence.commitBatch()
         } catch {
@@ -3781,6 +3883,138 @@ final class NoteDetailViewModel {
         return await saveBoardConfig(config.settingColumns(columns, forKey: key))
     }
 
+    /// Writes fields onto one stored column in `board.json` (collapse flags, sort), keeping everything else; a field
+    /// patched to `nil` or `false` is removed. Returns `false` without an alert while offline, so the caller decides
+    /// whether the change lasts for the session or needs the server.
+    @discardableResult
+    func saveKanbanColumnFields(
+        value: String,
+        patch: [String: KanbanBoardModels.JSONValue?],
+        for note: NoteItem,
+        groupBy rawGroupBy: String,
+        shownOrder: [String]
+    ) async -> Bool {
+        guard client != nil, isOnline else { return false }
+        let groupBy = KanbanBoardModels.GroupBy(rawGroupBy)
+        let config: KanbanBoardModels.BoardConfig
+        do {
+            config = try await fetchBoardConfigForSave(boardNoteId: note.noteId) ?? KanbanBoardModels.BoardConfig()
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            Log.api.error("saveKanbanColumnFields: reading board.json failed: \(error)")
+            return false
+        }
+        let key = kanbanColumnsKey(for: groupBy, config: config)
+        let columns = KanbanBoardModels.patchingColumn(
+            value,
+            with: patch,
+            stored: config.columns(forKey: key) ?? [],
+            shownOrder: shownOrder
+        )
+        return await saveBoardConfig(config.settingColumns(columns, forKey: key))
+    }
+
+    /// Puts an existing note on the board as a card in `column`: clones it under the board (unless it is already
+    /// there), then sets its grouping value like a card move. The grouping attribute is the note's own, so its
+    /// other clones carry it too. Online-only.
+    @discardableResult
+    func addExistingNoteAsKanbanCard(noteId cardNoteId: String, column: String, groupBy rawGroupBy: String) async -> Bool {
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to add notes to the board.", comment: "Kanban offline add existing note")
+            showSaveError = true
+            return false
+        }
+        guard cardNoteId != noteId else { return false }
+        do {
+            let (_, boardBranches) = try await client.getNoteWithBranches(noteId)
+            if !boardBranches.contains(where: { $0.noteId == cardNoteId }) {
+                let result = try await client.cloneNote(cardNoteId, toParentNoteId: noteId)
+                guard result.success else {
+                    saveError = result.message ?? String(
+                        localized: "The note could not be added to the board.",
+                        comment: "Kanban add existing note refused by server"
+                    )
+                    showSaveError = true
+                    return false
+                }
+            }
+            if let profileId = serverProfileId {
+                let (_, liveBranches) = try await client.getNoteWithBranches(noteId)
+                for branch in liveBranches where branch.noteId == cardNoteId {
+                    try? persistence.cacheBranchIfAllowed(
+                        from: branch,
+                        parentNoteIdsForNote: [noteId],
+                        serverProfileId: profileId,
+                        policy: cacheExclusion
+                    )
+                }
+                try? persistence.commitBatch()
+            }
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            Log.api.error("addExistingNoteAsKanbanCard failed: \(error)")
+            return false
+        }
+        // Sets (or, for the inbox, clears) the grouping value and refreshes the cached note and its parents.
+        guard await moveKanbanCard(noteId: cardNoteId, toColumn: column, groupBy: rawGroupBy) else { return false }
+        NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        return true
+    }
+
+    /// Takes a card off the board. By default only the board's branch goes, so the note stays wherever else it is
+    /// cloned (with no other parent, the note itself is deleted, as in the tree). `alsoRemoveClones` deletes the note
+    /// everywhere. Online-only.
+    @discardableResult
+    func deleteKanbanCard(noteId cardNoteId: String, branchId: String, alsoRemoveClones: Bool) async -> Bool {
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to delete cards.", comment: "Kanban offline delete card")
+            showSaveError = true
+            return false
+        }
+        do {
+            if alsoRemoveClones {
+                try await client.deleteNote(cardNoteId, eraseNotes: false)
+                if let profileId = serverProfileId {
+                    GhostNoteTracker.shared.add(cardNoteId, serverProfileId: profileId)
+                    persistence.removeFavoritesForCachedSubtree(rootNoteId: cardNoteId, serverProfileId: profileId)
+                    persistence.closeOpenNoteTabs(forDeletedNoteId: cardNoteId, serverProfileId: profileId)
+                    try? persistence.deleteCachedNotes(noteIds: [cardNoteId], serverProfileId: profileId)
+                }
+            } else {
+                var resolvedBranchId = branchId
+                if resolvedBranchId.isEmpty {
+                    resolvedBranchId = try await client.branchId(fromParentNoteId: noteId, toChildNoteId: cardNoteId) ?? ""
+                }
+                guard !resolvedBranchId.isEmpty else { throw APIError.notFound(cardNoteId) }
+                try await client.deleteBranchWithNoProgressTask(resolvedBranchId)
+                if let profileId = serverProfileId {
+                    // Without another parent, Trilium deleted the note with its last branch, so its tabs close too.
+                    let otherParents = ((try? persistence.fetchCachedNote(id: cardNoteId, serverProfileId: profileId))?.parentNoteIds ?? [])
+                        .filter { $0 != noteId }
+                    if otherParents.isEmpty {
+                        persistence.closeOpenNoteTabs(forDeletedNoteId: cardNoteId, serverProfileId: profileId)
+                    }
+                    try? persistence.deleteCachedBranchAndReconcilePlacement(
+                        branchId: resolvedBranchId,
+                        noteId: cardNoteId,
+                        parentNoteId: noteId,
+                        serverProfileId: profileId,
+                        hiddenNoteIds: []
+                    )
+                }
+            }
+            NotificationCenter.default.post(name: .noteDeleted, object: nil, userInfo: ["noteId": cardNoteId])
+            return true
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            Log.api.error("deleteKanbanCard failed: \(error)")
+            return false
+        }
+    }
+
     /// Moves a card to another column by rewriting its group-by label or relation (delete + create).
     /// Moving to the inbox only removes it. Online-only.
     @discardableResult
@@ -3849,18 +4083,34 @@ final class NoteDetailViewModel {
         }
         let groupBy = KanbanBoardModels.GroupBy(rawGroupBy)
         let resolvedTitle = NoteCreationTitle.resolved(from: title)
-        let groupingAttributes = column == KanbanBoardModels.inboxColumnValue
+        // The board's card template (v0.106 "Board properties"): a note type, or a template note whose ~template the
+        // server applies. The column label is still the card's own, so it survives the template.
+        var noteType = NoteType.text
+        var mime = "text/html"
+        var initialAttributes = column == KanbanBoardModels.inboxColumnValue
             ? []
-            : [NoteCreationAttribute(type: groupBy.attributeType, name: groupBy.name, value: column)]
+            : [NoteCreationAttribute(type: groupBy.attributeType, name: groupBy.name, value: column, applyAfterTemplate: true)]
+        switch KanbanBoardModels.CardTemplate(config: lastKanbanConfig) {
+        case .template(let templateNoteId)?:
+            initialAttributes.append(NoteCreationAttribute(type: "relation", name: "template", value: templateNoteId))
+        case .noteType(let type, let templateMime)?:
+            if let known = NoteType(rawValue: type), known != .text {
+                noteType = known
+                mime = templateMime ?? known.creationMime
+            }
+        case nil:
+            break
+        }
         do {
             let (newId, _) = try persistence.createOfflineChildNote(
                 parentNoteId: noteId,
                 title: resolvedTitle,
-                noteType: "text",
-                mime: "text/html",
-                initialContent: "",
+                noteType: noteType.triliumStorageType,
+                mime: mime,
+                initialContent: noteType == .text ? "" : noteType.creationInitialContent,
                 serverProfileId: profileId,
-                initialAttributes: groupingAttributes
+                initialAttributes: initialAttributes,
+                useParentTitleTemplate: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             )
             await loadChildNotes()
             // Flush immediately when online so the card lands on the server before the next board pull.
@@ -4143,7 +4393,8 @@ final class NoteDetailViewModel {
                 serverProfileId: profileId,
                 initialAttributes: [
                     NoteCreationAttribute(type: "label", name: "slide", value: ""),
-                ]
+                ],
+                useParentTitleTemplate: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             )
             await loadChildNotes()
             appState.backgroundSyncPendingChanges()

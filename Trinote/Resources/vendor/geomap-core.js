@@ -155,6 +155,9 @@
     };
     let markers = [];
     let tracks = [];
+    // Shapes drawn on a Trilium v0.106+ map (`#geoShape`): { noteId, title, color, type, coordinates, radiusMeters }.
+    let shapes = [];
+    let lastShapesDataKey = "";
     let selectedFeature = null;
     let selectedTrackMark = null;
     let selectedPinMark = null;
@@ -1117,6 +1120,112 @@
       scheduleRebuildMarkers();
     }
 
+    const EARTH_RADIUS_METERS = 6371008.8;
+    const SHAPE_CIRCLE_SEGMENTS = 64;
+
+    // A circle's radius walked out as a closed ring, great-circle like Trilium's `circleRing`.
+    function circleRing(center, radiusMeters) {
+      const toRad = Math.PI / 180;
+      const angular = radiusMeters / EARTH_RADIUS_METERS;
+      const lat = center[1] * toRad;
+      const lng = center[0] * toRad;
+      const ring = [];
+      for (let i = 0; i < SHAPE_CIRCLE_SEGMENTS; i++) {
+        const bearing = (2 * Math.PI * i) / SHAPE_CIRCLE_SEGMENTS;
+        const pointLat = Math.asin(
+          Math.sin(lat) * Math.cos(angular) + Math.cos(lat) * Math.sin(angular) * Math.cos(bearing)
+        );
+        const pointLng = lng + Math.atan2(
+          Math.sin(bearing) * Math.sin(angular) * Math.cos(lat),
+          Math.cos(angular) - Math.sin(lat) * Math.sin(pointLat)
+        );
+        ring.push([pointLng / toRad, pointLat / toRad]);
+      }
+      ring.push(ring[0]);
+      return ring;
+    }
+
+    function shapeOutline(shape) {
+      if (shape.type === "circle") return circleRing(shape.coordinates[0], shape.radiusMeters);
+      return shape.coordinates;
+    }
+
+    function shapesToGeoJSON(list) {
+      const features = [];
+      (list || []).forEach(function (shape) {
+        if (!shape || !shape.noteId || !Array.isArray(shape.coordinates) || !shape.coordinates.length) return;
+        let geometry = null;
+        if (shape.type === "line") {
+          geometry = { type: "LineString", coordinates: shape.coordinates };
+        } else if (shape.type === "polygon") {
+          // The label leaves out the closing point; GeoJSON rings end where they began.
+          geometry = { type: "Polygon", coordinates: [shape.coordinates.concat([shape.coordinates[0]])] };
+        } else if (shape.type === "circle" && shape.radiusMeters > 0) {
+          geometry = { type: "Polygon", coordinates: [circleRing(shape.coordinates[0], shape.radiusMeters)] };
+        }
+        if (!geometry) return;
+        features.push({
+          type: "Feature",
+          geometry: geometry,
+          properties: { noteId: shape.noteId, title: shape.title || "", color: shape.color || "#3388FF", kind: "shape" },
+        });
+      });
+      return { type: "FeatureCollection", features: features };
+    }
+
+    function removeShapeLayers() {
+      if (!map) return;
+      ["shapes-fill", "shapes-outline", "shapes-hit", "shapes-selected"].forEach((id) => {
+        if (map.getLayer(id)) map.removeLayer(id);
+      });
+      if (map.getSource("shapes")) map.removeSource("shapes");
+    }
+
+    // Shapes sit below tracks and markers, so a pin inside an area stays on top and tappable.
+    function rebuildShapes() {
+      if (!map || !styleLoaded) return;
+      removeShapeLayers();
+      if (!shapes.length) return;
+      map.addSource("shapes", { type: "geojson", data: shapesToGeoJSON(shapes) });
+      const beforeId = firstExistingLayer(["tracks-line", "clusters", "unclustered-pin", "unclustered-pin-fallback"]);
+      const add = function (spec) {
+        if (beforeId) map.addLayer(spec, beforeId);
+        else map.addLayer(spec);
+      };
+      add({
+        id: "shapes-fill",
+        type: "fill",
+        source: "shapes",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.15 },
+      });
+      add({
+        id: "shapes-outline",
+        type: "line",
+        source: "shapes",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": ["get", "color"], "line-width": 3 },
+      });
+      add({
+        id: "shapes-hit",
+        type: "line",
+        source: "shapes",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": ["get", "color"], "line-opacity": 0, "line-width": TRACK_HIT_WIDTH },
+      });
+      highlightSelection();
+    }
+
+    function setShapesData(next) {
+      const nextShapes = Array.isArray(next) ? next : [];
+      const key = JSON.stringify(nextShapes);
+      if (key === lastShapesDataKey && map && (map.getSource("shapes") || !nextShapes.length)) return;
+      shapes = nextShapes;
+      lastShapesDataKey = key;
+      logMarkers("setShapesData count=" + shapes.length + " styleLoaded=" + styleLoaded);
+      rebuildShapes();
+    }
+
     function rebuildTracks() {
       if (!map || !styleLoaded) {
         logMarkers(
@@ -1471,9 +1580,22 @@
     function highlightSelection() {
       if (!map || !styleLoaded) return;
       if (map.getLayer("tracks-selected")) map.removeLayer("tracks-selected");
+      if (map.getLayer("shapes-selected")) map.removeLayer("shapes-selected");
       removeTrackMarkFocusLayer();
       removePinFocusLayer();
       if (!selectedFeature) return;
+      if (selectedFeature.kind === "shape") {
+        if (map.getSource("shapes")) {
+          map.addLayer({
+            id: "shapes-selected",
+            type: "line",
+            source: "shapes",
+            filter: ["==", ["get", "noteId"], selectedFeature.noteId],
+            paint: { "line-color": "#ffcc00", "line-width": 6, "line-opacity": 0.9 },
+          });
+        }
+        return;
+      }
       if (selectedFeature.kind === "pin") {
         highlightSelectedPin();
         return;
@@ -1502,6 +1624,17 @@
       if (kind === "pin") {
         const pin = markers.find((m) => m.noteId === noteId);
         if (pin) map.flyTo({ center: [pin.lng, pin.lat], zoom: Math.max(map.getZoom(), 14) });
+        return;
+      }
+      if (kind === "shape") {
+        const shape = shapes.find((s) => s.noteId === noteId);
+        const outline = shape ? shapeOutline(shape) : [];
+        if (!outline.length) return;
+        const shapeBounds = outline.reduce(
+          (b, c) => b.extend(c),
+          new maplibregl.LngLatBounds(outline[0], outline[0])
+        );
+        map.fitBounds(shapeBounds, { padding: 48, maxZoom: 16 });
         return;
       }
       const source = map.getSource("tracks");
@@ -1601,21 +1734,43 @@
         map.on("click", layer, handleTrackFeatureClick);
       });
 
+      // Pins and tracks win over the shape underneath them.
+      function handleShapeClick(e) {
+        if (!e.features || !e.features.length) return;
+        const above = [
+          "unclustered-pin", "unclustered-pin-fallback", "clusters",
+          "tracks-line", "tracks-hit", "tracks-marks-summary", "tracks-marks-detail",
+        ].filter((id) => map.getLayer(id));
+        if (above.length && map.queryRenderedFeatures(e.point, { layers: above }).length) return;
+        e.preventDefault();
+        markFeatureClickHandled();
+        const noteId = e.features[0].properties.noteId;
+        if (!noteId) return;
+        logGeoMapDebug("click shape noteId=" + noteId);
+        selectFeatureInternal(noteId, "shape");
+        post("geoMapFeatureSelected", JSON.stringify({ noteId: noteId, kind: "shape" }));
+      }
+
+      ["shapes-fill", "shapes-hit"].forEach((layer) => {
+        map.on("click", layer, handleShapeClick);
+      });
+
       map.on("click", (e) => {
         if (e.defaultPrevented || shouldSuppressMapClickClear()) {
           return;
         }
-        const hit = map.queryRenderedFeatures(e.point, {
-          layers: [
-            "unclustered-pin",
-            "unclustered-pin-fallback",
-            "tracks-line",
-            "tracks-hit",
-            "tracks-marks-summary",
-            "tracks-marks-detail",
-            "clusters",
-          ],
-        });
+        const hitLayers = [
+          "unclustered-pin",
+          "unclustered-pin-fallback",
+          "tracks-line",
+          "tracks-hit",
+          "tracks-marks-summary",
+          "tracks-marks-detail",
+          "clusters",
+          "shapes-fill",
+          "shapes-hit",
+        ].filter((id) => map.getLayer(id));
+        const hit = hitLayers.length ? map.queryRenderedFeatures(e.point, { layers: hitLayers }) : [];
         if (!hit.length) {
           logGeoMapDebug("click map background clearSelection");
           clearSelectionInternal();
@@ -1739,6 +1894,7 @@
       );
       rebuildMarkers();
       rebuildTracks();
+      rebuildShapes();
       updateScaleControl();
       updateBuildings3D();
       if (is3DViewActive() && hasShortbreadSource()) {
@@ -2090,6 +2246,10 @@
 
       loadTracksData(data) {
         setTracksData(data);
+      },
+
+      loadShapesData(data) {
+        setShapesData(data);
       },
 
       addPin(noteId, title, lat, lng, color, iconClass) {

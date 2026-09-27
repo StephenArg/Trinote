@@ -3,6 +3,24 @@ import Foundation
 /// Resolves the effective Trilium `#iconClass` for display, including template and inheritable labels.
 enum NoteIconClassResolver {
 
+    /// Trilium v0.106 draws a text note placed on a geo map, when it has no icon of its own, as the pin
+    /// (`#geolocation`) or the shape it draws (`#geoShape`); a place outranks the folder icon. See `getNoteIcon`
+    /// in Trilium's `packages/commons/src/lib/notes.ts`.
+    static func geoDefaultIconClass(isTextNote: Bool, labelValue: (String) -> String?) -> String? {
+        guard isTextNote else { return nil }
+        if let location = labelValue("geolocation"), !location.trimmingCharacters(in: .whitespaces).isEmpty {
+            return "bx bx-pin"
+        }
+        guard let shape = labelValue("geoShape"), !shape.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return nil
+        }
+        switch shape.split(separator: ":", maxSplits: 1).first.map(String.init) {
+        case "polygon": return "bx bx-shape-polygon"
+        case "circle": return "bx bx-shape-circle"
+        default: return "bx bx-vector"
+        }
+    }
+
     struct ParentNoteContext: Sendable {
         let attributes: [AttributeItem]
         let parentNoteIds: [String]

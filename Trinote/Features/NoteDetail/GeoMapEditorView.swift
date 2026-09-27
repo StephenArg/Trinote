@@ -51,6 +51,7 @@ struct GeoMapEditorView: UIViewRepresentable {
     let viewportJSON: String
     let markers: [GeoMapPin]
     let tracks: [GeoMapTrack]
+    var shapes: [GeoMapShape] = []
     let settingsJSON: String
     let bridge: GeoMapEditorBridge
     var onCreatePin: ((_ lat: Double, _ lng: Double) -> Void)?
@@ -67,6 +68,7 @@ struct GeoMapEditorView: UIViewRepresentable {
             viewportJSON: viewportJSON,
             markers: markers,
             tracks: tracks,
+            shapes: shapes,
             settingsJSON: settingsJSON,
             onCreatePin: onCreatePin,
             onMovePin: onMovePin,
@@ -149,6 +151,7 @@ struct GeoMapEditorView: UIViewRepresentable {
         context.coordinator.latestViewportJSON = viewportJSON
         context.coordinator.latestMarkers = markers
         context.coordinator.latestTracks = tracks
+        context.coordinator.latestShapes = shapes
         context.coordinator.latestSettingsJSON = settingsJSON
         context.coordinator.syncFromSwiftUIIfNeeded()
         context.coordinator.invalidateMapIfBoundsChanged(containerBounds: container.bounds)
@@ -181,15 +184,17 @@ struct GeoMapEditorView: UIViewRepresentable {
         var latestViewportJSON: String
         var latestMarkers: [GeoMapPin]
         var latestTracks: [GeoMapTrack]
+        var latestShapes: [GeoMapShape]
         var latestSettingsJSON: String
         private var lastSyncedMarkersFingerprint = ""
         private var lastSyncedTracksFingerprint = ""
+        private var lastSyncedShapes: [GeoMapShape] = []
         private var lastSyncedSettingsJSON = ""
         private var editorReady = false
         private var mapReady = false
         private var lastInvalidateBounds: CGRect = .null
 
-        init(viewportJSON: String, markers: [GeoMapPin], tracks: [GeoMapTrack], settingsJSON: String,
+        init(viewportJSON: String, markers: [GeoMapPin], tracks: [GeoMapTrack], shapes: [GeoMapShape], settingsJSON: String,
              onCreatePin: ((_ lat: Double, _ lng: Double) -> Void)?,
              onMovePin: ((_ noteId: String, _ lat: Double, _ lng: Double) -> Void)?,
              onRemovePin: ((_ noteId: String) -> Void)?,
@@ -201,6 +206,7 @@ struct GeoMapEditorView: UIViewRepresentable {
             self.latestViewportJSON = viewportJSON
             self.latestMarkers = markers
             self.latestTracks = tracks
+            self.latestShapes = shapes
             self.latestSettingsJSON = settingsJSON
             self.onCreatePin = onCreatePin
             self.onMovePin = onMovePin
@@ -219,6 +225,7 @@ struct GeoMapEditorView: UIViewRepresentable {
                 mapReady = false
                 lastSyncedMarkersFingerprint = ""
                 lastSyncedTracksFingerprint = ""
+                lastSyncedShapes = []
                 lastSyncedSettingsJSON = ""
                 lastInvalidateBounds = .null
                 injectInitialState()
@@ -335,6 +342,14 @@ struct GeoMapEditorView: UIViewRepresentable {
                     }
                 }
             }
+            if latestShapes != lastSyncedShapes {
+                lastSyncedShapes = latestShapes
+                if let shapesJSON = latestShapes.bridgeJSONArray() {
+                    webView.evaluateJavaScript("window.geoMapEditor.loadShapesData(\(shapesJSON));") { _, error in
+                        if let error { Log.geoMap.error("geoMapEditor.loadShapes sync failed: \(error.localizedDescription)") }
+                    }
+                }
+            }
             if latestSettingsJSON != lastSyncedSettingsJSON {
                 lastSyncedSettingsJSON = latestSettingsJSON
                 Log.geoMap.info("[geo-map-debug] Swift sync settings → JS")
@@ -393,7 +408,8 @@ struct GeoMapEditorView: UIViewRepresentable {
         func injectInitialState() {
             guard editorReady, let webView else { return }
             guard let markersJSON = Self.markersJSONArray(latestMarkers),
-                  let tracksJSON = Self.tracksJSONArray(latestTracks) else {
+                  let tracksJSON = Self.tracksJSONArray(latestTracks),
+                  let shapesJSON = latestShapes.bridgeJSONArray() else {
                 Log.geoMap.error("GeoMapEditor init JSON encoding failed")
                 return
             }
@@ -401,6 +417,7 @@ struct GeoMapEditorView: UIViewRepresentable {
             window.geoMapEditor.init(\(latestViewportJSON), \(latestSettingsJSON));
             window.geoMapEditor.loadMarkersData(\(markersJSON));
             window.geoMapEditor.loadTracksData(\(tracksJSON));
+            window.geoMapEditor.loadShapesData(\(shapesJSON));
             """
             Log.geoMap.info(
                 "[markers] Swift inject init pins=\(GeoMapBridgeLogging.markersSummary(self.latestMarkers)) tracks=\(GeoMapBridgeLogging.tracksSummary(self.latestTracks))"
@@ -412,6 +429,7 @@ struct GeoMapEditorView: UIViewRepresentable {
                     self.mapReady = true
                     self.lastSyncedMarkersFingerprint = Self.markersFingerprint(self.latestMarkers)
                     self.lastSyncedTracksFingerprint = Self.tracksFingerprint(self.latestTracks)
+                    self.lastSyncedShapes = self.latestShapes
                     self.lastSyncedSettingsJSON = self.latestSettingsJSON
                     self.bumpInvalidateSize()
                 }
@@ -513,6 +531,7 @@ extension GeoMapEditorView: Equatable {
         lhs.viewportJSON == rhs.viewportJSON
             && lhs.markers == rhs.markers
             && lhs.tracks == rhs.tracks
+            && lhs.shapes == rhs.shapes
             && lhs.settingsJSON == rhs.settingsJSON
     }
 }

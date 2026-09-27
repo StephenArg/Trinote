@@ -261,7 +261,7 @@ final class AppState {
 
             let request = CreateNoteRequest(
                 parentNoteId: resolvedParent,
-                title: row.title,
+                title: row.titleFromTemplate ? nil : row.title,
                 type: row.noteType,
                 mime: row.mime,
                 content: contentToSend,
@@ -330,6 +330,19 @@ final class AppState {
                         noteId: newId,
                         parsedAttrs: parsedAttrs
                     )
+                    for attr in parsedAttrs where (attr["applyAfterTemplate"] as? Bool) == true {
+                        guard let type = attr["type"] as? String,
+                              let name = attr["name"] as? String,
+                              let value = attr["value"] as? String else { continue }
+                        do {
+                            try await client.createAttribute(CreateAttributeRequest(
+                                noteId: newId, type: type, name: name,
+                                value: value, isInheritable: nil, position: nil
+                            ))
+                        } catch {
+                            Log.sync.warning("createAttribute after template failed for \(newId) (\(type)/\(name)): \(error)")
+                        }
+                    }
                 }
                 if resolvedTemplateNoteId == nil {
                     for attr in parsedAttrs {
@@ -1379,8 +1392,9 @@ final class AppState {
         let raw = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = normalizeTemplateTitle(raw)
 
-        // Built-in template note ids are stable across locales — prefer them over title search.
-        if raw.hasPrefix("_template_"),
+        // A note id: a built-in `_template_*` (stable across locales, so preferred over title search) or a template
+        // picked by id, such as a board's card template. A title that isn't an id just misses and falls through.
+        if raw.range(of: #"^[A-Za-z0-9_]{4,128}$"#, options: .regularExpression) != nil,
            let note = try? await client.getNote(raw),
            !note.isDeleted {
             return note.noteId

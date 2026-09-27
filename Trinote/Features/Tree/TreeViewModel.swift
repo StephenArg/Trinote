@@ -34,6 +34,16 @@ final class TreeViewModel {
             rebuildVisibleNodes(animated: true)
         }
     }
+    /// Notes with Trilium's "Hide child notes in tree" (`#subtreeHidden`, own, inherited or from a template) show no
+    /// descendants or expand chevron, as in Trilium's tree. Off in pickers, so their children can still be chosen.
+    var hidesSubtreeHiddenChildren = false {
+        didSet {
+            guard oldValue != hidesSubtreeHiddenChildren else { return }
+            rebuildVisibleNodes(animated: true)
+        }
+    }
+    /// Label lookups for the current pass over the tree; dropped whenever the rows are rebuilt.
+    @ObservationIgnored private var labelResolver: TriliumLabelResolver?
 
     private let appState: AppState
     private let parentNoteId: String
@@ -47,6 +57,9 @@ final class TreeViewModel {
 
     var client: (any TriliumClientProtocol)? { appState.client }
     var serverProfileId: String? { appState.activeProfile?.id }
+    var isOnline: Bool { appState.isOnline }
+    /// The note whose children are this page's top-level rows.
+    var treeParentNoteId: String { parentNoteId }
 
     var rootChildren: [TreeNode] {
         get { _rootChildren }
@@ -57,7 +70,12 @@ final class TreeViewModel {
     }
 
     private func rebuildVisibleNodes(animated: Bool = true) {
-        let result = Self.flatten(_rootChildren, hideCalendarRootChildren: hidesCalendarRootChildrenInTree)
+        labelResolver = nil
+        let result = Self.flatten(
+            _rootChildren,
+            hideCalendarRootChildren: hidesCalendarRootChildrenInTree,
+            hidesChildren: { [unowned self] in isSubtreeHidden($0) }
+        )
         if animated {
             withAnimation(.easeInOut(duration: 0.15)) {
                 visibleNodes = result
@@ -67,14 +85,22 @@ final class TreeViewModel {
         }
     }
 
-    /// Emits visible tree rows. When `hideCalendarRootChildren` is on, calendar roots are leaves (descendants omitted).
+    /// Emits visible tree rows. When `hideCalendarRootChildren` is on, calendar roots are leaves (descendants omitted);
+    /// so is any note `hidesChildren` names.
     nonisolated static func flatten(
         _ nodes: [TreeNode],
         depth: Int = 0,
-        hideCalendarRootChildren: Bool = false
+        hideCalendarRootChildren: Bool = false,
+        hidesChildren: (NoteItem) -> Bool = { _ in false }
     ) -> [FlatTreeNode] {
         var result: [FlatTreeNode] = []
-        appendFlattened(nodes, depth: depth, hideCalendarRootChildren: hideCalendarRootChildren, into: &result)
+        appendFlattened(
+            nodes,
+            depth: depth,
+            hideCalendarRootChildren: hideCalendarRootChildren,
+            hidesChildren: hidesChildren,
+            into: &result
+        )
         return result
     }
 
@@ -82,6 +108,7 @@ final class TreeViewModel {
         _ nodes: [TreeNode],
         depth: Int,
         hideCalendarRootChildren: Bool,
+        hidesChildren: (NoteItem) -> Bool,
         into result: inout [FlatTreeNode]
     ) {
         for node in nodes {
@@ -89,8 +116,14 @@ final class TreeViewModel {
             if hideCalendarRootChildren && node.note.isCalendarRoot {
                 continue
             }
-            if let children = node.children {
-                appendFlattened(children, depth: depth + 1, hideCalendarRootChildren: hideCalendarRootChildren, into: &result)
+            if let children = node.children, !hidesChildren(node.note) {
+                appendFlattened(
+                    children,
+                    depth: depth + 1,
+                    hideCalendarRootChildren: hideCalendarRootChildren,
+                    hidesChildren: hidesChildren,
+                    into: &result
+                )
             }
         }
     }
@@ -109,6 +142,37 @@ final class TreeViewModel {
             hasChildren: note.hasChildren,
             isCalendarRoot: note.isCalendarRoot,
             hideCalendarRootChildren: hidesCalendarRootChildrenInTree
+        ) && !isSubtreeHidden(note)
+    }
+
+    /// Whether the row hides its children for "Hide child notes in tree" (only while `hidesSubtreeHiddenChildren`).
+    func isSubtreeHidden(_ note: NoteItem) -> Bool {
+        guard hidesSubtreeHiddenChildren, note.hasChildren else { return false }
+        let resolver = labelResolver ?? makeLabelResolver()
+        labelResolver = resolver
+        return resolver.isTruthy("subtreeHidden", noteId: note.noteId)
+    }
+
+    /// Children this row does not show: a calendar root's (when that preference is on) or a hidden subtree's.
+    private func hidesChildrenInTree(_ note: NoteItem) -> Bool {
+        (hidesCalendarRootChildrenInTree && note.isCalendarRoot) || isSubtreeHidden(note)
+    }
+
+    private func makeLabelResolver() -> TriliumLabelResolver {
+        let profileId = serverProfileId
+        let boardHidesChildren = TriliumServerCompatibility.supportsBoardOverhaul(appState.serverAppInfo)
+        return TriliumLabelResolver(
+            context: { [unowned self] noteId in
+                // Freshly loaded rows first, then the cache (ancestors, templates) for notes not on screen.
+                if let note = noteCache[noteId] {
+                    return TriliumLabelResolver.NoteContext(attributes: note.attributes, parentNoteIds: note.parentNoteIds)
+                }
+                guard let profileId else { return nil }
+                return persistence.labelResolverContext(noteId: noteId, serverProfileId: profileId)
+            },
+            builtinTemplateLabel: { templateNoteId, name in
+                TriliumBuiltinTemplateLabels.value(of: name, templateNoteId: templateNoteId, boardHidesChildren: boardHidesChildren)
+            }
         )
     }
 
@@ -274,117 +338,153 @@ final class TreeViewModel {
         }
     }
 
+    /// Where a List drag of flat row `fromIndex`, dropped before flat row `destination`, lands among the dragged row's
+    /// siblings. A drop anywhere in its parent's block of rows (its siblings and their open subtrees) reorders it among
+    /// those siblings; anywhere else is `nil`, since moving a note to another parent is not a reorder.
+    struct SiblingMove: Equatable {
+        /// Flat index of the parent row; `nil` for this page's top-level rows.
+        let parentIndex: Int?
+        let fromSibling: Int
+        let toSibling: Int
+    }
+
+    nonisolated static func siblingMove(in rows: [FlatTreeNode], from fromIndex: Int, to destination: Int) -> SiblingMove? {
+        guard rows.indices.contains(fromIndex) else { return nil }
+        let depth = rows[fromIndex].depth
+        var parentIndex: Int?
+        if depth > 0 {
+            guard let found = (0..<fromIndex).last(where: { rows[$0].depth == depth - 1 }) else { return nil }
+            parentIndex = found
+        }
+        let blockStart = (parentIndex ?? -1) + 1
+        var blockEnd = blockStart
+        while blockEnd < rows.count, rows[blockEnd].depth >= depth { blockEnd += 1 }
+        guard destination >= blockStart, destination <= blockEnd else { return nil }
+
+        let siblings = (blockStart..<blockEnd).filter { rows[$0].depth == depth }
+        guard let fromSibling = siblings.firstIndex(of: fromIndex) else { return nil }
+        var toSibling = siblings.filter { $0 < destination }.count
+        if destination > fromIndex { toSibling -= 1 }
+        return SiblingMove(parentIndex: parentIndex, fromSibling: fromSibling, toSibling: max(0, min(toSibling, siblings.count - 1)))
+    }
+
+    /// List reorder (`onMove`) at any depth: a note moves among its siblings and the new order is saved to the server.
     func reorderNodes(from source: IndexSet, to destination: Int) {
-        guard let fromIndex = source.first, let client else { return }
+        guard let fromIndex = source.first else { return }
+        guard let client, isOnline else {
+            error = String(localized: "Connect to the server to reorder notes.", comment: "Tree reorder while offline")
+            putRowsBack(after: source, destination)
+            return
+        }
+        let rows = visibleNodes
+        guard let move = Self.siblingMove(in: rows, from: fromIndex, to: destination), move.fromSibling != move.toSibling else {
+            putRowsBack(after: source, destination)
+            return
+        }
+        let parent = move.parentIndex.map { rows[$0].node }
+        let siblings: [TreeNode]
+        if let parent {
+            siblings = Self.findTreeNode(branchId: parent.branch.branchId, in: rootChildren)?.children ?? []
+        } else {
+            siblings = rootChildren
+        }
+        guard siblings.indices.contains(move.fromSibling), siblings.indices.contains(move.toSibling) else {
+            putRowsBack(after: source, destination)
+            return
+        }
 
-        let nodes = visibleNodes
-        guard fromIndex < nodes.count else { return }
-
-        let movedDepth: Int = nodes[fromIndex].depth
-        let movedBranchId: String = nodes[fromIndex].node.branch.branchId
-
-        let parentNode: TreeNode? = findParentNode(at: fromIndex, depth: movedDepth, in: nodes)
-
-        let oldChildren: [TreeNode] = resolveChildren(parent: parentNode)
-        guard !oldChildren.isEmpty else { return }
-
-        guard let fromChildIdx = oldChildren.firstIndex(where: { $0.branch.branchId == movedBranchId }) else { return }
-
-        let siblingFlatIndices: [Int] = findSiblingFlatIndices(depth: movedDepth, parent: parentNode, in: nodes)
-        guard !siblingFlatIndices.isEmpty else { return }
-
-        let firstSiblingFlat: Int = siblingFlatIndices[0]
-        let lastSiblingFlat: Int = siblingFlatIndices[siblingFlatIndices.count - 1]
-        guard destination >= firstSiblingFlat && destination <= lastSiblingFlat + 1 else { return }
-
-        let toChildIdx: Int = computeDestChildIndex(
-            siblingFlatIndices: siblingFlatIndices,
-            destination: destination,
-            fromIndex: fromIndex
-        )
-
-        guard fromChildIdx != toChildIdx, toChildIdx >= 0, toChildIdx < oldChildren.count else { return }
-
-        var newChildren = oldChildren
-        let moved = newChildren.remove(at: fromChildIdx)
-        newChildren.insert(moved, at: toChildIdx)
-
-        if let parent = parentNode {
+        var newChildren = siblings
+        let moved = newChildren.remove(at: move.fromSibling)
+        newChildren.insert(moved, at: move.toSibling)
+        if let parent {
             rootChildren = updateChildrenInTree(parentBranchId: parent.branch.branchId, newChildren: newChildren, in: rootChildren)
         } else {
             rootChildren = newChildren
         }
-
-        sendReorderUpdates(oldChildren: oldChildren, newChildren: newChildren, client: client)
+        Log.api.info("Tree reorder: branch \(moved.branch.branchId) to position \(move.toSibling) under \(parent?.note.noteId ?? self.parentNoteId)")
+        saveSiblingMove(
+            movedBranchId: moved.branch.branchId,
+            newOrder: newChildren.map(\.branch.branchId),
+            parentNoteId: parent?.note.noteId ?? parentNoteId,
+            parentBranchId: parent?.branch.branchId,
+            client: client
+        )
     }
 
-    private func findParentNode(at fromIndex: Int, depth: Int, in nodes: [FlatTreeNode]) -> TreeNode? {
-        guard depth > 0 else { return nil }
-        for j in (0..<fromIndex).reversed() {
-            if nodes[j].depth == depth - 1 { return nodes[j].node }
+    /// The List has already drawn a drop that is not saved. Mirror it in the rows, then rebuild them, so the list
+    /// animates the row back instead of keeping an order the tree does not have.
+    private func putRowsBack(after source: IndexSet, _ destination: Int) {
+        var shown = visibleNodes
+        shown.move(fromOffsets: source, toOffset: destination)
+        visibleNodes = shown
+        DispatchQueue.main.async { [weak self] in
+            self?.rebuildVisibleNodes(animated: true)
         }
-        return nil
     }
 
-    private func resolveChildren(parent: TreeNode?) -> [TreeNode] {
-        if let parent {
-            return parent.children ?? []
-        }
-        return rootChildren
-    }
-
-    private func findSiblingFlatIndices(depth: Int, parent: TreeNode?, in nodes: [FlatTreeNode]) -> [Int] {
-        let parentBranchId: String? = parent?.branch.branchId
-        var result: [Int] = []
-        for idx in nodes.indices {
-            guard nodes[idx].depth == depth else { continue }
-            if depth == 0 {
-                result.append(idx)
-                continue
-            }
-            guard let targetId = parentBranchId else { continue }
-            for j in (0..<idx).reversed() {
-                if nodes[j].depth == depth - 1 {
-                    if nodes[j].node.branch.branchId == targetId {
-                        result.append(idx)
-                    }
-                    break
-                }
-            }
-        }
-        return result
-    }
-
-    private func computeDestChildIndex(siblingFlatIndices: [Int], destination: Int, fromIndex: Int) -> Int {
-        var toChildIdx = 0
-        for flatIdx in siblingFlatIndices {
-            if flatIdx >= destination { break }
-            toChildIdx += 1
-        }
-        if destination > fromIndex && toChildIdx > 0 { toChildIdx -= 1 }
-        return toChildIdx
-    }
-
-    private func sendReorderUpdates(oldChildren: [TreeNode], newChildren: [TreeNode], client: any TriliumClientProtocol) {
-        var updates: [(String, Int)] = []
-        for (newIdx, node) in newChildren.enumerated() {
-            if let oldIdx = oldChildren.firstIndex(where: { $0.branch.branchId == node.branch.branchId }), oldIdx != newIdx {
-                updates.append((node.branch.branchId, newIdx))
-            }
-        }
-        guard !updates.isEmpty else { return }
-        let newOrder = newChildren.map(\.branch.branchId)
+    /// Saves a drag among one parent's children. Trilium needs only the dragged branch placed beside its new
+    /// neighbour: the siblings in between keep their order. (Placing every shifted sibling in turn, as this used to,
+    /// scrambles longer moves, since each request lands against positions the previous one already changed.)
+    /// The parent's positions are then read back, so the cache matches the server and a re-sort by the server
+    /// (`#sorted`) shows at once.
+    func saveSiblingMove(
+        movedBranchId: String,
+        newOrder: [String],
+        parentNoteId: String,
+        parentBranchId: String?,
+        client: any TriliumClientProtocol
+    ) {
         Task {
-            for (branchId, _) in updates {
-                do {
-                    try await client.placeBranchInSiblingOrder(branchId, orderedSiblingBranchIds: newOrder)
-                } catch {
-                    Log.api.error("Failed to update branch position: \(error)")
-                    await MainActor.run { self.error = APIError.from(error).localizedDescription }
-                    await refresh()
-                    return
-                }
+            do {
+                try await client.placeBranchInSiblingOrder(movedBranchId, orderedSiblingBranchIds: newOrder)
+            } catch {
+                Log.api.error("Failed to update branch position: \(error)")
+                self.error = APIError.from(error).localizedDescription
+                await refresh()
+                return
             }
+            await applyServerChildOrder(parentNoteId: parentNoteId, parentBranchId: parentBranchId, client: client)
+        }
+    }
+
+    /// Reads a parent's child positions from the server into the cache and the rows on screen.
+    private func applyServerChildOrder(
+        parentNoteId: String,
+        parentBranchId: String?,
+        client: any TriliumClientProtocol
+    ) async {
+        guard let (parent, liveBranches) = try? await client.getNoteWithBranches(parentNoteId) else { return }
+        let positions = Dictionary(liveBranches.map { ($0.branchId, $0.notePosition) }, uniquingKeysWith: { first, _ in first })
+        if let profileId = serverProfileId {
+            try? persistence.applyChildBranchPositions(positions, parentNoteId: parentNoteId, serverProfileId: profileId)
+            try? persistence.commitBatch()
+        }
+
+        func serverOrdered(_ nodes: [TreeNode]) -> [TreeNode] {
+            nodes.enumerated().sorted { lhs, rhs in
+                let left = positions[lhs.element.branch.branchId] ?? Int.max
+                let right = positions[rhs.element.branch.branchId] ?? Int.max
+                return left != right ? left < right : lhs.offset < rhs.offset
+            }.map(\.element)
+        }
+        let shown: [TreeNode]
+        if let parentBranchId {
+            shown = Self.findTreeNode(branchId: parentBranchId, in: rootChildren)?.children ?? []
+        } else {
+            shown = rootChildren
+        }
+        let ordered = serverOrdered(shown)
+        guard ordered.map(\.branch.branchId) != shown.map(\.branch.branchId) else { return }
+        if let parentBranchId {
+            rootChildren = updateChildrenInTree(parentBranchId: parentBranchId, newChildren: ordered, in: rootChildren)
+        } else {
+            rootChildren = ordered
+        }
+        if parent.attributes.contains(where: { $0.type == "label" && $0.name == "sorted" }) {
+            error = String(
+                localized: "This note sorts its sub-notes automatically (#sorted), so they can’t be reordered by hand.",
+                comment: "Tree reorder undone by the parent's #sorted label"
+            )
         }
     }
 
@@ -403,7 +503,7 @@ final class TreeViewModel {
     }
 
     func toggleExpand(_ node: TreeNode) async {
-        if hidesCalendarRootChildrenInTree && node.note.isCalendarRoot { return }
+        if hidesChildrenInTree(node.note) { return }
         let branchId = node.branch.branchId
         if expandedBranches.contains(branchId) {
             expandedBranches.remove(branchId)
@@ -573,6 +673,7 @@ final class TreeViewModel {
                 if let profileId = serverProfileId {
                     GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
                     persistence.removeFavoritesForCachedSubtree(rootNoteId: noteId, serverProfileId: profileId)
+                    persistence.closeOpenNoteTabs(forDeletedNoteId: noteId, serverProfileId: profileId)
                     try? persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
                 }
                 await refresh()
@@ -638,7 +739,8 @@ final class TreeViewModel {
                 mime: mime,
                 initialContent: initial,
                 serverProfileId: profileId,
-                initialAttributes: attrs
+                initialAttributes: attrs,
+                useParentTitleTemplate: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             )
             reloadFromCache()
             appState.backgroundSyncPendingChanges()
@@ -672,7 +774,7 @@ final class TreeViewModel {
     /// Re-attaches cached subtrees for branch IDs still marked expanded (used after `reloadFromCache`).
     private func attachExpandedCachedChildren(nodes: [TreeNode]) -> [TreeNode] {
         nodes.map { node in
-            if hidesCalendarRootChildrenInTree && node.note.isCalendarRoot {
+            if hidesChildrenInTree(node.note) {
                 return node
             }
             guard expandedBranches.contains(node.branch.branchId), node.note.hasChildren else {
@@ -747,7 +849,7 @@ final class TreeViewModel {
     // MARK: - Child Loading
 
     private func loadChildren(of note: NoteItem, client: any TriliumClientProtocol) async throws -> [TreeNode] {
-        if hidesCalendarRootChildrenInTree && note.isCalendarRoot { return [] }
+        if hidesChildrenInTree(note) { return [] }
         guard !note.childBranchIds.isEmpty else { return [] }
 
         var localBranchCache = branchCache
@@ -959,6 +1061,14 @@ final class TreeViewModel {
                 childCount: 0
             )
         }
+    }
+
+    private static func findTreeNode(branchId: String, in nodes: [TreeNode]) -> TreeNode? {
+        for node in nodes {
+            if node.branch.branchId == branchId { return node }
+            if let found = findTreeNode(branchId: branchId, in: node.children ?? []) { return found }
+        }
+        return nil
     }
 
     private static func findTreeNode(noteId: String, in nodes: [TreeNode]) -> TreeNode? {

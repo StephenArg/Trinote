@@ -649,6 +649,7 @@ struct FavoritesView: View {
             try await client.deleteNote(fav.noteId, eraseNotes: eraseNotes)
             GhostNoteTracker.shared.add(fav.noteId, serverProfileId: profileId)
             PersistenceManager.shared.removeFavoritesForCachedSubtree(rootNoteId: fav.noteId, serverProfileId: profileId)
+            PersistenceManager.shared.closeOpenNoteTabs(forDeletedNoteId: fav.noteId, serverProfileId: profileId)
             try? PersistenceManager.shared.deleteCachedNotes(noteIds: [fav.noteId], serverProfileId: profileId)
             loadFavorites()
             if postSync { onNoteDeleted?() }

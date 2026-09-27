@@ -1360,6 +1360,8 @@ struct TreeView: View {
     /// Parent/move pickers keep year/month/day notes visible so notes can still be filed under a day.
     private func applyCalendarTreePreference(to vm: TreeViewModel) {
         vm.hidesCalendarRootChildrenInTree = onPickParent == nil && hideCalendarChildNotesInTree
+        // Trilium's "Hide child notes in tree"; pickers still show those children so they can be chosen.
+        vm.hidesSubtreeHiddenChildren = onPickParent == nil
     }
 
     private func buildTreeNodeRow(node: TreeNode, depth: Int, vm: TreeViewModel) -> TreeNodeRow {
@@ -1473,51 +1475,9 @@ struct TreeView: View {
 
 @MainActor
 extension TreeViewModel {
-    /// Handles List row reordering for top-level tree notes.
-    /// Nested rows are ignored here to avoid flat-index/child-index mismatches.
+    /// Handles List row reordering (any depth; see `reorderNodes`).
     func handleMove(_ source: IndexSet, _ destination: Int) {
-        guard let fromFlatIndex = source.first, fromFlatIndex < visibleNodes.count, let client else { return }
-        guard visibleNodes[fromFlatIndex].depth == 0 else { return }
-
-        let topLevelFlatIndices = visibleNodes.indices.filter { visibleNodes[$0].depth == 0 }
-        guard let fromTopIndex = topLevelFlatIndices.firstIndex(of: fromFlatIndex) else { return }
-
-        let firstTopFlat = topLevelFlatIndices.first ?? fromFlatIndex
-        let lastTopFlat = topLevelFlatIndices.last ?? fromFlatIndex
-        guard destination >= firstTopFlat && destination <= lastTopFlat + 1 else { return }
-
-        var toTopIndex = topLevelFlatIndices.reduce(0) { count, idx in
-            count + (idx < destination ? 1 : 0)
-        }
-        if destination > fromFlatIndex && toTopIndex > 0 { toTopIndex -= 1 }
-        guard toTopIndex >= 0, toTopIndex < rootChildren.count, fromTopIndex != toTopIndex else { return }
-
-        let oldChildren = rootChildren
-        var newChildren = rootChildren
-        let moved = newChildren.remove(at: fromTopIndex)
-        newChildren.insert(moved, at: toTopIndex)
-        rootChildren = newChildren
-
-        let oldPositions = Dictionary(uniqueKeysWithValues: oldChildren.enumerated().map { ($1.branch.branchId, $0) })
-        let updates = newChildren.enumerated().compactMap { (newIdx, node) -> (String, Int)? in
-            guard let oldIdx = oldPositions[node.branch.branchId], oldIdx != newIdx else { return nil }
-            return (node.branch.branchId, newIdx)
-        }
-        guard !updates.isEmpty else { return }
-
-        let newOrder = newChildren.map(\.branch.branchId)
-        Task {
-            for (branchId, _) in updates {
-                do {
-                    try await client.placeBranchInSiblingOrder(branchId, orderedSiblingBranchIds: newOrder)
-                } catch {
-                    Log.api.error("Failed to update branch position: \(error)")
-                    await MainActor.run { self.error = APIError.from(error).localizedDescription }
-                    await refresh()
-                    return
-                }
-            }
-        }
+        reorderNodes(from: source, to: destination)
     }
 }
 
@@ -1633,6 +1593,20 @@ struct TreeNodeRow: View {
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .foregroundStyle(titleForegroundColor)
+                }
+
+                // Children hidden by "Hide child notes in tree": their count, as Trilium's tree shows it.
+                if viewModel.isSubtreeHidden(node.note) {
+                    Text("\(node.note.childNoteIds.count)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                        .accessibilityLabel(String(
+                            format: String(localized: "%lld hidden child notes", comment: "Tree row: children hidden by Hide child notes in tree"),
+                            node.note.childNoteIds.count
+                        ))
                 }
 
                 Spacer()

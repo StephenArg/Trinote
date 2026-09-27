@@ -257,6 +257,21 @@ final class KanbanPresentationModelTests: XCTestCase {
         XCTAssertEqual(withoutInbox.map(\.value), ["Done"])
     }
 
+    func testColumnAddedBesideAnotherIsStoredInPlace() {
+        let stored = [
+            Models.BoardColumn(value: "A"),
+            Models.BoardColumn(value: "Old", fields: ["archived": .bool(true)]),
+            Models.BoardColumn(value: "B"),
+        ]
+        let left = Models.reorderedColumns(stored: stored, shownOrder: ["New", "A", "B"], showInbox: false, makeColumnId: { "n1" })
+        // The archived column keeps its stored slot; the shown columns take the new order around it.
+        XCTAssertEqual(left.map(\.value), ["New", "Old", "A", "B"])
+        XCTAssertEqual(left.first?.fields["id"], .string("n1"))
+
+        let right = Models.reorderedColumns(stored: stored, shownOrder: ["A", "New", "B"], showInbox: false, makeColumnId: { "n1" })
+        XCTAssertEqual(right.filter { !$0.isArchived }.map(\.value), ["A", "New", "B"])
+    }
+
     func testReorderKeepsHiddenInboxEntryWhileInboxIsOff() {
         let stored = [Models.BoardColumn(value: "", fields: ["icon": .string("bx bxs-inbox")]), Models.BoardColumn(value: "A"), Models.BoardColumn(value: "B")]
         let reordered = Models.reorderedColumns(stored: stored, shownOrder: ["B", "A"], showInbox: false, makeColumnId: { "x" })
@@ -281,6 +296,214 @@ final class KanbanPresentationModelTests: XCTestCase {
         ]
         XCTAssertEqual(Models.columnValue(from: attrs, groupBy: Models.GroupBy("~owner")), "person1")
         XCTAssertEqual(Models.columnValue(from: attrs, groupBy: Models.GroupBy("owner")), "label-value")
+    }
+
+    func testColumnFieldsReachTheBoard() {
+        let stored = [
+            Models.BoardColumn(value: "To Do", fields: ["icon": .string("bx bx-bug"), "color": .string("#f00"), "limit": .int(1), "collapsed": .bool(true)]),
+        ]
+        let cards = [
+            Models.Card(noteId: "c1", branchId: "b1", title: "A", columnValue: "To Do", notePosition: 0),
+            Models.Card(noteId: "c2", branchId: "b2", title: "B", columnValue: "To Do", notePosition: 1),
+        ]
+        let column = Models.buildColumns(storedColumns: stored, cards: cards)[0]
+        XCTAssertEqual(column.icon, "bx bx-bug")
+        XCTAssertEqual(column.color, "#f00")
+        XCTAssertEqual(column.limit, 1)
+        XCTAssertTrue(column.isOverLimit)
+        XCTAssertTrue(column.isCollapsed)
+        XCTAssertFalse(Models.buildColumns(storedColumns: [Models.BoardColumn(value: "To Do", fields: ["limit": .int(0)])], cards: cards)[0].isOverLimit)
+    }
+
+    func testCollapseFlagsAreWrittenLikeTheWebBoard() {
+        let stored = [
+            Models.BoardColumn(value: "A", fields: ["id": .string("a1"), "icon": .string("bx bx-bug")]),
+            Models.BoardColumn(value: "C", fields: ["collapsed": .bool(true), "keepCollapsed": .bool(true)]),
+        ]
+        let kept = Models.settingCollapse(ofColumn: "A", collapsed: true, keepCollapsed: true, stored: stored, shownOrder: ["A", "C"])
+        XCTAssertEqual(kept[0].fields, ["id": .string("a1"), "icon": .string("bx bx-bug"), "collapsed": .bool(true), "keepCollapsed": .bool(true)])
+
+        // Off is removed, not stored as false; `nil` leaves a flag alone.
+        let released = Models.settingCollapse(ofColumn: "C", collapsed: nil, keepCollapsed: false, stored: stored, shownOrder: ["A", "C"])
+        XCTAssertEqual(released[1].fields, ["collapsed": .bool(true)])
+        let opened = Models.settingCollapse(ofColumn: "C", collapsed: false, keepCollapsed: false, stored: stored, shownOrder: ["A", "C"])
+        XCTAssertEqual(opened[1].fields, [:])
+
+        let columns = Models.buildColumns(storedColumns: stored, cards: [])
+        XCTAssertEqual(columns.map(\.isKeptCollapsed), [false, true])
+    }
+
+    func testCollapsingAColumnWithoutAnEntryStoresItWhereTheBoardDrawsIt() {
+        let stored = [Models.BoardColumn(value: "A"), Models.BoardColumn(value: "C")]
+        let shown = ["", "A", "B", "C", "D"]
+        XCTAssertEqual(Models.settingCollapse(ofColumn: "B", collapsed: true, keepCollapsed: nil, stored: stored, shownOrder: shown).map(\.value), ["A", "B", "C"])
+        XCTAssertEqual(Models.settingCollapse(ofColumn: "", collapsed: true, keepCollapsed: nil, stored: stored, shownOrder: shown).map(\.value), ["", "A", "C"])
+        XCTAssertEqual(Models.settingCollapse(ofColumn: "D", collapsed: true, keepCollapsed: nil, stored: stored, shownOrder: shown).map(\.value), ["A", "C", "D"])
+        let inserted = Models.settingCollapse(ofColumn: "B", collapsed: true, keepCollapsed: nil, stored: stored, shownOrder: shown)
+        XCTAssertEqual(inserted[1].fields, ["collapsed": .bool(true)])
+    }
+
+    // MARK: - Card order
+
+    private func label(_ name: String, _ value: String, inheritable: Bool = false) -> AttributeItem {
+        AttributeItem(attributeId: name, noteId: "board", type: .label, name: name, value: value, position: 0, isInheritable: inheritable)
+    }
+
+    func testSortKeyParsing() {
+        XCTAssertEqual(Models.SortKey("title"), .title)
+        XCTAssertEqual(Models.SortKey("creationDate"), .creationDate)
+        XCTAssertEqual(Models.SortKey("attr:priority"), .attribute("priority"))
+        XCTAssertNil(Models.SortKey("attr:"))
+        XCTAssertNil(Models.SortKey("manual"))
+        XCTAssertNil(Models.SortKey(nil))
+    }
+
+    func testColumnOrderWinsOverBoardOrderAndManualKeepsTreeOrder() {
+        let board = Models.boardSort([label("board:sortColumns", "title"), label("board:sortColumnsDescending", "")])
+        XCTAssertEqual(board, Models.ColumnSort(key: .title, descending: true))
+        XCTAssertNil(Models.boardSort([label("board:sortColumns", "nonsense")]))
+
+        XCTAssertEqual(Models.columnSort(for: nil, boardSort: board), board)
+        XCTAssertEqual(Models.columnSort(for: Models.BoardColumn(value: "A", fields: ["orderBy": .string("default")]), boardSort: board), board)
+        XCTAssertNil(Models.columnSort(for: Models.BoardColumn(value: "A", fields: ["orderBy": .string("manual")]), boardSort: board))
+        XCTAssertEqual(
+            Models.columnSort(for: Models.BoardColumn(value: "A", fields: ["orderBy": .string("attr:due"), "descendingOrder": .bool(true)]), boardSort: board),
+            Models.ColumnSort(key: .attribute("due"), descending: true)
+        )
+    }
+
+    func testSortedCardsPutsMissingValuesLastInEitherDirection() {
+        func card(_ id: String, priority: String?, created: String) -> Models.Card {
+            Models.Card(noteId: id, branchId: id, title: id, columnValue: "A", notePosition: 0, creationDate: created,
+                        labels: priority.map { ["priority": $0] } ?? [:])
+        }
+        let cards = [
+            card("none", priority: nil, created: "2026-01-01"),
+            card("ten", priority: "10", created: "2026-01-02"),
+            card("two", priority: "2", created: "2026-01-03"),
+            card("twoOlder", priority: "2", created: "2025-12-31"),
+        ]
+        let ascending = Models.sortedCards(cards, by: Models.ColumnSort(key: .attribute("priority"), descending: false), relationTitle: { _ in nil })
+        XCTAssertEqual(ascending.map(\.noteId), ["twoOlder", "two", "ten", "none"], "numbers compare numerically, ties by creation date")
+        let descending = Models.sortedCards(cards, by: Models.ColumnSort(key: .attribute("priority"), descending: true), relationTitle: { _ in nil })
+        XCTAssertEqual(descending.map(\.noteId), ["ten", "twoOlder", "two", "none"])
+    }
+
+    func testSortedCardsUsesRelationTargetTitles() {
+        let cards = [
+            Models.Card(noteId: "c1", branchId: "b1", title: "c1", columnValue: "A", notePosition: 0, relations: ["owner": "zed"]),
+            Models.Card(noteId: "c2", branchId: "b2", title: "c2", columnValue: "A", notePosition: 1, relations: ["owner": "amy"]),
+        ]
+        let titles = ["zed": "Alice", "amy": "Bob"]
+        let sorted = Models.sortedCards(cards, by: Models.ColumnSort(key: .attribute("owner"), descending: false), relationTitle: { titles[$0] })
+        XCTAssertEqual(sorted.map(\.noteId), ["c1", "c2"])
+    }
+
+    func testBuildColumnsAppliesBoardOrderToColumnsWithoutTheirOwn() {
+        let stored = [Models.BoardColumn(value: "A"), Models.BoardColumn(value: "B", fields: ["orderBy": .string("manual")])]
+        let cards = [
+            Models.Card(noteId: "a2", branchId: "1", title: "Zulu", columnValue: "A", notePosition: 0),
+            Models.Card(noteId: "a1", branchId: "2", title: "Alpha", columnValue: "A", notePosition: 1),
+            Models.Card(noteId: "b2", branchId: "3", title: "Zulu", columnValue: "B", notePosition: 0),
+            Models.Card(noteId: "b1", branchId: "4", title: "Alpha", columnValue: "B", notePosition: 1),
+        ]
+        let columns = Models.buildColumns(storedColumns: stored, cards: cards, boardSort: Models.ColumnSort(key: .title, descending: false))
+        XCTAssertEqual(columns[0].cards.map(\.noteId), ["a1", "a2"])
+        XCTAssertEqual(columns[1].cards.map(\.noteId), ["b2", "b1"])
+    }
+
+    func testColumnSortPatchKeepsBoardDefaultAndDropsFalseDirection() {
+        let stored = [Models.BoardColumn(value: "A", fields: ["orderBy": .string("title"), "descendingOrder": .bool(true), "icon": .string("bx bx-bug")])]
+        let toDefault = Models.patchingColumn("A", with: ["orderBy": .string("default")], stored: stored, shownOrder: ["A"])
+        XCTAssertEqual(toDefault[0].fields["orderBy"], .string("default"), "Board's Default is stored, not dropped")
+        XCTAssertEqual(toDefault[0].fields["descendingOrder"], .bool(true))
+        let ascending = Models.patchingColumn("A", with: ["descendingOrder": .bool(false)], stored: stored, shownOrder: ["A"])
+        XCTAssertNil(ascending[0].fields["descendingOrder"])
+        XCTAssertEqual(ascending[0].fields["icon"], .string("bx bx-bug"))
+
+        XCTAssertEqual(Models.sortSelection(storedOrderBy: nil), "default")
+        XCTAssertEqual(Models.sortSelection(storedOrderBy: "default"), "default")
+        XCTAssertEqual(Models.sortSelection(storedOrderBy: "manual"), "manual")
+        XCTAssertEqual(Models.sortSelection(storedOrderBy: "attr:due"), "attr:due")
+    }
+
+    func testColumnLimitIsStoredAsANumberAndRemovedWhenOff() {
+        let stored = [Models.BoardColumn(value: "A", fields: ["id": .string("a1")])]
+        let limited = Models.patchingColumn("A", with: ["limit": .int(3)], stored: stored, shownOrder: ["A"])
+        XCTAssertEqual(limited[0].fields["limit"], .int(3))
+        XCTAssertEqual(limited[0].limit, 3)
+        let json = try? String(decoding: Models.encodeBoardConfig(Models.BoardConfig().settingColumns(limited, forKey: "columns")), as: UTF8.self)
+        XCTAssertTrue(json?.contains(#""limit":3"#) == true)
+
+        let unlimited = Models.patchingColumn("A", with: ["limit": nil], stored: limited, shownOrder: ["A"])
+        XCTAssertNil(unlimited[0].fields["limit"])
+        XCTAssertEqual(unlimited[0].fields["id"], .string("a1"))
+    }
+
+    func testResortedColumnReordersCardsAtOnce() {
+        let cards = [
+            Models.Card(noteId: "z", branchId: "1", title: "Zulu", columnValue: "A", notePosition: 0),
+            Models.Card(noteId: "a", branchId: "2", title: "Alpha", columnValue: "A", notePosition: 1),
+            Models.Card(noteId: "m", branchId: "3", title: "Mike", columnValue: "A", notePosition: 2),
+        ]
+        let column = Models.Column(value: "A", cards: cards)
+        let byTitle = Models.resorted(column, orderBy: "title", descending: true, boardSort: nil, relationTitle: { _ in nil })
+        XCTAssertEqual(byTitle.cards.map(\.noteId), ["z", "m", "a"])
+        XCTAssertEqual(byTitle.effectiveSort, Models.ColumnSort(key: .title, descending: true))
+        XCTAssertEqual(byTitle.sortSelection, "title")
+
+        let manual = Models.resorted(byTitle, orderBy: "manual", descending: true, boardSort: nil, relationTitle: { _ in nil })
+        XCTAssertEqual(manual.cards.map(\.noteId), ["z", "a", "m"], "manual is tree order")
+        XCTAssertNil(manual.effectiveSort)
+
+        let boardOrder = Models.ColumnSort(key: .title, descending: false)
+        let followingBoard = Models.resorted(manual, orderBy: "default", descending: false, boardSort: boardOrder, relationTitle: { _ in nil })
+        XCTAssertEqual(followingBoard.cards.map(\.noteId), ["a", "m", "z"])
+        XCTAssertEqual(followingBoard.sortSelection, "default")
+    }
+
+    func testClonedCardKnowsItHasOtherParents() {
+        XCTAssertFalse(Models.Card(noteId: "c", branchId: "b", title: "C", columnValue: "A", notePosition: 0).isClonedElsewhere)
+        XCTAssertTrue(Models.Card(noteId: "c", branchId: "b", title: "C", columnValue: "A", notePosition: 0, parentNoteCount: 2).isClonedElsewhere)
+    }
+
+    // MARK: - Card properties, redirect and template
+
+    func testCardPropertiesFollowBoardSettingsAndSkipTheGrouping() {
+        let attributes = [
+            label("label:due", "promoted,alias=Due date,single,date", inheritable: true),
+            label("relation:owner", "promoted,single", inheritable: true),
+            label("label:status", "promoted,single,text", inheritable: true),
+            label("label:secret", "promoted,single,text", inheritable: true),
+            label("label:local", "promoted", inheritable: false),
+        ]
+        let settings: Models.JSONValue = .array([
+            .object(["name": .string("owner")]),
+            .object(["name": .string("secret"), "hidden": .bool(true)]),
+        ])
+        let properties = Models.cardProperties(boardAttributes: attributes, settings: settings, groupBy: .default)
+        XCTAssertEqual(properties, [
+            Models.CardProperty(name: "owner", title: "owner", isRelation: true),
+            Models.CardProperty(name: "due", title: "Due date", isRelation: false),
+        ])
+    }
+
+    func testCardRedirectReadsCurrentAndLegacyRelation() {
+        let current = Models.Card.attributeMaps([
+            AttributeItem(attributeId: "r", noteId: "c", type: .relation, name: "board:cardRedirectTo", value: "target", position: 0, isInheritable: false),
+        ])
+        XCTAssertEqual(Models.Card(noteId: "c", branchId: "b", title: "C", columnValue: "A", notePosition: 0, relations: current.relations).redirectNoteId, "target")
+        let legacy = Models.Card(noteId: "c", branchId: "b", title: "C", columnValue: "A", notePosition: 0, relations: ["boardCardRedirectTo": "old"])
+        XCTAssertEqual(legacy.redirectNoteId, "old")
+    }
+
+    func testCardTemplateReadsTypeAndTemplateIds() {
+        func config(_ fields: [String: Models.JSONValue]) -> Models.BoardConfig { Models.BoardConfig(fields: fields) }
+        XCTAssertEqual(Models.CardTemplate(config: config(["template": .string("template:tpl123")])), .template(noteId: "tpl123"))
+        XCTAssertEqual(Models.CardTemplate(config: config(["template": .string("type:code:text/x-markdown")])), .noteType(type: "code", mime: "text/x-markdown"))
+        XCTAssertEqual(Models.CardTemplate(config: config(["templates": .array([.string("type:canvas")])])), .noteType(type: "canvas", mime: nil))
+        XCTAssertNil(Models.CardTemplate(config: config(["template": .string("_template_text")])))
+        XCTAssertNil(Models.CardTemplate(config: nil))
     }
 
     // MARK: - Template lookup query

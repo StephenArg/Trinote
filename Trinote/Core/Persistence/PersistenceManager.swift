@@ -688,6 +688,49 @@ final class PersistenceManager {
         NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil)
     }
 
+    /// Closes the open tabs of a note being deleted and of the cached subnotes deleted with it. Trilium deletes a
+    /// subnote along with its last parent, so a tab closes when every parent of its note leads back to `noteId`; a
+    /// note that is also cloned elsewhere keeps its tabs. Returns how many closed, telling the tab strip if any did.
+    @discardableResult
+    func closeOpenNoteTabs(forDeletedNoteId noteId: String, serverProfileId: String) -> Int {
+        guard let tabs = try? fetchOpenNoteTabs(serverProfileId: serverProfileId), !tabs.isEmpty else { return 0 }
+        let profileId = serverProfileId
+        var memo: [String: Bool] = [:]
+        func isDeletedWithNote(_ id: String, visiting: Set<String>) -> Bool {
+            if id == noteId { return true }
+            if let known = memo[id] { return known }
+            guard !visiting.contains(id) else { return false }
+            let nid = id
+            let branches = (try? context.fetch(FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId }
+            ))) ?? []
+            let parentIds = Set(branches.map(\.parentNoteId))
+            // No cached parents (root, or a note outside the cache): nothing says it goes with the deleted note.
+            let result = !parentIds.isEmpty && parentIds.allSatisfy { isDeletedWithNote($0, visiting: visiting.union([id])) }
+            memo[id] = result
+            return result
+        }
+        let closing = tabs.filter { isDeletedWithNote($0.noteId, visiting: []) }
+        guard !closing.isEmpty else { return 0 }
+        closing.forEach { context.delete($0) }
+        try? context.save()
+        NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil)
+        return closing.count
+    }
+
+    /// Points every open tab of `oldNoteId` at `newNoteId` (an offline note given its server id).
+    func retargetOpenNoteTabs(fromNoteId oldNoteId: String, toNoteId newNoteId: String, serverProfileId: String) throws {
+        let oldId = oldNoteId
+        let profileId = serverProfileId
+        let rows = try context.fetch(FetchDescriptor<OpenNoteTab>(
+            predicate: #Predicate { $0.noteId == oldId && $0.serverProfileId == profileId }
+        ))
+        guard !rows.isEmpty else { return }
+        rows.forEach { $0.noteId = newNoteId }
+        try context.save()
+        NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil)
+    }
+
     /// Deletes the oldest rows (by `addedAt`) until at most `keep` remain.
     func pruneOpenNoteTabs(serverProfileId: String, keep: Int) throws {
         var descriptor = FetchDescriptor<OpenNoteTab>(
@@ -870,7 +913,7 @@ final class PersistenceManager {
             ?? attrs.first { $0.name == "iconClass" }?.value
         let templateTarget = attrs.first { $0.name == "template" && $0.type == "relation" }?.value
 
-        return NoteIconClassResolver.effectiveIconClass(
+        let resolved = NoteIconClassResolver.effectiveIconClass(
             noteId: noteId,
             ownIconClass: ownRaw,
             templateRelationValue: templateTarget,
@@ -893,6 +936,11 @@ final class PersistenceManager {
                 cachedTemplateIconClass(templateTarget: target, serverProfileId: serverProfileId)
             }
         )
+        if let resolved { return resolved }
+        let isTextNote = (try? fetchCachedNote(id: noteId, serverProfileId: serverProfileId))?.noteType == NoteType.text.rawValue
+        return NoteIconClassResolver.geoDefaultIconClass(isTextNote: isTextNote) { name in
+            attrs.first { $0.type == "label" && $0.name == name }?.value
+        }
     }
 
     /// `#iconClass` from a `~template` target note, with built-in template fallbacks.
@@ -917,6 +965,16 @@ final class PersistenceManager {
         }
         let attrs = (try? fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)) ?? []
         return NoteIconClassResolver.ParentNoteContext(
+            attributes: attributeItems(from: attrs),
+            parentNoteIds: allParentNoteIdsForTreeWalk(noteId: noteId, serverProfileId: serverProfileId, cached: note)
+        )
+    }
+
+    /// A cached note's own attributes and parents, for `TriliumLabelResolver`.
+    func labelResolverContext(noteId: String, serverProfileId: String) -> TriliumLabelResolver.NoteContext? {
+        guard let note = try? fetchCachedNote(id: noteId, serverProfileId: serverProfileId) else { return nil }
+        let attrs = (try? fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)) ?? []
+        return TriliumLabelResolver.NoteContext(
             attributes: attributeItems(from: attrs),
             parentNoteIds: allParentNoteIdsForTreeWalk(noteId: noteId, serverProfileId: serverProfileId, cached: note)
         )
@@ -1316,7 +1374,8 @@ final class PersistenceManager {
         mime: String,
         initialContent: String,
         serverProfileId: String,
-        initialAttributes: [NoteCreationAttribute] = []
+        initialAttributes: [NoteCreationAttribute] = [],
+        useParentTitleTemplate: Bool = false
     ) throws -> (noteId: String, branchId: String) {
         let profileId = serverProfileId
         let pid = parentNoteId
@@ -1386,10 +1445,10 @@ final class PersistenceManager {
         var attrsJSON = "[]"
         if !initialAttributes.isEmpty {
             let arr: [[String: Any]] = initialAttributes.map { a in
-                if a.isInheritable {
-                    return ["type": a.type, "name": a.name, "value": a.value, "isInheritable": true]
-                }
-                return ["type": a.type, "name": a.name, "value": a.value]
+                var entry: [String: Any] = ["type": a.type, "name": a.name, "value": a.value]
+                if a.isInheritable { entry["isInheritable"] = true }
+                if a.applyAfterTemplate { entry["applyAfterTemplate"] = true }
+                return entry
             }
             if let data = try? JSONSerialization.data(withJSONObject: arr),
                let str = String(data: data, encoding: .utf8) {
@@ -1406,7 +1465,9 @@ final class PersistenceManager {
             noteType: noteType,
             mime: mime,
             initialContent: initialContent,
-            initialAttributesJSON: attrsJSON
+            initialAttributesJSON: attrsJSON,
+            titleFromTemplate: useParentTitleTemplate
+                && hasEffectiveTitleTemplate(noteId: parentNoteId, serverProfileId: serverProfileId)
         )
         context.insert(pending)
         try context.save()
@@ -1453,6 +1514,9 @@ final class PersistenceManager {
         try rewritePendingBranchMoveLocalBranchIds(from: localBranchId, to: response.branch.branchId, serverProfileId: profileId)
 
         try deleteCachedBranch(branchId: localBranchId, serverProfileId: profileId)
+        // The note lives on under its server id: what the user keeps for it moves across before the placeholder's
+        // cache rows go, since dropping those also drops its tabs, favorite, recents entry and draft.
+        try remapUserNoteReferences(from: oldId, to: newId, serverProfileId: profileId)
         try deleteCachedNotes(noteIds: [localNoteId], serverProfileId: profileId)
 
         try cacheNote(from: response.note, serverProfileId: profileId)
@@ -1513,7 +1577,40 @@ final class PersistenceManager {
         }
     }
 
-    /// Moves drafts, favorites, recents, and pending body uploads from a placeholder id to the server id.
+    /// Moves the open tabs, favorite, recents entry and unsaved draft of a placeholder id to the server id.
+    private func remapUserNoteReferences(from oldId: String, to newId: String, serverProfileId: String) throws {
+        let profileId = serverProfileId
+        try retargetOpenNoteTabs(fromNoteId: oldId, toNoteId: newId, serverProfileId: profileId)
+
+        let oldCompositeId = "\(profileId):\(oldId)"
+        let newCompositeId = "\(profileId):\(newId)"
+
+        var draftDesc = FetchDescriptor<DraftContent>(predicate: #Predicate { $0.id == oldCompositeId })
+        draftDesc.fetchLimit = 1
+        if let draft = try context.fetch(draftDesc).first {
+            draft.noteId = newId
+            draft.id = newCompositeId
+        }
+
+        var favDesc = FetchDescriptor<FavoriteNote>(predicate: #Predicate { $0.id == oldCompositeId })
+        favDesc.fetchLimit = 1
+        if let favorite = try context.fetch(favDesc).first {
+            favorite.noteId = newId
+            favorite.id = newCompositeId
+        }
+
+        var recentDesc = FetchDescriptor<RecentNote>(predicate: #Predicate { $0.id == oldCompositeId })
+        recentDesc.fetchLimit = 1
+        if let recent = try context.fetch(recentDesc).first {
+            recent.noteId = newId
+            recent.id = newCompositeId
+        }
+
+        try context.save()
+    }
+
+    /// Moves pending body uploads, title patches, branch moves, deletions, attachment imports and cached attributes
+    /// from a placeholder id to the server id. (Tabs, favorites, recents and drafts move in `remapUserNoteReferences`.)
     func remapLocalNoteIdReferences(from oldId: String, to newId: String, serverProfileId: String) throws {
         let profileId = serverProfileId
         let from = oldId
@@ -1537,30 +1634,6 @@ final class PersistenceManager {
                 serverProfileId: profileId,
                 baseUtcDateModified: baseUtc
             )
-        }
-
-        let oldDraftId = "\(profileId):\(from)"
-        var draftDesc = FetchDescriptor<DraftContent>(predicate: #Predicate { $0.id == oldDraftId })
-        draftDesc.fetchLimit = 1
-        if let d = try context.fetch(draftDesc).first {
-            d.noteId = newId
-            d.id = "\(profileId):\(newId)"
-        }
-
-        let oldFavId = "\(profileId):\(from)"
-        var favDesc = FetchDescriptor<FavoriteNote>(predicate: #Predicate { $0.id == oldFavId })
-        favDesc.fetchLimit = 1
-        if let f = try context.fetch(favDesc).first {
-            f.noteId = newId
-            f.id = "\(profileId):\(newId)"
-        }
-
-        let oldRecentId = "\(profileId):\(from)"
-        var recentDesc = FetchDescriptor<RecentNote>(predicate: #Predicate { $0.id == oldRecentId })
-        recentDesc.fetchLimit = 1
-        if let r = try context.fetch(recentDesc).first {
-            r.noteId = newId
-            r.id = "\(profileId):\(newId)"
         }
 
         let moveRows = try context.fetch(
@@ -1715,6 +1788,8 @@ final class PersistenceManager {
     /// If the note was created offline (`ol_` prefix), cancels the pending creation instead.
     func enqueueOfflineNoteDeletion(noteId: String, serverProfileId: String, eraseNotes: Bool = false) throws {
         let profileId = serverProfileId
+        // The note leaves the tree now, so its tabs (and its subnotes') close now too, not when the queue uploads.
+        closeOpenNoteTabs(forDeletedNoteId: noteId, serverProfileId: profileId)
 
         if noteId.hasPrefix("ol_") {
             let nid = noteId
@@ -2150,8 +2225,15 @@ final class PersistenceManager {
 
     func deleteCachedNotes(noteIds: Set<String>, serverProfileId: String, clearGhost: Bool = true) throws {
         let profileId = serverProfileId
+        var closedTabs = false
+        defer {
+            // The tab strip reads its rows once; tell it they changed (a note deleted here, by sync or on another device).
+            if closedTabs { NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil) }
+        }
         for noteId in noteIds {
-            try purgeNoteFromAuxiliaryStores(noteId: noteId, serverProfileId: profileId, clearGhost: clearGhost)
+            if try purgeNoteFromAuxiliaryStores(noteId: noteId, serverProfileId: profileId, clearGhost: clearGhost) {
+                closedTabs = true
+            }
 
             let nid = noteId
             let pid = profileId
@@ -2179,7 +2261,9 @@ final class PersistenceManager {
     }
 
     /// Removes recents, favorites, tabs, drafts, images, and optionally ghost IDs for a note (no save).
-    func purgeNoteFromAuxiliaryStores(noteId: String, serverProfileId: String, clearGhost: Bool = true) throws {
+    /// Returns whether any open tab was removed.
+    @discardableResult
+    func purgeNoteFromAuxiliaryStores(noteId: String, serverProfileId: String, clearGhost: Bool = true) throws -> Bool {
         let compositeId = "\(serverProfileId):\(noteId)"
         let profileId = serverProfileId
         let nid = noteId
@@ -2202,6 +2286,7 @@ final class PersistenceManager {
             )
         )
         tabs.forEach { context.delete($0) }
+        let closedTabs = !tabs.isEmpty
 
         var draftDesc = FetchDescriptor<DraftContent>(predicate: #Predicate { $0.id == compositeId })
         draftDesc.fetchLimit = 1
@@ -2219,6 +2304,7 @@ final class PersistenceManager {
         if clearGhost {
             GhostNoteTracker.shared.remove(noteId, serverProfileId: serverProfileId)
         }
+        return closedTabs
     }
 
     /// Removes cached branches under `parentNoteId` absent from the live API tree, then deletes
@@ -2272,6 +2358,41 @@ final class PersistenceManager {
             try context.save()
         }
         return pruned + notesDeleted
+    }
+
+    /// Whether notes created under `noteId` take their title from a `#titleTemplate`. Trilium reads it off the parent
+    /// with inheritance: the parent's own label, one on the parent's `~template`, or an inheritable one on an ancestor.
+    func hasEffectiveTitleTemplate(noteId: String, serverProfileId: String) -> Bool {
+        func titleTemplateLabels(_ id: String) -> [CachedAttribute] {
+            ((try? fetchCachedAttributes(noteId: id, serverProfileId: serverProfileId)) ?? [])
+                .filter { $0.type == "label" && $0.name == "titleTemplate" }
+        }
+
+        let own = (try? fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)) ?? []
+        if own.contains(where: { $0.type == "label" && $0.name == "titleTemplate" }) { return true }
+        if let template = own.first(where: { $0.type == "relation" && $0.name == "template" })?.value,
+           !titleTemplateLabels(template).isEmpty {
+            return true
+        }
+
+        var visited: Set<String> = [noteId]
+        var frontier = [noteId]
+        while !frontier.isEmpty, visited.count < 200 {
+            var next: [String] = []
+            for id in frontier {
+                let childId = id
+                let profileId = serverProfileId
+                let parents = ((try? context.fetch(FetchDescriptor<CachedBranch>(
+                    predicate: #Predicate { $0.noteId == childId && $0.serverProfileId == profileId }
+                ))) ?? []).map(\.parentNoteId)
+                for parent in parents where visited.insert(parent).inserted {
+                    if titleTemplateLabels(parent).contains(where: \.isInheritable) { return true }
+                    next.append(parent)
+                }
+            }
+            frontier = next
+        }
+        return false
     }
 
     /// Applies a server `note_reordering` change: new positions for the children of `parentNoteId`, then

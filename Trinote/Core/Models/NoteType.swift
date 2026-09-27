@@ -6,12 +6,16 @@ struct NoteCreationAttribute: Equatable, Sendable, Hashable {
     var name: String
     var value: String
     var isInheritable: Bool
+    /// Also created when a `~template` resolves. Queued attributes are otherwise left to the template, so a
+    /// built-in template's own labels aren't duplicated; a value the template can't know (a card's column) sets this.
+    var applyAfterTemplate: Bool
 
-    init(type: String, name: String, value: String, isInheritable: Bool = false) {
+    init(type: String, name: String, value: String, isInheritable: Bool = false, applyAfterTemplate: Bool = false) {
         self.type = type
         self.name = name
         self.value = value
         self.isInheritable = isInheritable
+        self.applyAfterTemplate = applyAfterTemplate
     }
 }
 

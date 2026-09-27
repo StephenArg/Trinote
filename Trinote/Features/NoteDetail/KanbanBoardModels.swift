@@ -190,6 +190,27 @@ enum KanbanBoardModels {
 
         var isArchived: Bool { fields["archived"] == .bool(true) }
 
+        /// Icon class shown before the title, e.g. `bx bx-bug`.
+        var icon: String? { nonEmpty(fields["icon"]?.stringValue) }
+        /// CSS color the column is tinted with.
+        var color: String? { nonEmpty(fields["color"]?.stringValue) }
+        /// Card limit; the header shows `count/limit` and warns past it.
+        var limit: Int? {
+            switch fields["limit"] {
+            case .int(let value): return value > 0 ? value : nil
+            case .double(let value): return value > 0 ? Int(value) : nil
+            default: return nil
+            }
+        }
+        var isCollapsed: Bool { fields["collapsed"] == .bool(true) }
+        /// "Keep column collapsed": opening the column lasts only until the board is left.
+        var keepsCollapsed: Bool { fields["keepCollapsed"] == .bool(true) }
+
+        private func nonEmpty(_ value: String?) -> String? {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed?.isEmpty == false ? trimmed : nil
+        }
+
         var displayName: String? {
             let name = fields["displayName"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
             return name?.isEmpty == false ? name : nil
@@ -207,8 +228,35 @@ enum KanbanBoardModels {
         var fallbackNoteType: NoteType = .text
         /// Raw `#color` label value.
         var colorLabel: String? = nil
+        /// `utcDateCreated`, the tie-break (and the `creationDate` key) when a column sorts its cards.
+        var creationDate: String? = nil
+        /// First value per label name, and first target note id per relation name.
+        var labels: [String: String] = [:]
+        var relations: [String: String] = [:]
+        /// How many parents the note has; more than one means it is also cloned elsewhere in the tree.
+        var parentNoteCount: Int = 1
 
         var id: String { noteId }
+
+        var isClonedElsewhere: Bool { parentNoteCount > 1 }
+
+        /// `~board:cardRedirectTo` (or its old name): the note opening this card navigates to instead.
+        var redirectNoteId: String? {
+            relations["board:cardRedirectTo"] ?? relations["boardCardRedirectTo"]
+        }
+
+        /// Builds the lookups from a note's attributes (owned ones, as the server and cache give them).
+        static func attributeMaps(_ attributes: [AttributeItem]) -> (labels: [String: String], relations: [String: String]) {
+            var labels: [String: String] = [:]
+            var relations: [String: String] = [:]
+            for attribute in attributes.sorted(by: { $0.position < $1.position }) {
+                switch attribute.type {
+                case .label: if labels[attribute.name] == nil { labels[attribute.name] = attribute.value }
+                case .relation: if relations[attribute.name] == nil { relations[attribute.name] = attribute.value }
+                }
+            }
+            return (labels, relations)
+        }
     }
 
     struct Column: Identifiable, Equatable, Sendable {
@@ -216,12 +264,50 @@ enum KanbanBoardModels {
         var cards: [Card]
         /// Header text when it differs from `value`: the inbox's name, or a relation target's note title.
         var title: String?
+        var icon: String?
+        var color: String?
+        var limit: Int?
+        /// Stored as collapsed (`collapsed`).
+        var isCollapsed: Bool
+        /// Stored as "Keep column collapsed" (`keepCollapsed`).
+        var isKeptCollapsed: Bool
+        /// Stored `orderBy`: `manual`, `default` (or none), `title`, `creationDate` or `attr:<name>`.
+        var storedOrderBy: String?
+        /// Stored `descendingOrder`.
+        var isStoredDescending: Bool
+        /// The order the cards are drawn in (the column's own or the board's); `nil` is tree order.
+        var effectiveSort: ColumnSort?
 
-        init(value: String, cards: [Card], title: String? = nil) {
+        init(
+            value: String,
+            cards: [Card],
+            title: String? = nil,
+            icon: String? = nil,
+            color: String? = nil,
+            limit: Int? = nil,
+            isCollapsed: Bool = false,
+            isKeptCollapsed: Bool = false,
+            storedOrderBy: String? = nil,
+            isStoredDescending: Bool = false,
+            effectiveSort: ColumnSort? = nil
+        ) {
             self.value = value
             self.cards = cards
             self.title = title
+            self.icon = icon
+            self.color = color
+            self.limit = limit
+            self.isCollapsed = isCollapsed
+            self.isKeptCollapsed = isKeptCollapsed
+            self.storedOrderBy = storedOrderBy
+            self.isStoredDescending = isStoredDescending
+            self.effectiveSort = effectiveSort
         }
+
+        /// The Sort menu's current choice: `default`, `manual` or the stored key.
+        var sortSelection: String { KanbanBoardModels.sortSelection(storedOrderBy: storedOrderBy) }
+
+        var isOverLimit: Bool { limit.map { cards.count > $0 } ?? false }
 
         var id: String { value }
 
@@ -274,7 +360,14 @@ enum KanbanBoardModels {
 
     /// Archived columns are left out together with their cards, as Trilium's board does. With `showInbox`,
     /// cards without a grouping value (`inboxColumnValue`) get the inbox column, placed where it is stored or first.
-    static func buildColumns(storedColumns: [BoardColumn]?, cards: [Card], showInbox: Bool = false) -> [Column] {
+    /// Cards keep their tree order unless the column (or, for a column set to "default", the board) sorts them.
+    static func buildColumns(
+        storedColumns: [BoardColumn]?,
+        cards: [Card],
+        showInbox: Bool = false,
+        boardSort: ColumnSort? = nil,
+        relationTitle: (String) -> String? = { _ in nil }
+    ) -> [Column] {
         var buckets: [String: [Card]] = [:]
         for card in cards {
             buckets[card.columnValue, default: []].append(card)
@@ -310,9 +403,295 @@ enum KanbanBoardModels {
             ordered.append((value, nil))
         }
 
-        return ordered.map { entry in
-            Column(value: entry.value, cards: buckets[entry.value] ?? [], title: entry.title)
+        var storedByValue: [String: BoardColumn] = [:]
+        for column in storedColumns ?? [] where storedByValue[column.value] == nil {
+            storedByValue[column.value] = column
         }
+        return ordered.map { entry in
+            let stored = storedByValue[entry.value]
+            let sort = columnSort(for: stored, boardSort: boardSort)
+            return Column(
+                value: entry.value,
+                cards: orderedCards(buckets[entry.value] ?? [], by: sort, relationTitle: relationTitle),
+                title: entry.title,
+                icon: stored?.icon ?? (entry.value == inboxColumnValue ? "bx bxs-inbox" : nil),
+                color: stored?.color,
+                limit: stored?.limit,
+                isCollapsed: stored?.isCollapsed ?? false,
+                isKeptCollapsed: stored?.keepsCollapsed ?? false,
+                storedOrderBy: stored?.fields["orderBy"]?.stringValue,
+                isStoredDescending: stored?.fields["descendingOrder"] == .bool(true),
+                effectiveSort: sort
+            )
+        }
+    }
+
+    // MARK: - Column sorting (Trilium v0.106 `collections/sorting.ts`)
+
+    enum SortKey: Equatable, Sendable {
+        case title
+        case creationDate
+        case attribute(String)
+
+        /// `title`, `creationDate` or `attr:<name>`; anything else is no key.
+        init?(_ raw: String?) {
+            switch raw {
+            case "title": self = .title
+            case "creationDate": self = .creationDate
+            case let raw? where raw.hasPrefix("attr:") && raw.count > "attr:".count:
+                self = .attribute(String(raw.dropFirst("attr:".count)))
+            default: return nil
+            }
+        }
+    }
+
+    struct ColumnSort: Equatable, Sendable {
+        let key: SortKey
+        let descending: Bool
+    }
+
+    /// The board-wide order from `#board:sortColumns` / `#board:sortColumnsDescending`, if it names a key.
+    static func boardSort(_ attributes: [AttributeItem]) -> ColumnSort? {
+        func label(_ name: String) -> AttributeItem? {
+            attributes.first { $0.type == .label && $0.name == name }
+        }
+        guard let key = SortKey(label("board:sortColumns")?.value) else { return nil }
+        let descending = label("board:sortColumnsDescending").map { $0.value.lowercased() != "false" } ?? false
+        return ColumnSort(key: key, descending: descending)
+    }
+
+    /// A column's own key wins; `manual` keeps tree order; no `orderBy` (or `default`) takes the board's order.
+    static func columnSort(for stored: BoardColumn?, boardSort: ColumnSort?) -> ColumnSort? {
+        let raw = stored?.fields["orderBy"]?.stringValue
+        if raw == "manual" { return nil }
+        if raw == nil || raw == "" || raw == "default" { return boardSort }
+        guard let key = SortKey(raw) else { return nil }
+        return ColumnSort(key: key, descending: stored?.fields["descendingOrder"] == .bool(true))
+    }
+
+    private enum SortValue {
+        case number(Double)
+        case text(String)
+    }
+
+    /// Cards without a value go last whichever the direction; ties fall back to creation date, then tree order.
+    static func sortedCards(_ cards: [Card], by sort: ColumnSort, relationTitle: (String) -> String?) -> [Card] {
+        func value(_ card: Card) -> SortValue? {
+            let raw: String?
+            switch sort.key {
+            case .title: raw = card.title
+            case .creationDate: raw = card.creationDate
+            case .attribute(let name):
+                raw = card.labels[name] ?? card.relations[name].map { relationTitle($0) ?? $0 }
+            }
+            guard let raw, !raw.isEmpty else { return nil }
+            if sort.key != .title, let number = Double(raw) { return .number(number) }
+            return .text(raw)
+        }
+        func compare(_ a: SortValue?, _ b: SortValue?) -> ComparisonResult {
+            switch (a, b) {
+            case (nil, nil): return .orderedSame
+            case (nil, _): return .orderedDescending
+            case (_, nil): return .orderedAscending
+            case let (.number(x)?, .number(y)?): return x == y ? .orderedSame : (x < y ? .orderedAscending : .orderedDescending)
+            case let (.number(x)?, .text(y)?): return String(x).localizedStandardCompare(y)
+            case let (.text(x)?, .number(y)?): return x.localizedStandardCompare(String(y))
+            case let (.text(x)?, .text(y)?): return x.localizedStandardCompare(y)
+            }
+        }
+        let entries = cards.enumerated().map { (index: $0.offset, card: $0.element, value: value($0.element)) }
+        return entries.sorted { a, b in
+            let primary = compare(a.value, b.value)
+            if primary != .orderedSame {
+                let bothDefined = a.value != nil && b.value != nil
+                return (bothDefined && sort.descending) ? primary == .orderedDescending : primary == .orderedAscending
+            }
+            let created = (a.card.creationDate ?? "").compare(b.card.creationDate ?? "")
+            if created != .orderedSame { return created == .orderedAscending }
+            return a.index < b.index
+        }.map(\.card)
+    }
+
+    /// Cards in `sort`'s order, or in tree order (position, then title) when there is none.
+    static func orderedCards(_ cards: [Card], by sort: ColumnSort?, relationTitle: (String) -> String?) -> [Card] {
+        let treeOrder = cards.sorted { lhs, rhs in
+            if lhs.notePosition != rhs.notePosition { return lhs.notePosition < rhs.notePosition }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+        guard let sort else { return treeOrder }
+        return sortedCards(treeOrder, by: sort, relationTitle: relationTitle)
+    }
+
+    /// What the Sort menu shows as picked for a stored `orderBy`: nothing (or `default`) takes the board's order.
+    static func sortSelection(storedOrderBy: String?) -> String {
+        switch storedOrderBy {
+        case nil, "", "default": return "default"
+        case let raw?: return raw
+        }
+    }
+
+    /// `column` with a new stored sort, its cards put in the order that now applies.
+    static func resorted(
+        _ column: Column,
+        orderBy: String?,
+        descending: Bool,
+        boardSort: ColumnSort?,
+        relationTitle: (String) -> String?
+    ) -> Column {
+        var fields: [String: JSONValue] = [:]
+        if let orderBy { fields["orderBy"] = .string(orderBy) }
+        if descending { fields["descendingOrder"] = .bool(true) }
+        let sort = columnSort(for: BoardColumn(value: column.value, fields: fields), boardSort: boardSort)
+        var updated = column
+        updated.storedOrderBy = orderBy
+        updated.isStoredDescending = descending
+        updated.effectiveSort = sort
+        updated.cards = orderedCards(column.cards, by: sort, relationTitle: relationTitle)
+        return updated
+    }
+
+    // MARK: - Card properties (Trilium v0.106 "Board properties")
+
+    struct CardProperty: Equatable, Sendable, Hashable {
+        let name: String
+        let title: String
+        let isRelation: Bool
+    }
+
+    /// The board's inheritable `#label:<name>` / `#relation:<name>` definitions, ordered and hidden per `board.json`'s
+    /// `promotedAttributes`, without the attribute the board groups by. Mirrors `resolvePromotedAttributes`.
+    static func cardProperties(
+        boardAttributes: [AttributeItem],
+        settings: JSONValue?,
+        groupBy: GroupBy
+    ) -> [CardProperty] {
+        var defined: [(property: CardProperty, isRelation: Bool)] = []
+        for attribute in boardAttributes where attribute.type == .label && attribute.isInheritable {
+            let parts = attribute.name.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[0] == "label" || parts[0] == "relation", !parts[1].isEmpty,
+                  !defined.contains(where: { $0.property.name == parts[1] }) else { continue }
+            let alias = attribute.value.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { $0.hasPrefix("alias=") }
+                .map { String($0.dropFirst("alias=".count)) }
+                .flatMap { $0.isEmpty ? nil : $0 }
+            let isRelation = parts[0] == "relation"
+            defined.append((CardProperty(name: parts[1], title: alias ?? parts[1], isRelation: isRelation), isRelation))
+        }
+
+        var ordered: [CardProperty] = []
+        var hidden = Set<String>()
+        for setting in settings?.arrayValue ?? [] {
+            guard let object = setting.objectValue, let name = object["name"]?.stringValue,
+                  let match = defined.first(where: { $0.property.name == name }),
+                  !ordered.contains(match.property) else { continue }
+            if object["hidden"] == .bool(true) { hidden.insert(name) }
+            ordered.append(match.property)
+        }
+        for entry in defined where !ordered.contains(entry.property) {
+            ordered.append(entry.property)
+        }
+        return ordered.filter { property in
+            !hidden.contains(property.name)
+                && !(property.name == groupBy.name && property.isRelation == groupBy.isRelation)
+        }
+    }
+
+    /// A loaded board, as the view draws it.
+    struct BoardLoad: Equatable, Sendable {
+        var columns: [Column]
+        var groupBy: String
+        /// `#board:columnWidth`: `narrow` (default), `medium` or `wide`.
+        var columnWidth: String?
+        /// The board's search filter, when it was applied.
+        var filterQuery: String?
+        var cardProperties: [CardProperty]
+        var relationTitles: [String: String]
+        /// `#board:sortColumns` / `#board:sortColumnsDescending`, which columns set to the board's default follow.
+        var boardSort: ColumnSort?
+    }
+
+    // MARK: - Card templates
+
+    /// What `board.json`'s `template` (or the first of `templates`) says a new card is made from: a `type:<type>:<mime>`
+    /// blank note or a `template:<noteId>` note. `nil` means a plain text card.
+    enum CardTemplate: Equatable, Sendable {
+        case noteType(type: String, mime: String?)
+        case template(noteId: String)
+
+        init?(config: BoardConfig?) {
+            let id = config?.fields["template"]?.stringValue
+                ?? config?.fields["templates"]?.arrayValue?.first?.stringValue
+            guard let id else { return nil }
+            if id.hasPrefix("template:") {
+                let noteId = String(id.dropFirst("template:".count))
+                guard !noteId.isEmpty else { return nil }
+                self = .template(noteId: noteId)
+            } else if id.hasPrefix("type:") {
+                let rest = id.dropFirst("type:".count)
+                let parts = rest.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+                guard let type = parts.first, !type.isEmpty else { return nil }
+                let mime = parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil
+                self = .noteType(type: type, mime: mime)
+            } else {
+                return nil
+            }
+        }
+    }
+
+    /// The stored list with one column's `collapsed` / `keepCollapsed` set (`nil` leaves a flag as it is), as Trilium's
+    /// board writes them: a flag turned off is removed rather than stored as `false`, and a column without an entry
+    /// gets one after the nearest column before it (in `shownOrder`) that has one.
+    static func settingCollapse(
+        ofColumn value: String,
+        collapsed: Bool?,
+        keepCollapsed: Bool?,
+        stored: [BoardColumn],
+        shownOrder: [String]
+    ) -> [BoardColumn] {
+        var patch: [String: JSONValue?] = [:]
+        if let collapsed { patch["collapsed"] = .bool(collapsed) }
+        if let keepCollapsed { patch["keepCollapsed"] = .bool(keepCollapsed) }
+        return patchingColumn(value, with: patch, stored: stored, shownOrder: shownOrder)
+    }
+
+    /// The stored list with `patch` written onto column `value`, as Trilium's board `withColumn` does: a field set to
+    /// `nil`, `false`, `""` or `0` is removed rather than stored, and a column without an entry gets one after the
+    /// nearest column before it (in `shownOrder`) that has one.
+    static func patchingColumn(
+        _ value: String,
+        with patch: [String: JSONValue?],
+        stored: [BoardColumn],
+        shownOrder: [String]
+    ) -> [BoardColumn] {
+        func patched(_ column: BoardColumn) -> BoardColumn {
+            var column = column
+            for (key, newValue) in patch {
+                switch newValue {
+                case nil, .bool(false)?, .string("")?, .int(0)?, .null?: column.fields[key] = nil
+                case let kept?: column.fields[key] = kept
+                }
+            }
+            return column
+        }
+
+        if let index = stored.firstIndex(where: { $0.value == value }) {
+            var columns = stored
+            columns[index] = patched(columns[index])
+            return columns
+        }
+        var columns = stored
+        let insertAt: Int
+        if let shownIndex = shownOrder.firstIndex(of: value) {
+            let previous = shownOrder[..<shownIndex].reversed().first { candidate in
+                stored.contains { $0.value == candidate }
+            }
+            insertAt = previous.flatMap { candidate in stored.firstIndex { $0.value == candidate } }.map { $0 + 1 } ?? 0
+        } else {
+            insertAt = columns.count
+        }
+        columns.insert(patched(BoardColumn(value: value)), at: insertAt)
+        return columns
     }
 
     /// The stored list with the board's shown columns in `shownOrder`. Stored fields survive, columns the

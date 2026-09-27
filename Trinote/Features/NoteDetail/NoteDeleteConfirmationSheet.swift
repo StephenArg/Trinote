@@ -56,12 +56,17 @@ enum NoteDeleteConfirmationCopy {
 }
 
 extension View {
-    /// System confirm popup (`UIAlertController`) with a permanent-erase toggle between the message and buttons.
+    /// System confirm popup (`UIAlertController`) with an off-by-default toggle between the message and buttons:
+    /// permanent erase unless `toggleTitle` names another choice.
     func noteDeleteConfirmationAlert(
         isPresented: Binding<Bool>,
         title: String,
         message: String,
         confirmTitle: String = String(localized: "Delete", comment: "Confirm delete"),
+        toggleTitle: String = String(
+            localized: "Permanently delete note and subnotes",
+            comment: "Note delete: erase instead of moving to Trash"
+        ),
         erasePermanently: Binding<Bool>,
         onConfirm: @escaping () -> Void,
         onCancel: @escaping () -> Void = {}
@@ -72,6 +77,7 @@ extension View {
                 title: title,
                 message: message,
                 confirmTitle: confirmTitle,
+                toggleTitle: toggleTitle,
                 erasePermanently: erasePermanently,
                 onConfirm: onConfirm,
                 onCancel: onCancel
@@ -88,6 +94,7 @@ private struct NoteDeleteConfirmationAlertPresenter: UIViewControllerRepresentab
     var title: String
     var message: String
     var confirmTitle: String
+    var toggleTitle: String
     @Binding var erasePermanently: Bool
     var onConfirm: () -> Void
     var onCancel: () -> Void
@@ -174,6 +181,7 @@ private struct NoteDeleteConfirmationAlertPresenter: UIViewControllerRepresentab
                 textField.spellCheckingType = .no
 
                 let row = PermanentEraseToggleRow()
+                row.label.text = parent.toggleTitle
                 row.toggle.isOn = parent.erasePermanently
                 row.toggle.addTarget(coordinator, action: #selector(Coordinator.toggleChanged(_:)), for: .valueChanged)
                 coordinator.toggle = row.toggle

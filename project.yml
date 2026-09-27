@@ -15,7 +15,7 @@ options:
     - cs
     - pl
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "17.4"
   xcodeVersion: "16.0"
   generateEmptyDirectories: true
   groupSortPosition: top
@@ -44,7 +44,7 @@ targets:
   Trinote:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "17.4"
     sources:
       - path: Trinote
         excludes:
@@ -110,7 +110,7 @@ targets:
   TrinoteShare:
     type: app-extension
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "17.4"
     sources:
       - path: TrinoteShare
         excludes:
@@ -141,7 +141,7 @@ targets:
   TrinoteTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "17.4"
     sources:
       - path: TrinoteTests
         excludes:

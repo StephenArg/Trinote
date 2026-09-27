@@ -32,6 +32,79 @@ final class PersistenceTests: XCTestCase {
         persistence = PersistenceManager(container: container)
     }
 
+    // MARK: - Open tabs of deleted notes
+
+    /// root → parent → child → grandchild, with `clone` under both `parent` and `elsewhere`.
+    private func cacheDeletionTree(profileId: String) throws {
+        let edges: [(String, String)] = [
+            ("parent", "root"), ("child", "parent"), ("grandchild", "child"),
+            ("clone", "parent"), ("clone", "elsewhere"), ("elsewhere", "root"),
+        ]
+        for noteId in Set(edges.map(\.0)) {
+            let parents = edges.filter { $0.0 == noteId }.map(\.1)
+            try persistence.cacheNote(from: TestFixtures.noteResponse(id: noteId, title: noteId, parentNoteIds: parents), serverProfileId: profileId)
+        }
+        for (noteId, parentId) in edges {
+            try persistence.cacheBranch(
+                from: TestFixtures.branchResponse(branchId: "\(parentId)_\(noteId)", noteId: noteId, parentNoteId: parentId),
+                serverProfileId: profileId
+            )
+        }
+    }
+
+    func testDeletingANoteClosesItsTabsAndItsSubnotesButKeepsClones() throws {
+        let profileId = "p1"
+        try cacheDeletionTree(profileId: profileId)
+        for noteId in ["parent", "grandchild", "clone", "elsewhere"] {
+            try persistence.addOpenNoteTab(noteId: noteId, title: noteId, noteType: "text", serverProfileId: profileId)
+        }
+        let changed = expectation(forNotification: .openNoteTabsChanged, object: nil)
+
+        XCTAssertEqual(persistence.closeOpenNoteTabs(forDeletedNoteId: "parent", serverProfileId: profileId), 2)
+        wait(for: [changed], timeout: 1)
+        let remaining = try persistence.fetchOpenNoteTabs(serverProfileId: profileId).map(\.noteId)
+        XCTAssertEqual(Set(remaining), ["clone", "elsewhere"], "a subnote cloned elsewhere survives, so its tab stays")
+    }
+
+    func testRemovingADeletedNoteFromTheCacheTellsTheTabStrip() throws {
+        let profileId = "p1"
+        try cacheDeletionTree(profileId: profileId)
+        try persistence.addOpenNoteTab(noteId: "elsewhere", title: "elsewhere", noteType: "text", serverProfileId: profileId)
+        let changed = expectation(forNotification: .openNoteTabsChanged, object: nil)
+
+        try persistence.deleteCachedNotes(noteIds: ["elsewhere"], serverProfileId: profileId)
+        wait(for: [changed], timeout: 1)
+        XCTAssertTrue(try persistence.fetchOpenNoteTabs(serverProfileId: profileId).isEmpty)
+    }
+
+    func testUploadedOfflineNoteKeepsItsTabFavoriteRecentAndDraft() throws {
+        let profileId = "p1"
+        let localId = "ol_abc"
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: localId, title: "Offline"), serverProfileId: profileId)
+        try persistence.cacheBranch(from: TestFixtures.branchResponse(branchId: "ol_branch", noteId: localId), serverProfileId: profileId)
+        try persistence.addOpenNoteTab(noteId: localId, title: "Offline", noteType: "text", serverProfileId: profileId)
+        try persistence.addFavorite(noteId: localId, title: "Offline", noteType: "text", serverProfileId: profileId)
+        try persistence.recordRecentNote(noteId: localId, title: "Offline", noteType: "text", serverProfileId: profileId)
+        try persistence.saveDraft(noteId: localId, content: "<p>unsaved</p>", serverProfileId: profileId)
+
+        try persistence.applyOfflineNoteCreationServerResult(
+            queueRowId: "queue1",
+            localNoteId: localId,
+            localBranchId: "ol_branch",
+            response: CreateNoteResponse(
+                note: TestFixtures.noteResponse(id: "srv123", title: "Offline"),
+                branch: TestFixtures.branchResponse(branchId: "srv_branch", noteId: "srv123")
+            ),
+            serverProfileId: profileId
+        )
+
+        XCTAssertEqual(try persistence.fetchOpenNoteTabs(serverProfileId: profileId).map(\.noteId), ["srv123"])
+        XCTAssertEqual(try persistence.fetchFavorites(serverProfileId: profileId).map(\.noteId), ["srv123"])
+        XCTAssertEqual(try persistence.fetchRecentNotes(serverProfileId: profileId).map(\.noteId), ["srv123"])
+        XCTAssertEqual(try persistence.loadDraft(noteId: "srv123", serverProfileId: profileId)?.content, "<p>unsaved</p>")
+        XCTAssertNil(try persistence.loadDraft(noteId: localId, serverProfileId: profileId))
+    }
+
     // MARK: - Server Profiles
 
     func testSaveAndFetchProfile() throws {
@@ -161,6 +234,70 @@ final class PersistenceTests: XCTestCase {
         let parent = try XCTUnwrap(persistence.fetchCachedNote(id: "parent", serverProfileId: "server1"))
         XCTAssertEqual(parent.childNoteIds, ["b", "c", "a"])
         XCTAssertEqual(parent.childBranchIds, ["bb", "bc", "ba"])
+    }
+
+    // MARK: - #titleTemplate
+
+    private func cacheLabel(_ name: String, value: String = "", on noteId: String, inheritable: Bool = false, type: String = "label") throws {
+        try persistence.cacheAttributeBatch(
+            from: AttributeResponse(
+                attributeId: "a_\(noteId)_\(name)",
+                noteId: noteId,
+                type: type,
+                name: name,
+                value: value,
+                position: 0,
+                isInheritable: inheritable,
+                utcDateModified: nil
+            ),
+            serverProfileId: "server1"
+        )
+    }
+
+    func testEffectiveTitleTemplateOwnTemplateAndInheritedLabels() throws {
+        // root → books (#titleTemplate(inheritable)) → shelf → (new note)
+        for (branch, note, parent) in [("b_books", "books", "root"), ("b_shelf", "shelf", "books"), ("b_plain", "plain", "root")] {
+            try persistence.cacheBranch(
+                from: TestFixtures.branchResponse(branchId: branch, noteId: note, parentNoteId: parent),
+                serverProfileId: "server1"
+            )
+        }
+        XCTAssertFalse(persistence.hasEffectiveTitleTemplate(noteId: "shelf", serverProfileId: "server1"))
+
+        try cacheLabel("titleTemplate", value: "Book", on: "books")
+        XCTAssertTrue(persistence.hasEffectiveTitleTemplate(noteId: "books", serverProfileId: "server1"), "own label")
+        XCTAssertFalse(persistence.hasEffectiveTitleTemplate(noteId: "shelf", serverProfileId: "server1"), "not inheritable")
+
+        try cacheLabel("titleTemplate", value: "Book", on: "books", inheritable: true)
+        try persistence.commitBatch()
+        XCTAssertTrue(persistence.hasEffectiveTitleTemplate(noteId: "shelf", serverProfileId: "server1"), "inherited")
+
+        try cacheLabel("titleTemplate", value: "Person", on: "tpl")
+        try cacheLabel("template", value: "tpl", on: "plain", type: "relation")
+        try persistence.commitBatch()
+        XCTAssertTrue(persistence.hasEffectiveTitleTemplate(noteId: "plain", serverProfileId: "server1"), "via ~template")
+    }
+
+    func testOfflineCreateLeavesTitleToServerOnlyWhenParentHasTitleTemplate() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "parent", title: "Parent"), serverProfileId: "server1")
+        _ = try persistence.createOfflineChildNote(
+            parentNoteId: "parent", title: "Note 01-01-2026 00:00:00", noteType: "text", mime: "text/html",
+            initialContent: "", serverProfileId: "server1", useParentTitleTemplate: true
+        )
+        try cacheLabel("titleTemplate", value: "${now.format('YYYY')}", on: "parent")
+        try persistence.commitBatch()
+        _ = try persistence.createOfflineChildNote(
+            parentNoteId: "parent", title: "Note 01-01-2026 00:00:01", noteType: "text", mime: "text/html",
+            initialContent: "", serverProfileId: "server1", useParentTitleTemplate: true
+        )
+        _ = try persistence.createOfflineChildNote(
+            parentNoteId: "parent", title: "Named", noteType: "text", mime: "text/html",
+            initialContent: "", serverProfileId: "server1", useParentTitleTemplate: false
+        )
+        let flags = try persistence.fetchPendingNoteCreations(serverProfileId: "server1")
+            .sorted { $0.queuedAt < $1.queuedAt }
+            .map(\.titleFromTemplate)
+        XCTAssertEqual(flags, [false, true, false])
     }
 
     // MARK: - Attributes

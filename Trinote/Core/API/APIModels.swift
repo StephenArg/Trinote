@@ -72,6 +72,15 @@ enum TriliumServerCompatibility {
         return isAppVersion(info.appVersion, atLeast: presentationMinAppVersion)
     }
 
+    /// Trilium release whose geo map writes no `#iconClass` on new markers, relying on the default pin icon instead.
+    static let geoNoteIconsMinAppVersion = "0.106.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (default pin / shape note icons).
+    static func supportsGeoNoteIcons(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: geoNoteIconsMinAppVersion)
+    }
+
     /// Trilium release that added the `black-contrast`, `white-contrast`, `league` and `night` presentation themes.
     static let extendedPresentationThemesMinAppVersion = "0.106.0"
 
@@ -85,6 +94,15 @@ enum TriliumServerCompatibility {
     static func supportsBoardOverhaul(_ info: AppInfoResponse?) -> Bool {
         guard let info else { return false }
         return isAppVersion(info.appVersion, atLeast: boardOverhaulMinAppVersion)
+    }
+
+    /// Trilium release that added `POST /api/notes/metadata` (the timestamps of several notes in one request).
+    static let bulkNoteMetadataMinAppVersion = "0.106.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (batch note timestamps).
+    static func supportsBulkNoteMetadata(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: bulkNoteMetadataMinAppVersion)
     }
 
     /// Semantic compare for Trilium `appVersion` strings (`0.103.0`, `v0.102.1`, `0.103.0-beta.1`).
@@ -430,6 +448,30 @@ struct CreateAttachmentRequest: Encodable {
     let position: Int?
 }
 
+/// `GET /api/quick-search/:query` — the web's quick search. Trinote uses it for the snippet and breadcrumb Trilium
+/// builds per result. Every field is optional: older servers return fewer of them.
+struct QuickSearchResponse: Decodable, Sendable {
+    let searchResults: [QuickSearchResult]?
+}
+
+struct QuickSearchResult: Decodable, Sendable {
+    /// v0.106+; older servers identify the note by the last segment of `notePath`.
+    let noteId: String?
+    let notePath: String?
+    /// Breadcrumb of titles, `Parent / Child / Note`.
+    let notePathTitle: String?
+    let contentSnippet: String?
+    /// Escaped text with `<b>` around matches (`<b class="…">` for fuzzy ones on v0.106) and `<br>` for line breaks.
+    let highlightedContentSnippet: String?
+    let attributeSnippet: String?
+    let highlightedAttributeSnippet: String?
+
+    var resolvedNoteId: String? {
+        if let noteId, !noteId.isEmpty { return noteId }
+        return notePath?.split(separator: "/").last.map(String.init)
+    }
+}
+
 /// `PUT /api/notes/:id/board/rename-column` (Trilium v0.106+). `attribute` is the grouping name without `#`/`~`.
 struct RenameBoardColumnRequest: Encodable, Sendable {
     let attribute: String
@@ -572,7 +614,8 @@ struct ProcessAttachmentOCRResponse: Decodable, Sendable {
 
 struct CreateNoteRequest: Encodable {
     let parentNoteId: String
-    let title: String
+    /// `nil` leaves the title to the server, which evaluates the parent's `#titleTemplate`.
+    let title: String?
     let type: String
     let mime: String?
     let content: String
@@ -684,6 +727,14 @@ struct TreeLoadResponse: Decodable {
 struct FullSyncTreeBatchEntry: Sendable {
     let note: NoteResponse
     let childBranches: [BranchResponse]
+}
+
+/// Trilium's answer to `PUT /api/notes/:noteId/clone-to-note/:parentNoteId`. A refused clone (the note is already
+/// under that parent, or the clone would create a cycle) comes back as `success: false` with a `message`.
+struct CloneNoteResult: Decodable, Equatable, Sendable {
+    let success: Bool
+    let branchId: String?
+    let message: String?
 }
 
 struct TreeLoadNoteRow: Decodable {

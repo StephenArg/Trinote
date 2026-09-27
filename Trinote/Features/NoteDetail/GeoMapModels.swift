@@ -81,9 +81,106 @@ struct GeoMapTrack: Identifiable, Sendable, Hashable {
     }
 }
 
+/// A shape drawn on a Trilium v0.106+ geo map: a child note whose `#geoShape` label holds its geometry, as
+/// `line:lat,lng lat,lng…`, `polygon:lat,lng …` (the ring without its closing point) or `circle:lat,lng radiusMeters`.
+/// Mirrors `parseGeoShape` in Trilium's `geomap/shapes.ts`; a value it can't read is not drawn.
+struct GeoMapShape: Identifiable, Sendable, Hashable {
+    enum Kind: String, Sendable {
+        case line, polygon, circle
+    }
+
+    static let label = "geoShape"
+
+    let noteId: String
+    let title: String
+    let kind: Kind
+    /// `[longitude, latitude]` pairs: the line or ring, or the circle's center alone.
+    let coordinates: [[Double]]
+    /// Circles only.
+    let radiusMeters: Double?
+    var color: String?
+
+    var id: String { noteId }
+
+    /// Hex color for the map layers (`#RRGGBB`), matching markers and tracks.
+    var colorHex: String {
+        if let color, let canonical = TriliumNoteColorMapper.canonicalColorLabel(from: color) {
+            if canonical.hasPrefix("#") { return canonical.uppercased() }
+            if let ui = TriliumNoteColorMapper.swiftUIColor(for: canonical) {
+                return ui.hexString
+            }
+        }
+        return "#3388FF"
+    }
+
+    /// A point to open in Maps: the circle's center, or the mean of the line or ring.
+    var focusCoordinate: (lat: Double, lng: Double)? {
+        guard !coordinates.isEmpty else { return nil }
+        let lng = coordinates.map { $0[0] }.reduce(0, +) / Double(coordinates.count)
+        let lat = coordinates.map { $0[1] }.reduce(0, +) / Double(coordinates.count)
+        return (lat, lng)
+    }
+
+    init?(noteId: String, title: String, value: String, color: String?) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let colon = trimmed.firstIndex(of: ":"),
+              let kind = Kind(rawValue: String(trimmed[..<colon])) else { return nil }
+        let rest = String(trimmed[trimmed.index(after: colon)...])
+
+        switch kind {
+        case .circle:
+            let parts = rest.split(whereSeparator: \.isWhitespace)
+            guard parts.count == 2,
+                  let center = Self.parsePoints(String(parts[0])), center.count == 1,
+                  let radius = Double(parts[1]), radius.isFinite, radius > 0 else { return nil }
+            coordinates = center
+            radiusMeters = radius
+        case .line, .polygon:
+            guard let points = Self.parsePoints(rest), points.count >= (kind == .line ? 2 : 3) else { return nil }
+            coordinates = points
+            radiusMeters = nil
+        }
+        self.noteId = noteId
+        self.title = title
+        self.kind = kind
+        self.color = color
+    }
+
+    private static func parsePoints(_ value: String) -> [[Double]]? {
+        var points: [[Double]] = []
+        for point in value.split(whereSeparator: \.isWhitespace) {
+            let parts = point.split(separator: ",", omittingEmptySubsequences: false)
+            guard parts.count == 2, let lat = Double(parts[0]), let lng = Double(parts[1]),
+                  lat.isFinite, lng.isFinite else { return nil }
+            points.append([lng, lat])
+        }
+        return points.isEmpty ? nil : points
+    }
+}
+
+extension Array where Element == GeoMapShape {
+    /// JSON for the map engine's `loadShapesData`.
+    func bridgeJSONArray() -> String? {
+        let payload = map { shape -> [String: Any] in
+            var dict: [String: Any] = [
+                "noteId": shape.noteId,
+                "title": shape.title,
+                "type": shape.kind.rawValue,
+                "coordinates": shape.coordinates,
+                "color": shape.colorHex,
+            ]
+            if let radius = shape.radiusMeters { dict["radiusMeters"] = radius }
+            return dict
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
 enum GeoMapFeatureKind: String, Sendable {
     case pin
     case track
+    case shape
 }
 
 struct GeoMapSelection: Identifiable, Sendable, Equatable {

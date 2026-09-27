@@ -227,7 +227,12 @@ struct SearchView: View {
                 Button {
                     openNote(note, findQuery: nil, matchIndex1Based: nil)
                 } label: {
-                    SearchResultRow(note: note, searchQuery: vm.query, showTrailingChevron: true)
+                    SearchResultRow(
+                        note: note,
+                        searchQuery: vm.query,
+                        showTrailingChevron: true,
+                        snippet: vm.snippetsByNoteId[note.noteId]
+                    )
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -426,6 +431,8 @@ struct SearchResultRow: View {
     /// Current search query; title matches are highlighted (case-insensitive).
     var searchQuery: String = ""
     var showTrailingChevron: Bool = true
+    /// Trilium's snippet for this result (matched text and breadcrumb), when the server sent one.
+    var snippet: SearchResultSnippet? = nil
 
     @Environment(AppState.self) private var appState
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
@@ -448,7 +455,10 @@ struct SearchResultRow: View {
             serverProfileId: profileId,
             protectedSessionActive: appState.protectedSessionActive
         )
-        return (pathFull == displayTitle) ? "" : pathFull
+        if pathFull != displayTitle { return pathFull }
+        // Not in the local cache: the server's breadcrumb, which ends with the note's own title.
+        guard let serverPath = snippet?.pathTitle, serverPath != displayTitle else { return "" }
+        return serverPath
     }
 
     private var modifiedLabel: String? {
@@ -541,6 +551,21 @@ struct SearchResultRow: View {
                             .minimumScaleFactor(0.85)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                }
+
+                if let content = snippet?.content {
+                    Text(content)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                        .padding(.top, 2)
+                }
+                if let attribute = snippet?.attribute {
+                    Text(attribute)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

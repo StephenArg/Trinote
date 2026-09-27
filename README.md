@@ -20,7 +20,7 @@ A native iOS client for self-hosted [TriliumNext](https://github.com/TriliumNext
 
 ## Requirements
 
-- iOS 17.0+
+- iOS 17.4+ (Mermaid 12 needs Safari 17.4+)
 - Xcode 16.0+
 - Swift 5.9+
 - A self-hosted TriliumNext server (**v0.95.x – v0.106.x** supported; native `/api` routes are pinned in `local_notes/trilium_native_api_v0.95.md`, with later-release deltas noted at the bottom of that file)
@@ -52,7 +52,7 @@ open Trinote.xcodeproj
 
 ### 4. Build & Run
 
-Select an iOS 17+ simulator or device and press **Cmd+R**.
+Select an iOS 17.4+ simulator or device and press **Cmd+R**.
 
 ### Version & build number
 
