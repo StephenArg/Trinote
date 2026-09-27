@@ -46,6 +46,7 @@ actor MockTriliumClient: TriliumClientProtocol {
     var updateNoteContentCalls: [(String, Data)] = []
     var deleteNoteCalls: [(noteId: String, eraseNotes: Bool)] = []
     var searchCalls: [String] = []
+    var renameBoardColumnCalls: [(boardNoteId: String, request: RenameBoardColumnRequest)] = []
     var searchNoteIdTitlesCalls: [(query: String, limit: Int)] = []
     var editedNotesCalls: [String] = []
     var dayNotesForMonthCalls: [(month: String, calendarRootId: String)] = []
@@ -319,6 +320,10 @@ actor MockTriliumClient: TriliumClientProtocol {
     func placeBranchInSiblingOrder(_ branchId: String, orderedSiblingBranchIds: [String]) async throws {
         _ = branchId
         _ = orderedSiblingBranchIds
+    }
+
+    func renameBoardColumn(boardNoteId: String, request: RenameBoardColumnRequest) async throws {
+        renameBoardColumnCalls.append((boardNoteId, request))
     }
 
     func createBranch(_ request: CreateBranchRequest) async throws -> BranchResponse {

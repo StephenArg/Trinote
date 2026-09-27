@@ -1515,12 +1515,10 @@ final class AppState {
     }
 
     /// Trilium relation `template` values are note ids; resolve from the built-in template title when possible.
-    /// Multi-word titles must be quoted in search (e.g. `#title = "Geo Map"`).
+    /// `note.title` is the note's own title (`#title` would be a label named "title"), and `#template` keeps an
+    /// ordinary note that shares the title — e.g. a journal root called "Calendar" — from being picked.
     private static func resolveTemplateRelationTargetNoteId(client: any TriliumClientProtocol, title: String) async -> String? {
-        let escaped = title
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let q = "#title = \"\(escaped)\""
+        let q = templateTitleSearchQuery(title: title)
         do {
             let resp = try await client.searchNotes(
                 query: q,
@@ -1537,5 +1535,13 @@ final class AppState {
         } catch {
             return nil
         }
+    }
+
+    /// Multi-word titles must be quoted in search (e.g. `#template note.title = "Geo Map"`).
+    nonisolated static func templateTitleSearchQuery(title: String) -> String {
+        let escaped = title
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "#template note.title = \"\(escaped)\""
     }
 }

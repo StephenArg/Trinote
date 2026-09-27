@@ -492,6 +492,14 @@ struct RichTextEditorView: UIViewRepresentable {
                 pendingContent = html
                 return
             }
+            let iconCSS = TriliumInlineIconStyles.css(forHTML: html)
+            if !iconCSS.isEmpty,
+               let literal = try? JSONEncoder().encode(iconCSS),
+               let cssArgument = String(data: literal, encoding: .utf8) {
+                webView.evaluateJavaScript("window.editorBridge.setInlineIconStyles(\(cssArgument));") { _, error in
+                    if let error { Log.api.error("Failed to set inline icon styles: \(error)") }
+                }
+            }
             let escaped = html
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "`", with: "\\`")

@@ -70,15 +70,18 @@ final class HTMLCollapsibleReorderTests: XCTestCase {
     }
 
     func testSkipsIncludeNoteDetails() {
+        // Include preview markup as `IncludeNoteResolver` renders it.
         let withInclude = """
-        <div class="trinote-include"><div class="trinote-include__body">
+        <section class="trinote-include" data-note-id="inc1"><div class="trinote-include__body">
         <details class="trilium-collapsible"><summary>Inc</summary><p>x</p></details>
-        </div></div>
+        </div></section>
         <details class="trilium-collapsible"><summary>A</summary><p>a</p></details>
         <details class="trilium-collapsible"><summary>B</summary><p>b</p></details>
         """
         XCTAssertEqual(HTMLCollapsibleReorder.interactiveDetails(in: withInclude).count, 2)
-        let result = HTMLCollapsibleReorder.movingDetails(in: withInclude, fromIndex: 1, beforeChildIndex: 0)
+        // Collapsible indices skip the preview's details, but sibling indices still count the preview
+        // itself (as the reader's `siblingBlocks` does): 0 = preview, 1 = A, 2 = B. B moves before A.
+        let result = HTMLCollapsibleReorder.movingDetails(in: withInclude, fromIndex: 1, beforeChildIndex: 1)
         let html = try! XCTUnwrap(result)
         XCTAssertEqual(summaryTitles(in: html), ["Inc", "B", "A"])
     }

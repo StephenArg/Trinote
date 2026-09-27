@@ -138,6 +138,31 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(childrenWithNote[0].1.title, "Note")
     }
 
+    /// Trilium v0.106 `note_reordering`: positions arrive as a `{ branchId: notePosition }` map for one parent.
+    func testApplyChildBranchPositionsReordersParentChildLists() throws {
+        try persistence.cacheNote(
+            from: TestFixtures.noteResponse(id: "parent", title: "Parent", childNoteIds: ["a", "b", "c"], childBranchIds: ["ba", "bb", "bc"]),
+            serverProfileId: "server1"
+        )
+        for (branchId, noteId, position) in [("ba", "a", 10), ("bb", "b", 20), ("bc", "c", 30)] {
+            try persistence.cacheBranch(
+                from: TestFixtures.branchResponse(branchId: branchId, noteId: noteId, parentNoteId: "parent", notePosition: position),
+                serverProfileId: "server1"
+            )
+        }
+
+        try persistence.applyChildBranchPositions(
+            ["ba": 30, "bb": 10, "bc": 20, "unknown": 40],
+            parentNoteId: "parent",
+            serverProfileId: "server1"
+        )
+        try persistence.commitBatch()
+
+        let parent = try XCTUnwrap(persistence.fetchCachedNote(id: "parent", serverProfileId: "server1"))
+        XCTAssertEqual(parent.childNoteIds, ["b", "c", "a"])
+        XCTAssertEqual(parent.childBranchIds, ["bb", "bc", "ba"])
+    }
+
     // MARK: - Attributes
 
     func testCacheAttributes() throws {

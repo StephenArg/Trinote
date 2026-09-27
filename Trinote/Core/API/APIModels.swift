@@ -23,14 +23,14 @@ struct AppInfoResponse: Decodable {
 /// understand which quirks (new note types, schema changes) might not be fully handled yet.
 enum TriliumServerCompatibility {
     /// Highest `MAX_MIGRATION_VERSION` (`dbVersion`) the iOS client was tested against.
-    /// 240 as of v0.105.0 (migrations 239–240: TOTP cleanup, board select definitions).
+    /// 240 as of v0.105.0 (migrations 239–240: TOTP cleanup, board select definitions); unchanged in v0.106.0.
     static let testedMaxDbVersion: Int = 240
 
-    /// Highest `SYNC_VERSION` the iOS client was tested against. Still 39 as of v0.105.0.
+    /// Highest `SYNC_VERSION` the iOS client was tested against. Still 39 as of v0.106.0.
     static let testedMaxSyncVersion: Int = 39
 
     /// Human label used in the Settings banner when displaying the tested ceiling.
-    static let testedMaxAppVersion = "v0.105.0"
+    static let testedMaxAppVersion = "v0.106.0"
 
     /// Trilium release that introduced the `spreadsheet` note type (Univer Sheets).
     static let spreadsheetMinAppVersion = "0.103.0"
@@ -43,6 +43,10 @@ enum TriliumServerCompatibility {
 
     /// Trilium release that introduced `GET …/office-preview` for Office / EPUB HTML conversion.
     static let officePreviewMinAppVersion = "0.105.0"
+
+    /// Trilium release of the board overhaul: per-grouping column lists in `board.json`
+    /// (`<attr>ViewColumns`) and `PUT /api/notes/:id/board/rename-column`.
+    static let boardOverhaulMinAppVersion = "0.106.0"
 
     /// `true` when `/api/app-info` reports Trilium v0.103.0 or newer (spreadsheet note type).
     static func supportsSpreadsheetNotes(_ info: AppInfoResponse?) -> Bool {
@@ -66,6 +70,21 @@ enum TriliumServerCompatibility {
     static func supportsPresentationNotes(_ info: AppInfoResponse?) -> Bool {
         guard let info else { return false }
         return isAppVersion(info.appVersion, atLeast: presentationMinAppVersion)
+    }
+
+    /// Trilium release that added the `black-contrast`, `white-contrast`, `league` and `night` presentation themes.
+    static let extendedPresentationThemesMinAppVersion = "0.106.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (extra presentation themes).
+    static func supportsExtendedPresentationThemes(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: extendedPresentationThemesMinAppVersion)
+    }
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (board overhaul).
+    static func supportsBoardOverhaul(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: boardOverhaulMinAppVersion)
     }
 
     /// Semantic compare for Trilium `appVersion` strings (`0.103.0`, `v0.102.1`, `0.103.0-beta.1`).
@@ -411,6 +430,14 @@ struct CreateAttachmentRequest: Encodable {
     let position: Int?
 }
 
+/// `PUT /api/notes/:id/board/rename-column` (Trilium v0.106+). `attribute` is the grouping name without `#`/`~`.
+struct RenameBoardColumnRequest: Encodable, Sendable {
+    let attribute: String
+    let isRelation: Bool
+    let oldValue: String
+    let newValue: String
+}
+
 /// `GET /api/notes/:id/office-preview` and `GET /api/attachments/:id/office-preview` (Trilium v0.105+).
 struct OfficePreviewResponse: Decodable, Sendable {
     let html: String
@@ -732,6 +759,9 @@ struct SyncPullResponse {
     let branches: [[String: Any]]
     let attributes: [[String: Any]]
     let blobs: [[String: Any]]
+    /// `note_reordering` rows: parent note id → `{ branchId: notePosition }` for all of its children.
+    /// The server sends these when it re-sorts children (`#sorted`), which rewrites positions without branch rows.
+    var noteReorderings: [String: [String: Int]] = [:]
 
     /// Parses the `GET /api/sync/changed` response format:
     /// ```
@@ -753,6 +783,7 @@ struct SyncPullResponse {
         var branches: [[String: Any]] = []
         var attributes: [[String: Any]] = []
         var blobs: [[String: Any]] = []
+        var noteReorderings: [String: [String: Int]] = [:]
         changes.reserveCapacity(rawList.count)
 
         for item in rawList {
@@ -771,6 +802,8 @@ struct SyncPullResponse {
                 case "branches":    branches.append(entity)
                 case "attributes":  attributes.append(entity)
                 case "blobs":       blobs.append(entity)
+                case "note_reordering":
+                    noteReorderings[eid] = entity.compactMapValues { FlexJSON.int($0) }
                 default: break
                 }
             }
@@ -783,7 +816,8 @@ struct SyncPullResponse {
             notes: notes,
             branches: branches,
             attributes: attributes,
-            blobs: blobs
+            blobs: blobs,
+            noteReorderings: noteReorderings
         )
     }
 }

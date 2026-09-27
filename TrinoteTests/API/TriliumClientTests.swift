@@ -377,6 +377,36 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(res.results.count, 0)
     }
 
+    /// A `/` in the query must stay inside the `:searchString` segment, encoded once (`%2F`, not `%252F`).
+    func testSearchEncodesSlashOnceInsideQuerySegment() async throws {
+        var searchURL: String?
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                let json = #"{"csrfToken":"x","device":"desktop"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("/api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            if path.contains("/api/search/") {
+                searchURL = request.url?.absoluteString
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("[]".utf8))
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        _ = try await client.searchNotes(query: "a/b #tag=x? 100%", fastSearch: false, includeArchived: false, ancestorNoteId: nil, orderBy: nil, orderDirection: nil, limit: 10)
+        XCTAssertEqual(searchURL, "https://trilium.test/api/search/a%2Fb%20%23tag=x%3F%20100%25")
+    }
+
+    func testMakeURLPercentEncodesPlainPaths() throws {
+        let url = try TriliumClient.makeURL(baseURL: URL(string: "https://trilium.test/sub")!, path: "/api/notes/a b", queryParams: nil)
+        XCTAssertEqual(url.absoluteString, "https://trilium.test/sub/api/notes/a%20b")
+    }
+
     func testSearchNoteIdTitlesUsesSearchThenSingleTreeLoad() async throws {
         var treeLoadCount = 0
         MockURLProtocol.requestHandler = { [appInfoJSON] request in
@@ -587,6 +617,23 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(p.notes.count, 1)
         XCTAssertEqual(p.notes[0]["noteId"] as? String, "n1")
         XCTAssertEqual(p.notes[0]["title"] as? String, "Test")
+    }
+
+    /// Trilium v0.106 multi-criteria `#sorted` rewrites positions server-side and emits only `note_reordering`,
+    /// whose entity is the parent's `{ branchId: notePosition }` map.
+    func testSyncPullResponseParsesNoteReordering() throws {
+        let json = #"""
+        {
+            "entityChanges":[
+                {"entityChange":{"entityName":"note_reordering","entityId":"parent1","isErased":false},"entity":{"b1":20,"b2":10,"b3":"30"}}
+            ],
+            "lastEntityChangeId":7,
+            "outstandingPullCount":0
+        }
+        """#.data(using: .utf8)!
+        let p = try SyncPullResponse.parseFromChanged(jsonData: json)
+        XCTAssertEqual(p.entityChanges.map(\.entityName), ["note_reordering"])
+        XCTAssertEqual(p.noteReorderings["parent1"], ["b1": 20, "b2": 10, "b3": 30])
     }
 
     /// Locks in the shape returned by Trilium v0.103 `/api/sync/changed`: each item is
@@ -801,6 +848,26 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertTrue(TriliumServerCompatibility.supportsOfficePreview(newer))
     }
 
+    func testSupportsBoardOverhaulRequiresV0_106() {
+        func info(_ version: String) -> AppInfoResponse {
+            AppInfoResponse(
+                appVersion: version,
+                dbVersion: 240,
+                syncVersion: 39,
+                buildDate: nil,
+                buildRevision: nil,
+                dataDirectory: nil,
+                clipperProtocolVersion: nil,
+                utcDateTime: nil
+            )
+        }
+        XCTAssertFalse(TriliumServerCompatibility.supportsBoardOverhaul(nil))
+        XCTAssertFalse(TriliumServerCompatibility.supportsBoardOverhaul(info("0.105.1")))
+        XCTAssertTrue(TriliumServerCompatibility.supportsBoardOverhaul(info("0.106.0")))
+        XCTAssertTrue(TriliumServerCompatibility.supportsBoardOverhaul(info("v0.107.0-beta.1")))
+        XCTAssertEqual(TriliumServerCompatibility.evaluate(info("0.106.0")), .withinTestedRange)
+    }
+
     func testGetNoteOfficePreviewDecodesHTML() async throws {
         MockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "GET")
@@ -829,6 +896,40 @@ final class TriliumClientTests: XCTestCase {
         let client = makeClient()
         let result = try await client.getAttachmentOfficePreview("a9")
         XCTAssertEqual(result.html, "<table><tr><td>1</td></tr></table>")
+    }
+
+    /// Trilium v0.106 sends the fragment itself as the body instead of a `{ html }` envelope.
+    func testGetNoteOfficePreviewAcceptsRawHTMLBody() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/api/notes/n1/office-preview")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/html; charset=utf-8"]
+                )!,
+                Data("<div class=\"container\"><p>Doc</p></div>".utf8)
+            )
+        }
+        let client = makeClient()
+        let result = try await client.getNoteOfficePreview("n1")
+        XCTAssertEqual(result.html, "<div class=\"container\"><p>Doc</p></div>")
+    }
+
+    func testDecodeOfficePreviewDetectsBothShapes() throws {
+        XCTAssertEqual(
+            try TriliumClient.decodeOfficePreview(data: Data(#"  {"html":"<p>A</p>"}"#.utf8), contentType: nil).html,
+            "<p>A</p>"
+        )
+        XCTAssertEqual(
+            try TriliumClient.decodeOfficePreview(data: Data(#"{"html":"<p>B</p>"}"#.utf8), contentType: "application/json").html,
+            "<p>B</p>"
+        )
+        XCTAssertEqual(
+            try TriliumClient.decodeOfficePreview(data: Data("<table></table>".utf8), contentType: nil).html,
+            "<table></table>"
+        )
     }
 
     func testGetNoteOfficePreviewSurfaces400() async throws {

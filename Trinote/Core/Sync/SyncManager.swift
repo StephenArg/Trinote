@@ -388,6 +388,14 @@ final class SyncManager {
                         if let row = blobIndex[ec.entityId] {
                             try applyBlobRow(row, profileId: profileId, notesToRefreshUtc: &notesToRefreshContent)
                         }
+                    case "note_reordering":
+                        if let positions = pull.noteReorderings[ec.entityId] {
+                            try persistence.applyChildBranchPositions(
+                                positions,
+                                parentNoteId: ec.entityId,
+                                serverProfileId: profileId
+                            )
+                        }
                     default:
                         break
                     }

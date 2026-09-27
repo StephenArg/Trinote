@@ -52,6 +52,9 @@ protocol TriliumClientProtocol: Actor, Sendable {
 
     func getBranch(_ branchId: String, parentNoteId: String) async throws -> BranchResponse
     func placeBranchInSiblingOrder(_ branchId: String, orderedSiblingBranchIds: [String]) async throws
+    /// `PUT /api/notes/:id/board/rename-column` — Trilium 0.106+. Renames the cards' values, the column
+    /// definition and `board.json` in one transaction.
+    func renameBoardColumn(boardNoteId: String, request: RenameBoardColumnRequest) async throws
 
     func createBranch(_ request: CreateBranchRequest) async throws -> BranchResponse
     func updateBranch(_ branchId: String, request: UpdateBranchRequest) async throws -> BranchResponse
@@ -1157,8 +1160,11 @@ actor TriliumClient: TriliumClientProtocol {
         _ = orderBy
         _ = orderDirection
 
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "/").inverted) ?? query
-        let ids: [String] = try await get("/api/search/\(encoded)", csrf: false)
+        let ids: [String] = try await get(
+            "/api/search/\(Self.percentEncodePathSegment(query))",
+            csrf: false,
+            pathIsPercentEncoded: true
+        )
 
         let max = limit ?? 50
         let slice = Array(ids.prefix(max))
@@ -1167,8 +1173,11 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle] {
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "/").inverted) ?? query
-        let ids: [String] = try await get("/api/search/\(encoded)", csrf: false)
+        let ids: [String] = try await get(
+            "/api/search/\(Self.percentEncodePathSegment(query))",
+            csrf: false,
+            pathIsPercentEncoded: true
+        )
         let slice = Array(ids.prefix(max(0, limit)))
         guard !slice.isEmpty else { return [] }
         let tree = try await batchTreeLoad(noteIds: slice)
@@ -1235,6 +1244,10 @@ actor TriliumClient: TriliumClientProtocol {
             isExpanded: row.isExpanded,
             utcDateModified: nil
         )
+    }
+
+    func renameBoardColumn(boardNoteId: String, request: RenameBoardColumnRequest) async throws {
+        try await putJSONVoid("/api/notes/\(boardNoteId)/board/rename-column", body: request, csrf: true)
     }
 
     func placeBranchInSiblingOrder(_ branchId: String, orderedSiblingBranchIds: [String]) async throws {
@@ -1604,12 +1617,23 @@ actor TriliumClient: TriliumClientProtocol {
         request.timeoutInterval = Self.officePreviewTimeout
         let (data, response) = try await dataForLongRunningRequest(request, timeout: Self.officePreviewTimeout)
         try validateResponse(response, data: data)
+        let contentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")
         do {
-            return try decoder.decode(OfficePreviewResponse.self, from: data)
+            return try Self.decodeOfficePreview(data: data, contentType: contentType)
         } catch {
             Log.api.error("Decoding failed for \(path): \(error)")
             throw APIError.decodingFailed(error.localizedDescription)
         }
+    }
+
+    /// v0.105 wraps the fragment as JSON `{ html }`; v0.106+ sends the HTML itself as the body.
+    static func decodeOfficePreview(data: Data, contentType: String?) throws -> OfficePreviewResponse {
+        let isJSONType = contentType?.lowercased().contains("json") == true
+        let firstByte = data.first { !Character(UnicodeScalar($0)).isWhitespace }
+        if isJSONType || firstByte == UInt8(ascii: "{") {
+            return try JSONDecoder().decode(OfficePreviewResponse.self, from: data)
+        }
+        return OfficePreviewResponse(html: String(decoding: data, as: UTF8.self))
     }
 
     private func dataForLongRunningRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
@@ -1634,8 +1658,20 @@ actor TriliumClient: TriliumClientProtocol {
 
     // MARK: - Request helpers
 
-    private func get<T: Decodable>(_ path: String, queryParams: [String: String]? = nil, csrf: Bool) async throws -> T {
-        let request = try buildRequest(path: path, method: "GET", queryParams: queryParams, csrf: csrf, jsonBody: false)
+    private func get<T: Decodable>(
+        _ path: String,
+        queryParams: [String: String]? = nil,
+        csrf: Bool,
+        pathIsPercentEncoded: Bool = false
+    ) async throws -> T {
+        let request = try buildRequest(
+            path: path,
+            method: "GET",
+            queryParams: queryParams,
+            csrf: csrf,
+            jsonBody: false,
+            pathIsPercentEncoded: pathIsPercentEncoded
+        )
         let (data, response) = try await session.data(for: request)
         try validateResponse(response, data: data)
         do {
@@ -1703,9 +1739,15 @@ actor TriliumClient: TriliumClientProtocol {
         method: String,
         queryParams: [String: String]?,
         csrf: Bool,
-        jsonBody: Bool
+        jsonBody: Bool,
+        pathIsPercentEncoded: Bool = false
     ) throws -> URLRequest {
-        let url = try Self.makeURL(baseURL: baseURL, path: path, queryParams: queryParams)
+        let url = try Self.makeURL(
+            baseURL: baseURL,
+            path: path,
+            queryParams: queryParams,
+            pathIsPercentEncoded: pathIsPercentEncoded
+        )
         var request = URLRequest(url: url)
         request.httpMethod = method
         if jsonBody || method != "GET" {
@@ -1749,15 +1791,31 @@ actor TriliumClient: TriliumClientProtocol {
         request.setValue(parts.joined(separator: "; "), forHTTPHeaderField: "Cookie")
     }
 
-    private static func makeURL(baseURL: URL, path: String, queryParams: [String: String]?) throws -> URL {
+    /// Encodes one path segment, `/` included, so a value such as a search query stays a single segment.
+    static func percentEncodePathSegment(_ segment: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/")
+        return segment.addingPercentEncoding(withAllowedCharacters: allowed) ?? segment
+    }
+
+    /// `pathIsPercentEncoded` keeps escapes already in `path` (see `percentEncodePathSegment`); otherwise
+    /// the `URLComponents.path` setter encodes it, which would turn an existing `%2F` into `%252F`.
+    static func makeURL(
+        baseURL: URL,
+        path: String,
+        queryParams: [String: String]?,
+        pathIsPercentEncoded: Bool = false
+    ) throws -> URL {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { throw APIError.invalidURL }
         let appendPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        var basePath = components.path
+        var basePath = pathIsPercentEncoded ? components.percentEncodedPath : components.path
         if basePath.isEmpty { basePath = "/" }
-        if basePath.hasSuffix("/") {
-            components.path = (basePath + appendPath).replacingOccurrences(of: "//", with: "/")
+        let joined = basePath.hasSuffix("/") ? basePath + appendPath : basePath + "/" + appendPath
+        let fullPath = joined.replacingOccurrences(of: "//", with: "/")
+        if pathIsPercentEncoded {
+            components.percentEncodedPath = fullPath
         } else {
-            components.path = (basePath + "/" + appendPath).replacingOccurrences(of: "//", with: "/")
+            components.path = fullPath
         }
         if let queryParams, !queryParams.isEmpty {
             components.queryItems = queryParams.map { URLQueryItem(name: $0.key, value: $0.value) }

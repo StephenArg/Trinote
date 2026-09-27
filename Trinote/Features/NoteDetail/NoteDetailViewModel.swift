@@ -1983,13 +1983,13 @@ final class NoteDetailViewModel {
             if let existing = existingAttachment {
                 try await client.uploadAttachmentContent(existing.attachmentId, data: svgData, contentType: "image/svg+xml")
             } else {
-                let base64 = svgData.base64EncodedString()
+                // The server stores `content` as sent, so the SVG goes as text (not base64).
                 let request = CreateAttachmentRequest(
                     ownerId: nid,
                     role: "image",
                     mime: "image/svg+xml",
                     title: "canvas-export.svg",
-                    content: base64,
+                    content: String(decoding: svgData, as: UTF8.self),
                     position: 0
                 )
                 _ = try await client.createAttachment(request)
@@ -3518,23 +3518,24 @@ final class NoteDetailViewModel {
 
     // MARK: - Kanban Board
 
-    /// Group-by attribute name from `#board:groupBy` (default `status`).
+    /// Group-by attribute from `#board:groupBy` (default `status`); a relation keeps its `~`.
     func kanbanGroupByAttributeName(for note: NoteItem) -> String {
         let raw = note.attributes.first(where: {
             $0.type == .label && $0.name.caseInsensitiveCompare("board:groupBy") == .orderedSame
         })?.value
-        return KanbanBoardModels.normalizedGroupByAttributeName(raw)
+        return KanbanBoardModels.GroupBy(raw).rawValue
     }
 
     /// Loads Kanban cards + `board.json` columns.
     /// When online, merges server children with cache so freshly queued offline cards (`ol_*`) still appear
     /// before `backgroundSyncPendingChanges` finishes flushing them.
     func loadKanbanBoard(for note: NoteItem) async -> (columns: [KanbanBoardModels.Column], groupBy: String) {
-        let groupBy = kanbanGroupByAttributeName(for: note)
-        let cacheCards = kanbanCardsFromCache(groupBy: groupBy)
+        let groupBy = KanbanBoardModels.GroupBy(kanbanGroupByAttributeName(for: note))
+        let showInbox = KanbanBoardModels.showsInbox(note.attributes)
+        let cacheCards = kanbanCardsFromCache(groupBy: groupBy, showInbox: showInbox)
         let cards: [KanbanBoardModels.Card]
         if client != nil, isOnline {
-            let serverCards = await fetchKanbanCardsFromServer(note: note, groupBy: groupBy)
+            let serverCards = await fetchKanbanCardsFromServer(note: note, groupBy: groupBy, showInbox: showInbox)
             var byId: [String: KanbanBoardModels.Card] = [:]
             for card in serverCards { byId[card.noteId] = card }
             for card in cacheCards where byId[card.noteId] == nil {
@@ -3545,10 +3546,40 @@ final class NoteDetailViewModel {
             cards = cacheCards
         }
         let config = await loadBoardConfig(for: note)
-        return (KanbanBoardModels.buildColumns(config: config, cards: cards), groupBy)
+        let stored = config?.columns(forKey: kanbanColumnsKey(for: groupBy, config: config))
+        var columns = KanbanBoardModels.buildColumns(storedColumns: stored, cards: cards, showInbox: showInbox)
+        if groupBy.isRelation {
+            columns = await titledRelationColumns(columns)
+        }
+        return (columns, groupBy.rawValue)
     }
 
-    func kanbanCardsFromCache(groupBy: String) -> [KanbanBoardModels.Card] {
+    /// Where `board.json` keeps the columns of `groupBy`. A per-grouping list is only written for servers that
+    /// read one (v0.106+, or a config that already holds one); reading falls back to a legacy `columns` list.
+    private func kanbanColumnsKey(for groupBy: KanbanBoardModels.GroupBy, config: KanbanBoardModels.BoardConfig?) -> String {
+        let configHasGroupedLists = config?.fields.keys.contains(where: KanbanBoardModels.isGroupedColumnsKey) ?? false
+        let perGroupingLists = configHasGroupedLists
+            || TriliumServerCompatibility.supportsBoardOverhaul(appState.serverAppInfo)
+        return groupBy.columnsKey(perGroupingLists: perGroupingLists)
+    }
+
+    /// A relation grouping's column values are note ids; show the target notes' titles.
+    private func titledRelationColumns(_ columns: [KanbanBoardModels.Column]) async -> [KanbanBoardModels.Column] {
+        var titled = columns
+        for index in titled.indices where !titled[index].isInbox && titled[index].title == nil {
+            let targetId = titled[index].value
+            if let profileId = serverProfileId,
+               let cached = try? persistence.fetchCachedNote(id: targetId, serverProfileId: profileId),
+               !cached.title.isEmpty {
+                titled[index].title = cached.title
+            } else if let client, isOnline, let target = try? await client.getNote(targetId) {
+                titled[index].title = target.title
+            }
+        }
+        return titled
+    }
+
+    func kanbanCardsFromCache(groupBy: KanbanBoardModels.GroupBy, showInbox: Bool) -> [KanbanBoardModels.Card] {
         guard let profileId = serverProfileId else { return [] }
         var cards: [KanbanBoardModels.Card] = []
         for childId in resolvedChildNoteIdsForDetail() {
@@ -3564,23 +3595,37 @@ final class NoteDetailViewModel {
                     isInheritable: a.isInheritable
                 )
             }
-            guard let column = KanbanBoardModels.columnValue(from: attrs, groupByName: groupBy) else { continue }
+            guard let column = KanbanBoardModels.columnValue(from: attrs, groupBy: groupBy)
+                ?? (showInbox ? KanbanBoardModels.inboxColumnValue : nil)
+            else { continue }
             let branch = try? persistence.fetchCachedBranch(noteId: childId, parentNoteId: noteId, serverProfileId: profileId)
             let branchId = branch?.branchId ?? ""
             let position = branch?.notePosition ?? 0
             let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let icon = persistence.tabRowIconContext(
+                noteId: childId,
+                fallbackNoteType: cached.noteType,
+                serverProfileId: profileId
+            )
             cards.append(KanbanBoardModels.Card(
                 noteId: childId,
                 branchId: branchId,
                 title: trimmedTitle.isEmpty ? childId : trimmedTitle,
                 columnValue: column,
-                notePosition: position
+                notePosition: position,
+                iconClass: icon.iconClass,
+                fallbackNoteType: icon.fallbackNoteType,
+                colorLabel: persistence.cachedNoteColorLabel(noteId: childId, serverProfileId: profileId)
             ))
         }
         return cards
     }
 
-    func fetchKanbanCardsFromServer(note: NoteItem, groupBy: String) async -> [KanbanBoardModels.Card] {
+    func fetchKanbanCardsFromServer(
+        note: NoteItem,
+        groupBy: KanbanBoardModels.GroupBy,
+        showInbox: Bool
+    ) async -> [KanbanBoardModels.Card] {
         guard let client, isOnline else { return [] }
         var cards: [KanbanBoardModels.Card] = []
         do {
@@ -3604,7 +3649,9 @@ final class NoteDetailViewModel {
                     if let profileId = serverProfileId {
                         persistNoteResponse(childResp, profileId: profileId)
                     }
-                    guard let column = KanbanBoardModels.columnValue(from: childItem.attributes, groupByName: groupBy) else {
+                    guard let column = KanbanBoardModels.columnValue(from: childItem.attributes, groupBy: groupBy)
+                        ?? (showInbox ? KanbanBoardModels.inboxColumnValue : nil)
+                    else {
                         continue
                     }
                     cards.append(KanbanBoardModels.Card(
@@ -3612,7 +3659,10 @@ final class NoteDetailViewModel {
                         branchId: branch.branchId,
                         title: childItem.title,
                         columnValue: column,
-                        notePosition: branch.notePosition
+                        notePosition: branch.notePosition,
+                        iconClass: effectiveIconClass(for: childItem),
+                        fallbackNoteType: childItem.iconFallbackNoteType,
+                        colorLabel: childItem.colorLabelValue
                     ))
                 } catch {
                     continue
@@ -3621,7 +3671,7 @@ final class NoteDetailViewModel {
             try? persistence.commitBatch()
         } catch {
             Log.api.error("fetchKanbanCardsFromServer failed: \(error)")
-            return kanbanCardsFromCache(groupBy: groupBy)
+            return kanbanCardsFromCache(groupBy: groupBy, showInbox: showInbox)
         }
         return cards
     }
@@ -3648,6 +3698,23 @@ final class NoteDetailViewModel {
         return nil
     }
 
+    /// The server's current `board.json` for a save, so the save builds on what the web client last wrote.
+    /// Throws when it cannot be read, rather than letting a save replace a config it never saw;
+    /// `nil` means the board has no `board.json` yet.
+    private func fetchBoardConfigForSave(boardNoteId: String) async throws -> KanbanBoardModels.BoardConfig? {
+        guard let client else { throw APIError.unauthorized }
+        let attachments = try await client.getNoteAttachments(boardNoteId)
+        self.attachments = attachments.map(AttachmentItem.init)
+        guard let att = attachments.first(where: { $0.title == KanbanBoardModels.boardConfigAttachmentTitle }) else {
+            return nil
+        }
+        let data = try await client.getAttachmentContent(att.attachmentId)
+        guard let config = KanbanBoardModels.decodeBoardConfig(from: data) else {
+            throw APIError.decodingFailed(String(localized: "The board's configuration could not be read.", comment: "Kanban unreadable board.json"))
+        }
+        return config
+    }
+
     /// Persists `board.json` (create or replace content). Online-only.
     @discardableResult
     func saveBoardConfig(_ config: KanbanBoardModels.BoardConfig) async -> Bool {
@@ -3664,12 +3731,13 @@ final class NoteDetailViewModel {
             if let existing {
                 try await client.uploadAttachmentContent(existing.attachmentId, data: data, contentType: "application/json")
             } else {
+                // The server stores `content` as sent, so the JSON goes as text (not base64).
                 let request = CreateAttachmentRequest(
                     ownerId: noteId,
                     role: "viewConfig",
                     mime: "application/json",
                     title: KanbanBoardModels.boardConfigAttachmentTitle,
-                    content: data.base64EncodedString(),
+                    content: String(decoding: data, as: UTF8.self),
                     position: 0
                 )
                 _ = try await client.createAttachment(request)
@@ -3684,26 +3752,59 @@ final class NoteDetailViewModel {
         }
     }
 
-    /// Moves a card to another column by rewriting its group-by label (delete + create). Online-only.
+    /// Saves the board's shown columns in `shownOrder` (add, delete, reorder), keeping every other
+    /// `board.json` key and column field (icons, colours, limits, archived columns, other groupings). Online-only.
     @discardableResult
-    func moveKanbanCard(noteId cardNoteId: String, toColumn: String, groupBy: String) async -> Bool {
+    func saveKanbanColumns(shownOrder: [String], for note: NoteItem, groupBy rawGroupBy: String) async -> Bool {
+        guard client != nil, isOnline else {
+            saveError = String(localized: "Connect to the server to edit board columns.", comment: "Kanban offline column edit")
+            showSaveError = true
+            return false
+        }
+        let groupBy = KanbanBoardModels.GroupBy(rawGroupBy)
+        let config: KanbanBoardModels.BoardConfig
+        do {
+            config = try await fetchBoardConfigForSave(boardNoteId: note.noteId) ?? KanbanBoardModels.BoardConfig()
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            Log.api.error("saveKanbanColumns: reading board.json failed: \(error)")
+            return false
+        }
+        let key = kanbanColumnsKey(for: groupBy, config: config)
+        let columns = KanbanBoardModels.reorderedColumns(
+            stored: config.columns(forKey: key) ?? [],
+            shownOrder: shownOrder,
+            showInbox: KanbanBoardModels.showsInbox(note.attributes),
+            makeColumnId: KanbanBoardModels.makeColumnId
+        )
+        return await saveBoardConfig(config.settingColumns(columns, forKey: key))
+    }
+
+    /// Moves a card to another column by rewriting its group-by label or relation (delete + create).
+    /// Moving to the inbox only removes it. Online-only.
+    @discardableResult
+    func moveKanbanCard(noteId cardNoteId: String, toColumn: String, groupBy rawGroupBy: String) async -> Bool {
         guard let client, isOnline else {
             saveError = String(localized: "Connect to the server to move cards.", comment: "Kanban offline move")
             showSaveError = true
             return false
         }
+        let groupBy = KanbanBoardModels.GroupBy(rawGroupBy)
+        let attributeKind: AttributeItem.AttributeKind = groupBy.isRelation ? .relation : .label
         do {
             let noteResp = try await client.getNote(cardNoteId)
             let item = NoteItem(from: noteResp)
-            if let existing = item.attributes.first(where: {
-                $0.type == .label && $0.name.caseInsensitiveCompare(groupBy) == .orderedSame
-            }) {
+            for existing in item.attributes where
+                existing.type == attributeKind && existing.name.caseInsensitiveCompare(groupBy.name) == .orderedSame {
                 try await client.deleteAttribute(noteId: cardNoteId, attributeId: existing.attributeId)
             }
-            try await client.createAttribute(CreateAttributeRequest(
-                noteId: cardNoteId, type: "label", name: groupBy,
-                value: toColumn, isInheritable: nil, position: nil
-            ))
+            if toColumn != KanbanBoardModels.inboxColumnValue {
+                try await client.createAttribute(CreateAttributeRequest(
+                    noteId: cardNoteId, type: groupBy.attributeType, name: groupBy.name,
+                    value: toColumn, isInheritable: nil, position: nil
+                ))
+            }
             if let profileId = serverProfileId {
                 persistNoteResponse(try await client.getNote(cardNoteId), profileId: profileId)
                 try? persistence.commitBatch()
@@ -3737,15 +3838,20 @@ final class NoteDetailViewModel {
         }
     }
 
-    /// Creates a text card under this board with the group-by label set (offline-queued).
-    func createKanbanCard(title: String, column: String, groupBy: String) async -> String? {
+    /// Creates a text card under this board with the group-by label or relation set (offline-queued).
+    /// A card created in the inbox carries no grouping value.
+    func createKanbanCard(title: String, column: String, groupBy rawGroupBy: String) async -> String? {
         guard let profileId = serverProfileId else { return nil }
         guard appState.isAuthenticated else {
             saveError = String(localized: "Sign in to create notes.", comment: "Error when creating child offline without session")
             showSaveError = true
             return nil
         }
+        let groupBy = KanbanBoardModels.GroupBy(rawGroupBy)
         let resolvedTitle = NoteCreationTitle.resolved(from: title)
+        let groupingAttributes = column == KanbanBoardModels.inboxColumnValue
+            ? []
+            : [NoteCreationAttribute(type: groupBy.attributeType, name: groupBy.name, value: column)]
         do {
             let (newId, _) = try persistence.createOfflineChildNote(
                 parentNoteId: noteId,
@@ -3754,9 +3860,7 @@ final class NoteDetailViewModel {
                 mime: "text/html",
                 initialContent: "",
                 serverProfileId: profileId,
-                initialAttributes: [
-                    NoteCreationAttribute(type: "label", name: groupBy, value: column),
-                ]
+                initialAttributes: groupingAttributes
             )
             await loadChildNotes()
             // Flush immediately when online so the card lands on the server before the next board pull.
@@ -3773,34 +3877,98 @@ final class NoteDetailViewModel {
         }
     }
 
-    /// Renames a column in `board.json` and rewrites `#status` (or group-by) on cards. Online-only.
+    /// Renames a column and the grouping value on its cards. v0.106+ does it server-side in one transaction
+    /// (cards, column definition and `board.json`); older servers get per-card rewrites, then the stored column
+    /// is renamed in place so its other fields survive. Online-only.
     @discardableResult
-    func renameKanbanColumn(from oldValue: String, to newValue: String, groupBy: String, cards: [KanbanBoardModels.Card], configColumns: [String]) async -> Bool {
+    func renameKanbanColumn(
+        from oldValue: String,
+        to newValue: String,
+        for note: NoteItem,
+        groupBy rawGroupBy: String,
+        cards: [KanbanBoardModels.Card],
+        shownOrder: [String]
+    ) async -> Bool {
         let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != oldValue else { return false }
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to edit board columns.", comment: "Kanban offline column edit")
+            showSaveError = true
+            return false
+        }
+        let groupBy = KanbanBoardModels.GroupBy(rawGroupBy)
+        if TriliumServerCompatibility.supportsBoardOverhaul(appState.serverAppInfo) {
+            do {
+                try await client.renameBoardColumn(
+                    boardNoteId: note.noteId,
+                    request: RenameBoardColumnRequest(
+                        attribute: groupBy.name,
+                        isRelation: groupBy.isRelation,
+                        oldValue: oldValue,
+                        newValue: trimmed
+                    )
+                )
+                await loadAttachments()
+                return true
+            } catch {
+                saveError = APIError.from(error).localizedDescription
+                showSaveError = true
+                Log.api.error("renameKanbanColumn failed: \(error)")
+                return false
+            }
+        }
+
         for card in cards where card.columnValue == oldValue {
-            let ok = await moveKanbanCard(noteId: card.noteId, toColumn: trimmed, groupBy: groupBy)
+            let ok = await moveKanbanCard(noteId: card.noteId, toColumn: trimmed, groupBy: rawGroupBy)
             if !ok { return false }
         }
-        let updated = configColumns.map { $0 == oldValue ? trimmed : $0 }
-        let config = KanbanBoardModels.BoardConfig(columns: updated.map { KanbanBoardModels.BoardColumn(value: $0) })
-        return await saveBoardConfig(config)
+        let config: KanbanBoardModels.BoardConfig
+        do {
+            config = try await fetchBoardConfigForSave(boardNoteId: note.noteId) ?? KanbanBoardModels.BoardConfig()
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return false
+        }
+        let key = kanbanColumnsKey(for: groupBy, config: config)
+        let renamedStored = (config.columns(forKey: key) ?? []).map { column in
+            var column = column
+            if column.value == oldValue { column.value = trimmed }
+            return column
+        }
+        let columns = KanbanBoardModels.reorderedColumns(
+            stored: renamedStored,
+            shownOrder: shownOrder.map { $0 == oldValue ? trimmed : $0 },
+            showInbox: KanbanBoardModels.showsInbox(note.attributes),
+            makeColumnId: KanbanBoardModels.makeColumnId
+        )
+        return await saveBoardConfig(config.settingColumns(columns, forKey: key))
     }
 
     // MARK: - Presentation
 
+    /// Presentation themes the connected server can store and show (v0.106 added four).
+    var availablePresentationThemes: [String] {
+        PresentationModels.availableThemes(
+            includeExtended: TriliumServerCompatibility.supportsExtendedPresentationThemes(appState.serverAppInfo)
+        )
+    }
+
     /// Loads horizontal slides (and nested vertical slides) for a presentation note.
     func loadPresentationSlides(for note: NoteItem) async -> (slides: [PresentationModels.Slide], theme: String) {
-        let theme = PresentationModels.normalizedTheme(
-            note.attributes.first(where: {
-                $0.type == .label && $0.name.caseInsensitiveCompare("presentation:theme") == .orderedSame
-            })?.value
-        )
+        let cachedTheme = Self.presentationThemeLabel(in: note.attributes)
         if client != nil, isOnline {
-            let slides = await fetchPresentationSlidesFromServer(note: note)
-            return (slides, theme)
+            let (slides, serverTheme) = await fetchPresentationSlidesFromServer(note: note)
+            // The note the view was built with can predate a theme change; the server copy is current.
+            return (slides, PresentationModels.normalizedTheme(serverTheme ?? cachedTheme))
         }
-        return (await presentationSlidesFromCache(), theme)
+        return (await presentationSlidesFromCache(), PresentationModels.normalizedTheme(cachedTheme))
+    }
+
+    private static func presentationThemeLabel(in attributes: [AttributeItem]) -> String? {
+        attributes.first(where: {
+            $0.type == .label && $0.name.caseInsensitiveCompare("presentation:theme") == .orderedSame
+        })?.value
     }
 
     func presentationSlidesFromCache() async -> [PresentationModels.Slide] {
@@ -3871,10 +4039,12 @@ final class NoteDetailViewModel {
         return PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent)
     }
 
-    func fetchPresentationSlidesFromServer(note: NoteItem) async -> [PresentationModels.Slide] {
-        guard let client, isOnline else { return await presentationSlidesFromCache() }
+    /// Slides plus the presentation's `#presentation:theme` as the server has it (`nil` when the fetch fell back to cache).
+    func fetchPresentationSlidesFromServer(note: NoteItem) async -> (slides: [PresentationModels.Slide], theme: String?) {
+        guard let client, isOnline else { return (await presentationSlidesFromCache(), nil) }
         do {
             let (parentResp, liveBranches) = try await client.getNoteWithBranches(note.noteId)
+            let serverTheme = Self.presentationThemeLabel(in: NoteItem(from: parentResp).attributes)
             if let profileId = serverProfileId {
                 persistNoteResponse(parentResp, profileId: profileId)
                 for branch in liveBranches {
@@ -3948,10 +4118,10 @@ final class NoteDetailViewModel {
                 }
             }
             try? persistence.commitBatch()
-            return PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent)
+            return (PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent), serverTheme)
         } catch {
             Log.api.error("fetchPresentationSlidesFromServer failed: \(error)")
-            return await presentationSlidesFromCache()
+            return (await presentationSlidesFromCache(), nil)
         }
     }
 

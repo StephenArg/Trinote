@@ -345,8 +345,17 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
         scrollView.canCancelContentTouches = true
         scrollView.clipsToBounds = true
         scrollView.backgroundColor = .clear
+        // The strip belongs to the bar, not the page content. Under the iOS 26+ floating tab bar, UIKit
+        // otherwise treats its lower edge as sitting under the tab bar: it insets it and draws the bottom
+        // scroll-edge effect across it, hiding the lower part of the tabs.
+        scrollView.contentInsetAdjustmentBehavior = .never
+        if #available(iOS 26.0, *) {
+            scrollView.topEdgeEffect.isHidden = true
+            scrollView.bottomEdgeEffect.isHidden = true
+        }
 
         let hosting = UIHostingController(rootView: content())
+        hosting.safeAreaRegions = []
         hosting.view.backgroundColor = .clear
         hosting.view.translatesAutoresizingMaskIntoConstraints = false
         hosting.view.isUserInteractionEnabled = true

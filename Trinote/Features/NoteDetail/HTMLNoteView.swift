@@ -30,6 +30,8 @@ struct HTMLNoteView: View {
     var allowListReorder: Bool = true
     /// When false, skip collapsible-section drag handles (Markdown preview / non-text surfaces).
     var allowCollapsibleReorder: Bool = true
+    /// Colors that replace the reader's own (e.g. a presentation theme's), whatever the appearance setting.
+    var themeOverride: HTMLThemeColors? = nil
 
     @State private var contentHeight: CGFloat = 200
     @State private var fullScreenImage: FullScreenImagePayload?
@@ -42,6 +44,7 @@ struct HTMLNoteView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var themeColors: HTMLThemeColors {
+        if let themeOverride { return themeOverride }
         let theme = ColorTheme(rawValue: colorTheme) ?? .default
         if useCustomTextColor {
             return HTMLThemeColors(
@@ -116,6 +119,8 @@ struct HTMLThemeColors: Equatable {
     let darkText: String
     let lightLink: String
     let darkLink: String
+    /// Headings otherwise take the body text color.
+    var headingColor: String? = nil
 }
 
 private struct HTMLNoteWebView: UIViewRepresentable {
@@ -384,6 +389,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         <style>
         :root { color-scheme: light dark; }
         * { -webkit-text-size-adjust: 100%; }
+        \(TriliumInlineIconStyles.css(forHTML: body))
+        \(theme.headingColor.map { "h1, h2, h3, h4, h5, h6 { color: \($0); }" } ?? "")
         body {
             font: -apple-system-body;
             font-size: 18px;

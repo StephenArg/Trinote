@@ -50,7 +50,9 @@ struct PresentationNoteView: View {
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .automatic))
-                .background(themeBackground)
+                // Dots on a backing, so they stay visible on light themes as well as dark ones.
+                .indexViewStyle(.page(backgroundDisplayMode: .always))
+                .background(themeBackdrop(PresentationModels.style(for: theme)))
             }
         }
         .disabled(isMutating)
@@ -115,8 +117,21 @@ struct PresentationNoteView: View {
         }
     }
 
-    private var themeBackground: Color {
-        PresentationModels.themeColors(for: theme).background
+    /// The theme's background color, with the radial gradient reveal.js paints over it for some themes.
+    @ViewBuilder
+    private func themeBackdrop(_ style: PresentationModels.ThemeStyle) -> some View {
+        if let stops = style.radialGradient {
+            GeometryReader { geo in
+                RadialGradient(
+                    colors: stops.map { Color(hex: $0) },
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: max(geo.size.width, geo.size.height) * 0.75
+                )
+            }
+        } else {
+            Color(hex: style.background)
+        }
     }
 
     @ViewBuilder
@@ -185,18 +200,19 @@ struct PresentationNoteView: View {
 
     @ViewBuilder
     private func slidePage(_ slide: PresentationModels.Slide) -> some View {
-        let colors = PresentationModels.themeColors(for: theme)
+        let style = PresentationModels.style(for: theme)
         Group {
             if slide.verticalSlides.isEmpty {
-                slideContent(slide, colors: colors)
+                slideContent(slide, style: style)
             } else {
                 TabView {
-                    slideContent(slide, colors: colors)
+                    slideContent(slide, style: style)
                     ForEach(slide.verticalSlides) { vertical in
-                        slideContent(vertical, colors: colors)
+                        slideContent(vertical, style: style)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .automatic))
+                .indexViewStyle(.page(backgroundDisplayMode: .always))
             }
         }
     }
@@ -204,20 +220,20 @@ struct PresentationNoteView: View {
     @ViewBuilder
     private func slideContent(
         _ slide: PresentationModels.Slide,
-        colors: (background: Color, foreground: Color)
+        style: PresentationModels.ThemeStyle
     ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text(slide.title)
                     .font(.title2.weight(.semibold))
-                    .foregroundStyle(colors.foreground)
+                    .foregroundStyle(Color(hex: style.heading))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
 
                 if slide.html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(String(localized: "Empty slide — tap Edit to add content.", comment: "Presentation empty slide body"))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(hex: style.text).opacity(0.6))
                         .padding(.horizontal, 16)
                 } else {
                     HTMLNoteView(
@@ -229,38 +245,40 @@ struct PresentationNoteView: View {
                         imageBytes: { routeType, entityId in
                             await viewModel.loadImageBytes(routeType: routeType, entityId: entityId)
                         },
-                        allowCollapsibleReorder: false
+                        allowCollapsibleReorder: false,
+                        themeOverride: HTMLThemeColors(
+                            lightText: style.text,
+                            darkText: style.text,
+                            lightLink: style.link,
+                            darkLink: style.link,
+                            headingColor: style.heading
+                        )
                     )
                     .padding(.horizontal, 8)
                 }
             }
             .padding(.bottom, 24)
         }
-        .background(slideBackground(slide, themeBackground: colors.background))
+        .background(slideBackground(slide, style: style))
         .onTapGesture(count: 2) {
             onOpenSlide(slide.noteId)
         }
     }
 
     @ViewBuilder
-    private func slideBackground(_ slide: PresentationModels.Slide, themeBackground: Color) -> some View {
-        if let bg = slide.background?.trimmingCharacters(in: .whitespacesAndNewlines), !bg.isEmpty {
-            if PresentationModels.isGradientBackground(bg) {
-                themeBackground
-            } else if let color = Color(hexOrCSS: bg) {
-                color
-            } else {
-                themeBackground
-            }
+    private func slideBackground(_ slide: PresentationModels.Slide, style: PresentationModels.ThemeStyle) -> some View {
+        if let bg = slide.background?.trimmingCharacters(in: .whitespacesAndNewlines), !bg.isEmpty,
+           !PresentationModels.isGradientBackground(bg), let color = Color(hexOrCSS: bg) {
+            color
         } else {
-            themeBackground
+            themeBackdrop(style)
         }
     }
 
     private var themePickerSheet: some View {
         NavigationStack {
             List {
-                ForEach(PresentationModels.knownThemes, id: \.self) { name in
+                ForEach(viewModel.availablePresentationThemes, id: \.self) { name in
                     Button {
                         Task {
                             showThemePicker = false
@@ -268,7 +286,7 @@ struct PresentationNoteView: View {
                         }
                     } label: {
                         HStack {
-                            Text(name.capitalized)
+                            Text(PresentationModels.displayName(for: name))
                             Spacer()
                             if PresentationModels.normalizedTheme(theme) == name {
                                 Image(systemName: "checkmark")

@@ -2274,6 +2274,30 @@ final class PersistenceManager {
         return pruned + notesDeleted
     }
 
+    /// Applies a server `note_reordering` change: new positions for the children of `parentNoteId`, then
+    /// re-derives the parent's ordered child id lists. Branches not cached locally are skipped.
+    func applyChildBranchPositions(
+        _ positions: [String: Int],
+        parentNoteId: String,
+        serverProfileId: String
+    ) throws {
+        let pid = parentNoteId
+        let profileId = serverProfileId
+        let childBranches = try context.fetch(
+            FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { $0.parentNoteId == pid && $0.serverProfileId == profileId }
+            )
+        )
+        var changed = false
+        for branch in childBranches {
+            guard let position = positions[branch.branchId], branch.notePosition != position else { continue }
+            branch.notePosition = position
+            changed = true
+        }
+        guard changed else { return }
+        try reconcileCachedNoteBranchesMetadata(forNoteId: parentNoteId, serverProfileId: serverProfileId)
+    }
+
     /// Removes one branch placement, refreshes the parent's tree id lists, and deletes the note row when it has no branches left.
     func deleteCachedBranchAndReconcilePlacement(
         branchId: String,

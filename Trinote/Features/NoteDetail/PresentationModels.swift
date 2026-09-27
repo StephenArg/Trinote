@@ -11,6 +11,63 @@ enum PresentationModels {
         "moon", "dracula", "sky", "blood",
     ]
 
+    /// Themes Trilium v0.106 added; older servers fall back to white for them, so they're offered only on v0.106+.
+    static let extendedThemes: [String] = ["black-contrast", "white-contrast", "league", "night"]
+
+    static func availableThemes(includeExtended: Bool) -> [String] {
+        includeExtended ? knownThemes + extendedThemes : knownThemes
+    }
+
+    static func displayName(for theme: String) -> String {
+        switch theme {
+        case "black-contrast":
+            return String(localized: "Black (High Contrast)", comment: "Presentation theme name")
+        case "white-contrast":
+            return String(localized: "White (High Contrast)", comment: "Presentation theme name")
+        default:
+            return theme.capitalized
+        }
+    }
+
+    /// The colors of a reveal.js theme (its `--r-*` variables in reveal.js 6.0), which Trilium presents slides with.
+    struct ThemeStyle: Equatable, Sendable {
+        /// `--r-background-color`.
+        let background: String
+        /// `--r-main-color`: body text.
+        let text: String
+        /// `--r-heading-color`.
+        let heading: String
+        /// `--r-link-color`.
+        let link: String
+        /// `--r-background` stops, for the themes that paint a radial gradient over the background color.
+        var radialGradient: [String]? = nil
+    }
+
+    static let themeStyles: [String: ThemeStyle] = [
+        "black": ThemeStyle(background: "#191919", text: "#ffffff", heading: "#ffffff", link: "#42affa"),
+        "white": ThemeStyle(background: "#ffffff", text: "#222222", heading: "#222222", link: "#2a76dd"),
+        "beige": ThemeStyle(background: "#f7f3de", text: "#333333", heading: "#333333", link: "#8b743d",
+                            radialGradient: ["#ffffff", "#f7f2d3"]),
+        "serif": ThemeStyle(background: "#f0f1eb", text: "#000000", heading: "#383d3d", link: "#51483d"),
+        "simple": ThemeStyle(background: "#ffffff", text: "#000000", heading: "#000000", link: "#00008b"),
+        "solarized": ThemeStyle(background: "#fdf6e3", text: "#657b83", heading: "#586e75", link: "#268bd2"),
+        "moon": ThemeStyle(background: "#002b36", text: "#93a1a1", heading: "#eee8d5", link: "#268bd2"),
+        "dracula": ThemeStyle(background: "#191919", text: "#f8f8f2", heading: "#bd93f9", link: "#ff79c6"),
+        "sky": ThemeStyle(background: "#f7fbfc", text: "#333333", heading: "#333333", link: "#2a76dd",
+                          radialGradient: ["#f7fbfc", "#add9e4"]),
+        "blood": ThemeStyle(background: "#222222", text: "#eeeeee", heading: "#eeeeee", link: "#aa2233"),
+        "black-contrast": ThemeStyle(background: "#000000", text: "#ffffff", heading: "#ffffff", link: "#42affa"),
+        "white-contrast": ThemeStyle(background: "#ffffff", text: "#000000", heading: "#000000", link: "#2a76dd"),
+        "league": ThemeStyle(background: "#1c1e20", text: "#eeeeee", heading: "#eeeeee", link: "#13daec",
+                             radialGradient: ["#555a5f", "#1c1e20"]),
+        "night": ThemeStyle(background: "#111111", text: "#ffffff", heading: "#ffffff", link: "#e7ad52"),
+    ]
+
+    /// An unknown theme falls back to white, as Trilium's own presentation view does.
+    static func style(for theme: String?) -> ThemeStyle {
+        themeStyles[normalizedTheme(theme)] ?? themeStyles[defaultTheme]!
+    }
+
     struct Slide: Identifiable, Equatable, Sendable {
         let noteId: String
         let branchId: String
@@ -58,23 +115,5 @@ enum PresentationModels {
     /// Whether `#slide:background` looks like a CSS gradient (Trilium allows hex or gradient).
     static func isGradientBackground(_ value: String) -> Bool {
         value.lowercased().contains("gradient(")
-    }
-
-    /// Approximate page chrome colors for native presentation themes (not full reveal.js CSS).
-    static func themeColors(for theme: String) -> (background: Color, foreground: Color) {
-        switch normalizedTheme(theme) {
-        case "black", "moon", "dracula", "blood":
-            return (Color(red: 0.11, green: 0.11, blue: 0.12), Color.white.opacity(0.92))
-        case "beige":
-            return (Color(red: 0.96, green: 0.94, blue: 0.86), Color(red: 0.2, green: 0.18, blue: 0.14))
-        case "solarized":
-            return (Color(red: 0.99, green: 0.96, blue: 0.89), Color(red: 0.40, green: 0.48, blue: 0.51))
-        case "sky":
-            return (Color(red: 0.95, green: 0.97, blue: 1.0), Color(red: 0.13, green: 0.22, blue: 0.35))
-        case "serif", "simple", "white":
-            return (Color.white, Color(red: 0.13, green: 0.13, blue: 0.13))
-        default:
-            return (Color(.systemBackground), Color(.label))
-        }
     }
 }

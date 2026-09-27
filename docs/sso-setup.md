@@ -49,6 +49,8 @@ Paste the full script into the JS backend note and save.
 
 **After upgrading Trilium to v0.105 or newer**, paste the script again even if SSO worked before. v0.105 tightened SSO session checks; the current handler validates via `/api/app-info` (not `/bootstrap`) and refreshes cookies before opening Trinote.
 
+Upgrading from v0.105 to **v0.106** needs no change: the handler uses only `api.req` / `api.res`, so the removal of `api.cheerio` and the server's move to ESM (`main.mjs`) don't affect it.
+
 ### 4. Confirm it works
 
 In Safari on your phone (or any browser), open:

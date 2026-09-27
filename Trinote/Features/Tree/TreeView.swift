@@ -239,7 +239,14 @@ struct TreeView: View {
                     let noteId = note.noteId
                     noteToDelete = nil
                     Task {
-                        _ = await treeVm.deleteNoteAndSubnotes(noteId: noteId, eraseNotes: erase)
+                        // Surfaced as an alert: the tree's inline error banner sits at the top of the list,
+                        // out of sight when the deleted row was further down.
+                        if !(await treeVm.deleteNoteAndSubnotes(noteId: noteId, eraseNotes: erase)) {
+                            bulkDeleteError = treeVm.error ?? String(
+                                localized: "The note could not be deleted.",
+                                comment: "Tree single note delete failure"
+                            )
+                        }
                     }
                 },
                 onCancel: {

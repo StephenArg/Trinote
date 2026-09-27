@@ -6,6 +6,8 @@ struct KanbanBoardView: View {
     let note: NoteItem
     var onOpenCard: (String) -> Void
 
+    @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
+
     @State private var columns: [KanbanBoardModels.Column] = []
     @State private var groupBy: String = KanbanBoardModels.defaultGroupByAttribute
     @State private var isLoading = true
@@ -19,8 +21,10 @@ struct KanbanBoardView: View {
     @State private var renameColumnText = ""
     @State private var columnToDelete: String?
     @State private var showDeleteColumnConfirm = false
-    @State private var showReorderColumns = false
-    @State private var reorderDraft: [String] = []
+    @State private var columnReorder: KanbanColumnReorderRequest?
+
+    /// A relation grouping's columns are target notes, so they can't be named or renamed as text here.
+    private var groupsByRelation: Bool { KanbanBoardModels.GroupBy(groupBy).isRelation }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,10 +42,12 @@ struct KanbanBoardView: View {
                 } description: {
                     Text(String(localized: "Add a column to get started.", comment: "Kanban empty description"))
                 } actions: {
-                    Button(String(localized: "Add Column", comment: "Kanban add column")) {
-                        showAddColumn = true
+                    if !groupsByRelation {
+                        Button(String(localized: "Add Column", comment: "Kanban add column")) {
+                            showAddColumn = true
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             } else {
                 ScrollView(.horizontal, showsIndicators: true) {
@@ -123,8 +129,15 @@ struct KanbanBoardView: View {
         } message: {
             Text(String(localized: "Only empty columns can be deleted.", comment: "Kanban delete column message"))
         }
-        .sheet(isPresented: $showReorderColumns) {
-            reorderColumnsSheet
+        // The column snapshot travels as the sheet's item: filling a separate draft right before an
+        // `isPresented` sheet could present it built from the previous, empty draft.
+        .sheet(item: $columnReorder) { request in
+            KanbanColumnReorderSheet(request: request) { values in
+                columnReorder = nil
+                Task { await saveReorderedColumns(values) }
+            } onCancel: {
+                columnReorder = nil
+            }
         }
     }
 
@@ -137,8 +150,10 @@ struct KanbanBoardView: View {
             Spacer()
             if columns.count > 1 {
                 Button {
-                    reorderDraft = columns.map(\.value)
-                    showReorderColumns = true
+                    columnReorder = KanbanColumnReorderRequest(
+                        values: columns.map(\.value),
+                        titles: Dictionary(columns.map { ($0.value, $0.displayTitle) }, uniquingKeysWith: { first, _ in first })
+                    )
                 } label: {
                     Label(
                         String(localized: "Reorder Columns", comment: "Kanban reorder columns"),
@@ -148,12 +163,14 @@ struct KanbanBoardView: View {
                 .labelStyle(.iconOnly)
                 .accessibilityLabel(String(localized: "Reorder Columns", comment: "Kanban reorder columns"))
             }
-            Button {
-                showAddColumn = true
-            } label: {
-                Label(String(localized: "Column", comment: "Kanban add column short"), systemImage: "plus.rectangle.on.rectangle")
+            if !groupsByRelation {
+                Button {
+                    showAddColumn = true
+                } label: {
+                    Label(String(localized: "Column", comment: "Kanban add column short"), systemImage: "plus.rectangle.on.rectangle")
+                }
+                .labelStyle(.iconOnly)
             }
-            .labelStyle(.iconOnly)
             Button {
                 Task { await reload(showSpinner: false) }
             } label: {
@@ -165,41 +182,12 @@ struct KanbanBoardView: View {
         .padding(.vertical, 8)
     }
 
-    private var reorderColumnsSheet: some View {
-        NavigationStack {
-            List {
-                ForEach(reorderDraft, id: \.self) { name in
-                    Text(name)
-                }
-                .onMove { source, destination in
-                    reorderDraft.move(fromOffsets: source, toOffset: destination)
-                }
-            }
-            .environment(\.editMode, .constant(.active))
-            .navigationTitle(String(localized: "Reorder Columns", comment: "Kanban reorder columns"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(String(localized: "Cancel", comment: "Cancel")) {
-                        showReorderColumns = false
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(String(localized: "Save", comment: "Save")) {
-                        Task { await saveReorderedColumns() }
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
     @ViewBuilder
     private func kanbanColumn(_ column: KanbanBoardModels.Column) -> some View {
         let columnIndex = columns.firstIndex(where: { $0.value == column.value })
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(column.value)
+                Text(column.displayTitle)
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
@@ -233,20 +221,24 @@ struct KanbanBoardView: View {
                             }
                         }
                     }
-                    Button(String(localized: "Rename Column", comment: "Kanban rename column")) {
-                        renameColumnText = column.value
-                        renameColumnTarget = column.value
+                    if !column.isInbox && !groupsByRelation {
+                        Button(String(localized: "Rename Column", comment: "Kanban rename column")) {
+                            renameColumnText = column.value
+                            renameColumnTarget = column.value
+                        }
                     }
-                    Button(String(localized: "Delete Column", comment: "Kanban delete column"), role: .destructive) {
-                        columnToDelete = column.value
-                        if column.cards.isEmpty {
-                            showDeleteColumnConfirm = true
-                        } else {
-                            viewModel.saveError = String(
-                                localized: "Move or delete cards in this column before deleting it.",
-                                comment: "Kanban delete non-empty column"
-                            )
-                            viewModel.showSaveError = true
+                    if !column.isInbox {
+                        Button(String(localized: "Delete Column", comment: "Kanban delete column"), role: .destructive) {
+                            columnToDelete = column.value
+                            if column.cards.isEmpty {
+                                showDeleteColumnConfirm = true
+                            } else {
+                                viewModel.saveError = String(
+                                    localized: "Move or delete cards in this column before deleting it.",
+                                    comment: "Kanban delete non-empty column"
+                                )
+                                viewModel.showSaveError = true
+                            }
                         }
                     }
                 } label: {
@@ -286,10 +278,18 @@ struct KanbanBoardView: View {
         Button {
             onOpenCard(card.noteId)
         } label: {
-            HStack(alignment: .top) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                NoteIconView(
+                    iconClass: card.iconClass,
+                    fallbackNoteType: card.fallbackNoteType,
+                    size: .compact,
+                    foregroundStyle: cardColor(card)
+                )
+                .frame(width: 20)
+                .accessibilityHidden(true)
                 Text(card.title)
                     .font(.body)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(cardColor(card))
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.right")
@@ -306,7 +306,7 @@ struct KanbanBoardView: View {
                     Task { await moveCard(card, to: target.value) }
                 } label: {
                     Label(
-                        String(format: String(localized: "Move to %@", comment: "Kanban move card to column"), target.value),
+                        String(format: String(localized: "Move to %@", comment: "Kanban move card to column"), target.displayTitle),
                         systemImage: "arrow.right"
                     )
                 }
@@ -328,6 +328,12 @@ struct KanbanBoardView: View {
                 }
             }
         }
+    }
+
+    /// The card's `#color`, as the note tree tints its rows when Trilium note colors are enabled.
+    private func cardColor(_ card: KanbanBoardModels.Card) -> Color {
+        guard useTriliumNoteColors else { return .primary }
+        return TriliumNoteColorMapper.swiftUIColor(for: card.colorLabel) ?? .primary
     }
 
     /// Reloads board data. Spinner only on the first empty load — never tears down an existing board.
@@ -363,9 +369,7 @@ struct KanbanBoardView: View {
         await persistColumnOrder(values)
     }
 
-    private func saveReorderedColumns() async {
-        let values = reorderDraft
-        showReorderColumns = false
+    private func saveReorderedColumns(_ values: [String]) async {
         guard values != columns.map(\.value) else { return }
         await persistColumnOrder(values)
     }
@@ -373,14 +377,13 @@ struct KanbanBoardView: View {
     /// Persists column order via `board.json`. Updates UI immediately; keeps the board on screen.
     private func persistColumnOrder(_ values: [String]) async {
         let previous = columns
-        let cardsByColumn = Dictionary(uniqueKeysWithValues: columns.map { ($0.value, $0.cards) })
+        let columnsByValue = Dictionary(columns.map { ($0.value, $0) }, uniquingKeysWith: { first, _ in first })
         withAnimation(.easeInOut(duration: 0.2)) {
-            columns = values.map { KanbanBoardModels.Column(value: $0, cards: cardsByColumn[$0] ?? []) }
+            columns = values.map { columnsByValue[$0] ?? KanbanBoardModels.Column(value: $0, cards: []) }
         }
         isMutating = true
         defer { isMutating = false }
-        let config = KanbanBoardModels.BoardConfig(columns: values.map { KanbanBoardModels.BoardColumn(value: $0) })
-        if !(await viewModel.saveBoardConfig(config)) {
+        if !(await viewModel.saveKanbanColumns(shownOrder: values, for: note, groupBy: groupBy)) {
             withAnimation(.easeInOut(duration: 0.2)) {
                 columns = previous
             }
@@ -417,14 +420,10 @@ struct KanbanBoardView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             columns = columns.map { col in
                 if col.value != old { return col }
-                let renamedCards = col.cards.map {
-                    KanbanBoardModels.Card(
-                        noteId: $0.noteId,
-                        branchId: $0.branchId,
-                        title: $0.title,
-                        columnValue: trimmed,
-                        notePosition: $0.notePosition
-                    )
+                let renamedCards = col.cards.map { card in
+                    var renamed = card
+                    renamed.columnValue = trimmed
+                    return renamed
                 }
                 return KanbanBoardModels.Column(value: trimmed, cards: renamedCards)
             }
@@ -432,13 +431,13 @@ struct KanbanBoardView: View {
         isMutating = true
         defer { isMutating = false }
         let allCards = previous.flatMap(\.cards)
-        let configColumns = previous.map(\.value)
         if await viewModel.renameKanbanColumn(
             from: old,
             to: trimmed,
+            for: note,
             groupBy: groupBy,
             cards: allCards,
-            configColumns: configColumns
+            shownOrder: previous.map(\.value)
         ) {
             // Keep optimistic UI; only pull if labels/config diverge.
             await reload(showSpinner: false)
@@ -476,13 +475,8 @@ struct KanbanBoardView: View {
         for i in next.indices {
             next[i].cards.removeAll { $0.noteId == card.noteId }
         }
-        let moved = KanbanBoardModels.Card(
-            noteId: card.noteId,
-            branchId: card.branchId,
-            title: card.title,
-            columnValue: column,
-            notePosition: card.notePosition
-        )
+        var moved = card
+        moved.columnValue = column
         if let idx = next.firstIndex(where: { $0.value == column }) {
             next[idx].cards.append(moved)
         }
@@ -520,5 +514,58 @@ struct KanbanBoardView: View {
                 columns = previous
             }
         }
+    }
+}
+
+/// The board's columns as they stood when Reorder Columns was opened.
+private struct KanbanColumnReorderRequest: Identifiable {
+    let id = UUID()
+    let values: [String]
+    /// Header text per column value (the inbox's name, a relation target's title).
+    let titles: [String: String]
+}
+
+/// Drag-to-reorder list for a board's columns; owns its draft so it always opens with the columns it was given.
+private struct KanbanColumnReorderSheet: View {
+    let request: KanbanColumnReorderRequest
+    let onSave: ([String]) -> Void
+    let onCancel: () -> Void
+
+    @State private var draft: [String]
+
+    init(request: KanbanColumnReorderRequest, onSave: @escaping ([String]) -> Void, onCancel: @escaping () -> Void) {
+        self.request = request
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _draft = State(initialValue: request.values)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(draft, id: \.self) { value in
+                    Text(request.titles[value] ?? value)
+                }
+                .onMove { source, destination in
+                    draft.move(fromOffsets: source, toOffset: destination)
+                }
+            }
+            .environment(\.editMode, .constant(.active))
+            .navigationTitle(String(localized: "Reorder Columns", comment: "Kanban reorder columns"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(String(localized: "Cancel", comment: "Cancel")) {
+                        onCancel()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(String(localized: "Save", comment: "Save")) {
+                        onSave(draft)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

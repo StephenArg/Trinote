@@ -1270,6 +1270,53 @@ const TriliumAnchor = Image.extend({
   },
 });
 
+/* Trilium v0.106+ inline icons (CKEditor `InlineIcon` plugin): an empty <span class="tn-icon bx bx-star"></span>,
+   optionally carrying a transform class (bx-rotate-90, bx-flip-horizontal, …) and wrapped in a colour or size span.
+   TipTap drops empty spans that have no style, so we register an inline atom that round-trips the class list; the
+   glyph itself comes from the CSS the native side injects (TriliumInlineIconStyles). */
+const TriliumInlineIcon = Image.extend({
+  name: 'triliumInlineIcon',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  draggable: false,
+  selectable: true,
+  addAttributes() {
+    return {
+      iconClass: { default: '' },
+    };
+  },
+  parseHTML() {
+    return [{
+      tag: 'span.tn-icon',
+      // Ahead of TextStyle's span rule, which would otherwise claim an icon span that carries a style.
+      priority: 60,
+      getAttrs: (el) => {
+        const iconClass = (el.getAttribute('class') || '')
+          .split(/\s+/)
+          .filter(c => c && c !== 'tn-icon')
+          .join(' ');
+        return iconClass ? { iconClass } : false;
+      },
+    }];
+  },
+  renderHTML({ node }) {
+    return ['span', { class: ('tn-icon ' + (node.attrs.iconClass || '')).trim() }];
+  },
+  addNodeView() {
+    return ({ node }) => {
+      const dom = document.createElement('span');
+      dom.className = ('tn-icon ' + (node.attrs.iconClass || '')).trim();
+      dom.setAttribute('contenteditable', 'false');
+      dom.setAttribute('data-trinote-inline-icon', '1');
+      return { dom };
+    };
+  },
+  // Image's `setImage` command and `![alt](src)` input rule would otherwise insert icons.
+  addCommands() { return {}; },
+  addInputRules() { return []; },
+});
+
 /* Trilium / ckeditor5-math: inline TeX stored as <script type="math/tex"> on the server; TipTap cannot keep <script> in the doc. */
 const TriliumMath = Image.extend({
   name: 'triliumMath',
@@ -1668,6 +1715,7 @@ const editorExtensions = [
   CustomLink.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
   IncludeNote,
   TriliumAnchor,
+  TriliumInlineIcon,
   TriliumMath,
   TaskList,
   TaskItem.configure({ nested: true }),
@@ -4786,6 +4834,16 @@ window.editorBridge = {
   setFloatingChipScrollClearance(px) {
     const n = Math.max(0, Number(px) || 0);
     document.documentElement.style.setProperty('--editor-floating-chip-clearance', n + 'px');
+  },
+  // Glyph CSS for the inline icons in the content being loaded (see TriliumInlineIcon); replaces any earlier set.
+  setInlineIconStyles(css) {
+    let style = document.getElementById('trinote-inline-icon-styles');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'trinote-inline-icon-styles';
+      document.head.appendChild(style);
+    }
+    style.textContent = css || '';
   },
   setContent(html) {
     // Extract captions before ProseMirror parsing (PM would discard them).
