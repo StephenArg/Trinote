@@ -71,7 +71,10 @@ struct FindOnPageBar: View {
             control.applyQueryFromFieldChange()
         }
         .onAppear {
-            findFieldFocused = true
+            // Opened from a search match: the keyboard would cover the match it jumps to.
+            if control.consumeFocusOnPresent() {
+                findFieldFocused = true
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             guard

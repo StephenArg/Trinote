@@ -1245,7 +1245,9 @@ struct NoteDetailView: View {
     private func applyReadScrollStateFromStoreForOpenTabId(_ id: String) {
         if lastAppliedReadScrollTabId == id { return }
 
-        if let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
+        // Opened from a search match: the tab's saved position would scroll away from it.
+        let skipsRestore = opensAtFindMatch && activeNoteId == noteId
+        if !skipsRestore, let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
             readOnlyScrollFraction = f
             readOnlyScrollFractionPendingRestore = f
             isReadOnlyScrollRevealPending = f > Self.readOnlyScrollRevealMaskThreshold
@@ -1403,7 +1405,18 @@ struct NoteDetailView: View {
               vm.contentString != nil
         else { return }
         findDeepLinkConsumed = true
+        // The match decides where the note scrolls, not the open tab's saved position.
+        if readOnlyScrollFractionPendingRestore != nil || isReadOnlyScrollRevealPending {
+            readOnlyScrollFractionPendingRestore = nil
+            isReadOnlyScrollRevealPending = false
+            finishFloatingEditScrollSettling(vm: vm, note: note)
+        }
         findControl.prepareFindDeepLink(findQuery: q, matchIndex1Based: idx)
+    }
+
+    /// Opened from a search match (see `consumeFindDeepLinkIfNeeded`).
+    private var opensAtFindMatch: Bool {
+        pendingFindQuery != nil && pendingFindMatchIndex != nil
     }
 
     @ViewBuilder

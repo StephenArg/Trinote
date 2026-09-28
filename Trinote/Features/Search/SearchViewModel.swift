@@ -4,196 +4,20 @@ import os
 import SwiftData
 import UIKit
 
-// MARK: - In-note match previews (file-level: not on any @Observable tracked property)
-
-/// One occurrence of the search query in a note, with a 1-based index aligned with in-page find (order of matches in plain text).
-struct SearchInNoteMatch: Identifiable, Hashable, Sendable {
-    var id: Int { matchIndex1Based }
-    let matchIndex1Based: Int
-    /// Single-line preview; query substring can be highlighted in UI.
-    let previewLine: String
-}
-
-private enum SearchNoteMatchExtractor {
-    private static let maxPreviewLength = 200
-
-    static func matches(noteType: NoteType, rawContent: String, searchText: String) -> [SearchInNoteMatch] {
-        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-
-        let plain: String
-        switch noteType {
-        case .text:
-            plain = plainTextFromHTML(rawContent)
-        case .code, .markdown:
-            plain = rawContent
-        default:
-            return []
-        }
-
-        guard !plain.isEmpty else {
-            Log.search.debug("matches: plain text is empty for \(noteType.rawValue) note")
-            return []
-        }
-
-        Log.search.debug("matches: noteType=\(noteType.rawValue), query len=\(trimmed.count), plainLen=\(plain.count)")
-
-        let ns = plain as NSString
-        let len = ns.length
-        var results: [SearchInNoteMatch] = []
-        var searchLoc = 0
-        var index = 1
-
-        while searchLoc < len {
-            let r = ns.range(of: trimmed, options: [.caseInsensitive], range: NSRange(location: searchLoc, length: len - searchLoc))
-            if r.location == NSNotFound { break }
-            let preview = previewSnippet(around: r, query: trimmed, inPlainText: ns, length: len)
-            results.append(SearchInNoteMatch(matchIndex1Based: index, previewLine: preview))
-            index += 1
-            searchLoc = r.location + max(r.length, 1)
-        }
-
-        Log.search.debug("matches: found \(results.count) matches")
-        return results
-    }
-
-    // MARK: - HTML → plain text (thread-safe, no WebKit/NSAttributedString)
-
-    private static let htmlEntityMap: [String: String] = [
-        "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'",
-        "&nbsp;": " ", "&ndash;": "–", "&mdash;": "—", "&hellip;": "…",
-        "&lsquo;": "\u{2018}", "&rsquo;": "\u{2019}",
-        "&ldquo;": "\u{201C}", "&rdquo;": "\u{201D}",
-    ]
-
-    private static func plainTextFromHTML(_ html: String) -> String {
-        var text = html
-
-        // Remove script/style blocks entirely (content + tags)
-        text = text.replacingOccurrences(of: "<style[^>]*>[\\s\\S]*?</style>", with: "", options: [.regularExpression, .caseInsensitive])
-        text = text.replacingOccurrences(of: "<script[^>]*>[\\s\\S]*?</script>", with: "", options: [.regularExpression, .caseInsensitive])
-        // Remove HTML comments
-        text = text.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: "", options: .regularExpression)
-
-        // Insert newlines for block-level boundaries
-        let blockTags = "p|div|br|h[1-6]|li|tr|blockquote|pre|hr|section|article|header|footer|figcaption|ul|ol|table|thead|tbody|tfoot|dd|dt"
-        text = text.replacingOccurrences(of: "<\\s*(?:\(blockTags))\\b[^>]*>", with: "\n", options: [.regularExpression, .caseInsensitive])
-        text = text.replacingOccurrences(of: "</\\s*(?:\(blockTags))\\s*>", with: "\n", options: [.regularExpression, .caseInsensitive])
-
-        // Checkbox inputs
-        text = text.replacingOccurrences(
-            of: "<input[^>]*checked[^>]*>",
-            with: "☑ ",
-            options: [.regularExpression, .caseInsensitive]
-        )
-        text = text.replacingOccurrences(
-            of: "<input[^>]*type\\s*=\\s*[\"']checkbox[\"'][^>]*>",
-            with: "☐ ",
-            options: [.regularExpression, .caseInsensitive]
-        )
-
-        // Strip all remaining tags
-        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-
-        // Decode HTML entities
-        for (entity, replacement) in htmlEntityMap {
-            text = text.replacingOccurrences(of: entity, with: replacement)
-        }
-        text = decodeNumericEntities(text)
-
-        // Normalize whitespace within lines (keep newlines)
-        text = text.replacingOccurrences(of: "[^\\S\\n]+", with: " ", options: .regularExpression)
-        // Collapse excessive blank lines
-        text = text.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
-        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return text
-    }
-
-    private static func decodeNumericEntities(_ text: String) -> String {
-        var result = text
-        // &#xHEX; (must come before decimal to avoid partial matching)
-        while let range = result.range(of: "&#x[0-9a-fA-F]+;", options: .regularExpression) {
-            let entity = String(result[range])
-            let hex = entity.dropFirst(3).dropLast()
-            if let code = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(code) {
-                result.replaceSubrange(range, with: String(scalar))
-            } else {
-                result.replaceSubrange(range, with: "")
-            }
-        }
-        // &#decimal;
-        while let range = result.range(of: "&#\\d+;", options: .regularExpression) {
-            let entity = String(result[range])
-            let digits = entity.dropFirst(2).dropLast()
-            if let code = UInt32(digits), let scalar = Unicode.Scalar(code) {
-                result.replaceSubrange(range, with: String(scalar))
-            } else {
-                result.replaceSubrange(range, with: "")
-            }
-        }
-        return result
-    }
-
-    // MARK: - Snippet extraction
-
-    private static func previewSnippet(around matchRange: NSRange, query: String, inPlainText ns: NSString, length len: Int) -> String {
-        let matchMid = matchRange.location + matchRange.length / 2
-        let half = maxPreviewLength / 2
-
-        var windowStart = max(0, matchMid - half)
-        var windowEnd = min(len, windowStart + maxPreviewLength)
-        if windowEnd - windowStart < maxPreviewLength {
-            windowStart = max(0, windowEnd - maxPreviewLength)
-        }
-
-        // Ensure the entire match fits inside the window
-        if matchRange.location < windowStart {
-            windowStart = matchRange.location
-            windowEnd = min(len, windowStart + maxPreviewLength)
-        }
-        let matchEnd = matchRange.location + matchRange.length
-        if matchEnd > windowEnd {
-            windowEnd = min(len, matchEnd)
-            windowStart = max(0, windowEnd - maxPreviewLength)
-        }
-
-        var snippet = ns.substring(with: NSRange(location: windowStart, length: windowEnd - windowStart))
-        snippet = cleanSnippet(snippet)
-
-        // Safety check: if the query got lost during cleaning, return the raw match with context
-        if (snippet as NSString).range(of: query, options: .caseInsensitive).location == NSNotFound {
-            let raw = ns.substring(with: matchRange)
-            snippet = cleanSnippet(raw)
-        }
-
-        if snippet.isEmpty {
-            return String(localized: "(empty line)", comment: "Search match preview when line has no visible text")
-        }
-
-        if windowStart > 0 { snippet = "…" + snippet }
-        if windowEnd < len { snippet = snippet + "…" }
-        return snippet
-    }
-
-    private static func cleanSnippet(_ raw: String) -> String {
-        var s = raw
-        s = s.replacingOccurrences(of: "\t", with: " ")
-        s = s.replacingOccurrences(of: "\r", with: "")
-        s = s.replacingOccurrences(of: "\n", with: " ")
-        s = s.replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression)
-        s = s.trimmingCharacters(in: .whitespaces)
-        return s
-    }
-}
-
 // MARK: - Server snippets (quick search)
 
-/// Trilium's own snippet for a search result: the matched text around the query and the note's breadcrumb.
+/// Trilium's own snippet for a search result: the matched text around the query and the note's breadcrumb. Offline
+/// results carry the same kind of snippet, cut from the cached body.
 struct SearchResultSnippet: Equatable, Sendable {
     let pathTitle: String?
     let content: AttributedString?
     let attribute: AttributedString?
+
+    init(pathTitle: String? = nil, content: AttributedString?, attribute: AttributedString? = nil) {
+        self.pathTitle = pathTitle
+        self.content = content
+        self.attribute = attribute
+    }
 
     init?(_ result: QuickSearchResult) {
         let path = result.notePathTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -271,6 +95,18 @@ enum SearchSnippetFormatter {
     }
 }
 
+/// Why the list shows results from this device instead of the server's.
+enum LocalResultsReason: Equatable, Sendable {
+    /// The device has no network connection.
+    case noConnection
+    /// The server didn't answer in time or couldn't be reached (also while `AppState.activeServerSearchBackoff` lasts).
+    case serverUnreachable
+    /// The server answered with an error; the message says which.
+    case serverFailed(String)
+    /// Not connected to a server.
+    case noClient
+}
+
 @Observable
 @MainActor
 final class SearchViewModel {
@@ -280,7 +116,13 @@ final class SearchViewModel {
     var error: String?
     var recentSearches: [RecentSearch] = []
     var hasSearched = false
-    var isOfflineResults = false
+    /// Set when `results` came from this device instead of the server.
+    var localResultsReason: LocalResultsReason?
+    var isOfflineResults: Bool { localResultsReason != nil }
+    /// Local results only: the query used operators only the server understands, which were left out.
+    var localQueryIsLimited = false
+    /// Local results only: how far the offline search index has got while it's still being built.
+    var localIndexProgress: OfflineSearchIndex.Progress?
     /// Trilium's snippet and breadcrumb per result note, when the server provides them.
     var snippetsByNoteId: [String: SearchResultSnippet] = [:]
     /// What's wrong with the query, as Trilium 0.106+ reads it (`POST /api/search/lint`); nil when nothing is.
@@ -306,12 +148,25 @@ final class SearchViewModel {
     @ObservationIgnored private var searchGeneration = 0
     /// The note picker shows no snippets, so it skips the second search (`quick-search`) that fetches them.
     private let fetchesSnippets: Bool
+    /// How long a server search may take before the device's own results are shown instead (issue #29).
+    private let serverTimeout: TimeInterval
     private let appState: AppState
+    private let localIndex: OfflineSearchIndex
     private let persistence = PersistenceManager.shared
 
-    init(appState: AppState, fetchesSnippets: Bool = true) {
+    static let serverSearchTimeout: TimeInterval = 15
+    static let resultLimit = 50
+
+    init(
+        appState: AppState,
+        fetchesSnippets: Bool = true,
+        serverTimeout: TimeInterval = SearchViewModel.serverSearchTimeout,
+        localIndex: OfflineSearchIndex = .shared
+    ) {
         self.appState = appState
         self.fetchesSnippets = fetchesSnippets
+        self.serverTimeout = serverTimeout
+        self.localIndex = localIndex
     }
 
     var client: (any TriliumClientProtocol)? { appState.client }
@@ -328,7 +183,7 @@ final class SearchViewModel {
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
             results = []
             hasSearched = false
-            isOfflineResults = false
+            clearLocalResultsState()
             queryProblem = nil
             return
         }
@@ -341,14 +196,14 @@ final class SearchViewModel {
     }
 
     /// Searches right away (Return, a recent search, Retry), replacing any search still pending or running, so a
-    /// query never runs twice.
-    func searchNow() {
+    /// query never runs twice. `forceServer` (Retry) asks the server even while a recent failure has it skipped.
+    func searchNow(forceServer: Bool = false) {
         searchTask?.cancel()
         lintTask?.cancel()
-        searchTask = Task { await performSearch() }
+        searchTask = Task { await performSearch(forceServer: forceServer) }
     }
 
-    func performSearch() async {
+    func performSearch(forceServer: Bool = false) async {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
 
@@ -357,74 +212,102 @@ final class SearchViewModel {
         isSearching = true
         error = nil
         hasSearched = true
-        isOfflineResults = false
+        clearLocalResultsState()
         snippetsByNoteId = [:]
         clearMatchExpansionState()
         defer {
             if generation == searchGeneration { isSearching = false }
         }
 
-        if let client {
-            // Checked beside the search, which still runs: the message only explains a query that finds nothing.
-            let checksQuery = TriliumServerCompatibility.supportsSearchLint(appState.serverAppInfo) && appState.isOnline
-            lintTask?.cancel()
-            lintTask = Task { [weak self] in
-                var problem: String?
-                if checksQuery {
-                    do {
-                        problem = try await client.lintSearchQuery(trimmed)
-                        Log.api.info("Search lint: \(problem ?? "no problem")")
-                    } catch {
-                        Log.api.warning("Search lint failed: \(error)")
-                    }
-                } else {
-                    Log.api.info("Search lint skipped: server \(self?.appState.serverAppInfo?.appVersion ?? "unknown"), online \(self?.appState.isOnline == true)")
-                }
-                guard !Task.isCancelled, let self, self.query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
-                self.queryProblem = problem
-            }
-            do {
-                let response = try await client.searchNotes(query: trimmed, fastSearch: false, includeArchived: false, ancestorNoteId: nil, orderBy: nil, orderDirection: nil, limit: 50)
-                guard !Task.isCancelled, generation == searchGeneration else { return }
-                results = response.results.map(NoteItem.init)
-                // The list is ready: stop the spinner now, snippets fill in when they arrive.
-                isSearching = false
-
-                if let profileId = serverProfileId {
-                    try? persistence.recordRecentSearch(query: trimmed, serverProfileId: profileId)
-                    loadRecentSearches()
-                }
-
-                // Snippets come from a second full search (so the list and its ranking stay the first's). Trilium
-                // runs searches one at a time, so asking only now gets the list back first.
-                guard fetchesSnippets else { return }
-                let snippets = await Self.fetchSnippets(client: client, query: trimmed)
-                guard !Task.isCancelled, generation == searchGeneration,
-                      query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
-                snippetsByNoteId = snippets
-            } catch {
-                guard !Task.isCancelled, generation == searchGeneration else { return }
-                let apiError = APIError.from(error)
-                if case .cancelled = apiError { return }
-
-                self.error = apiError.localizedDescription
-                Log.api.error("Search failed: \(error)")
-
-                // Fall back to local title search
-                performOfflineSearch(trimmed)
-            }
-        } else {
+        guard let client else {
             queryProblem = nil
-            performOfflineSearch(trimmed)
+            await performLocalSearch(trimmed, reason: .noClient, generation: generation)
+            return
+        }
+        // No network: the request would wait for one (up to two minutes) before failing.
+        guard appState.isOnline else {
+            lintTask?.cancel()
+            queryProblem = nil
+            await performLocalSearch(trimmed, reason: .noConnection, generation: generation)
+            return
+        }
+        if forceServer {
+            appState.clearServerSearchBackoff()
+        } else if appState.activeServerSearchBackoff != nil {
+            lintTask?.cancel()
+            queryProblem = nil
+            await performLocalSearch(trimmed, reason: .serverUnreachable, generation: generation)
+            return
+        }
+
+        // Checked beside the search, which still runs: the message only explains a query that finds nothing.
+        let checksQuery = TriliumServerCompatibility.supportsSearchLint(appState.serverAppInfo)
+        lintTask?.cancel()
+        lintTask = Task { [weak self] in
+            var problem: String?
+            if checksQuery {
+                do {
+                    problem = try await client.lintSearchQuery(trimmed)
+                    Log.api.info("Search lint: \(problem ?? "no problem")")
+                } catch {
+                    Log.api.warning("Search lint failed: \(error)")
+                }
+            } else {
+                Log.api.info("Search lint skipped: server \(self?.appState.serverAppInfo?.appVersion ?? "unknown")")
+            }
+            guard !Task.isCancelled, let self, self.query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
+            self.queryProblem = problem
+        }
+        let timeout = serverTimeout
+        do {
+            let response = try await withTimeout(seconds: timeout) {
+                try await client.searchNotes(query: trimmed, fastSearch: false, includeArchived: false, ancestorNoteId: nil, orderBy: nil, orderDirection: nil, limit: Self.resultLimit)
+            }
+            guard !Task.isCancelled, generation == searchGeneration else { return }
+            results = response.results.map(NoteItem.init)
+            // The list is ready: stop the spinner now, snippets fill in when they arrive.
+            isSearching = false
+
+            if let profileId = serverProfileId {
+                try? persistence.recordRecentSearch(query: trimmed, serverProfileId: profileId)
+                loadRecentSearches()
+            }
+
+            // Snippets come from a second full search (so the list and its ranking stay the first's). Trilium
+            // runs searches one at a time, so asking only now gets the list back first.
+            guard fetchesSnippets else { return }
+            let snippets = await Self.fetchSnippets(client: client, query: trimmed, timeout: timeout)
+            guard !Task.isCancelled, generation == searchGeneration,
+                  query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
+            snippetsByNoteId = snippets
+        } catch {
+            guard !Task.isCancelled, generation == searchGeneration else { return }
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError { return }
+            Log.api.error("Search failed, searching this device instead: \(error)")
+
+            let reason: LocalResultsReason
+            if apiError.isNetworkError {
+                // The lint request goes to the same unreachable server.
+                lintTask?.cancel()
+                appState.beginServerSearchBackoff(message: apiError.localizedDescription)
+                reason = .serverUnreachable
+            } else {
+                reason = .serverFailed(apiError.localizedDescription)
+            }
+            await performLocalSearch(trimmed, reason: reason, generation: generation)
         }
     }
 
     /// Empty when the server has no quick search or its results carry no snippets: rows then show as before.
     nonisolated private static func fetchSnippets(
         client: any TriliumClientProtocol,
-        query: String
+        query: String,
+        timeout: TimeInterval
     ) async -> [String: SearchResultSnippet] {
-        guard let results = try? await client.quickSearchResults(query: query) else { return [:] }
+        guard let results = try? await withTimeout(seconds: timeout, operation: {
+            try await client.quickSearchResults(query: query)
+        }) else { return [:] }
         var snippets: [String: SearchResultSnippet] = [:]
         for result in results {
             guard let noteId = result.resolvedNoteId, snippets[noteId] == nil,
@@ -434,31 +317,80 @@ final class SearchViewModel {
         return snippets
     }
 
-    private func performOfflineSearch(_ query: String) {
-        guard let profileId = serverProfileId else { return }
+    /// Searches the notes cached on this device: titles, bodies (through the offline index) and `#labels`.
+    private func performLocalSearch(_ query: String, reason: LocalResultsReason, generation: Int) async {
+        let parsed = LocalSearchQuery(query)
+        localResultsReason = reason
+        localQueryIsLimited = parsed.hasUnsupportedOperators
+        guard let profileId = serverProfileId else {
+            results = []
+            return
+        }
         do {
-            let matched = try persistence.fetchCachedNotes(titleContaining: query, serverProfileId: profileId, limit: 30)
-                .map { cached in
-                    NoteItem(
-                        noteId: cached.noteId,
-                        title: cached.title,
-                        type: NoteType(rawValue: cached.noteType) ?? .text,
-                        mime: cached.mime,
-                        isProtected: cached.isProtected,
-                        dateCreated: "",
-                        dateModified: "",
-                        parentNoteIds: cached.parentNoteIds,
-                        childNoteIds: cached.childNoteIds,
-                        parentBranchIds: cached.parentBranchIds,
-                        childBranchIds: cached.childBranchIds,
-                        attributes: []
+            let outcome = try await localIndex.search(parsed, profileId: profileId, limit: Self.resultLimit)
+            guard !Task.isCancelled, generation == searchGeneration else { return }
+            results = outcome.hits.map(NoteItem.init(localHit:))
+            localIndexProgress = outcome.indexProgress
+            if fetchesSnippets {
+                var snippets: [String: SearchResultSnippet] = [:]
+                for hit in outcome.hits {
+                    guard let preview = hit.snippet else { continue }
+                    snippets[hit.noteId] = SearchResultSnippet(
+                        content: SearchQueryHighlight.attributedString(text: preview, terms: parsed.highlightTerms)
                     )
                 }
-            results = Array(matched)
-            isOfflineResults = true
+                snippetsByNoteId = snippets
+            }
         } catch {
-            Log.persistence.error("Offline search failed: \(error)")
+            guard !Task.isCancelled, generation == searchGeneration else { return }
+            Log.search.error("Offline search failed: \(error)")
+            results = []
+            self.error = String(localized: "Couldn’t search the notes on this device.", comment: "Offline search failure")
         }
+        // Picks up notes opened or edited on this device since the last sync.
+        localIndex.scheduleRefresh(profileId: profileId)
+    }
+
+    /// Lines explaining local results: why they aren't the server's first, then what they may be missing. Empty for
+    /// server results.
+    var localResultsDetails: [String] {
+        guard let localResultsReason else { return [] }
+        var lines: [String] = []
+        switch localResultsReason {
+        case .noConnection:
+            lines.append(String(localized: "No connection — showing results from this device", comment: "Offline search banner: no network"))
+        case .serverUnreachable:
+            lines.append(String(localized: "Server didn’t respond — showing results from this device", comment: "Offline search banner: server timed out or unreachable"))
+        case .serverFailed(let message):
+            lines.append(String(localized: "Server search failed — showing results from this device", comment: "Offline search banner: server returned an error"))
+            lines.append(message)
+        case .noClient:
+            lines.append(String(localized: "Showing results from this device", comment: "Offline search banner: no server connection"))
+        }
+        if let localIndexProgress {
+            lines.append(String(
+                localized: "Offline search index is still being built (\(localIndexProgress.done) of \(localIndexProgress.total) notes)",
+                comment: "Offline search banner: index build progress"
+            ))
+        }
+        if localQueryIsLimited {
+            lines.append(String(localized: "Only words and #labels are searched on this device", comment: "Offline search banner: query used server-only operators"))
+        }
+        return lines
+    }
+
+    /// Whether Retry can ask the server again (the device has a connection, but the server failed or was skipped).
+    var localResultsCanRetryServer: Bool {
+        switch localResultsReason {
+        case .serverUnreachable, .serverFailed: return client != nil
+        default: return false
+        }
+    }
+
+    private func clearLocalResultsState() {
+        localResultsReason = nil
+        localQueryIsLimited = false
+        localIndexProgress = nil
     }
 
     func loadRecentSearches() {
@@ -503,7 +435,7 @@ final class SearchViewModel {
         snippetsByNoteId = [:]
         queryProblem = nil
         hasSearched = false
-        isOfflineResults = false
+        clearLocalResultsState()
         clearMatchExpansionState()
         searchTask?.cancel()
     }
@@ -555,9 +487,17 @@ final class SearchViewModel {
         defer { loadingMatchNoteIds.remove(note.noteId) }
 
         var raw: String?
-        if let client {
+        // Offline, or the server just failed: the cached body, without waiting on the server again.
+        let cacheFirst = isOfflineResults || !appState.isOnline
+        if cacheFirst {
+            raw = cachedBody(noteId: note.noteId)
+        }
+        if raw == nil, let client {
             do {
-                let data = try await client.getNoteContent(note.noteId)
+                let noteId = note.noteId
+                let data = try await withTimeout(seconds: serverTimeout) {
+                    try await client.getNoteContent(noteId)
+                }
                 guard !Task.isCancelled else { return }
                 raw = String(data: data, encoding: .utf8)
             } catch {
@@ -566,19 +506,13 @@ final class SearchViewModel {
                 raw = nil
             }
         }
-
-        if raw == nil, let profileId = serverProfileId {
-            if let cached = try? persistence.fetchCachedNote(id: note.noteId, serverProfileId: profileId),
-               let data = cached.content,
-               let s = String(data: data, encoding: .utf8) {
-                raw = s
-            }
+        if raw == nil, !cacheFirst {
+            raw = cachedBody(noteId: note.noteId)
         }
 
         guard matchLoadStillValid(generation: generation, trimmedQuery: trimmed) else { return }
 
         guard let content = raw, !content.isEmpty else {
-            guard matchLoadStillValid(generation: generation, trimmedQuery: trimmed) else { return }
             matchLoadErrorByNoteId[note.noteId] = String(
                 localized: "Couldn’t load note content for previews.",
                 comment: "Search expansion when body fetch fails"
@@ -608,8 +542,36 @@ final class SearchViewModel {
         }
     }
 
+    private func cachedBody(noteId: String) -> String? {
+        guard let profileId = serverProfileId,
+              let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId),
+              let data = cached.content
+        else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
     private func matchLoadStillValid(generation: Int, trimmedQuery: String) -> Bool {
         generation == matchLinesLoadGeneration
             && query.trimmingCharacters(in: .whitespaces) == trimmedQuery
+    }
+}
+
+private extension NoteItem {
+    init(localHit hit: LocalSearchHit) {
+        self.init(
+            noteId: hit.noteId,
+            title: hit.title,
+            type: NoteType(rawValue: hit.noteType) ?? .text,
+            mime: hit.mime,
+            isProtected: hit.isProtected,
+            dateCreated: "",
+            // `utcDateModified` is "yyyy-MM-dd HH:mm:ss.SSSZ"; with a "T" it parses as ISO 8601 for the row's date.
+            dateModified: hit.utcDateModified?.replacingOccurrences(of: " ", with: "T") ?? "",
+            parentNoteIds: hit.parentNoteIds,
+            childNoteIds: hit.childNoteIds,
+            parentBranchIds: hit.parentBranchIds,
+            childBranchIds: hit.childBranchIds,
+            attributes: []
+        )
     }
 }

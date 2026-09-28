@@ -438,6 +438,63 @@ struct CacheStore {
         return try context.fetch(descriptor).map(\.noteId)
     }
 
+    // MARK: - Offline search
+
+    /// What the offline search index needs to know about a cached body, without loading it.
+    struct CachedBodyStamp: Sendable {
+        let noteId: String
+        let noteType: String
+        let isProtected: Bool
+        /// When the body was stored; every body write (`storeBody`) sets it, so it changes whenever the body does.
+        let contentFetchedAt: Date
+    }
+
+    /// Every cached note with a body, as stamps.
+    func fetchCachedBodyStamps(serverProfileId: String) throws -> [CachedBodyStamp] {
+        let profileId = serverProfileId
+        var descriptor = FetchDescriptor<CachedNote>(
+            predicate: #Predicate { $0.serverProfileId == profileId && $0.contentFetchedAt != nil }
+        )
+        descriptor.propertiesToFetch = [\.noteId, \.noteType, \.isProtected, \.contentFetchedAt]
+        return try context.fetch(descriptor).compactMap { row in
+            guard let fetchedAt = row.contentFetchedAt else { return nil }
+            return CachedBodyStamp(
+                noteId: row.noteId,
+                noteType: row.noteType,
+                isProtected: row.isProtected,
+                contentFetchedAt: fetchedAt
+            )
+        }
+    }
+
+    /// Ids of every cached note whose title contains `text` (case- and diacritic-insensitive, as
+    /// `PersistenceManager.fetchCachedNotes(titleContaining:)` matches).
+    func fetchCachedNoteIds(titleContaining text: String, serverProfileId: String) throws -> Set<String> {
+        let profileId = serverProfileId
+        var descriptor = FetchDescriptor<CachedNote>(
+            predicate: #Predicate { $0.serverProfileId == profileId && $0.title.localizedStandardContains(text) }
+        )
+        descriptor.propertiesToFetch = [\.noteId]
+        return Set(try context.fetch(descriptor).map(\.noteId))
+    }
+
+    /// Ids of notes that have the label `name` themselves (not inherited), with `value` when given (compared
+    /// ignoring case).
+    func fetchNoteIds(withLabel name: String, value: String?, serverProfileId: String) throws -> Set<String> {
+        let profileId = serverProfileId
+        let labelName = name
+        let labelType = "label"
+        let rows = try context.fetch(
+            FetchDescriptor<CachedAttribute>(
+                predicate: #Predicate {
+                    $0.name == labelName && $0.type == labelType && $0.serverProfileId == profileId
+                }
+            )
+        )
+        guard let value else { return Set(rows.map(\.noteId)) }
+        return Set(rows.filter { $0.value.compare(value, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }.map(\.noteId))
+    }
+
     /// Deletes cached notes (and their branches/attributes) for the profile.
     func deleteCachedNotes(noteIds: [String], serverProfileId: String, clearGhost: Bool = true) throws {
         try deleteCachedNotes(noteIds: Set(noteIds), serverProfileId: serverProfileId, clearGhost: clearGhost)

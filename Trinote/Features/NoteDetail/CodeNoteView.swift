@@ -333,10 +333,8 @@ private struct CodeReadonlyTextView: UIViewRepresentable {
             let attributed = CodeSyntaxHighlighter.attributedString(code: text, mime: mime, darkMode: darkMode)
             context.coordinator.baseAttributedText = attributed
             uiView.attributedText = attributed
+            // Re-finds on the new text, keeping the active match.
             findControl?.registerCodeTextView(uiView, plainText: text, baseAttributedText: attributed)
-            if let fc = findControl, !fc.query.isEmpty {
-                fc.applyQueryFromFieldChange()
-            }
         } else {
             findControl?.registerCodeTextView(
                 uiView,

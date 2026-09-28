@@ -7,7 +7,15 @@ import Observation
 final class AppState {
     var activeProfile: ServerProfile?
     var client: (any TriliumClientProtocol)?
-    var isAuthenticated = false
+    var isAuthenticated = false {
+        didSet {
+            // Builds the offline search index for a cache synced before it existed, and catches it up on sign-in and
+            // server switches (sync keeps it current after that).
+            if isAuthenticated, let profileId = activeProfile?.id {
+                OfflineSearchIndex.shared.scheduleRefresh(profileId: profileId, minimumInterval: 60)
+            }
+        }
+    }
     var isLoading = true
     var connectionError: String?
     var lastRefreshed: Date?
@@ -42,6 +50,38 @@ final class AppState {
     private var lastOwnUploadTimestamps: [String: String] = [:]
 
     var isOnline: Bool { networkMonitor.isConnected }
+
+    /// A server search that timed out or couldn't connect: until `until`, search looks on this device first so each
+    /// keystroke doesn't wait out another timeout (issue #29).
+    struct ServerSearchBackoff {
+        let until: Date
+        let message: String
+    }
+
+    /// Per server profile; shared by the Search tab and the note picker. Retry clears it.
+    @ObservationIgnored private var serverSearchBackoffs: [String: ServerSearchBackoff] = [:]
+
+    static let serverSearchBackoffDuration: TimeInterval = 60
+
+    /// The active server's back-off, while it lasts.
+    var activeServerSearchBackoff: ServerSearchBackoff? {
+        guard let profileId = activeProfile?.id,
+              let backoff = serverSearchBackoffs[profileId], backoff.until > .now else { return nil }
+        return backoff
+    }
+
+    func beginServerSearchBackoff(message: String) {
+        guard let profileId = activeProfile?.id else { return }
+        serverSearchBackoffs[profileId] = ServerSearchBackoff(
+            until: .now.addingTimeInterval(Self.serverSearchBackoffDuration),
+            message: message
+        )
+    }
+
+    func clearServerSearchBackoff() {
+        guard let profileId = activeProfile?.id else { return }
+        serverSearchBackoffs[profileId] = nil
+    }
 
     /// Ends the Trilium protected-note session on the server and persists cookies. Call after restoring the main session and when the app goes to the background so the document password is required again.
     func endServerProtectedSessionAndPersistCookies() async {

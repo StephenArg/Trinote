@@ -367,7 +367,17 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse {
         searchCalls.append(query)
+        if searchDelaySeconds > 0 {
+            try await Task.sleep(nanoseconds: UInt64(searchDelaySeconds * 1_000_000_000))
+        }
         return try searchResult.get()
+    }
+
+    /// How long `searchNotes` takes, for search timeout tests.
+    var searchDelaySeconds: TimeInterval = 0
+
+    func setSearchDelay(_ seconds: TimeInterval) {
+        searchDelaySeconds = seconds
     }
 
     func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle] {

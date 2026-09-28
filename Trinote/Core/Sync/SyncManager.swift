@@ -86,8 +86,12 @@ final class SyncManager {
     private let cacheExclusion: CacheExclusionPolicy
     /// Where sync reads and writes SwiftData: a background context, so large syncs don't block the UI.
     private let syncStore: SyncStore
+    /// Re-indexed after a sync changes cached bodies, for offline search. Nil for a store other than the app's, unless
+    /// one is given.
+    private let searchIndex: OfflineSearchIndex?
 
-    init(persistence: PersistenceManager? = nil) {
+    init(persistence: PersistenceManager? = nil, searchIndex: OfflineSearchIndex? = nil) {
+        self.searchIndex = searchIndex ?? (persistence == nil ? .shared : nil)
         let persistence = persistence ?? .shared
         self.persistence = persistence
         self.cacheExclusion = CacheExclusionPolicy(persistence: persistence)
@@ -350,11 +354,12 @@ final class SyncManager {
         }
     }
 
-    /// Tells the tree (and open notes) to reload from the cache, only when the sync just finished changed it: a sync
-    /// that found nothing new would make every listener reload for nothing.
-    private func postTreeRefreshIfCacheChanged() {
+    /// Tells the tree (and open notes) to reload from the cache, and offline search to re-index, only when the sync
+    /// just finished changed it: a sync that found nothing new would make every listener reload for nothing.
+    private func postTreeRefreshIfCacheChanged(profileId: String) {
         guard lastCompletedSyncChangedLocalDatabase else { return }
         NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        searchIndex?.scheduleRefresh(profileId: profileId)
     }
 
     private func isStale(_ generation: UInt64) -> Bool {
@@ -496,7 +501,7 @@ final class SyncManager {
             self.reportProgress(fraction: 1.0, force: true)
             await self.pruneCacheExclusions(client: client, profileId: profileId)
             finished = true
-            self.postTreeRefreshIfCacheChanged()
+            self.postTreeRefreshIfCacheChanged(profileId: profileId)
             Log.sync.info("Full sync complete: \(self.progressDone) notes synced, \(changedLocalDatabase ? "cache updated" : "no changes")")
 
         } catch {
@@ -610,7 +615,7 @@ final class SyncManager {
             self.lastIncrementalSyncDate = .now
             self.phase = .done
             self.reportProgress(fraction: 1.0, force: true)
-            self.postTreeRefreshIfCacheChanged()
+            self.postTreeRefreshIfCacheChanged(profileId: profileId)
             Log.sync.info(
                 "Incremental sync complete: \(self.progressDone) notes updated, \(deletionCount) deletions\(downloadChangedBodies ? "" : " (metadata only)")"
             )
@@ -860,6 +865,7 @@ final class SyncManager {
             self.phase = .done
             self.reportProgress(fraction: 1.0, force: true)
             NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+            self.searchIndex?.scheduleRefresh(profileId: profileId)
             Log.sync.info("Subtree sync complete for \(rootNoteId): \(serverNotes.count) notes")
         } catch {
             if isStale(generation) { return }

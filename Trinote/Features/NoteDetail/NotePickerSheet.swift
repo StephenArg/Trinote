@@ -133,6 +133,15 @@ struct NotePickerSheet: View {
 
             Divider()
 
+            if !vm.isSearching, vm.hasSearched, let notice = vm.localResultsDetails.first {
+                Label(notice, systemImage: "icloud.slash")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+            }
+
             if vm.isSearching {
                 Spacer()
                 ProgressView(String(localized: "Searching…", comment: ""))

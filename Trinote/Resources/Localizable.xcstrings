@@ -7093,6 +7093,77 @@
         }
       }
     },
+    "Couldn’t search the notes on this device." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعذّر البحث في الملاحظات على هذا الجهاز."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Poznámky v tomto zařízení se nepodařilo prohledat."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Notizen auf diesem Gerät konnten nicht durchsucht werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t search the notes on this device."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron buscar las notas de este dispositivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de rechercher dans les notes de cet appareil."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस डिवाइस के नोट में खोज नहीं हो सकी।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nem sikerült keresni az eszközön lévő jegyzetekben."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile cercare nelle note di questo dispositivo."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nie udało się przeszukać notatek na tym urządzeniu."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось выполнить поиск по заметкам на этом устройстве."
+          }
+        }
+      }
+    },
     "Couldn't update sharing" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -16682,6 +16753,77 @@
         }
       }
     },
+    "No connection — showing results from this device" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لا يوجد اتصال — تُعرض نتائج من هذا الجهاز"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bez připojení – zobrazeny výsledky z tohoto zařízení"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Verbindung – Ergebnisse von diesem Gerät"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No connection — showing results from this device"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin conexión: mostrando resultados de este dispositivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas de connexion — résultats de cet appareil"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कनेक्शन नहीं है — इस डिवाइस के परिणाम दिखाए जा रहे हैं"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nincs kapcsolat – az eszközön lévő találatok láthatók"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessuna connessione — risultati da questo dispositivo"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brak połączenia — wyniki z tego urządzenia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет подключения — показаны результаты с этого устройства"
+          }
+        }
+      }
+    },
     "No Favorites" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -16962,6 +17104,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Нет недавних заметок"
+          }
+        }
+      }
+    },
+    "No Results on This Device" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لا نتائج على هذا الجهاز"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Na tomto zařízení nic nenalezeno"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Ergebnisse auf diesem Gerät"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Results on This Device"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin resultados en este dispositivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun résultat sur cet appareil"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस डिवाइस पर कोई परिणाम नहीं"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nincs találat ezen az eszközön"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessun risultato su questo dispositivo"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brak wyników na tym urządzeniu"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет результатов на этом устройстве"
           }
         }
       }
@@ -18315,6 +18528,77 @@
         }
       }
     },
+    "Offline search index is still being built (%lld of %lld notes)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لا يزال فهرس البحث دون اتصال قيد الإنشاء (%lld من %lld ملاحظة)"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Index offline vyhledávání se ještě vytváří (%lld z %lld poznámek)"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Offline-Suchindex wird noch erstellt (%lld von %lld Notizen)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline search index is still being built (%lld of %lld notes)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El índice de búsqueda sin conexión aún se está creando (%lld de %lld notas)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’index de recherche hors ligne est encore en cours de création (%lld sur %lld notes)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ऑफ़लाइन खोज इंडेक्स अभी बन रहा है (%lld / %lld नोट)"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Az offline keresési index még készül (%lld / %lld jegyzet)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’indice di ricerca offline è ancora in costruzione (%lld di %lld note)"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indeks wyszukiwania offline jest jeszcze tworzony (%lld z %lld notatek)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Индекс офлайн-поиска ещё создаётся (%lld из %lld заметок)"
+          }
+        }
+      }
+    },
     "OK" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -18524,6 +18808,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Только блокноты верхнего уровня"
+          }
+        }
+      }
+    },
+    "Only words and #labels are searched on this device" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يُبحث على هذا الجهاز عن الكلمات و#التسميات فقط"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Na tomto zařízení se hledají jen slova a #štítky"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf diesem Gerät wird nur nach Wörtern und #Labels gesucht"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only words and #labels are searched on this device"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En este dispositivo solo se buscan palabras y #etiquetas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sur cet appareil, seuls les mots et les #libellés sont recherchés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस डिवाइस पर केवल शब्द और #लेबल खोजे जाते हैं"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ezen az eszközön csak szavakra és #címkékre lehet keresni"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su questo dispositivo si cercano solo parole e #etichette"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Na tym urządzeniu wyszukiwane są tylko słowa i #etykiety"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "На этом устройстве ищутся только слова и #метки"
           }
         }
       }
@@ -22157,6 +22512,77 @@
         }
       }
     },
+    "Server didn’t respond — showing results from this device" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لم يستجب الخادم — تُعرض نتائج من هذا الجهاز"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server neodpověděl – zobrazeny výsledky z tohoto zařízení"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server antwortet nicht – Ergebnisse von diesem Gerät"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server didn’t respond — showing results from this device"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor no respondió: mostrando resultados de este dispositivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur n’a pas répondu — résultats de cet appareil"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सर्वर ने जवाब नहीं दिया — इस डिवाइस के परिणाम दिखाए जा रहे हैं"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A kiszolgáló nem válaszolt – az eszközön lévő találatok láthatók"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server non ha risposto — risultati da questo dispositivo"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serwer nie odpowiedział — wyniki z tego urządzenia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер не ответил — показаны результаты с этого устройства"
+          }
+        }
+      }
+    },
     "Server is syncing" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -22295,6 +22721,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Пароль сервера"
+          }
+        }
+      }
+    },
+    "Server search failed — showing results from this device" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "فشل البحث على الخادم — تُعرض نتائج من هذا الجهاز"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hledání na serveru selhalo – zobrazeny výsledky z tohoto zařízení"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serversuche fehlgeschlagen – Ergebnisse von diesem Gerät"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server search failed — showing results from this device"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La búsqueda en el servidor falló: mostrando resultados de este dispositivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec de la recherche sur le serveur — résultats de cet appareil"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सर्वर पर खोज विफल रही — इस डिवाइस के परिणाम दिखाए जा रहे हैं"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A keresés a kiszolgálón nem sikerült – az eszközön lévő találatok láthatók"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricerca sul server non riuscita — risultati da questo dispositivo"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wyszukiwanie na serwerze nie powiodło się — wyniki z tego urządzenia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поиск на сервере не удался — показаны результаты с этого устройства"
           }
         }
       }
@@ -23577,73 +24074,73 @@
         }
       }
     },
-    "Showing cached results (title match only)" : {
+    "Showing results from this device" : {
       "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "عرض نتائج مخبأة (تطابق العنوان فقط)"
+            "value" : "تُعرض نتائج من هذا الجهاز"
           }
         },
         "cs" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Uložené výsledky (pouze název)"
+            "value" : "Zobrazeny výsledky z tohoto zařízení"
           }
         },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zwischengespeicherte Ergebnisse (nur Titel)"
+            "value" : "Ergebnisse von diesem Gerät"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Showing cached results (title match only)"
+            "value" : "Showing results from this device"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mostrando resultados en caché (solo título)"
+            "value" : "Mostrando resultados de este dispositivo"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Résultats en cache (titre seulement)"
+            "value" : "Résultats de cet appareil"
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "कैश परिणाम (केवल शीर्षक)"
+            "value" : "इस डिवाइस के परिणाम दिखाए जा रहे हैं"
           }
         },
         "hu" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gyorsítótárazott találatok (csak cím)"
+            "value" : "Az eszközön lévő találatok láthatók"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Risultati in cache (solo titolo)"
+            "value" : "Risultati da questo dispositivo"
           }
         },
         "pl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wyniki z pamięci podręcznej (tylko tytuł)"
+            "value" : "Wyniki z tego urządzenia"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Показаны кэшированные результаты (только заголовок)"
+            "value" : "Показаны результаты с этого устройства"
           }
         }
       }

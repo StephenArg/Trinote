@@ -93,8 +93,21 @@ struct SearchView: View {
                 } description: {
                     Text(error)
                 } actions: {
-                    Button(String(localized: "Retry", comment: "Retry search")) { vm.searchNow() }
+                    Button(String(localized: "Retry", comment: "Retry search")) { vm.searchNow(forceServer: true) }
                         .buttonStyle(.bordered)
+                }
+                Spacer()
+            } else if vm.hasSearched && vm.results.isEmpty && vm.isOfflineResults {
+                Spacer()
+                ContentUnavailableView {
+                    Label(String(localized: "No Results on This Device", comment: "Offline search: nothing found locally"), systemImage: "iphone.slash")
+                } description: {
+                    Text(vm.localResultsDetails.joined(separator: "\n"))
+                } actions: {
+                    if vm.localResultsCanRetryServer {
+                        Button(String(localized: "Retry", comment: "Retry search")) { vm.searchNow(forceServer: true) }
+                            .buttonStyle(.bordered)
+                    }
                 }
                 Spacer()
             } else if vm.hasSearched && vm.results.isEmpty {
@@ -183,14 +196,8 @@ struct SearchView: View {
         List {
             if vm.isOfflineResults {
                 Section {
-                    HStack(spacing: 6) {
-                        Image(systemName: "icloud.slash")
-                            .font(.caption)
-                        Text(String(localized: "Showing cached results (title match only)", comment: "Offline search banner"))
-                            .font(.caption)
-                    }
-                    .foregroundStyle(.orange)
-                    .listRowBackground(Color.orange.opacity(0.08))
+                    localResultsBanner(vm)
+                        .listRowBackground(Color.orange.opacity(0.08))
                 }
             }
 
@@ -210,6 +217,34 @@ struct SearchView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(treeChromeBackground)
+    }
+
+    /// Why these results come from this device, and what they may be missing; Retry asks the server again.
+    private func localResultsBanner(_ vm: SearchViewModel) -> some View {
+        let lines = vm.localResultsDetails
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "icloud.slash")
+                .font(.caption)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                if let first = lines.first {
+                    Text(first)
+                        .font(.caption)
+                }
+                ForEach(Array(lines.dropFirst().enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if vm.localResultsCanRetryServer {
+                Button(String(localized: "Retry", comment: "Retry search")) { vm.searchNow(forceServer: true) }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.borderless)
+            }
+        }
+        .foregroundStyle(.orange)
     }
 
     private static let maxVisibleMatches = 20
@@ -408,21 +443,30 @@ struct SearchView: View {
 
 enum SearchQueryHighlight {
     static func attributedString(text: String, query: String) -> AttributedString {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let mutable = NSMutableAttributedString(string: text)
-        guard !trimmed.isEmpty else {
-            return AttributedString(mutable)
-        }
+        attributedString(text: text, terms: [query], options: [.caseInsensitive])
+    }
 
+    /// Highlights every term (offline results: each word or phrase of the query, ignoring case and accents as the
+    /// offline index does).
+    static func attributedString(
+        text: String,
+        terms: [String],
+        options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]
+    ) -> AttributedString {
+        let mutable = NSMutableAttributedString(string: text)
         let nsText = text as NSString
         let len = nsText.length
         let bg = UIColor.systemYellow.withAlphaComponent(0.38)
-        var loc = 0
-        while loc < len {
-            let r = nsText.range(of: trimmed, options: [.caseInsensitive], range: NSRange(location: loc, length: len - loc))
-            if r.location == NSNotFound { break }
-            mutable.addAttribute(.backgroundColor, value: bg, range: r)
-            loc = r.location + max(r.length, 1)
+        for term in terms {
+            let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            var loc = 0
+            while loc < len {
+                let r = nsText.range(of: trimmed, options: options, range: NSRange(location: loc, length: len - loc))
+                if r.location == NSNotFound { break }
+                mutable.addAttribute(.backgroundColor, value: bg, range: r)
+                loc = r.location + max(r.length, 1)
+            }
         }
         return AttributedString(mutable)
     }

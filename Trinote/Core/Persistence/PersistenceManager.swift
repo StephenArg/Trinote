@@ -2408,6 +2408,10 @@ final class PersistenceManager {
 
     func clearCache(for serverProfileId: String) throws {
         let profileId = serverProfileId
+        // The offline search index is built from this cache (only the app's store has one).
+        if Self._shared === self {
+            Task { await OfflineSearchIndex.shared.deleteIndex(profileId: profileId) }
+        }
 
         let notes = try context.fetch(FetchDescriptor<CachedNote>(
             predicate: #Predicate { $0.serverProfileId == profileId }
