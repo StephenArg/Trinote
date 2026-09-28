@@ -662,6 +662,13 @@ final class TreeViewModel {
         await loadTree()
     }
 
+    /// A sync that just finished shows the server answers again, so an error from when it didn't (a timeout while
+    /// away from its network, say) is replaced by a live reload instead of staying up until a manual refresh.
+    func reloadAfterSyncIfShowingError() async {
+        guard error != nil, !isRefreshing else { return }
+        await refreshFromServerIfOnline()
+    }
+
     func refresh() async {
         noteCache.removeAll()
         branchCache.removeAll()

@@ -115,6 +115,8 @@ struct TreeView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.colorScheme) private var colorScheme
     @State private var viewModel: TreeViewModel?
+    /// Pull-to-refresh / toolbar refresh in progress; it reloads the tree after its sync, so a finished sync needn't.
+    @State private var isRefreshingWithSync = false
     @State private var navigateToNote: NoteItem?
     @State private var drillDownTarget: SubTreeTarget?
     @State private var createSheetContext: CreateNoteSheetContext?
@@ -562,6 +564,11 @@ struct TreeView: View {
                 treeContent(viewModel)
                     .onChange(of: appState.protectedSessionActive) { _, _ in
                         Task { await viewModel.refresh() }
+                    }
+                    .onChange(of: appState.syncManager.lastSyncDate) { _, _ in
+                        // Pull-to-refresh reloads the tree itself once its sync is done.
+                        guard !isRefreshingWithSync else { return }
+                        Task { await viewModel.reloadAfterSyncIfShowingError() }
                     }
             } else {
                 ProgressView("Loading…")
@@ -1071,6 +1078,8 @@ struct TreeView: View {
 
     /// Shared by pull-to-refresh and the toolbar refresh button.
     private func refreshWithSync() async {
+        isRefreshingWithSync = true
+        defer { isRefreshingWithSync = false }
         // A sync that changed the cache already pruned and reloaded the tree (`.trinoteTreeShouldRefresh`); the
         // server reload below rebuilds it either way.
         await self.appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)

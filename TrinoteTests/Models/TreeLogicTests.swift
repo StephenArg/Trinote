@@ -842,6 +842,43 @@ final class TreeLogicTests: XCTestCase {
         let calls = await mock.getOrCreateDayNoteCalls
         XCTAssertEqual(calls, [TodaysJournalNote.localISODay(now)])
     }
+
+    // MARK: - Error banner after a sync
+
+    @MainActor
+    func testFinishedSyncReplacesATimeoutErrorWithTheLiveTree() async throws {
+        let appState = AppState()
+        let mock = MockTriliumClient()
+        await mock.setNoteResult("root", .success(TestFixtures.noteResponse(
+            id: "root", title: "root", parentNoteIds: [], childNoteIds: ["c1"], childBranchIds: ["root_c1"]
+        )))
+        await mock.setNoteResult("c1", .success(TestFixtures.noteResponse(id: "c1", title: "Child", parentNoteIds: ["root"])))
+        await mock.setBranchResult("root_c1", .success(TestFixtures.branchResponse(branchId: "root_c1", noteId: "c1", parentNoteId: "root")))
+        appState.client = mock
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try XCTSkipUnless(appState.isOnline, "the network monitor reports offline")
+
+        // The banner shows over the cached rows kept after the failed load.
+        let vm = TreeViewModel(appState: appState)
+        vm.rootChildren = [makeNode(noteTitle: "Cached")]
+        vm.error = APIError.timeout.localizedDescription
+        await vm.reloadAfterSyncIfShowingError()
+
+        XCTAssertNil(vm.error)
+        XCTAssertEqual(vm.rootChildren.map(\.note.noteId), ["c1"])
+    }
+
+    @MainActor
+    func testFinishedSyncLeavesATreeWithoutAnErrorAlone() async throws {
+        let appState = AppState()
+        let mock = MockTriliumClient()
+        appState.client = mock
+
+        await TreeViewModel(appState: appState).reloadAfterSyncIfShowingError()
+
+        let calls = await mock.getNoteCalls
+        XCTAssertEqual(calls, [])
+    }
 }
 
 final class NoteDeleteConfirmationCopyTests: XCTestCase {

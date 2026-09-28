@@ -43,6 +43,9 @@ final class SyncManager {
 
     var hasCompletedFullSync: Bool { self.lastFullSyncDate != nil }
 
+    /// When a full or quick sync last finished; each success moves it, so views can react to "the server answered".
+    var lastSyncDate: Date? { [lastFullSyncDate, lastIncrementalSyncDate].compactMap { $0 }.max() }
+
     /// How far the server is through pulling from its own sync server (Trilium's `sync-pull-in-progress` progress),
     /// or `nil` when it is not pulling. Only an instance that syncs with an upstream server sends this.
     struct ServerPullProgress: Equatable, Sendable {
