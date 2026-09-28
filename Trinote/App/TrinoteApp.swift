@@ -85,7 +85,7 @@ struct TrinoteApp: App {
     @State private var appState: AppState?
     @State private var persistenceError: String?
     @State private var isAppLocked = false
-    @State private var pinShake = false
+    @State private var pinErrorMessage: String?
     /// URL opened before `appState` exists (cold start from Share Extension).
     @State private var pendingIncomingURL: URL?
     @Environment(\.scenePhase) private var scenePhase
@@ -93,11 +93,13 @@ struct TrinoteApp: App {
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
     @AppStorage("appPinEnabled") private var appPinEnabled = false
     @AppStorage("appBiometricEnabled") private var appBiometricEnabled = false
+    @AppStorage(AppPinLength.storageKey) private var appPinLength = AppPinLength.default
     @State private var biometricInProgress = false
     /// After biometric fails or the user cancels, show the PIN keypad until the next time the app lock engages.
     @State private var preferPinKeypadVisible = false
-    /// Changes when the lock engages so `.task` runs one automatic biometric attempt per lock (no cancel/retry loops).
-    @State private var lockSessionID = UUID()
+    /// Set when the lock engages with biometrics on; the one automatic attempt runs once the scene is active
+    /// (the lock engages in the background, where Face ID fails at once and would skip straight to the PIN).
+    @State private var biometricAutoAttemptPending = false
 
     private var resolvedColorScheme: ColorScheme? {
         AppearanceMode(rawValue: appearanceMode)?.colorScheme
@@ -179,6 +181,7 @@ struct TrinoteApp: App {
                     if let appState {
                         Task { await appState.onForegroundResume() }
                     }
+                    runPendingBiometricAutoAttempt()
                 } else if newPhase == .background {
                     if let appState {
                         Task { await appState.onBackground() }
@@ -226,8 +229,33 @@ struct TrinoteApp: App {
         guard appPinEnabled else { return }
         let offerBiometricFirst = appBiometricEnabled && lockScreenBiometricHardwareAvailable
         preferPinKeypadVisible = !offerBiometricFirst
+        biometricAutoAttemptPending = offerBiometricFirst
+        pinErrorMessage = nil
         isAppLocked = true
-        lockSessionID = UUID()
+        dismissKeyboardForAppLock()
+        // Cold launch can engage after the scene is already active, so no `.active` change follows.
+        if scenePhase == .active {
+            runPendingBiometricAutoAttempt()
+        }
+    }
+
+    private func runPendingBiometricAutoAttempt() {
+        guard biometricAutoAttemptPending, isAppLocked else { return }
+        biometricAutoAttemptPending = false
+        Task { @MainActor in
+            await attemptBiometricUnlockAsync(isUserInitiated: false)
+        }
+    }
+
+    /// The lock overlay sits above the note editor, which keeps first responder while the app is in the
+    /// background — so iOS would bring its keyboard back over the PIN screen on return. Resign it instead.
+    private func dismissKeyboardForAppLock() {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                window.endEditing(true)
+            }
+        }
     }
 
     private func attemptBiometricUnlockFromUserButton() {
@@ -251,12 +279,21 @@ struct TrinoteApp: App {
         defer { biometricInProgress = false }
 
         let reason = String(localized: "Unlock Trinote", comment: "Lock screen biometric prompt")
-        let result = await BiometricAuthenticator.authenticate(localizedReason: reason)
+        let result = await BiometricAuthenticator.authenticate(
+            localizedReason: reason,
+            fallbackTitle: String(localized: "Enter PIN", comment: "Lock screen title")
+        )
         if case .success = result {
             withAnimation(.easeOut(duration: 0.25)) {
                 isAppLocked = false
                 preferPinKeypadVisible = false
             }
+        } else if case .failure(let error) = result,
+                  !isUserInitiated,
+                  [.systemCancel, .appCancel, .notInteractive].contains(error.code),
+                  UIApplication.shared.applicationState != .active {
+            // Leaving the app interrupted the scan (not a failed scan or Cancel): try again on return.
+            biometricAutoAttemptPending = true
         } else {
             withAnimation(.easeOut(duration: 0.2)) {
                 preferPinKeypadVisible = true
@@ -265,69 +302,68 @@ struct TrinoteApp: App {
     }
 
     private var biometricLockPlaceholder: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 0) {
             Spacer()
 
-            VStack(spacing: 16) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 52, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Image(systemName: "key.fill")
-                    .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+            VStack(spacing: 14) {
+                LaunchAppMark(size: 72)
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+
+                Text(String(localized: "Trinote Is Locked", comment: "Lock screen title while Face ID or Touch ID runs"))
+                    .font(.title2.weight(.semibold))
+
+                Label(
+                    String(localized: "Confirm to unlock", comment: "Hint while system Face ID or Touch ID sheet is shown"),
+                    systemImage: lockScreenBiometryKind.symbolName
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             }
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 32)
             .accessibilityElement(children: .combine)
             .accessibilityLabel(String(localized: "Locked. Confirm your identity to unlock.", comment: "VoiceOver lock placeholder"))
 
-            Text(String(localized: "Confirm to unlock", comment: "Hint while system Face ID or Touch ID sheet is shown"))
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-
             Spacer()
+
+            // Way out if the system sheet was dismissed without a result.
+            Button(String(localized: "Enter PIN", comment: "Lock screen title")) {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    preferPinKeypadVisible = true
+                }
+            }
+            .font(.body.weight(.medium))
+            .padding(.bottom, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { PinEntryBackground() }
     }
 
     private var pinLockOverlay: some View {
         Group {
             if shouldShowBiometricPlaceholder {
                 biometricLockPlaceholder
-                    .task(id: lockSessionID) {
-                        guard isAppLocked else { return }
-                        await attemptBiometricUnlockAsync(isUserInitiated: false)
-                    }
             } else {
-                VStack(spacing: 20) {
-                    ManagedPinEntryView(
-                        title: String(localized: "Enter PIN", comment: "Lock screen title"),
-                        subtitle: nil,
-                        onComplete: { pin in
-                            Task {
-                                let match = (try? await KeychainManager.shared.verifyAppPin(pin)) ?? false
-                                if match {
-                                    withAnimation(.easeOut(duration: 0.25)) {
-                                        isAppLocked = false
-                                        preferPinKeypadVisible = false
-                                    }
-                                } else {
-                                    pinShake = true
-                                }
-                            }
-                        },
-                        triggerShake: $pinShake
-                    )
-
-                    if appBiometricEnabled, lockScreenBiometryKind != .none {
-                        Button {
-                            attemptBiometricUnlockFromUserButton()
-                        } label: {
-                            Text(lockScreenBiometryKind.localizedUseButtonTitle)
+                PinEntryView(
+                    title: String(localized: "Enter PIN", comment: "Lock screen title"),
+                    subtitle: String(localized: "Trinote is locked", comment: "Lock screen subtitle above the PIN keypad"),
+                    errorMessage: $pinErrorMessage,
+                    pinLength: appPinLength,
+                    biometricKind: appBiometricEnabled ? lockScreenBiometryKind : .none,
+                    onBiometric: attemptBiometricUnlockFromUserButton,
+                    onComplete: { pin in
+                        let match = (try? await KeychainManager.shared.verifyAppPin(pin)) ?? false
+                        guard match else {
+                            pinErrorMessage = String(localized: "Incorrect PIN", comment: "PIN entry: wrong PIN")
+                            return .rejected
                         }
-                        .buttonStyle(.bordered)
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            isAppLocked = false
+                            preferPinKeypadVisible = false
+                        }
+                        return .done
                     }
-                }
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

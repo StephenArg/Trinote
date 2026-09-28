@@ -931,6 +931,9 @@ struct NoteDetailView: View {
             .background {
                 NavigationPopGestureBlocker(blocked: shouldBlockNavigationPopGesture, label: "NoteDetail")
             }
+            .background {
+                TabBarHiddenEnforcer(hidden: viewModel?.isEditing == true)
+            }
             .onChange(of: shouldBlockNavigationPopGesture) { _, blocked in
                 // TEMP: mind-map swipe-back diagnosis
                 let type = viewModel?.note?.type.rawValue ?? "nil"

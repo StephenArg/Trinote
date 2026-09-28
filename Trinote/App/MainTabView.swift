@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
@@ -115,6 +116,81 @@ struct MainTabView: View {
                 SettingsView()
             }
             .id(navigationStackInstanceId)
+        }
+    }
+}
+
+/// Hides the enclosing tab bar through UIKit while `hidden` is true, and brings it back when `hidden`
+/// turns false or the host leaves the screen.
+///
+/// `.toolbar(.hidden, for: .tabBar)` toggled on a view that is already on screen can leave the floating
+/// tab bar drawn over content that is already laid out as if it were gone, cutting off bottom-pinned
+/// toolbars (e.g. the note editor's formatting bar while the keyboard is down).
+struct TabBarHiddenEnforcer: UIViewControllerRepresentable {
+    let hidden: Bool
+
+    func makeUIViewController(context: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.wantsHidden = hidden
+    }
+
+    final class Controller: UIViewController {
+        var wantsHidden = false {
+            didSet {
+                guard wantsHidden != oldValue else { return }
+                apply(animated: true)
+            }
+        }
+
+        /// Set only while this host is the one keeping the tab bar hidden.
+        private weak var hiddenTabBarController: UITabBarController?
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.isUserInteractionEnabled = false
+            view.backgroundColor = .clear
+            view.isOpaque = false
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            apply(animated: false)
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            showTabBarIfHidden(animated: animated)
+        }
+
+        private func apply(animated: Bool) {
+            guard wantsHidden else {
+                showTabBarIfHidden(animated: animated)
+                return
+            }
+            guard viewIfLoaded?.window != nil, let tabs = enclosingTabBarController, !tabs.isTabBarHidden else { return }
+            tabs.setTabBarHidden(true, animated: animated)
+            hiddenTabBarController = tabs
+        }
+
+        private func showTabBarIfHidden(animated: Bool) {
+            guard let tabs = hiddenTabBarController else { return }
+            hiddenTabBarController = nil
+            if tabs.isTabBarHidden {
+                tabs.setTabBarHidden(false, animated: animated)
+            }
+        }
+
+        private var enclosingTabBarController: UITabBarController? {
+            if let tabBarController { return tabBarController }
+            var responder: UIResponder? = view
+            while let current = responder {
+                if let tabs = current as? UITabBarController { return tabs }
+                responder = current.next
+            }
+            return nil
         }
     }
 }

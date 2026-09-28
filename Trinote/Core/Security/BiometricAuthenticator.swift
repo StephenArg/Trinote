@@ -73,9 +73,13 @@ enum BiometricAuthenticator {
     }
 
     /// Presents the system biometric sheet. Call from the main actor so the system UI presents reliably.
-    static func authenticate(localizedReason: String) async -> Result<Void, LAError> {
+    /// `fallbackTitle` renames the sheet's "Enter Password" button (tapping it fails with `.userFallback`).
+    static func authenticate(localizedReason: String, fallbackTitle: String? = nil) async -> Result<Void, LAError> {
         await withCheckedContinuation { continuation in
             let context = LAContext()
+            if let fallbackTitle {
+                context.localizedFallbackTitle = fallbackTitle
+            }
             context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: localizedReason) { success, error in
                 if success {
                     continuation.resume(returning: .success(()))

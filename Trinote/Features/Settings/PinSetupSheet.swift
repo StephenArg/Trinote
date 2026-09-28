@@ -8,10 +8,13 @@ struct PinSetupSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appPinEnabled") private var appPinEnabled = false
     @AppStorage("appBiometricEnabled") private var appBiometricEnabled = false
+    @AppStorage(AppPinLength.storageKey) private var appPinLength = AppPinLength.default
 
     @State private var step: Step = .initial
     @State private var firstEntry = ""
-    @State private var triggerShake = false
+    /// Length chosen for the new PIN; saved to `appPinLength` only once the PIN is saved.
+    @State private var newPinLength = AppPinLength.default
+    @State private var entryError: String?
     @State private var error: String?
 
     private let keychain = KeychainManager.shared
@@ -47,88 +50,104 @@ struct PinSetupSheet: View {
             }
         }
         .interactiveDismissDisabled()
+        .onAppear {
+            newPinLength = appPinLength
+        }
     }
 
-    // MARK: - Setup Flow (set + confirm)
+    // MARK: - Setup Flow (choose length + set, then confirm)
 
-    @ViewBuilder
     private var setupFlow: some View {
-        switch step {
-        case .initial:
-            ManagedPinEntryView(
-                title: String(localized: "Set PIN", comment: "PIN setup: first entry"),
-                subtitle: String(localized: "Enter a 4-digit PIN", comment: "PIN setup hint"),
-                onComplete: { pin in
+        PinEntryView(
+            title: step == .initial
+                ? String(localized: "Create a PIN", comment: "PIN setup: first entry")
+                : String(localized: "Confirm PIN", comment: "PIN setup: confirm entry"),
+            subtitle: step == .initial
+                ? String(localized: "Choose a \(newPinLength)-digit PIN to lock Trinote", comment: "PIN setup hint; the number is 4 or 6")
+                : String(localized: "Enter the same PIN again", comment: "PIN confirm hint"),
+            errorMessage: $entryError,
+            pinLength: newPinLength,
+            icon: .symbol(step == .initial ? "lock.fill" : "checkmark.shield.fill"),
+            onComplete: { pin in
+                switch step {
+                case .initial:
                     firstEntry = pin
                     step = .confirm
-                },
-                triggerShake: $triggerShake
-            )
-            .navigationTitle(String(localized: "Set PIN", comment: "PIN setup nav title"))
-            .navigationBarTitleDisplayMode(.inline)
-
-        case .confirm:
-            ManagedPinEntryView(
-                title: String(localized: "Confirm PIN", comment: "PIN setup: confirm entry"),
-                subtitle: String(localized: "Re-enter your PIN", comment: "PIN confirm hint"),
-                onComplete: { pin in
-                    if pin == firstEntry {
-                        savePin(pin)
-                    } else {
+                    return .advance
+                case .confirm:
+                    guard pin == firstEntry else {
                         firstEntry = ""
                         step = .initial
-                        triggerShake = true
+                        entryError = String(localized: "PINs didn't match. Try again.", comment: "PIN setup: confirm mismatch")
+                        return .rejected
                     }
-                },
-                triggerShake: $triggerShake
-            )
-            .navigationTitle(String(localized: "Confirm PIN", comment: "PIN confirm nav title"))
-            .navigationBarTitleDisplayMode(.inline)
+                    return await savePin(pin)
+                }
+            }
+        ) {
+            Picker(String(localized: "PIN length", comment: "PIN setup: length picker"), selection: $newPinLength) {
+                ForEach(AppPinLength.options, id: \.self) { length in
+                    Text(String(localized: "\(length) Digits", comment: "PIN setup: length option; the number is 4 or 6"))
+                        .tag(length)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+            // Keep its space on the confirm step so the keypad doesn't jump.
+            .opacity(step == .initial ? 1 : 0)
+            .disabled(step != .initial)
+            .accessibilityHidden(step != .initial)
+            .animation(.easeInOut(duration: 0.2), value: step)
+        }
+        .onChange(of: newPinLength) { _, _ in
+            entryError = nil
         }
     }
 
     // MARK: - Remove Flow (verify current)
 
     private var removeFlow: some View {
-        ManagedPinEntryView(
-            title: String(localized: "Enter PIN", comment: "PIN remove: verify"),
-            subtitle: String(localized: "Enter your current PIN to remove it", comment: "PIN remove hint"),
+        PinEntryView(
+            title: String(localized: "Enter Current PIN", comment: "PIN remove: verify"),
+            subtitle: String(localized: "Enter your current PIN to turn it off", comment: "PIN remove hint"),
+            errorMessage: $entryError,
+            pinLength: appPinLength,
+            icon: .symbol("lock.open.fill"),
             onComplete: { pin in
-                Task {
-                    do {
-                        let match = try await keychain.verifyAppPin(pin)
-                        if match {
-                            try await keychain.deleteAppPin()
-                            appPinEnabled = false
-                            appBiometricEnabled = false
-                            onComplete()
-                            dismiss()
-                        } else {
-                            triggerShake = true
-                        }
-                    } catch {
-                        self.error = error.localizedDescription
+                do {
+                    guard try await keychain.verifyAppPin(pin) else {
+                        entryError = String(localized: "Incorrect PIN", comment: "PIN entry: wrong PIN")
+                        return .rejected
                     }
+                    try await keychain.deleteAppPin()
+                    appPinEnabled = false
+                    appBiometricEnabled = false
+                    onComplete()
+                    dismiss()
+                    return .done
+                } catch {
+                    self.error = error.localizedDescription
+                    return .rejected
                 }
-            },
-            triggerShake: $triggerShake
+            }
         )
-        .navigationTitle(String(localized: "Remove PIN", comment: "PIN remove nav title"))
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Helpers
 
-    private func savePin(_ pin: String) {
-        Task {
-            do {
-                try await keychain.saveAppPin(pin)
-                appPinEnabled = true
-                onComplete()
-                dismiss()
-            } catch {
-                self.error = error.localizedDescription
-            }
+    private func savePin(_ pin: String) async -> PinEntryResult {
+        do {
+            try await keychain.saveAppPin(pin)
+            appPinLength = pin.count
+            appPinEnabled = true
+            onComplete()
+            dismiss()
+            return .done
+        } catch {
+            firstEntry = ""
+            step = .initial
+            self.error = error.localizedDescription
+            return .rejected
         }
     }
 }
