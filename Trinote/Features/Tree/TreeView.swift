@@ -1071,8 +1071,9 @@ struct TreeView: View {
 
     /// Shared by pull-to-refresh and the toolbar refresh button.
     private func refreshWithSync() async {
+        // A sync that changed the cache already pruned and reloaded the tree (`.trinoteTreeShouldRefresh`); the
+        // server reload below rebuilds it either way.
         await self.appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
-        self.viewModel?.pruneDeletedNodes()
         await self.viewModel?.refreshFromServerIfOnline()
     }
 
@@ -1177,34 +1178,6 @@ struct TreeView: View {
         .padding(.horizontal)
     }
 
-    private func fullSyncBanner(_ sync: SyncManager) -> some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(fullSyncPhaseLabel(sync))
-                        .font(.subheadline.weight(.medium))
-                    Text("Please keep the app open while syncing")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if sync.totalNoteCount > 0 {
-                    Text("\(sync.syncedNoteCount)/\(sync.totalNoteCount)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if sync.totalNoteCount > 0 {
-                ProgressView(value: sync.syncProgress)
-                    .tint(.accentColor)
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 10)
-    }
-
     private var localTransferReceiveBanner: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "antenna.radiowaves.left.and.right")
@@ -1224,39 +1197,6 @@ struct TreeView: View {
         }
         .padding(.vertical, 4)
         .listRowBackground(Color.accentColor.opacity(0.08))
-    }
-
-    /// Slim bar for a large quick sync (or the server's own sync); small ones keep to the toolbar spinner.
-    private func syncProgressBar(title: String, done: Int, total: Int, fraction: Double) -> some View {
-        VStack(spacing: 4) {
-            HStack {
-                Text(title)
-                    .font(.caption.weight(.medium))
-                Spacer()
-                Text(String(
-                    format: String(localized: "%1$@ of %2$@", comment: "Tree sync progress count"),
-                    done.formatted(),
-                    total.formatted()
-                ))
-                .font(.caption.monospacedDigit())
-            }
-            .foregroundStyle(.secondary)
-            ProgressView(value: min(max(fraction, 0), 1))
-                .tint(.accentColor)
-                .animation(.easeOut(duration: 0.25), value: fraction)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .combine)
-    }
-
-    private func fullSyncPhaseLabel(_ sync: SyncManager) -> String {
-        switch sync.phase {
-        case .walkingTree:       String(localized: "Building note tree…", comment: "Full sync phase")
-        case .downloadingContent: String(localized: "Downloading notes…", comment: "Full sync phase")
-        case .cleaningUp:        String(localized: "Finishing up…", comment: "Full sync phase")
-        default:                 String(localized: "Syncing…", comment: "Full sync phase")
-        }
     }
 
     private func rootNotebookHeaderRow(viewModel vm: TreeViewModel) -> some View {
@@ -1287,7 +1227,7 @@ struct TreeView: View {
                         .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(.borderless)
-            } else {
+            } else if !isSelectMode {
                 Button {
                     createSheetContext = CreateNoteSheetContext(parentNote: syntheticRootNoteItem(), viewModel: vm)
                 } label: {
@@ -1352,8 +1292,7 @@ struct TreeView: View {
     }
 
     private func treeList(_ vm: TreeViewModel) -> some View {
-        let sync = appState.syncManager
-        return ScrollViewReader { proxy in
+        ScrollViewReader { proxy in
             List {
                 if isLocalTransferUIHost, appState.localTransfer.receiveModeEnabled {
                     localTransferReceiveBanner
@@ -1364,34 +1303,8 @@ struct TreeView: View {
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.red.opacity(0.08))
                 }
-                if sync.isSyncing, !sync.hasCompletedFullSync {
-                    fullSyncBanner(sync)
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.accentColor.opacity(0.08))
-                } else if sync.showsIncrementalProgress {
-                    syncProgressBar(
-                        title: sync.phase == .downloadingContent
-                            ? String(localized: "Downloading notes", comment: "Tree sync progress: note bodies")
-                            : String(localized: "Syncing changes", comment: "Tree sync progress: entity changes"),
-                        done: sync.syncedNoteCount,
-                        total: sync.totalNoteCount,
-                        fraction: sync.syncProgress
-                    )
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.accentColor.opacity(0.06))
-                } else if sync.hasCompletedFullSync, let server = sync.serverPullProgress {
-                    syncProgressBar(
-                        title: String(localized: "Server is syncing", comment: "Tree progress: the server pulls from its own sync server"),
-                        done: server.pulled,
-                        total: server.total,
-                        fraction: server.fraction
-                    )
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.accentColor.opacity(0.06))
-                }
+                // Its own view: progress ticks then redraw only this row, not the whole list.
+                TreeSyncStatusRows(sync: appState.syncManager)
                 if parentNoteId == "root", showsRootNotebookHeader {
                     rootNotebookHeaderRow(viewModel: vm)
                         .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
@@ -1916,4 +1829,102 @@ private struct SyncToolbarIcon: View {
     }
     .environment(AppState())
     .modelContainer(PersistenceManager.shared.container)
+}
+
+/// The tree's sync banner and progress bars. A separate view so only it reads `SyncManager`'s progress, and a progress
+/// tick redraws this row instead of every tree row.
+private struct TreeSyncStatusRows: View {
+    let sync: SyncManager
+
+    var body: some View {
+        if sync.isSyncing, !sync.hasCompletedFullSync {
+            fullSyncBanner
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.accentColor.opacity(0.08))
+        } else if sync.showsIncrementalProgress {
+            syncProgressBar(
+                title: sync.phase == .downloadingContent
+                    ? String(localized: "Downloading notes", comment: "Tree sync progress: note bodies")
+                    : String(localized: "Syncing changes", comment: "Tree sync progress: entity changes"),
+                done: sync.syncedNoteCount,
+                total: sync.totalNoteCount,
+                fraction: sync.syncProgress
+            )
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.accentColor.opacity(0.06))
+        } else if sync.hasCompletedFullSync, let server = sync.serverPullProgress {
+            syncProgressBar(
+                title: String(localized: "Server is syncing", comment: "Tree progress: the server pulls from its own sync server"),
+                done: server.pulled,
+                total: server.total,
+                fraction: server.fraction
+            )
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.accentColor.opacity(0.06))
+        }
+    }
+
+    private var fullSyncBanner: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(fullSyncPhaseLabel)
+                        .font(.subheadline.weight(.medium))
+                    Text("Please keep the app open while syncing")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if sync.totalNoteCount > 0 {
+                    Text("\(sync.syncedNoteCount)/\(sync.totalNoteCount)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if sync.totalNoteCount > 0 {
+                ProgressView(value: sync.syncProgress)
+                    .tint(.accentColor)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+    }
+
+    /// Slim bar for a large quick sync (or the server's own sync); small ones keep to the toolbar spinner.
+    private func syncProgressBar(title: String, done: Int, total: Int, fraction: Double) -> some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(.caption.weight(.medium))
+                Spacer()
+                Text(String(
+                    format: String(localized: "%1$@ of %2$@", comment: "Tree sync progress count"),
+                    done.formatted(),
+                    total.formatted()
+                ))
+                .font(.caption.monospacedDigit())
+            }
+            .foregroundStyle(.secondary)
+            ProgressView(value: min(max(fraction, 0), 1))
+                .tint(.accentColor)
+                .animation(.easeOut(duration: 0.25), value: fraction)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var fullSyncPhaseLabel: String {
+        switch sync.phase {
+        case .walkingTree:       String(localized: "Building note tree…", comment: "Full sync phase")
+        case .downloadingContent: String(localized: "Downloading notes…", comment: "Full sync phase")
+        case .cleaningUp:        String(localized: "Finishing up…", comment: "Full sync phase")
+        default:                 String(localized: "Syncing…", comment: "Full sync phase")
+        }
+    }
 }

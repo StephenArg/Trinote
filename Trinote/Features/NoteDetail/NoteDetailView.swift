@@ -3302,10 +3302,7 @@ struct NoteDetailView: View {
             let tracks: [GeoMapTrack]
             let shapes: [GeoMapShape]
             if vm.client != nil, vm.isOnline {
-                async let serverPinsAndShapes = vm.fetchGeoMapPinsAndShapesFromServer(note: note)
-                async let serverTracks = vm.fetchGeoMapTracksFromServer(note: note)
-                (pins, shapes) = await serverPinsAndShapes
-                tracks = await serverTracks
+                (pins, shapes, tracks) = await vm.fetchGeoMapLayersFromServer(note: note)
             } else {
                 pins = vm.geoMapPinsFromCache()
                 tracks = vm.geoMapTracksFromCache()

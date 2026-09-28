@@ -257,7 +257,8 @@ enum TriliumInlineImageCaching {
         persistence: PersistenceManager,
         serverProfileId: String,
         sourceNoteId: String,
-        parentNoteIds: [String]
+        parentNoteIds: [String],
+        maxBytes: Int? = nil
     ) async -> Bool {
         if plausibleCachedImage(
             entityId: reference.entityId,
@@ -281,7 +282,8 @@ enum TriliumInlineImageCaching {
             persistence: persistence,
             serverProfileId: serverProfileId,
             sourceNoteId: sourceNoteId,
-            parentNoteIds: parentNoteIds
+            parentNoteIds: parentNoteIds,
+            maxBytes: maxBytes
         ) != nil
     }
 
@@ -352,6 +354,7 @@ enum TriliumInlineImageCaching {
         )
     }
 
+    /// - Parameter maxBytes: Larger images aren't kept (Settings: images over 5 MB left out).
     private static func persistPlausibleImage(
         entityId: String,
         entityType: String,
@@ -359,9 +362,11 @@ enum TriliumInlineImageCaching {
         serverProfileId: String,
         persistence: PersistenceManager,
         sourceNoteId: String?,
-        parentNoteIds: [String]
+        parentNoteIds: [String],
+        maxBytes: Int? = nil
     ) {
         guard data.isPlausibleInlineImagePayload else { return }
+        if let maxBytes, data.count > maxBytes { return }
         let mime = data.detectImageMIME()
         do {
             if let sourceNoteId {
@@ -398,7 +403,8 @@ enum TriliumInlineImageCaching {
         persistence: PersistenceManager,
         serverProfileId: String,
         sourceNoteId: String?,
-        parentNoteIds: [String]
+        parentNoteIds: [String],
+        maxBytes: Int? = nil
     ) async -> Data? {
         do {
             if routeType.lowercased() == "attachments" {
@@ -410,7 +416,8 @@ enum TriliumInlineImageCaching {
                     serverProfileId: serverProfileId,
                     persistence: persistence,
                     sourceNoteId: sourceNoteId,
-                    parentNoteIds: parentNoteIds
+                    parentNoteIds: parentNoteIds,
+                    maxBytes: maxBytes
                 )
                 return data.isPlausibleInlineImagePayload ? data : nil
             }
@@ -424,7 +431,8 @@ enum TriliumInlineImageCaching {
                     serverProfileId: serverProfileId,
                     persistence: persistence,
                     sourceNoteId: sourceNoteId,
-                    parentNoteIds: parentNoteIds
+                    parentNoteIds: parentNoteIds,
+                    maxBytes: maxBytes
                 )
                 return noteBody
             }
@@ -439,7 +447,8 @@ enum TriliumInlineImageCaching {
                     serverProfileId: serverProfileId,
                     persistence: persistence,
                     sourceNoteId: sourceNoteId,
-                    parentNoteIds: parentNoteIds
+                    parentNoteIds: parentNoteIds,
+                    maxBytes: maxBytes
                 )
                 return svgData.isPlausibleInlineImagePayload ? svgData : nil
             }

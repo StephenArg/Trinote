@@ -233,6 +233,9 @@ struct NoteResponse: Decodable {
     let parentBranchIds: [String]
     let childBranchIds: [String]
     let attributes: [AttributeResponse]
+    /// Whether the note sits anywhere under `_share` (publicly shared), when the response carried its ancestors
+    /// (`tree/load` does); `nil` when unknown.
+    var hasShareAncestor: Bool?
 
     enum CodingKeys: String, CodingKey {
         case noteId, isProtected, title, type, mime, blobId, isDeleted
@@ -783,6 +786,23 @@ struct FullSyncTreeBatchEntry: Sendable {
     let childBranches: [BranchResponse]
 }
 
+/// `GET /api/stats/subtree-size/:noteId`.
+struct SubtreeSizeResponse: Decodable, Sendable, Equatable {
+    /// Bytes of content (bodies, attachments and revisions) under the note.
+    let subTreeSize: Int64
+    let subTreeNoteCount: Int
+}
+
+/// What the offline cache holds for a note when a full-sync batch is fetched.
+struct FullSyncCachedNoteState: Sendable, Equatable {
+    let blobId: String?
+    let title: String
+    let type: String
+    let mime: String
+    let isProtected: Bool
+    let utcDateModified: String?
+}
+
 /// Trilium's answer to `PUT /api/notes/:noteId/clone-to-note/:parentNoteId`. A refused clone (the note is already
 /// under that parent, or the clone would create a cycle) comes back as `success: false` with a `message`.
 struct CloneNoteResult: Decodable, Equatable, Sendable {
@@ -848,14 +868,18 @@ struct SyncCheckResponse: Decodable {
 /// Normalized sync pull response used by `SyncManager`.
 /// Parsed from `GET /api/sync/changed` whose items are
 /// `{ entityChange: {...}, entity: {...} | null }`.
-struct SyncPullResponse {
-    struct EntityChange {
+/// `@unchecked Sendable`: the entity rows come straight from `JSONSerialization` (strings, numbers, arrays and
+/// dictionaries) and nothing mutates them after parsing, so handing a pull to `SyncStore` is safe.
+struct SyncPullResponse: @unchecked Sendable {
+    struct EntityChange: Sendable {
         let entityName: String
         let entityId: String
         let isErased: Bool
+        /// The change's number in the server's history (`entity_changes.id`).
+        var id: Int64? = nil
     }
 
-    let entityChanges: [EntityChange]
+    var entityChanges: [EntityChange]
     let maxEntityChangeId: Int64
     let outstandingPullCount: Int
 
@@ -867,6 +891,13 @@ struct SyncPullResponse {
     /// `note_reordering` rows: parent note id → `{ branchId: notePosition }` for all of its children.
     /// The server sends these when it re-sorts children (`#sorted`), which rewrites positions without branch rows.
     var noteReorderings: [String: [String: Int]] = [:]
+
+    /// This pull without the changes numbered `id` or earlier (already applied); changes without a number stay.
+    func droppingChanges(through id: Int64) -> SyncPullResponse {
+        var copy = self
+        copy.entityChanges = entityChanges.filter { ($0.id ?? .max) > id }
+        return copy
+    }
 
     /// Parses the `GET /api/sync/changed` response format:
     /// ```
@@ -898,7 +929,7 @@ struct SyncPullResponse {
             else { continue }
 
             let erased = FlexJSON.bool(ec["isErased"])
-            changes.append(EntityChange(entityName: name, entityId: eid, isErased: erased))
+            changes.append(EntityChange(entityName: name, entityId: eid, isErased: erased, id: FlexJSON.int64(ec["id"])))
 
             // Group entity data by type (nil / NSNull for erased entities).
             if !erased, let entity = item["entity"] as? [String: Any] {

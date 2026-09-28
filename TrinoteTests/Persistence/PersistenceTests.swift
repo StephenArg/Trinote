@@ -662,6 +662,115 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(hits.map(\.title), ["Alpha", "Beta"])
     }
 
+    // MARK: - Body staleness (blob ids)
+
+    func testBodyIsStaleOnlyWhenItsBlobIdDiffersFromTheNotes() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "same", blobId: "b1"), serverProfileId: "server1")
+        try persistence.cacheNoteContent("same", content: Data("x".utf8), serverProfileId: "server1", contentBlobId: "b1")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "changed", blobId: "b1"), serverProfileId: "server1")
+        try persistence.cacheNoteContent("changed", content: Data("x".utf8), serverProfileId: "server1", contentBlobId: "b1")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "changed", blobId: "b2"), serverProfileId: "server1")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "empty"), serverProfileId: "server1")
+
+        // Dates alone would call "same" stale; its blob id says it isn't.
+        let serverDates = ["same": "2030-01-01 00:00:00.000Z", "changed": "", "empty": ""]
+        let needing = try persistence.fetchNotesNeedingContent(serverProfileId: "server1", serverModifiedAfter: serverDates)
+        XCTAssertEqual(Set(needing), ["changed", "empty"])
+    }
+
+    func testBodyCachedBeforeBlobIdsComparesDatesOnceThenAdoptsTheBlobId() throws {
+        try cacheNoteWithUTC(id: "legacy", title: "Legacy", utc: "2026-01-01 00:00:00.000Z")
+        try cacheNoteWithUTC(id: "legacyStale", title: "Stale", utc: "2026-01-01 00:00:00.000Z")
+        XCTAssertNil(try persistence.fetchCachedNote(id: "legacy", serverProfileId: "server1")?.contentBlobId)
+
+        let needing = try persistence.fetchNotesNeedingContent(
+            serverProfileId: "server1",
+            serverModifiedAfter: ["legacy": "2026-01-01 00:00:00.000Z", "legacyStale": "2026-05-01 00:00:00.000Z"]
+        )
+        XCTAssertEqual(needing, ["legacyStale"])
+        XCTAssertEqual(try persistence.fetchCachedNote(id: "legacy", serverProfileId: "server1")?.contentBlobId, "blob-legacy")
+        XCTAssertNil(try persistence.fetchCachedNote(id: "legacyStale", serverProfileId: "server1")?.contentBlobId)
+    }
+
+    func testUnprotectedContentCheckSkipsProtectedAndUncachedNotes() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "secret", isProtected: true), serverProfileId: "server1")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "plain"), serverProfileId: "server1")
+        let candidates = ["secret": "", "plain": "", "unknown": ""]
+
+        XCTAssertEqual(try persistence.fetchNotesNeedingContent(serverProfileId: "server1", serverModifiedAfter: candidates), ["plain"])
+        XCTAssertEqual(try persistence.fetchProtectedNotesNeedingContent(serverProfileId: "server1", serverModifiedAfter: candidates), ["secret"])
+    }
+
+    func testCacheSizeSumsRecordedSizesAndMeasuresOlderRowsOnce() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "sized"), serverProfileId: "server1")
+        try persistence.cacheNoteContent("sized", content: Data(count: 1_000), serverProfileId: "server1")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "older"), serverProfileId: "server1")
+        try persistence.cacheNoteContent("older", content: Data(count: 300), serverProfileId: "server1")
+        let older = try XCTUnwrap(persistence.fetchCachedNote(id: "older", serverProfileId: "server1"))
+        older.contentByteCount = nil
+        try persistence.cacheImage(entityId: "img", entityType: "attachments", data: Data(count: 50), mime: "image/png", serverProfileId: "server1")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "noBody"), serverProfileId: "server1")
+
+        XCTAssertEqual(try persistence.estimateCacheSizeInBytes(for: "server1"), 1_350)
+        XCTAssertEqual(older.contentByteCount, 300)
+        XCTAssertEqual(try persistence.estimateCacheSizeInBytes(for: "other"), 0)
+    }
+
+    func testTitleSearchMatchesInTheStoreUpToTheLimit() throws {
+        for (id, title) in [("n1", "Grocery list"), ("n2", "Café notes"), ("n3", "Weekly GROCERY run"), ("n4", "Unrelated")] {
+            try persistence.cacheNote(from: TestFixtures.noteResponse(id: id, title: title), serverProfileId: "server1")
+        }
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "n5", title: "grocery elsewhere"), serverProfileId: "server2")
+
+        XCTAssertEqual(Set(try persistence.fetchCachedNotes(titleContaining: "grocery", serverProfileId: "server1", limit: 30).map(\.noteId)), ["n1", "n3"])
+        XCTAssertEqual(try persistence.fetchCachedNotes(titleContaining: "cafe", serverProfileId: "server1", limit: 30).map(\.noteId), ["n2"])
+        XCTAssertEqual(try persistence.fetchCachedNotes(titleContaining: "grocery", serverProfileId: "server1", limit: 1).count, 1)
+    }
+
+    func testRememberedIconIsDroppedWhenTheStoreSaves() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "folder", parentNoteIds: ["root"], childNoteIds: ["leaf"]), serverProfileId: "server1")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "leaf", parentNoteIds: ["folder"]), serverProfileId: "server1")
+        try persistence.cacheBranch(from: TestFixtures.branchResponse(branchId: "branch_folder_leaf", noteId: "leaf", parentNoteId: "folder"), serverProfileId: "server1")
+        try persistence.cacheAttributeBatch(
+            from: AttributeResponse(attributeId: "icon", noteId: "folder", type: "label", name: "iconClass", value: "bx bx-star", position: 10, isInheritable: true, utcDateModified: nil),
+            serverProfileId: "server1"
+        )
+        try persistence.commitBatch()
+        XCTAssertEqual(persistence.cachedEffectiveNoteIconClass(noteId: "leaf", serverProfileId: "server1"), "bx bx-star")
+        XCTAssertEqual(persistence.cachedEffectiveNoteIconClass(noteId: "folder", serverProfileId: "server1"), "bx bx-star")
+
+        try persistence.setCachedIconClass("bx bx-moon", noteId: "folder", serverProfileId: "server1")
+        XCTAssertEqual(persistence.cachedEffectiveNoteIconClass(noteId: "folder", serverProfileId: "server1"), "bx bx-moon")
+    }
+
+    func testEachServerKeepsItsOwnRowsForTheSameIds() throws {
+        // Every Trilium server has `root` and system notes like `_hidden`, with the same branch ids under them.
+        for (profile, title) in [("serverA", "Root A"), ("serverB", "Root B")] {
+            try persistence.cacheNote(from: TestFixtures.noteResponse(id: "root", title: title, parentNoteIds: []), serverProfileId: profile)
+            try persistence.cacheNote(from: TestFixtures.noteResponse(id: "_hidden", title: "Hidden \(profile)"), serverProfileId: profile)
+            try persistence.cacheBranchBatch(
+                from: TestFixtures.branchResponse(branchId: "root__hidden", noteId: "_hidden", parentNoteId: "root"),
+                serverProfileId: profile
+            )
+            try persistence.cacheAttributeBatch(
+                from: TestFixtures.attributeResponse(attributeId: "_hiddenIcon", noteId: "_hidden", name: "iconClass", value: "bx bx-\(profile)"),
+                serverProfileId: profile
+            )
+        }
+        try persistence.commitBatch()
+
+        XCTAssertEqual(try persistence.fetchCachedNote(id: "root", serverProfileId: "serverA")?.title, "Root A")
+        XCTAssertEqual(try persistence.fetchCachedNote(id: "root", serverProfileId: "serverB")?.title, "Root B")
+        XCTAssertNotNil(try persistence.fetchCachedBranch(branchId: "root__hidden", serverProfileId: "serverA"))
+        XCTAssertNotNil(try persistence.fetchCachedBranch(branchId: "root__hidden", serverProfileId: "serverB"))
+        XCTAssertEqual(try persistence.fetchCachedAttributes(noteId: "_hidden", serverProfileId: "serverA").map(\.value), ["bx bx-serverA"])
+
+        try persistence.clearCache(for: "serverA")
+        XCTAssertNil(try persistence.fetchCachedNote(id: "root", serverProfileId: "serverA"))
+        XCTAssertEqual(try persistence.fetchCachedNote(id: "root", serverProfileId: "serverB")?.title, "Root B")
+        XCTAssertNotNil(try persistence.fetchCachedBranch(branchId: "root__hidden", serverProfileId: "serverB"))
+    }
+
     private func cacheNoteWithUTC(id: String, title: String, utc: String, profile: String = "server1") throws {
         try persistence.cacheNote(from: TestFixtures.noteResponse(id: id, title: title), serverProfileId: profile)
         try persistence.cacheNoteContent(id, content: Data("<p></p>".utf8), serverProfileId: profile, utcDateModified: utc)

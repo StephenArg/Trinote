@@ -58,6 +58,43 @@ final class CacheExclusionPolicyTests: XCTestCase {
         )
     }
 
+    func testSnapshotAnswersLikeThePolicyForManyNotes() throws {
+        try persistence.cacheNote(
+            from: TestFixtures.noteResponse(id: "notebookA", title: "A", parentNoteIds: ["root"], childNoteIds: ["inner", "cloned"]),
+            serverProfileId: "s1"
+        )
+        try persistence.cacheNote(
+            from: TestFixtures.noteResponse(id: "inner", title: "Inner", parentNoteIds: ["notebookA"], childNoteIds: ["deep"]),
+            serverProfileId: "s1"
+        )
+        try persistence.cacheNote(
+            from: TestFixtures.noteResponse(id: "deep", title: "Deep", parentNoteIds: ["inner"]),
+            serverProfileId: "s1"
+        )
+        try policy.setExcludedRootNoteIds(["notebookA"], serverProfileId: "s1")
+
+        let rules = policy.snapshot(serverProfileId: "s1")
+        XCTAssertTrue(rules.isExcludedRoot("notebookA"))
+        XCTAssertFalse(rules.isExcludedRoot("inner"))
+        let cases: [(String, [String])] = [
+            ("notebookA", ["root"]),
+            ("inner", ["notebookA"]),
+            ("deep", ["inner"]),
+            ("cloned", ["notebookA", "notebookB"]),
+            ("elsewhere", ["notebookB"]),
+        ]
+        for (noteId, parents) in cases {
+            XCTAssertEqual(
+                rules.isNoteExcludedFromCache(noteId: noteId, parentNoteIds: parents),
+                policy.isNoteExcludedFromCache(noteId: noteId, parentNoteIds: parents, serverProfileId: "s1"),
+                noteId
+            )
+        }
+        XCTAssertTrue(rules.isNoteExcludedFromCache(noteId: "deep", parentNoteIds: ["inner"]))
+        XCTAssertFalse(rules.isNoteExcludedFromCache(noteId: "cloned", parentNoteIds: ["notebookA", "notebookB"]))
+        XCTAssertFalse(policy.snapshot(serverProfileId: "other").isNoteExcludedFromCache(noteId: "inner", parentNoteIds: ["notebookA"]))
+    }
+
     func testCloneEscapeAllowsCacheWhenParentOutsideSubtree() throws {
         try persistence.cacheNote(
             from: TestFixtures.noteResponse(

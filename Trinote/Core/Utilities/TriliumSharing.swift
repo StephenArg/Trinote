@@ -35,19 +35,27 @@ enum TriliumSharing {
         return p
     }
 
-    /// Walks parent links via `getNote` until `_share` is found (handles clones nested under folders inside `_share`).
+    /// Whether `_share` is above the note on any path (handles clones nested under folders inside `_share`).
+    /// One `getNote`: its `tree/load` carries every ancestor, so the client answers without walking up.
     static func noteHasShareAncestor(noteId: String, client: any TriliumClientProtocol) async throws -> Bool {
-        var visited = Set<String>()
-        var queue: [String] = [noteId]
-        visited.insert(noteId)
-        while let id = queue.first {
-            queue.removeFirst()
-            let response = try await client.getNote(id)
+        let response = try await client.getNote(noteId)
+        if let known = response.hasShareAncestor { return known }
+        return try await walkParentsForShareRoot(from: response, client: client)
+    }
+
+    /// For a client that doesn't report ancestry: walks parent links one `getNote` at a time.
+    private static func walkParentsForShareRoot(from note: NoteResponse, client: any TriliumClientProtocol) async throws -> Bool {
+        var visited: Set<String> = [note.noteId]
+        var queue: [NoteResponse] = [note]
+        var head = 0
+        while head < queue.count {
+            let response = queue[head]
+            head += 1
             for rawParent in response.parentNoteIds {
                 guard let parentId = sanitizedParentNoteId(rawParent) else { continue }
                 if parentId == shareRootNoteId { return true }
                 if visited.insert(parentId).inserted {
-                    queue.append(parentId)
+                    queue.append(try await client.getNote(parentId))
                 }
             }
         }

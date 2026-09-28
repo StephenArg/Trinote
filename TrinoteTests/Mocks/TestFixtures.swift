@@ -11,7 +11,8 @@ enum TestFixtures {
         parentNoteIds: [String] = ["root"],
         childNoteIds: [String] = [],
         childBranchIds: [String] = [],
-        attributes: [AttributeResponse] = []
+        attributes: [AttributeResponse] = [],
+        blobId: String? = nil
     ) -> NoteResponse {
         NoteResponse(
             noteId: id,
@@ -19,7 +20,7 @@ enum TestFixtures {
             title: title,
             type: type,
             mime: mime,
-            blobId: "blob-\(id)",
+            blobId: blobId ?? "blob-\(id)",
             isDeleted: false,
             dateCreated: "2024-01-15 12:00:00",
             dateModified: "2024-01-15 13:00:00",

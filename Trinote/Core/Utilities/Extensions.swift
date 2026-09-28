@@ -330,3 +330,13 @@ extension Task where Success == Never, Failure == Never {
         try await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000)
     }
 }
+
+// MARK: - Array
+
+extension Array {
+    /// Consecutive slices of at most `size` elements (the last may be shorter).
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0, !isEmpty else { return isEmpty ? [] : [self] }
+        return stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) }
+    }
+}

@@ -21,8 +21,9 @@ final class TreeViewModel {
     /// Trilium system notes that should not appear in the tree.
     private static let hiddenNoteIds: Set<String> = TriliumSharing.hiddenSystemChildNoteIds
 
-    private var noteCache: [String: NoteItem] = [:]
-    private var branchCache: [String: BranchItem] = [:]
+    // Lookup caches only (`visibleNodes` drives the rows): observing them would redraw every row on each insert.
+    @ObservationIgnored private var noteCache: [String: NoteItem] = [:]
+    @ObservationIgnored private var branchCache: [String: BranchItem] = [:]
     private var expandedBranches: Set<String> = []
     private var _rootChildren: [TreeNode] = []
     /// When true, `rootChildren` updates rebuild `visibleNodes` without animation (reveal-in-tree).
@@ -44,15 +45,24 @@ final class TreeViewModel {
     }
     /// Label lookups for the current pass over the tree; dropped whenever the rows are rebuilt.
     @ObservationIgnored private var labelResolver: TriliumLabelResolver?
+    /// Row icons for the current pass over the tree (a row's `body` asks on every render; the answer can walk every
+    /// ancestor); dropped whenever the rows are rebuilt.
+    @ObservationIgnored private var iconClassMemo: [String: String?] = [:]
+    /// Loaded notes by lowercased title, for `~template` relations that name their target by title; built on first use
+    /// per pass.
+    @ObservationIgnored private var loadedNotesByTitle: [String: NoteItem]?
 
     private let appState: AppState
     private let parentNoteId: String
-    private let persistence = PersistenceManager.shared
-    private let cacheExclusion = CacheExclusionPolicy()
+    private let persistence: PersistenceManager
+    private let cacheExclusion: CacheExclusionPolicy
 
-    init(appState: AppState, parentNoteId: String = "root") {
+    init(appState: AppState, parentNoteId: String = "root", persistence: PersistenceManager? = nil) {
         self.appState = appState
         self.parentNoteId = parentNoteId
+        let persistence = persistence ?? .shared
+        self.persistence = persistence
+        self.cacheExclusion = CacheExclusionPolicy(persistence: persistence)
     }
 
     var client: (any TriliumClientProtocol)? { appState.client }
@@ -71,6 +81,8 @@ final class TreeViewModel {
 
     private func rebuildVisibleNodes(animated: Bool = true) {
         labelResolver = nil
+        iconClassMemo.removeAll(keepingCapacity: true)
+        loadedNotesByTitle = nil
         let result = Self.flatten(
             _rootChildren,
             hideCalendarRootChildren: hidesCalendarRootChildrenInTree,
@@ -932,14 +944,20 @@ final class TreeViewModel {
         guard let profileId = serverProfileId else { return }
         let validBranchIds: Set<String>
         do {
-            let pid = profileId
-            let all = try persistence.fetchAllCachedBranchIds(serverProfileId: pid)
-            validBranchIds = Set(all)
+            // Only the branches on screen need checking, not every cached branch.
+            validBranchIds = try persistence.fetchExistingBranchIds(
+                among: Self.branchIds(in: rootChildren),
+                serverProfileId: profileId
+            )
         } catch {
             Log.cache.error("pruneDeletedNodes: failed to fetch branch IDs: \(error)")
             return
         }
         rootChildren = Self.pruneTree(rootChildren, validBranchIds: validBranchIds)
+    }
+
+    private static func branchIds(in nodes: [TreeNode]) -> [String] {
+        nodes.flatMap { node in [node.branch.branchId] + branchIds(in: node.children ?? []) }
     }
 
     private static func pruneTree(_ nodes: [TreeNode], validBranchIds: Set<String>) -> [TreeNode] {
@@ -1105,6 +1123,13 @@ final class TreeViewModel {
 
     /// Own, template, or inherited `#iconClass` for tree display.
     func effectiveIconClass(for note: NoteItem) -> String? {
+        if let memo = iconClassMemo[note.noteId] { return memo }
+        let icon = resolveEffectiveIconClass(for: note)
+        iconClassMemo[note.noteId] = icon
+        return icon
+    }
+
+    private func resolveEffectiveIconClass(for note: NoteItem) -> String? {
         if let resolved = NoteIconClassResolver.effectiveIconClass(
             noteId: note.noteId,
             ownIconClass: note.iconClass,
@@ -1128,7 +1153,10 @@ final class TreeViewModel {
            let icon = BoxiconsResolver.usableIconClass(from: templateNote.iconClass) {
             return icon
         }
-        if let match = noteCache.values.first(where: { $0.title.caseInsensitiveCompare(target) == .orderedSame }),
+        if loadedNotesByTitle == nil {
+            loadedNotesByTitle = Dictionary(noteCache.values.map { ($0.title.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
+        }
+        if let match = loadedNotesByTitle?[target.lowercased()],
            let icon = BoxiconsResolver.usableIconClass(from: match.iconClass) {
             return icon
         }
@@ -1179,15 +1207,16 @@ final class TreeViewModel {
             serverProfileId: profileId
         )) ?? []
         if ids.isEmpty {
-            ids = (try? persistence.fetchChildNoteIdsReferencingParent(
-                parentNoteId: parentNoteId,
-                serverProfileId: profileId
-            )) ?? []
+            // No branch rows under it: fall back to the note's own child list. A leaf has none, so tapping one doesn't
+            // scan every cached note's parent list.
+            ids = (try? persistence.fetchCachedNote(id: parentNoteId, serverProfileId: profileId))?.childNoteIds ?? []
         }
         guard !ids.isEmpty else { return nil }
+        let notes = (try? persistence.fetchCachedNotes(ids: ids, serverProfileId: profileId)) ?? [:]
+        let attributesByNote = (try? persistence.fetchCachedAttributesByNote(noteIds: ids, serverProfileId: profileId)) ?? [:]
         return ids.map { childId in
-            if let n = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) {
-                let cachedAttrs = (try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
+            if let n = notes[childId] {
+                let cachedAttrs = attributesByNote[childId] ?? []
                 let iconClass = cachedAttrs.first { $0.name == "iconClass" }?.value
                 return ChildNoteSummary(
                     noteId: n.noteId,
@@ -1233,52 +1262,89 @@ final class TreeViewModel {
         guard let profileId = serverProfileId else { return }
         Task {
             do {
-                try persistence.cacheNoteBatchIfAllowed(from: rootNote, serverProfileId: profileId, policy: cacheExclusion)
-                persistNodesRecursive(rootChildren, profileId: profileId)
-                try persistence.commitBatch()
+                try persistLoadedTree(rootNote: rootNote, profileId: profileId)
             } catch {
                 Log.persistence.error("Batch tree persist failed: \(error)")
             }
         }
     }
 
-    private func persistNodesRecursive(_ nodes: [TreeNode], profileId: String) {
+    /// Caches the loaded tree in one pass: exclusion rules read once, existing rows fetched by id in bulk, only rows
+    /// that differ written, one save.
+    private func persistLoadedTree(rootNote: NoteResponse, profileId: String) throws {
+        let rules = cacheExclusion.snapshot(serverProfileId: profileId)
         let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
-        for node in nodes where !ghosts.contains(node.note.noteId) {
-            let noteResponse = NoteResponse(
-                noteId: node.note.noteId,
-                isProtected: node.note.isProtected,
-                title: node.note.title,
-                type: node.note.type.rawValue,
-                mime: node.note.mime,
-                blobId: nil,
-                isDeleted: false,
-                dateCreated: node.note.dateCreated,
-                dateModified: node.note.dateModified,
-                utcDateCreated: "",
-                utcDateModified: "",
-                parentNoteIds: node.note.parentNoteIds,
-                childNoteIds: node.note.childNoteIds,
-                parentBranchIds: node.note.parentBranchIds,
-                childBranchIds: node.note.childBranchIds,
-                attributes: node.note.attributes.map { attr in
-                    AttributeResponse(
-                        attributeId: attr.attributeId,
-                        noteId: attr.noteId,
-                        type: attr.type.rawValue,
-                        name: attr.name,
-                        value: attr.value,
-                        position: attr.position,
-                        isInheritable: attr.isInheritable,
-                        utcDateModified: nil
+        var notes: [NoteResponse] = []
+        var branches: [BranchResponse] = []
+        var attributes: [AttributeResponse] = []
+
+        if !rules.isNoteExcludedFromCache(noteId: rootNote.noteId, parentNoteIds: rootNote.parentNoteIds) {
+            notes.append(rootNote)
+        }
+        func collect(_ nodes: [TreeNode]) {
+            for node in nodes where !ghosts.contains(node.note.noteId) {
+                let note = Self.noteResponse(for: node.note)
+                if !rules.isNoteExcludedFromCache(noteId: note.noteId, parentNoteIds: note.parentNoteIds) {
+                    notes.append(note)
+                    attributes.append(contentsOf: note.attributes)
+                    branches.append(
+                        BranchResponse(
+                            branchId: node.branch.branchId,
+                            noteId: node.branch.noteId,
+                            parentNoteId: node.branch.parentNoteId,
+                            prefix: node.branch.prefix,
+                            notePosition: node.branch.notePosition,
+                            isExpanded: node.branch.isExpanded,
+                            utcDateModified: nil
+                        )
                     )
                 }
-            )
-            try? persistence.cacheNoteBatchIfAllowed(from: noteResponse, serverProfileId: profileId, policy: cacheExclusion)
+                if let children = node.children {
+                    collect(children)
+                }
+            }
+        }
+        collect(rootChildren)
 
-            // Cache attributes
-            for attr in node.note.attributes {
-                let attrResp = AttributeResponse(
+        let cachedNotes = try persistence.fetchCachedNotes(ids: notes.map(\.noteId), serverProfileId: profileId)
+        let cachedBranches = try persistence.fetchCachedBranches(ids: branches.map(\.branchId), serverProfileId: profileId)
+        let cachedAttributes = try persistence.fetchCachedAttributes(ids: attributes.map(\.attributeId), serverProfileId: profileId)
+        var seenNotes = Set<String>()
+        for note in notes where seenNotes.insert(note.noteId).inserted {
+            persistence.upsertNoteForFullSync(note, existing: cachedNotes[note.noteId], serverProfileId: profileId)
+        }
+        var seenBranches = Set<String>()
+        for branch in branches where seenBranches.insert(branch.branchId).inserted {
+            persistence.upsertBranchForFullSync(branch, existing: cachedBranches[branch.branchId], serverProfileId: profileId)
+        }
+        var seenAttributes = Set<String>()
+        for attribute in attributes where seenAttributes.insert(attribute.attributeId).inserted {
+            persistence.upsertAttributeForFullSync(attribute, existing: cachedAttributes[attribute.attributeId], serverProfileId: profileId)
+        }
+        if persistence.context.hasChanges {
+            try persistence.commitBatch()
+        }
+    }
+
+    private static func noteResponse(for note: NoteItem) -> NoteResponse {
+        NoteResponse(
+            noteId: note.noteId,
+            isProtected: note.isProtected,
+            title: note.title,
+            type: note.type.rawValue,
+            mime: note.mime,
+            blobId: nil,
+            isDeleted: false,
+            dateCreated: note.dateCreated,
+            dateModified: note.dateModified,
+            utcDateCreated: "",
+            utcDateModified: "",
+            parentNoteIds: note.parentNoteIds,
+            childNoteIds: note.childNoteIds,
+            parentBranchIds: note.parentBranchIds,
+            childBranchIds: note.childBranchIds,
+            attributes: note.attributes.map { attr in
+                AttributeResponse(
                     attributeId: attr.attributeId,
                     noteId: attr.noteId,
                     type: attr.type.rawValue,
@@ -1288,34 +1354,8 @@ final class TreeViewModel {
                     isInheritable: attr.isInheritable,
                     utcDateModified: nil
                 )
-                try? persistence.cacheAttributeBatchIfAllowed(
-                    from: attrResp,
-                    parentNoteIds: noteResponse.parentNoteIds,
-                    serverProfileId: profileId,
-                    policy: cacheExclusion
-                )
             }
-
-            let branchResponse = BranchResponse(
-                branchId: node.branch.branchId,
-                noteId: node.branch.noteId,
-                parentNoteId: node.branch.parentNoteId,
-                prefix: node.branch.prefix,
-                notePosition: node.branch.notePosition,
-                isExpanded: node.branch.isExpanded,
-                utcDateModified: nil
-            )
-            try? persistence.cacheBranchBatchIfAllowed(
-                from: branchResponse,
-                parentNoteIdsForNote: noteResponse.parentNoteIds,
-                serverProfileId: profileId,
-                policy: cacheExclusion
-            )
-
-            if let children = node.children {
-                persistNodesRecursive(children, profileId: profileId)
-            }
-        }
+        )
     }
 
     // MARK: - Cache Fallback (recursive)
@@ -1330,6 +1370,8 @@ final class TreeViewModel {
         }
     }
 
+    /// Children of `parentNoteId` from SwiftData in four queries: the parent's branches, the child notes, their
+    /// attributes and their own child branches (not three queries per child).
     private func loadCachedChildren(parentNoteId: String) -> [TreeNode] {
         guard let profileId = serverProfileId else {
             return []
@@ -1337,13 +1379,12 @@ final class TreeViewModel {
         let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
         do {
             let pairs = try persistence.fetchCachedChildren(parentNoteId: parentNoteId, serverProfileId: profileId)
-            let nodes: [TreeNode] = pairs.compactMap { branch, note -> TreeNode? in
-                if Self.hiddenNoteIds.contains(note.noteId) {
-                    return nil
-                }
-                if ghosts.contains(note.noteId) {
-                    return nil
-                }
+                .filter { !Self.hiddenNoteIds.contains($0.1.noteId) && !ghosts.contains($0.1.noteId) }
+            let childIds = pairs.map(\.1.noteId)
+            let attributesByNote = try persistence.fetchCachedAttributesByNote(noteIds: childIds, serverProfileId: profileId)
+            let grandchildBranches = try persistence.fetchCachedChildBranchesByParent(parentNoteIds: childIds, serverProfileId: profileId)
+
+            return pairs.map { branch, note -> TreeNode in
                 let branchItem = BranchItem(
                     branchId: branch.branchId,
                     noteId: branch.noteId,
@@ -1352,9 +1393,7 @@ final class TreeViewModel {
                     notePosition: branch.notePosition,
                     isExpanded: false
                 )
-
-                let cachedAttrs = (try? persistence.fetchCachedAttributes(noteId: note.noteId, serverProfileId: profileId)) ?? []
-                let attrs = cachedAttrs.map { a in
+                let attrs = (attributesByNote[note.noteId] ?? []).map { a in
                     AttributeItem(
                         attributeId: a.attributeId,
                         noteId: a.noteId,
@@ -1365,7 +1404,8 @@ final class TreeViewModel {
                         isInheritable: a.isInheritable
                     )
                 }
-
+                let ownChildBranches = grandchildBranches[note.noteId] ?? []
+                var seenChildren = Set<String>()
                 let noteItem = NoteItem(
                     noteId: note.noteId,
                     title: note.title,
@@ -1375,22 +1415,9 @@ final class TreeViewModel {
                     dateCreated: "",
                     dateModified: "",
                     parentNoteIds: note.parentNoteIds,
-                    childNoteIds: (try? persistence.fetchChildNoteIdsOrderedFromBranches(
-                        parentNoteId: note.noteId,
-                        serverProfileId: profileId
-                    )) ?? note.childNoteIds,
+                    childNoteIds: ownChildBranches.map(\.noteId).filter { seenChildren.insert($0).inserted },
                     parentBranchIds: note.parentBranchIds,
-                    childBranchIds: {
-                        let pid = profileId
-                        let nid = note.noteId
-                        let branches = (try? persistence.context.fetch(
-                            FetchDescriptor<CachedBranch>(
-                                predicate: #Predicate { $0.parentNoteId == nid && $0.serverProfileId == pid },
-                                sortBy: [SortDescriptor(\.notePosition)]
-                            )
-                        )) ?? []
-                        return branches.isEmpty ? note.childBranchIds : branches.map(\.branchId)
-                    }(),
+                    childBranchIds: ownChildBranches.isEmpty ? note.childBranchIds : ownChildBranches.map(\.branchId),
                     attributes: attrs
                 )
 
@@ -1400,7 +1427,6 @@ final class TreeViewModel {
 
                 return TreeNode(branch: branchItem, note: noteItem)
             }
-            return nodes
         } catch {
             Log.cache.error("Failed to load cached children for \(parentNoteId): \(error)")
             return []

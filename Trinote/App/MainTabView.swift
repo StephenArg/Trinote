@@ -74,6 +74,15 @@ struct MainTabView: View {
                 selectedTab = .notes
             }
         }
+        .sheet(item: firstSyncRequest) { request in
+            FirstSyncChoiceSheet(request: request)
+                .environment(appState)
+        }
+    }
+
+    /// A server's first full sync waits here for what to keep offline.
+    private var firstSyncRequest: Binding<SyncManager.FirstSyncRequest?> {
+        Binding(get: { appState.syncManager.pendingFirstSync }, set: { _ in })
     }
 
     @ViewBuilder

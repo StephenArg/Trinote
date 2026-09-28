@@ -301,11 +301,17 @@ final class SearchViewModel {
     @ObservationIgnored private var lastCommittedMatchQueryByNoteId: [String: String] = [:]
 
     private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var lintTask: Task<Void, Never>?
+    /// Bumped per search, so an older one finishing late can't touch the newer one's state.
+    @ObservationIgnored private var searchGeneration = 0
+    /// The note picker shows no snippets, so it skips the second search (`quick-search`) that fetches them.
+    private let fetchesSnippets: Bool
     private let appState: AppState
     private let persistence = PersistenceManager.shared
 
-    init(appState: AppState) {
+    init(appState: AppState, fetchesSnippets: Bool = true) {
         self.appState = appState
+        self.fetchesSnippets = fetchesSnippets
     }
 
     var client: (any TriliumClientProtocol)? { appState.client }
@@ -317,6 +323,7 @@ final class SearchViewModel {
 
     func onQueryChanged() {
         searchTask?.cancel()
+        lintTask?.cancel()
         clearMatchExpansionState()
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
             results = []
@@ -333,22 +340,35 @@ final class SearchViewModel {
         }
     }
 
+    /// Searches right away (Return, a recent search, Retry), replacing any search still pending or running, so a
+    /// query never runs twice.
+    func searchNow() {
+        searchTask?.cancel()
+        lintTask?.cancel()
+        searchTask = Task { await performSearch() }
+    }
+
     func performSearch() async {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
 
+        searchGeneration += 1
+        let generation = searchGeneration
         isSearching = true
         error = nil
         hasSearched = true
         isOfflineResults = false
         snippetsByNoteId = [:]
         clearMatchExpansionState()
-        defer { isSearching = false }
+        defer {
+            if generation == searchGeneration { isSearching = false }
+        }
 
         if let client {
             // Checked beside the search, which still runs: the message only explains a query that finds nothing.
             let checksQuery = TriliumServerCompatibility.supportsSearchLint(appState.serverAppInfo) && appState.isOnline
-            Task { [weak self] in
+            lintTask?.cancel()
+            lintTask = Task { [weak self] in
                 var problem: String?
                 if checksQuery {
                     do {
@@ -360,26 +380,30 @@ final class SearchViewModel {
                 } else {
                     Log.api.info("Search lint skipped: server \(self?.appState.serverAppInfo?.appVersion ?? "unknown"), online \(self?.appState.isOnline == true)")
                 }
-                guard let self, self.query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
+                guard !Task.isCancelled, let self, self.query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
                 self.queryProblem = problem
             }
-            // Snippets come from a second request so the result list and its ranking stay the full search's.
-            async let snippetFetch = Self.fetchSnippets(client: client, query: trimmed)
             do {
                 let response = try await client.searchNotes(query: trimmed, fastSearch: false, includeArchived: false, ancestorNoteId: nil, orderBy: nil, orderDirection: nil, limit: 50)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, generation == searchGeneration else { return }
                 results = response.results.map(NoteItem.init)
+                // The list is ready: stop the spinner now, snippets fill in when they arrive.
+                isSearching = false
 
                 if let profileId = serverProfileId {
                     try? persistence.recordRecentSearch(query: trimmed, serverProfileId: profileId)
                     loadRecentSearches()
                 }
 
-                let snippets = await snippetFetch
-                guard !Task.isCancelled, query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
+                // Snippets come from a second full search (so the list and its ranking stay the first's). Trilium
+                // runs searches one at a time, so asking only now gets the list back first.
+                guard fetchesSnippets else { return }
+                let snippets = await Self.fetchSnippets(client: client, query: trimmed)
+                guard !Task.isCancelled, generation == searchGeneration,
+                      query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
                 snippetsByNoteId = snippets
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, generation == searchGeneration else { return }
                 let apiError = APIError.from(error)
                 if case .cancelled = apiError { return }
 
@@ -412,16 +436,8 @@ final class SearchViewModel {
 
     private func performOfflineSearch(_ query: String) {
         guard let profileId = serverProfileId else { return }
-        let lowered = query.lowercased()
         do {
-            let allNotes = try persistence.context.fetch(
-                FetchDescriptor<CachedNote>(
-                    predicate: #Predicate<CachedNote> { $0.serverProfileId == profileId }
-                )
-            )
-            let matched = allNotes
-                .filter { $0.title.lowercased().contains(lowered) }
-                .prefix(30)
+            let matched = try persistence.fetchCachedNotes(titleContaining: query, serverProfileId: profileId, limit: 30)
                 .map { cached in
                     NoteItem(
                         noteId: cached.noteId,
@@ -456,8 +472,7 @@ final class SearchViewModel {
 
     func selectRecentSearch(_ search: RecentSearch) {
         query = search.query
-        searchTask?.cancel()
-        Task { await performSearch() }
+        searchNow()
     }
 
     func deleteRecentSearches(at offsets: IndexSet) {

@@ -36,10 +36,22 @@ struct CacheExcludedRootNotesView: View {
                 Text(String(localized: "No top-level notebooks found.", comment: "Cache exclusion empty"))
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(rootNoteRows) { row in
-                    Toggle(isOn: cachingEnabledBinding(for: row.noteId)) {
-                        Text(row.title)
+                Section {
+                    ForEach(rootNoteRows) { row in
+                        Toggle(isOn: cachingEnabledBinding(for: row.noteId)) {
+                            Text(row.title)
+                        }
                     }
+                }
+                Section {
+                    Button(String(localized: "Exclude All Notebooks", comment: "Cache exclusion: turn every notebook off")) {
+                        setAllCachingEnabled(false)
+                    }
+                    .disabled(rootNoteRows.allSatisfy { draftCachingEnabled[$0.noteId] == false })
+                    Button(String(localized: "Include All Notebooks", comment: "Cache exclusion: turn every notebook on")) {
+                        setAllCachingEnabled(true)
+                    }
+                    .disabled(rootNoteRows.allSatisfy { draftCachingEnabled[$0.noteId] ?? true })
                 }
             }
         }
@@ -125,6 +137,13 @@ struct CacheExcludedRootNotesView: View {
         return parts.joined(separator: " ")
     }
 
+    /// Sets every notebook's toggle; Save applies them.
+    private func setAllCachingEnabled(_ enabled: Bool) {
+        for row in rootNoteRows {
+            draftCachingEnabled[row.noteId] = enabled
+        }
+    }
+
     private func cachingEnabledBinding(for noteId: String) -> Binding<Bool> {
         Binding(
             get: { draftCachingEnabled[noteId] ?? true },
@@ -147,13 +166,18 @@ struct CacheExcludedRootNotesView: View {
             do {
                 try await client.restoreSession()
                 let (_, branches) = try await client.getNoteWithBranches(TriliumTreeConstants.rootNoteId)
-                var rows: [RootNoteRow] = []
-                for branch in branches.sorted(by: { $0.notePosition < $1.notePosition }) {
-                    let noteId = branch.noteId
-                    guard !Self.hiddenNoteIds.contains(noteId) else { continue }
-                    let note = try await client.getNote(noteId)
-                    rows.append(RootNoteRow(noteId: noteId, title: note.title))
+                let notebookIds = branches
+                    .sorted(by: { $0.notePosition < $1.notePosition })
+                    .map(\.noteId)
+                    .filter { !Self.hiddenNoteIds.contains($0) }
+                // Titles in batches, not one request per notebook.
+                var titles: [String: String] = [:]
+                for chunk in notebookIds.chunked(into: 100) {
+                    for entry in try await client.fullSyncFetchTreeBatch(noteIds: chunk) {
+                        titles[entry.note.noteId] = entry.note.title
+                    }
                 }
+                let rows = notebookIds.compactMap { noteId in titles[noteId].map { RootNoteRow(noteId: noteId, title: $0) } }
                 rootNoteRows = rows
                 let liveIds = Set(rows.map(\.noteId))
                 try? policy.pruneStaleExcludedRoots(

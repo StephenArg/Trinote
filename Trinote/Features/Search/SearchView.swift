@@ -93,7 +93,7 @@ struct SearchView: View {
                 } description: {
                     Text(error)
                 } actions: {
-                    Button(String(localized: "Retry", comment: "Retry search")) { Task { await vm.performSearch() } }
+                    Button(String(localized: "Retry", comment: "Retry search")) { vm.searchNow() }
                         .buttonStyle(.bordered)
                 }
                 Spacer()
@@ -143,7 +143,7 @@ struct SearchView: View {
                 .autocorrectionDisabled()
                 .submitLabel(.search)
                 .focused($isSearchFieldFocused)
-                .onSubmit { Task { await vm.performSearch() } }
+                .onSubmit { vm.searchNow() }
                 .accessibilityLabel(String(localized: "Search notes", comment: "VoiceOver search field"))
 
                 if !vm.query.isEmpty {

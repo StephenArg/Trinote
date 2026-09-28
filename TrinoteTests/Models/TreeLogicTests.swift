@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import Trinote
 
 final class TreeLogicTests: XCTestCase {
@@ -609,6 +610,33 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(Set(noteCache.keys), ["parent", "c1", "c2", "c3"])
     }
 
+    func testTreeChildBatchLoader_chunksALargeFolderWithTheParentInTheFirstChunk() async throws {
+        let mock = MockTriliumClient()
+        let childIds = (0..<450).map { "c\($0)" }
+        let parent = NoteItem(
+            from: TestFixtures.noteResponse(
+                id: "parent",
+                title: "Parent",
+                childNoteIds: childIds,
+                childBranchIds: childIds.map { "b_\($0)" }
+            )
+        )
+        var branchCache: [String: BranchItem] = [:]
+        var noteCache: [String: NoteItem] = [:]
+
+        try await TreeChildBatchLoader.populateCachesIfNeeded(
+            parentNote: parent,
+            client: mock,
+            branchCache: &branchCache,
+            noteCache: &noteCache
+        )
+
+        let batchCalls = await mock.fullSyncFetchTreeBatchCalls
+        XCTAssertEqual(batchCalls.map(\.count), [200, 200, 51])
+        XCTAssertEqual(batchCalls.first?.first, "parent")
+        XCTAssertEqual(batchCalls.flatMap { $0 }.filter { $0 != "parent" }, childIds)
+    }
+
     func testTreeChildBatchLoader_skipsWhenFullyCached() async throws {
         let mock = MockTriliumClient()
         let parent = NoteItem(
@@ -729,6 +757,65 @@ final class TreeLogicTests: XCTestCase {
         )
         XCTAssertEqual(split.sending, ["a", "b"])
         XCTAssertEqual(split.notSent, ["stale", "ol_new"], "unconfirmed notes go one by one; subnotes of sent notes go with them")
+    }
+
+    // MARK: - Tree rows from the offline cache
+
+    @MainActor
+    func testCachedTreeRowsCarryAttributesAndChildListsFromBatchedQueries() async throws {
+        // `AppState` reads the app's shared store, which the test host creates at launch.
+        for _ in 0..<100 where !PersistenceManager.isInitialized {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        try XCTSkipUnless(PersistenceManager.isInitialized, "the test host hasn't created the shared store")
+        let schema = Schema([
+            ServerProfile.self, CachedNote.self, CachedBranch.self, CachedAttribute.self,
+            CacheExcludedRootNote.self, CachedImageData.self,
+        ])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(isStoredInMemoryOnly: true)])
+        let persistence = PersistenceManager(container: container)
+        let profileId = "tree-cache-test"
+        func cache(_ id: String, parent: String?, position: Int = 10, attributes: [AttributeResponse] = []) throws {
+            try persistence.cacheNote(
+                from: TestFixtures.noteResponse(id: id, title: id.uppercased(), parentNoteIds: parent.map { [$0] } ?? [], attributes: attributes),
+                serverProfileId: profileId
+            )
+            for attribute in attributes {
+                try persistence.cacheAttributeBatch(from: attribute, serverProfileId: profileId)
+            }
+            if let parent {
+                try persistence.cacheBranch(
+                    from: TestFixtures.branchResponse(branchId: "\(parent)_\(id)", noteId: id, parentNoteId: parent, notePosition: position),
+                    serverProfileId: profileId
+                )
+            }
+        }
+        try cache("root", parent: nil)
+        try cache("a", parent: "root", position: 20, attributes: [
+            TestFixtures.attributeResponse(attributeId: "a_icon", noteId: "a", name: "iconClass", value: "bx bx-star"),
+        ])
+        try cache("b", parent: "root", position: 10)
+        try cache("a2", parent: "a", position: 20)
+        try cache("a1", parent: "a", position: 10)
+        try persistence.commitBatch()
+
+        let appState = AppState()
+        appState.activeProfile = ServerProfile(id: profileId, name: "Test", baseURL: "https://example.test")
+        let vm = TreeViewModel(appState: appState, persistence: persistence)
+        vm.reloadFromCache()
+
+        XCTAssertEqual(vm.rootChildren.map(\.note.noteId), ["b", "a"])
+        let a = try XCTUnwrap(vm.rootChildren.last?.note)
+        XCTAssertEqual(a.childNoteIds, ["a1", "a2"])
+        XCTAssertEqual(a.childBranchIds, ["a_a1", "a_a2"])
+        XCTAssertEqual(a.attributes.map(\.value), ["bx bx-star"])
+        XCTAssertEqual(vm.rootChildren.first?.note.childNoteIds, [])
+        XCTAssertEqual(vm.childNoteSummariesForDetailNavigation(parentNoteId: "a")?.map(\.noteId), ["a1", "a2"])
+        XCTAssertNil(vm.childNoteSummariesForDetailNavigation(parentNoteId: "b"), "a leaf has no sub-notes")
+
+        try persistence.deleteCachedBranch(branchId: "root_b", serverProfileId: profileId)
+        vm.pruneDeletedNodes()
+        XCTAssertEqual(vm.rootChildren.map(\.note.noteId), ["a"])
     }
 
     // MARK: - Today's journal note

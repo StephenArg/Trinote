@@ -17,6 +17,8 @@ final class ImageCachePrefetcher {
     private static let maxConcurrency = 8
 
     func prefetchAllInlineImages(client: any TriliumClientProtocol, profileId: String) {
+        // Images are media: nothing to fetch while the server keeps none offline.
+        guard OfflineCacheSettings.load(profileId: profileId).cachesMediaBodies else { return }
         cancel()
         prefetchTask = Task {
             await self.performPrefetch(client: client, profileId: profileId)
@@ -60,6 +62,7 @@ final class ImageCachePrefetcher {
             endBackgroundTimeExtension()
         }
 
+        let maxImageBytes = OfflineCacheSettings.load(profileId: profileId).maxMediaBodyBytes
         do {
             let bodies = try persistence.cachedNoteBodies(serverProfileId: profileId)
             var refs: [(TriliumInlineImageCaching.Reference, String, [String])] = []
@@ -98,7 +101,8 @@ final class ImageCachePrefetcher {
                                 persistence: self.persistence,
                                 serverProfileId: profileId,
                                 sourceNoteId: item.1,
-                                parentNoteIds: item.2
+                                parentNoteIds: item.2,
+                                maxBytes: maxImageBytes
                             )
                         }
                     }

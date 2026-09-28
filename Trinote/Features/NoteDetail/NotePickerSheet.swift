@@ -79,7 +79,7 @@ struct NotePickerSheet: View {
         }
         .task(id: modeRaw) {
             if PickerMode(rawValue: modeRaw) == .search, searchViewModel == nil {
-                searchViewModel = SearchViewModel(appState: appState)
+                searchViewModel = SearchViewModel(appState: appState, fetchesSnippets: false)
             }
         }
     }
@@ -116,7 +116,7 @@ struct NotePickerSheet: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
-                .onSubmit { Task { await vm.performSearch() } }
+                .onSubmit { vm.searchNow() }
 
                 if !vm.query.isEmpty {
                     Button {

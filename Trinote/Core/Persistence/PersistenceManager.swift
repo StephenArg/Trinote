@@ -12,6 +12,9 @@ final class PersistenceManager {
         return s
     }
 
+    /// `shared` is ready (app startup has created the store).
+    static var isInitialized: Bool { _shared != nil }
+
     let container: ModelContainer
     private let isMemoryOnly: Bool
 
@@ -70,15 +73,239 @@ final class PersistenceManager {
     private init(container: ModelContainer, isMemoryOnly: Bool = true) {
         self.container = container
         self.isMemoryOnly = isMemoryOnly
+        observeSaves()
     }
 
     /// For testing: create with a specific container
     init(container: ModelContainer) {
         self.container = container
         self.isMemoryOnly = true
+        observeSaves()
+    }
+
+    /// Answers derived from cached rows (icons walked up the tree), dropped whenever the store changes.
+    private var effectiveIconClassMemo: [IconMemoKey: String?] = [:]
+    private var saveObserver: NSObjectProtocol?
+
+    private func observeSaves() {
+        saveObserver = NotificationCenter.default.addObserver(
+            forName: ModelContext.didSave,
+            object: container.mainContext,
+            queue: nil
+        ) { [weak self] _ in
+            // Posted during `save()` on the saving thread, which for the main context is the main thread; clear right
+            // away so a read just after the save doesn't get the old answer.
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.invalidateDerivedCaches() }
+            } else {
+                Task { @MainActor in self?.invalidateDerivedCaches() }
+            }
+        }
+    }
+
+    /// Drops answers derived from cached rows. Runs after every save of the main context; call it after changing the
+    /// store any other way.
+    func invalidateDerivedCaches() {
+        effectiveIconClassMemo.removeAll(keepingCapacity: true)
     }
 
     var context: ModelContext { container.mainContext }
+
+    // MARK: - Sync-shared cache operations (on the main context)
+
+    /// The cache operations sync shares with `SyncStore`, which runs them on a background context. These forward to
+    /// them on the main context, for everything else in the app.
+    var cache: CacheStore { CacheStore(context: context) }
+    static let idQueryChunkSize = CacheStore.idQueryChunkSize
+
+    func fetchCachedNote(id: String, serverProfileId: String) throws -> CachedNote? {
+        try cache.fetchCachedNote(id: id, serverProfileId: serverProfileId)
+    }
+
+    func fetchCachedNotes(ids: some Collection<String>, serverProfileId: String) throws -> [String: CachedNote] {
+        try cache.fetchCachedNotes(ids: ids, serverProfileId: serverProfileId)
+    }
+
+    func fetchCachedBranches(ids: some Collection<String>, serverProfileId: String) throws -> [String: CachedBranch] {
+        try cache.fetchCachedBranches(ids: ids, serverProfileId: serverProfileId)
+    }
+
+    func fetchCachedAttributes(ids: some Collection<String>, serverProfileId: String) throws -> [String: CachedAttribute] {
+        try cache.fetchCachedAttributes(ids: ids, serverProfileId: serverProfileId)
+    }
+
+    func fetchCachedBranch(branchId: String, serverProfileId: String) throws -> CachedBranch? {
+        try cache.fetchCachedBranch(branchId: branchId, serverProfileId: serverProfileId)
+    }
+
+    func fetchCachedChildren(parentNoteId: String, serverProfileId: String) throws -> [(CachedBranch, CachedNote)] {
+        try cache.fetchCachedChildren(parentNoteId: parentNoteId, serverProfileId: serverProfileId)
+    }
+
+    func fetchAllCachedNoteIds(serverProfileId: String) throws -> [String] {
+        try cache.fetchAllCachedNoteIds(serverProfileId: serverProfileId)
+    }
+
+    func cacheNote(from response: NoteResponse, serverProfileId: String) throws {
+        try cache.cacheNote(from: response, serverProfileId: serverProfileId)
+    }
+
+    func cacheNoteBatch(from response: NoteResponse, serverProfileId: String) throws {
+        try cache.cacheNoteBatch(from: response, serverProfileId: serverProfileId)
+    }
+
+    func cacheBranchBatch(from response: BranchResponse, serverProfileId: String) throws {
+        try cache.cacheBranchBatch(from: response, serverProfileId: serverProfileId)
+    }
+
+    func cacheAttributeBatch(from response: AttributeResponse, serverProfileId: String) throws {
+        try cache.cacheAttributeBatch(from: response, serverProfileId: serverProfileId)
+    }
+
+    func cacheNoteContent(
+        _ noteId: String,
+        content: Data,
+        serverProfileId: String,
+        utcDateModified: String? = nil,
+        contentBlobId: String? = nil
+    ) throws {
+        try cache.cacheNoteContent(
+            noteId,
+            content: content,
+            serverProfileId: serverProfileId,
+            utcDateModified: utcDateModified,
+            contentBlobId: contentBlobId
+        )
+    }
+
+    func commitBatch() throws {
+        try cache.commitBatch()
+    }
+
+    @discardableResult
+    func upsertNoteForFullSync(_ response: NoteResponse, existing: CachedNote?, serverProfileId: String) -> Bool {
+        cache.upsertNoteForFullSync(response, existing: existing, serverProfileId: serverProfileId)
+    }
+
+    @discardableResult
+    func upsertBranchForFullSync(_ response: BranchResponse, existing: CachedBranch?, serverProfileId: String) -> Bool {
+        cache.upsertBranchForFullSync(response, existing: existing, serverProfileId: serverProfileId)
+    }
+
+    @discardableResult
+    func upsertAttributeForFullSync(_ response: AttributeResponse, existing: CachedAttribute?, serverProfileId: String) -> Bool {
+        cache.upsertAttributeForFullSync(response, existing: existing, serverProfileId: serverProfileId)
+    }
+
+    func updateSyncStatus(domain: String, serverProfileId: String) throws {
+        try cache.updateSyncStatus(domain: domain, serverProfileId: serverProfileId)
+    }
+
+    func recordSyncError(domain: String, error: String, serverProfileId: String) throws {
+        try cache.recordSyncError(domain: domain, error: error, serverProfileId: serverProfileId)
+    }
+
+    func getEntityPullCursor(serverProfileId: String) throws -> Int64 {
+        try cache.getEntityPullCursor(serverProfileId: serverProfileId)
+    }
+
+    func setEntityPullCursor(serverProfileId: String, lastEntityChangeId: Int64) throws {
+        try cache.setEntityPullCursor(serverProfileId: serverProfileId, lastEntityChangeId: lastEntityChangeId)
+    }
+
+    func deleteCachedBranch(branchId: String, serverProfileId: String) throws {
+        try cache.deleteCachedBranch(branchId: branchId, serverProfileId: serverProfileId)
+    }
+
+    func deleteCachedAttribute(attributeId: String, serverProfileId: String) throws {
+        try cache.deleteCachedAttribute(attributeId: attributeId, serverProfileId: serverProfileId)
+    }
+
+    func deleteCachedNotes(noteIds: [String], serverProfileId: String, clearGhost: Bool = true) throws {
+        try cache.deleteCachedNotes(noteIds: noteIds, serverProfileId: serverProfileId, clearGhost: clearGhost)
+    }
+
+    func deleteCachedNotes(noteIds: Set<String>, serverProfileId: String, clearGhost: Bool = true) throws {
+        try cache.deleteCachedNotes(noteIds: noteIds, serverProfileId: serverProfileId, clearGhost: clearGhost)
+    }
+
+    @discardableResult
+    func purgeNoteFromAuxiliaryStores(noteId: String, serverProfileId: String, clearGhost: Bool = true) throws -> Bool {
+        try cache.purgeNoteFromAuxiliaryStores(noteId: noteId, serverProfileId: serverProfileId, clearGhost: clearGhost)
+    }
+
+    func pendingDeletionNoteIds(serverProfileId: String) throws -> Set<String> {
+        try cache.pendingDeletionNoteIds(serverProfileId: serverProfileId)
+    }
+
+    func fetchPendingNoteDeletions(serverProfileId: String) throws -> [PendingNoteDeletion] {
+        try cache.fetchPendingNoteDeletions(serverProfileId: serverProfileId)
+    }
+
+    @discardableResult
+    func pruneStaleBranchesUnderParent(
+        parentNoteId: String,
+        liveBranchIds: Set<String>,
+        serverProfileId: String,
+        hiddenNoteIds: Set<String>
+    ) throws -> Int {
+        try cache.pruneStaleBranchesUnderParent(
+            parentNoteId: parentNoteId,
+            liveBranchIds: liveBranchIds,
+            serverProfileId: serverProfileId,
+            hiddenNoteIds: hiddenNoteIds
+        )
+    }
+
+    func applyChildBranchPositions(_ positions: [String: Int], parentNoteId: String, serverProfileId: String) throws {
+        try cache.applyChildBranchPositions(positions, parentNoteId: parentNoteId, serverProfileId: serverProfileId)
+    }
+
+    func deleteCachedBranchAndReconcilePlacement(
+        branchId: String,
+        noteId: String,
+        parentNoteId: String,
+        serverProfileId: String,
+        hiddenNoteIds: Set<String>
+    ) throws {
+        try cache.deleteCachedBranchAndReconcilePlacement(
+            branchId: branchId,
+            noteId: noteId,
+            parentNoteId: parentNoteId,
+            serverProfileId: serverProfileId,
+            hiddenNoteIds: hiddenNoteIds
+        )
+    }
+
+    func reconcileCachedNoteBranchesMetadata(forNoteId noteId: String, serverProfileId: String) throws {
+        try cache.reconcileCachedNoteBranchesMetadata(forNoteId: noteId, serverProfileId: serverProfileId)
+    }
+
+    @discardableResult
+    func reconcileCachedNoteBranchesMetadata(serverProfileId: String) throws -> Int {
+        try cache.reconcileCachedNoteBranchesMetadata(serverProfileId: serverProfileId)
+    }
+
+    func fetchNotesNeedingContent(serverProfileId: String, serverModifiedAfter: [String: String]) throws -> [String] {
+        try cache.fetchNotesNeedingContent(serverProfileId: serverProfileId, serverModifiedAfter: serverModifiedAfter)
+    }
+
+    func fetchProtectedNotesNeedingContent(serverProfileId: String, serverModifiedAfter: [String: String]) throws -> [String] {
+        try cache.fetchProtectedNotesNeedingContent(serverProfileId: serverProfileId, serverModifiedAfter: serverModifiedAfter)
+    }
+
+    func serverModifiedMapForUnprotectedNotesMissingContent(serverProfileId: String) throws -> [String: String] {
+        try cache.serverModifiedMapForUnprotectedNotesMissingContent(serverProfileId: serverProfileId)
+    }
+
+    func serverModifiedMapForProtectedNotesMissingContent(serverProfileId: String) throws -> [String: String] {
+        try cache.serverModifiedMapForProtectedNotesMissingContent(serverProfileId: serverProfileId)
+    }
+
+    @discardableResult
+    func clearCachedMediaBodies(serverProfileId: String) throws -> Int {
+        try cache.clearCachedMediaBodies(serverProfileId: serverProfileId)
+    }
     var isUsingMemoryFallback: Bool { isMemoryOnly }
 
     // MARK: - Server Profiles
@@ -136,58 +363,15 @@ final class PersistenceManager {
 
     // MARK: - Cached Notes
 
-    func cacheNote(from response: NoteResponse, serverProfileId: String) throws {
-        let existing = try fetchCachedNote(id: response.noteId, serverProfileId: serverProfileId)
-        if let existing {
-            existing.title = response.title
-            existing.noteType = response.type
-            existing.mime = response.mime
-            existing.isProtected = response.isProtected
-            existing.parentNoteIds = response.parentNoteIds
-            existing.childNoteIds = response.childNoteIds
-            existing.parentBranchIds = response.parentBranchIds
-            existing.childBranchIds = response.childBranchIds
-            // Don't update utcDateModified here — it's updated in
-            // cacheNoteContent so that fetchNotesNeedingContent can
-            // correctly detect stale content by comparing dates.
-            existing.metadataFetchedAt = .now
-        } else {
-            let cached = CachedNote(
-                noteId: response.noteId,
-                title: response.title,
-                noteType: response.type,
-                mime: response.mime,
-                isProtected: response.isProtected,
-                parentNoteIds: response.parentNoteIds,
-                childNoteIds: response.childNoteIds,
-                parentBranchIds: response.parentBranchIds,
-                childBranchIds: response.childBranchIds,
-                utcDateModified: nil,
-                serverProfileId: serverProfileId
-            )
-            context.insert(cached)
-        }
-    }
-
-    func cacheNoteContent(_ noteId: String, content: Data, serverProfileId: String, utcDateModified: String? = nil) throws {
-        if let existing = try fetchCachedNote(id: noteId, serverProfileId: serverProfileId) {
-            existing.content = content
-            existing.contentFetchedAt = .now
-            if let date = utcDateModified {
-                existing.utcDateModified = date
-            }
-            try context.save()
-        }
-    }
-
-    func fetchCachedNote(id: String, serverProfileId: String) throws -> CachedNote? {
-        let noteId = id
+    /// Up to `limit` cached notes whose title contains `text` (case- and diacritic-insensitive). The store does the
+    /// matching and stops at `limit`, so offline search doesn't load every cached note.
+    func fetchCachedNotes(titleContaining text: String, serverProfileId: String, limit: Int) throws -> [CachedNote] {
         let profileId = serverProfileId
         var descriptor = FetchDescriptor<CachedNote>(
-            predicate: #Predicate { $0.noteId == noteId && $0.serverProfileId == profileId }
+            predicate: #Predicate { $0.serverProfileId == profileId && $0.title.localizedStandardContains(text) }
         )
-        descriptor.fetchLimit = 1
-        return try context.fetch(descriptor).first
+        descriptor.fetchLimit = limit
+        return try context.fetch(descriptor)
     }
 
     /// Cached notes whose `utcDateModified` falls on `dayISO` (`yyyy-MM-dd`). UTC-day only — prefer `GET /api/edited-notes/{date}` when online.
@@ -200,9 +384,18 @@ final class PersistenceManager {
         guard JournalDayEditedNotes.isISODay(dayISO) else { return [] }
         let pid = serverProfileId
         let exclude = excludingNoteId
+        // `utcDateModified` starts with the day (`yyyy-MM-dd` then `T` or a space), so an indexed string range
+        // narrows the rows to that day before the exact check below.
+        let dayStart: String = dayISO
+        let dayEnd: String = dayISO + "\u{7F}"
+        let onDay = #Predicate<CachedNote> { note in
+            note.utcDateModified.flatMap { utc in utc >= dayStart && utc < dayEnd } == true
+        }
         let rows = try context.fetch(
             FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.serverProfileId == pid && $0.noteId != exclude }
+                predicate: #Predicate<CachedNote> { note in
+                    note.serverProfileId == pid && note.noteId != exclude && onDay.evaluate(note)
+                }
             )
         )
         let matches = rows.compactMap { cached -> NoteIdTitle? in
@@ -217,259 +410,47 @@ final class PersistenceManager {
 
     // MARK: - Batch Cache (no save per-item; caller calls commitBatch)
 
-    func cacheNoteBatch(from response: NoteResponse, serverProfileId: String) throws {
-        try cacheNote(from: response, serverProfileId: serverProfileId)
-    }
-
-    func cacheBranchBatch(from response: BranchResponse, serverProfileId: String) throws {
-        try cacheBranchInternal(from: response, serverProfileId: serverProfileId)
-    }
-
-    func cacheAttributeBatch(from response: AttributeResponse, serverProfileId: String) throws {
-        let attrId = response.attributeId
-        let profileId = serverProfileId
-        var descriptor = FetchDescriptor<CachedAttribute>(
-            predicate: #Predicate { $0.attributeId == attrId && $0.serverProfileId == profileId }
-        )
-        descriptor.fetchLimit = 1
-        let existing = try context.fetch(descriptor).first
-
-        if let existing {
-            existing.noteId = response.noteId
-            existing.type = response.type
-            existing.name = response.name
-            existing.value = response.value
-            existing.position = response.position
-            existing.isInheritable = response.isInheritable
-        } else {
-            let cached = CachedAttribute(
-                attributeId: response.attributeId,
-                noteId: response.noteId,
-                type: response.type,
-                name: response.name,
-                value: response.value,
-                position: response.position,
-                isInheritable: response.isInheritable,
-                serverProfileId: serverProfileId
-            )
-            context.insert(cached)
-        }
-    }
-
-    func commitBatch() throws {
-        try context.save()
-    }
-
-    // MARK: - Full sync tree walk (prefetch + upsert without redundant existence checks)
-
-    func prefetchExistingNoteIds(serverProfileId: String) throws -> Set<String> {
-        let profileId = serverProfileId
-        let rows = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
-            )
-        )
-        return Set(rows.map(\.noteId))
-    }
-
-    func prefetchExistingBranchIds(serverProfileId: String) throws -> Set<String> {
-        let profileId = serverProfileId
-        let rows = try context.fetch(
-            FetchDescriptor<CachedBranch>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
-            )
-        )
-        return Set(rows.map(\.branchId))
-    }
-
-    func prefetchExistingAttributeIds(serverProfileId: String) throws -> Set<String> {
-        let profileId = serverProfileId
-        let rows = try context.fetch(
-            FetchDescriptor<CachedAttribute>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
-            )
-        )
-        return Set(rows.map(\.attributeId))
-    }
-
-    func cacheNoteBatchForFullSync(from response: NoteResponse, serverProfileId: String, knownExisting: inout Set<String>) throws {
-        if knownExisting.contains(response.noteId) {
-            guard let existing = try fetchCachedNote(id: response.noteId, serverProfileId: serverProfileId) else {
-                knownExisting.remove(response.noteId)
-                try cacheNoteBatchForFullSync(from: response, serverProfileId: serverProfileId, knownExisting: &knownExisting)
-                return
-            }
-            existing.title = response.title
-            existing.noteType = response.type
-            existing.mime = response.mime
-            existing.isProtected = response.isProtected
-            existing.parentNoteIds = response.parentNoteIds
-            existing.childNoteIds = response.childNoteIds
-            existing.parentBranchIds = response.parentBranchIds
-            existing.childBranchIds = response.childBranchIds
-            existing.metadataFetchedAt = .now
-        } else {
-            let cached = CachedNote(
-                noteId: response.noteId,
-                title: response.title,
-                noteType: response.type,
-                mime: response.mime,
-                isProtected: response.isProtected,
-                parentNoteIds: response.parentNoteIds,
-                childNoteIds: response.childNoteIds,
-                parentBranchIds: response.parentBranchIds,
-                childBranchIds: response.childBranchIds,
-                utcDateModified: nil,
-                serverProfileId: serverProfileId
-            )
-            context.insert(cached)
-            knownExisting.insert(response.noteId)
-        }
-    }
-
-    func cacheBranchBatchForFullSync(from response: BranchResponse, serverProfileId: String, knownExisting: inout Set<String>) throws {
-        if knownExisting.contains(response.branchId) {
-            guard let existing = try fetchCachedBranchById(branchId: response.branchId, serverProfileId: serverProfileId) else {
-                knownExisting.remove(response.branchId)
-                try cacheBranchBatchForFullSync(from: response, serverProfileId: serverProfileId, knownExisting: &knownExisting)
-                return
-            }
-            existing.noteId = response.noteId
-            existing.parentNoteId = response.parentNoteId
-            existing.prefix = response.prefix
-            existing.notePosition = response.notePosition
-            existing.isExpanded = response.isExpanded
-            existing.fetchedAt = .now
-        } else {
-            let cached = CachedBranch(
-                branchId: response.branchId,
-                noteId: response.noteId,
-                parentNoteId: response.parentNoteId,
-                prefix: response.prefix,
-                notePosition: response.notePosition,
-                isExpanded: response.isExpanded,
-                serverProfileId: serverProfileId
-            )
-            context.insert(cached)
-            knownExisting.insert(response.branchId)
-        }
-    }
-
-    func cacheAttributeBatchForFullSync(from response: AttributeResponse, serverProfileId: String, knownExisting: inout Set<String>) throws {
-        if knownExisting.contains(response.attributeId) {
-            guard let existing = try fetchCachedAttributeById(attributeId: response.attributeId, serverProfileId: serverProfileId) else {
-                knownExisting.remove(response.attributeId)
-                try cacheAttributeBatchForFullSync(from: response, serverProfileId: serverProfileId, knownExisting: &knownExisting)
-                return
-            }
-            existing.noteId = response.noteId
-            existing.type = response.type
-            existing.name = response.name
-            existing.value = response.value
-            existing.position = response.position
-            existing.isInheritable = response.isInheritable
-        } else {
-            let cached = CachedAttribute(
-                attributeId: response.attributeId,
-                noteId: response.noteId,
-                type: response.type,
-                name: response.name,
-                value: response.value,
-                position: response.position,
-                isInheritable: response.isInheritable,
-                serverProfileId: serverProfileId
-            )
-            context.insert(cached)
-            knownExisting.insert(response.attributeId)
-        }
-    }
-
-    func fetchCachedBranch(branchId: String, serverProfileId: String) throws -> CachedBranch? {
-        try fetchCachedBranchById(branchId: branchId, serverProfileId: serverProfileId)
-    }
-
-    private func fetchCachedBranchById(branchId: String, serverProfileId: String) throws -> CachedBranch? {
-        let bid = branchId
-        let profileId = serverProfileId
-        var descriptor = FetchDescriptor<CachedBranch>(
-            predicate: #Predicate { $0.branchId == bid && $0.serverProfileId == profileId }
-        )
-        descriptor.fetchLimit = 1
-        return try context.fetch(descriptor).first
-    }
-
-    private func fetchCachedAttributeById(attributeId: String, serverProfileId: String) throws -> CachedAttribute? {
-        let aid = attributeId
-        let profileId = serverProfileId
-        var descriptor = FetchDescriptor<CachedAttribute>(
-            predicate: #Predicate { $0.attributeId == aid && $0.serverProfileId == profileId }
-        )
-        descriptor.fetchLimit = 1
-        return try context.fetch(descriptor).first
-    }
+    // MARK: - Full sync tree walk (one lookup per batch; unchanged rows stay untouched)
 
     // MARK: - Cached Branches
 
     func cacheBranch(from response: BranchResponse, serverProfileId: String) throws {
-        try cacheBranchInternal(from: response, serverProfileId: serverProfileId)
+        try cache.cacheBranchInternal(from: response, serverProfileId: serverProfileId)
         try context.save()
-    }
-
-    private func cacheBranchInternal(from response: BranchResponse, serverProfileId: String) throws {
-        let branchId = response.branchId
-        let profileId = serverProfileId
-        var descriptor = FetchDescriptor<CachedBranch>(
-            predicate: #Predicate { $0.branchId == branchId && $0.serverProfileId == profileId }
-        )
-        descriptor.fetchLimit = 1
-        let existing = try context.fetch(descriptor).first
-
-        if let existing {
-            existing.noteId = response.noteId
-            existing.parentNoteId = response.parentNoteId
-            existing.prefix = response.prefix
-            existing.notePosition = response.notePosition
-            existing.isExpanded = response.isExpanded
-            existing.fetchedAt = .now
-        } else {
-            let cached = CachedBranch(
-                branchId: response.branchId,
-                noteId: response.noteId,
-                parentNoteId: response.parentNoteId,
-                prefix: response.prefix,
-                notePosition: response.notePosition,
-                isExpanded: response.isExpanded,
-                serverProfileId: serverProfileId
-            )
-            context.insert(cached)
-        }
     }
 
     // MARK: - Cached Tree (recursive retrieval)
 
-    func fetchCachedChildren(parentNoteId: String, serverProfileId: String) throws -> [(CachedBranch, CachedNote)] {
-        let parentId = parentNoteId
+    /// Attributes of each of `noteIds` in `position` order, keyed by note id (one query per 500 notes).
+    func fetchCachedAttributesByNote(noteIds: some Collection<String>, serverProfileId: String) throws -> [String: [CachedAttribute]] {
         let profileId = serverProfileId
-        let branches = try context.fetch(
-            FetchDescriptor<CachedBranch>(
-                predicate: #Predicate { $0.parentNoteId == parentId && $0.serverProfileId == profileId },
-                sortBy: [SortDescriptor(\.notePosition)]
-            )
-        )
-
-        var results: [(CachedBranch, CachedNote)] = []
-        for branch in branches {
-            let noteId = branch.noteId
-            let pid = profileId
-            if let note = try context.fetch(
-                FetchDescriptor<CachedNote>(
-                    predicate: #Predicate { $0.noteId == noteId && $0.serverProfileId == pid }
+        var byNote: [String: [CachedAttribute]] = [:]
+        for chunk in Array(noteIds).chunked(into: Self.idQueryChunkSize) {
+            let rows = try context.fetch(
+                FetchDescriptor<CachedAttribute>(
+                    predicate: #Predicate { chunk.contains($0.noteId) && $0.serverProfileId == profileId },
+                    sortBy: [SortDescriptor(\.position)]
                 )
-            ).first {
-                results.append((branch, note))
-            }
+            )
+            for row in rows { byNote[row.noteId, default: []].append(row) }
         }
-        return results
+        return byNote
+    }
+
+    /// Child branches of each of `parentNoteIds` in tree order (`notePosition`, then branch id), keyed by parent.
+    func fetchCachedChildBranchesByParent(parentNoteIds: some Collection<String>, serverProfileId: String) throws -> [String: [CachedBranch]] {
+        let profileId = serverProfileId
+        var byParent: [String: [CachedBranch]] = [:]
+        for chunk in Array(parentNoteIds).chunked(into: Self.idQueryChunkSize) {
+            let rows = try context.fetch(
+                FetchDescriptor<CachedBranch>(
+                    predicate: #Predicate { chunk.contains($0.parentNoteId) && $0.serverProfileId == profileId },
+                    sortBy: [SortDescriptor(\.notePosition), SortDescriptor(\.branchId)]
+                )
+            )
+            for row in rows { byParent[row.parentNoteId, default: []].append(row) }
+        }
+        return byParent
     }
 
     /// Branch row linking `noteId` as a child of `parentNoteId` (one clone per parent).
@@ -521,23 +502,6 @@ final class PersistenceManager {
             ordered.append(b.noteId)
         }
         return ordered
-    }
-
-    /// Child note ids whose cached `parentNoteIds` includes `parentNoteId` (ordered by title).
-    /// Used when `CachedNote.childNoteIds` and `CachedBranch` under the parent are both empty after incremental sync, but child rows were synced with parent pointers.
-    /// Fetches by profile then filters in memory — SwiftData `#Predicate` + `.contains` on persisted `[String]` is unreliable across OS versions.
-    func fetchChildNoteIdsReferencingParent(parentNoteId: String, serverProfileId: String) throws -> [String] {
-        let parentId = parentNoteId
-        let profileId = serverProfileId
-        let notes = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
-            )
-        )
-        return notes
-            .filter { $0.parentNoteIds.contains(parentId) }
-            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-            .map(\.noteId)
     }
 
     /// Resolves `CachedNote.childBranchIds` (branch id list on the parent) to child note ids in list order.
@@ -954,7 +918,21 @@ final class PersistenceManager {
     }
 
     /// Effective `#iconClass` including template targets and inheritable labels from ancestors.
+    /// Remembered until the next save: rows ask on every render, and the answer can walk every ancestor.
     func cachedEffectiveNoteIconClass(noteId: String, serverProfileId: String) -> String? {
+        let key = IconMemoKey(serverProfileId: serverProfileId, noteId: noteId)
+        if let memo = effectiveIconClassMemo[key] { return memo }
+        let icon = resolveCachedEffectiveNoteIconClass(noteId: noteId, serverProfileId: serverProfileId)
+        effectiveIconClassMemo[key] = icon
+        return icon
+    }
+
+    private struct IconMemoKey: Hashable {
+        let serverProfileId: String
+        let noteId: String
+    }
+
+    private func resolveCachedEffectiveNoteIconClass(noteId: String, serverProfileId: String) -> String? {
         let attrs = (try? fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)) ?? []
         let ownRaw = attrs.first { $0.name == "iconClass" && $0.type == "label" }?.value
             ?? attrs.first { $0.name == "iconClass" }?.value
@@ -1310,17 +1288,20 @@ final class PersistenceManager {
         }
     }
 
-    /// `rootNoteId` plus any descendant note IDs reachable via cached `childNoteIds` (BFS).
+    /// `rootNoteId` plus any descendant note IDs reachable via cached `childNoteIds` (BFS, one query per level).
     func cachedDescendantNoteIds(rootNoteId: String, serverProfileId: String) -> Set<String> {
         var result: Set<String> = [rootNoteId]
-        var queue: [String] = [rootNoteId]
-        while !queue.isEmpty {
-            let id = queue.removeFirst()
-            guard let note = try? fetchCachedNote(id: id, serverProfileId: serverProfileId) else { continue }
-            for child in note.childNoteIds where !result.contains(child) {
-                result.insert(child)
-                queue.append(child)
+        var level: [String] = [rootNoteId]
+        while !level.isEmpty {
+            let notes = (try? fetchCachedNotes(ids: level, serverProfileId: serverProfileId)) ?? [:]
+            var next: [String] = []
+            for id in level {
+                guard let note = notes[id] else { continue }
+                for child in note.childNoteIds where result.insert(child).inserted {
+                    next.append(child)
+                }
             }
+            level = next
         }
         return result
     }
@@ -1888,16 +1869,6 @@ final class PersistenceManager {
         try reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
     }
 
-    func fetchPendingNoteDeletions(serverProfileId: String) throws -> [PendingNoteDeletion] {
-        let pid = serverProfileId
-        return try context.fetch(
-            FetchDescriptor<PendingNoteDeletion>(
-                predicate: #Predicate { $0.serverProfileId == pid },
-                sortBy: [SortDescriptor(\.queuedAt, order: .forward)]
-            )
-        )
-    }
-
     func deletePendingNoteDeletion(id: String, serverProfileId: String) throws {
         let did = id
         let pid = serverProfileId
@@ -2153,20 +2124,6 @@ final class PersistenceManager {
 
     // MARK: - Sync Status
 
-    func updateSyncStatus(domain: String, serverProfileId: String) throws {
-        let id = "\(serverProfileId):\(domain)"
-        var descriptor = FetchDescriptor<SyncStatus>(predicate: #Predicate { $0.id == id })
-        descriptor.fetchLimit = 1
-        if let existing = try context.fetch(descriptor).first {
-            existing.lastSyncedAt = .now
-            existing.lastError = nil
-        } else {
-            let status = SyncStatus(domain: domain, serverProfileId: serverProfileId)
-            context.insert(status)
-        }
-        try context.save()
-    }
-
     func deleteSyncStatus(domain: String, serverProfileId: String) throws {
         let id = "\(serverProfileId):\(domain)"
         var descriptor = FetchDescriptor<SyncStatus>(predicate: #Predicate { $0.id == id })
@@ -2175,20 +2132,6 @@ final class PersistenceManager {
             context.delete(existing)
             try context.save()
         }
-    }
-
-    func recordSyncError(domain: String, error: String, serverProfileId: String) throws {
-        let id = "\(serverProfileId):\(domain)"
-        var descriptor = FetchDescriptor<SyncStatus>(predicate: #Predicate { $0.id == id })
-        descriptor.fetchLimit = 1
-        if let existing = try context.fetch(descriptor).first {
-            existing.lastError = error
-        } else {
-            let status = SyncStatus(domain: domain, serverProfileId: serverProfileId)
-            status.lastError = error
-            context.insert(status)
-        }
-        try context.save()
     }
 
     func fetchSyncStatuses(serverProfileId: String) throws -> [SyncStatus] {
@@ -2202,217 +2145,20 @@ final class PersistenceManager {
 
     // MARK: - Entity pull cursor (`/api/sync/changed`)
 
-    func getEntityPullCursor(serverProfileId: String) throws -> Int64 {
-        let pid = serverProfileId
-        var descriptor = FetchDescriptor<EntityPullCursor>(
-            predicate: #Predicate { $0.serverProfileId == pid }
-        )
-        descriptor.fetchLimit = 1
-        if let row = try context.fetch(descriptor).first {
-            return row.lastEntityChangeId
-        }
-        let row = EntityPullCursor(serverProfileId: serverProfileId, lastEntityChangeId: 0)
-        context.insert(row)
-        try context.save()
-        return 0
-    }
-
-    func setEntityPullCursor(serverProfileId: String, lastEntityChangeId: Int64) throws {
-        let pid = serverProfileId
-        var descriptor = FetchDescriptor<EntityPullCursor>(
-            predicate: #Predicate { $0.serverProfileId == pid }
-        )
-        descriptor.fetchLimit = 1
-        if let row = try context.fetch(descriptor).first {
-            row.lastEntityChangeId = lastEntityChangeId
-        } else {
-            context.insert(EntityPullCursor(serverProfileId: serverProfileId, lastEntityChangeId: lastEntityChangeId))
-        }
-        try context.save()
-    }
-
-    func deleteCachedBranch(branchId: String, serverProfileId: String) throws {
-        let bid = branchId
-        let pid = serverProfileId
-        let rows = try context.fetch(FetchDescriptor<CachedBranch>(
-            predicate: #Predicate { $0.branchId == bid && $0.serverProfileId == pid }
-        ))
-        rows.forEach { context.delete($0) }
-        try context.save()
-    }
-
-    func deleteCachedAttribute(attributeId: String, serverProfileId: String) throws {
-        let aid = attributeId
-        let pid = serverProfileId
-        let rows = try context.fetch(FetchDescriptor<CachedAttribute>(
-            predicate: #Predicate { $0.attributeId == aid && $0.serverProfileId == pid }
-        ))
-        rows.forEach { context.delete($0) }
-        try context.save()
-    }
-
     // MARK: - Sync Helpers
 
-    func fetchAllCachedNoteIds(serverProfileId: String) throws -> [String] {
+    /// Which of `branchIds` are still cached (one indexed query per 500 ids, id column only).
+    func fetchExistingBranchIds(among branchIds: some Collection<String>, serverProfileId: String) throws -> Set<String> {
         let profileId = serverProfileId
-        let notes = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
+        var existing = Set<String>()
+        for chunk in Array(branchIds).chunked(into: Self.idQueryChunkSize) {
+            var descriptor = FetchDescriptor<CachedBranch>(
+                predicate: #Predicate { chunk.contains($0.branchId) && $0.serverProfileId == profileId }
             )
-        )
-        return notes.map(\.noteId)
-    }
-
-    func fetchAllCachedBranchIds(serverProfileId: String) throws -> [String] {
-        let profileId = serverProfileId
-        let branches = try context.fetch(
-            FetchDescriptor<CachedBranch>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
-            )
-        )
-        return branches.map(\.branchId)
-    }
-
-    /// Deletes cached notes (and their branches/attributes) for the profile.
-    func deleteCachedNotes(noteIds: [String], serverProfileId: String, clearGhost: Bool = true) throws {
-        try deleteCachedNotes(noteIds: Set(noteIds), serverProfileId: serverProfileId, clearGhost: clearGhost)
-    }
-
-    func deleteCachedNotes(noteIds: Set<String>, serverProfileId: String, clearGhost: Bool = true) throws {
-        let profileId = serverProfileId
-        var closedTabs = false
-        defer {
-            // The tab strip reads its rows once; tell it they changed (a note deleted here, by sync or on another device).
-            if closedTabs { NotificationCenter.default.post(name: .openNoteTabsChanged, object: nil) }
+            descriptor.propertiesToFetch = [\.branchId]
+            existing.formUnion(try context.fetch(descriptor).map(\.branchId))
         }
-        for noteId in noteIds {
-            if try purgeNoteFromAuxiliaryStores(noteId: noteId, serverProfileId: profileId, clearGhost: clearGhost) {
-                closedTabs = true
-            }
-
-            let nid = noteId
-            let pid = profileId
-
-            let notes = try context.fetch(FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
-            ))
-            notes.forEach { context.delete($0) }
-
-            let branches = try context.fetch(FetchDescriptor<CachedBranch>(
-                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
-            ))
-            branches.forEach { context.delete($0) }
-
-            let attrs = try context.fetch(FetchDescriptor<CachedAttribute>(
-                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
-            ))
-            attrs.forEach { context.delete($0) }
-        }
-        try context.save()
-    }
-
-    func pendingDeletionNoteIds(serverProfileId: String) throws -> Set<String> {
-        Set(try fetchPendingNoteDeletions(serverProfileId: serverProfileId).map(\.noteId))
-    }
-
-    /// Removes recents, favorites, tabs, drafts, images, and optionally ghost IDs for a note (no save).
-    /// Returns whether any open tab was removed.
-    @discardableResult
-    func purgeNoteFromAuxiliaryStores(noteId: String, serverProfileId: String, clearGhost: Bool = true) throws -> Bool {
-        let compositeId = "\(serverProfileId):\(noteId)"
-        let profileId = serverProfileId
-        let nid = noteId
-
-        var recentDesc = FetchDescriptor<RecentNote>(predicate: #Predicate { $0.id == compositeId })
-        recentDesc.fetchLimit = 1
-        if let recent = try context.fetch(recentDesc).first {
-            context.delete(recent)
-        }
-
-        var favDesc = FetchDescriptor<FavoriteNote>(predicate: #Predicate { $0.id == compositeId })
-        favDesc.fetchLimit = 1
-        if let fav = try context.fetch(favDesc).first {
-            context.delete(fav)
-        }
-
-        let tabs = try context.fetch(
-            FetchDescriptor<OpenNoteTab>(
-                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId }
-            )
-        )
-        tabs.forEach { context.delete($0) }
-        let closedTabs = !tabs.isEmpty
-
-        var draftDesc = FetchDescriptor<DraftContent>(predicate: #Predicate { $0.id == compositeId })
-        draftDesc.fetchLimit = 1
-        if let draft = try context.fetch(draftDesc).first {
-            context.delete(draft)
-        }
-
-        let images = try context.fetch(
-            FetchDescriptor<CachedImageData>(
-                predicate: #Predicate { $0.entityId == nid && $0.serverProfileId == profileId }
-            )
-        )
-        images.forEach { context.delete($0) }
-
-        if clearGhost {
-            GhostNoteTracker.shared.remove(noteId, serverProfileId: serverProfileId)
-        }
-        return closedTabs
-    }
-
-    /// Removes cached branches under `parentNoteId` absent from the live API tree, then deletes
-    /// note rows that no longer have any branch placements (unless listed in `hiddenNoteIds`).
-    @discardableResult
-    func pruneStaleBranchesUnderParent(
-        parentNoteId: String,
-        liveBranchIds: Set<String>,
-        serverProfileId: String,
-        hiddenNoteIds: Set<String>
-    ) throws -> Int {
-        let parentId = parentNoteId
-        let profileId = serverProfileId
-        let cachedPairs = try fetchCachedChildren(parentNoteId: parentId, serverProfileId: profileId)
-        var pruned = 0
-        var noteIdsToCheck: Set<String> = []
-
-        for (branch, _) in cachedPairs where !liveBranchIds.contains(branch.branchId) {
-            let branchId = branch.branchId
-            let rows = try context.fetch(
-                FetchDescriptor<CachedBranch>(
-                    predicate: #Predicate { $0.branchId == branchId && $0.serverProfileId == profileId }
-                )
-            )
-            rows.forEach { context.delete($0) }
-            pruned += 1
-            noteIdsToCheck.insert(branch.noteId)
-        }
-
-        var notesDeleted = 0
-        for noteId in noteIdsToCheck where !hiddenNoteIds.contains(noteId) {
-            let nid = noteId
-            let remaining = try context.fetch(
-                FetchDescriptor<CachedBranch>(
-                    predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId }
-                )
-            )
-            if remaining.isEmpty {
-                try deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
-                notesDeleted += 1
-            }
-        }
-
-        if pruned > 0 {
-            try reconcileCachedNoteBranchesMetadata(forNoteId: parentNoteId, serverProfileId: profileId)
-        } else if notesDeleted > 0 {
-            try reconcileCachedNoteBranchesMetadata(forNoteId: parentNoteId, serverProfileId: profileId)
-        }
-
-        if pruned > 0 || notesDeleted > 0 {
-            try context.save()
-        }
-        return pruned + notesDeleted
+        return existing
     }
 
     /// Whether notes created under `noteId` take their title from a `#titleTemplate`. Trilium reads it off the parent
@@ -2448,188 +2194,6 @@ final class PersistenceManager {
             frontier = next
         }
         return false
-    }
-
-    /// Applies a server `note_reordering` change: new positions for the children of `parentNoteId`, then
-    /// re-derives the parent's ordered child id lists. Branches not cached locally are skipped.
-    func applyChildBranchPositions(
-        _ positions: [String: Int],
-        parentNoteId: String,
-        serverProfileId: String
-    ) throws {
-        let pid = parentNoteId
-        let profileId = serverProfileId
-        let childBranches = try context.fetch(
-            FetchDescriptor<CachedBranch>(
-                predicate: #Predicate { $0.parentNoteId == pid && $0.serverProfileId == profileId }
-            )
-        )
-        var changed = false
-        for branch in childBranches {
-            guard let position = positions[branch.branchId], branch.notePosition != position else { continue }
-            branch.notePosition = position
-            changed = true
-        }
-        guard changed else { return }
-        try reconcileCachedNoteBranchesMetadata(forNoteId: parentNoteId, serverProfileId: serverProfileId)
-    }
-
-    /// Removes one branch placement, refreshes the parent's tree id lists, and deletes the note row when it has no branches left.
-    func deleteCachedBranchAndReconcilePlacement(
-        branchId: String,
-        noteId: String,
-        parentNoteId: String,
-        serverProfileId: String,
-        hiddenNoteIds: Set<String>
-    ) throws {
-        try deleteCachedBranch(branchId: branchId, serverProfileId: serverProfileId)
-        try reconcileCachedNoteBranchesMetadata(forNoteId: parentNoteId, serverProfileId: serverProfileId)
-        let nid = noteId
-        let pid = serverProfileId
-        let remaining = try context.fetch(
-            FetchDescriptor<CachedBranch>(
-                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
-            )
-        )
-        if remaining.isEmpty, !hiddenNoteIds.contains(noteId) {
-            try deleteCachedNotes(noteIds: [noteId], serverProfileId: serverProfileId)
-        } else {
-            try context.save()
-        }
-    }
-
-    /// Rebuilds one note's parent/child id lists from `CachedBranch` rows (cheap targeted reconcile).
-    func reconcileCachedNoteBranchesMetadata(forNoteId noteId: String, serverProfileId: String) throws {
-        guard let note = try fetchCachedNote(id: noteId, serverProfileId: serverProfileId) else { return }
-        let profileId = serverProfileId
-        let nid = noteId
-
-        let childBranches = try context.fetch(
-            FetchDescriptor<CachedBranch>(
-                predicate: #Predicate { $0.parentNoteId == nid && $0.serverProfileId == profileId },
-                sortBy: [SortDescriptor(\.notePosition)]
-            )
-        )
-        note.childBranchIds = childBranches.map(\.branchId)
-        note.childNoteIds = childBranches.map(\.noteId)
-
-        let parentBranches = try context.fetch(
-            FetchDescriptor<CachedBranch>(
-                predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId },
-                sortBy: [SortDescriptor(\.branchId)]
-            )
-        )
-        note.parentBranchIds = parentBranches.map(\.branchId)
-        note.parentNoteIds = parentBranches.map(\.parentNoteId)
-    }
-
-    /// Returns note IDs from `serverModifiedAfter` that need their content downloaded.
-    /// A note needs content if: it has no cached content, or the server's
-    /// `utcDateModified` is newer than the cached version.
-    func fetchNotesNeedingContent(serverProfileId: String, serverModifiedAfter: [String: String]) throws -> [String] {
-        let profileId = serverProfileId
-        let notes = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.serverProfileId == profileId && $0.isProtected == false }
-            )
-        )
-        let notesByID = Dictionary(uniqueKeysWithValues: notes.map { ($0.noteId, $0) })
-
-        // Use `contentFetchedAt`, not `content == nil`, so SwiftData does not fault every `@Attribute(.externalStorage)` blob during sync.
-        return serverModifiedAfter.compactMap { (noteId, serverDate) in
-            guard let cached = notesByID[noteId] else {
-                return noteId
-            }
-            if cached.contentFetchedAt == nil { return noteId }
-            guard let cachedDate = cached.utcDateModified else { return noteId }
-            return serverDate > cachedDate ? noteId : nil
-        }
-    }
-
-    /// Same staleness rules as `fetchNotesNeedingContent`, for **protected** notes (after a protected session exists on the server).
-    func fetchProtectedNotesNeedingContent(serverProfileId: String, serverModifiedAfter: [String: String]) throws -> [String] {
-        let profileId = serverProfileId
-        let notes = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.serverProfileId == profileId && $0.isProtected == true }
-            )
-        )
-        let notesByID = Dictionary(uniqueKeysWithValues: notes.map { ($0.noteId, $0) })
-
-        return serverModifiedAfter.compactMap { (noteId, serverDate) in
-            guard let cached = notesByID[noteId] else {
-                return noteId
-            }
-            if cached.contentFetchedAt == nil { return noteId }
-            guard let cachedDate = cached.utcDateModified else { return noteId }
-            return serverDate > cachedDate ? noteId : nil
-        }
-    }
-
-    /// `noteId` → server `utcDateModified` (empty string ok) for notes that still have no cached body blob.
-    func serverModifiedMapForUnprotectedNotesMissingContent(serverProfileId: String) throws -> [String: String] {
-        let profileId = serverProfileId
-        let notes = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate {
-                    $0.serverProfileId == profileId && $0.isProtected == false && $0.contentFetchedAt == nil
-                }
-            )
-        )
-        return Dictionary(uniqueKeysWithValues: notes.map { ($0.noteId, "") })
-    }
-
-    /// Protected notes with no body cached yet (requires an active server protected session to download).
-    func serverModifiedMapForProtectedNotesMissingContent(serverProfileId: String) throws -> [String: String] {
-        let profileId = serverProfileId
-        let notes = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate {
-                    $0.serverProfileId == profileId && $0.isProtected == true && $0.contentFetchedAt == nil
-                }
-            )
-        )
-        return Dictionary(uniqueKeysWithValues: notes.map { ($0.noteId, "") })
-    }
-
-    /// Rebuilds each `CachedNote`’s parent/child id lists from `CachedBranch` rows (fixes incremental sync rows that omit tree fields).
-    func reconcileCachedNoteBranchesMetadata(serverProfileId: String) throws {
-        let profileId = serverProfileId
-        let branches = try context.fetch(
-            FetchDescriptor<CachedBranch>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
-            )
-        )
-
-        var byParent: [String: [(branchId: String, noteId: String, pos: Int)]] = [:]
-        var byChild: [String: [(parentNoteId: String, branchId: String)]] = [:]
-
-        for b in branches {
-            byParent[b.parentNoteId, default: []].append((branchId: b.branchId, noteId: b.noteId, pos: b.notePosition))
-            byChild[b.noteId, default: []].append((parentNoteId: b.parentNoteId, branchId: b.branchId))
-        }
-
-        for key in byParent.keys {
-            byParent[key]?.sort { $0.pos < $1.pos }
-        }
-
-        let notes = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
-            )
-        )
-
-        for n in notes {
-            let outs = byParent[n.noteId] ?? []
-            n.childBranchIds = outs.map(\.branchId)
-            n.childNoteIds = outs.map(\.noteId)
-
-            let ins = (byChild[n.noteId] ?? []).sorted { $0.branchId < $1.branchId }
-            n.parentBranchIds = ins.map(\.branchId)
-            n.parentNoteIds = ins.map(\.parentNoteId)
-        }
-
-        try context.save()
     }
 
     // MARK: - Cache exclusion preferences
@@ -2827,6 +2391,7 @@ final class PersistenceManager {
         descriptor.fetchLimit = 1
         if let existing = try context.fetch(descriptor).first {
             existing.data = data
+            existing.byteCount = data.count
             existing.mime = mime
             existing.fetchedAt = .now
         } else {
@@ -2922,25 +2487,44 @@ final class PersistenceManager {
     }
 
     /// Estimates total size in bytes of cached note content and images.
+    /// Sums the recorded body and image sizes, so the bodies themselves aren't read. Rows cached before sizes were
+    /// recorded are measured (and their size recorded) once.
     func estimateCacheSizeInBytes(for serverProfileId: String) throws -> Int {
         let profileId = serverProfileId
-        let notes = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
-            )
-        )
         var total = 0
-        for note in notes {
-            total += note.content?.count ?? 0
-        }
-        let images = try context.fetch(
-            FetchDescriptor<CachedImageData>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
-            )
+        var recordedSizes = false
+
+        var noteDescriptor = FetchDescriptor<CachedNote>(
+            predicate: #Predicate { $0.serverProfileId == profileId && $0.contentFetchedAt != nil }
         )
-        for img in images {
-            total += img.data.count
+        noteDescriptor.propertiesToFetch = [\.contentByteCount]
+        for note in try context.fetch(noteDescriptor) {
+            if let count = note.contentByteCount {
+                total += count
+            } else {
+                let count = note.content?.count ?? 0
+                note.contentByteCount = count
+                total += count
+                recordedSizes = true
+            }
         }
+
+        var imageDescriptor = FetchDescriptor<CachedImageData>(
+            predicate: #Predicate { $0.serverProfileId == profileId }
+        )
+        imageDescriptor.propertiesToFetch = [\.byteCount]
+        for image in try context.fetch(imageDescriptor) {
+            if let count = image.byteCount {
+                total += count
+            } else {
+                let count = image.data.count
+                image.byteCount = count
+                total += count
+                recordedSizes = true
+            }
+        }
+
+        if recordedSizes { try context.save() }
         return total
     }
 

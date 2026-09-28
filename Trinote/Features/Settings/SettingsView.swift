@@ -48,6 +48,9 @@ struct SettingsView: View {
     @State private var cacheSizeBytesAllInstances: Int?
     @State private var activeProfileHasCloudflareAccess = false
     @State private var showCloudflareAccessSettings = false
+    /// The active server's offline-cache choices; saved as they change.
+    @State private var offlineCacheSettings = OfflineCacheSettings()
+    @State private var showRemoveMediaConfirm = false
 
     var body: some View {
         List {
@@ -62,6 +65,7 @@ struct SettingsView: View {
                 ssoSection
                 connectionSection
             case .data:
+                offlineCacheSection
                 cacheSection
                 aboutSection
             }
@@ -103,10 +107,12 @@ struct SettingsView: View {
         }
         .onAppear {
             deviceBiometryKind = BiometricAuthenticator.availability().kind
+            loadOfflineCacheSettings()
             reloadServerProfiles()
             Task { await refreshCloudflareAccessVisibility() }
         }
         .onChange(of: appState.activeProfile?.id) { _, _ in
+            loadOfflineCacheSettings()
             reloadServerProfiles()
             Task {
                 await loadDiagnostics()
@@ -623,6 +629,48 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var offlineCacheSection: some View {
+        if appState.activeProfile != nil {
+            OfflineCacheOptionSections(settings: $offlineCacheSettings)
+                .onChange(of: offlineCacheSettings) { _, new in
+                    guard let profileId = appState.activeProfile?.id else { return }
+                    let saved = OfflineCacheSettings.load(profileId: profileId)
+                    // Equal to what's saved: just loaded, nothing to write.
+                    guard new != saved else { return }
+                    new.save(profileId: profileId)
+                    if saved.cachesMediaBodies, !new.cachesMediaBodies {
+                        showRemoveMediaConfirm = true
+                    }
+                }
+                .confirmationDialog(
+                    String(localized: "Remove Downloaded Images, Videos & Files?", comment: "Offline cache: confirm dropping cached media bodies"),
+                    isPresented: $showRemoveMediaConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button(String(localized: "Remove", comment: "Offline cache: drop cached media bodies"), role: .destructive) {
+                        if let profileId = appState.activeProfile?.id {
+                            try? PersistenceManager.shared.clearCachedMediaBodies(serverProfileId: profileId)
+                            Task { await loadDiagnostics() }
+                        }
+                    }
+                    Button(String(localized: "Keep", comment: "Offline cache: keep cached media bodies"), role: .cancel) {}
+                } message: {
+                    Text(
+                        String(
+                            localized: "They download again when you open them. Keep them to only stop new downloads.",
+                            comment: "Offline cache: remove cached media message"
+                        )
+                    )
+                }
+        }
+    }
+
+    private func loadOfflineCacheSettings() {
+        guard let profileId = appState.activeProfile?.id else { return }
+        offlineCacheSettings = OfflineCacheSettings.load(profileId: profileId)
+    }
+
     private var cacheSection: some View {
         Section(String(localized: "Cache & Sync", comment: "Settings section")) {
             LabeledContent(String(localized: "Cached Entities", comment: "Settings cache"), value: "\(cacheEntityCount)")
@@ -691,10 +739,7 @@ struct SettingsView: View {
             Button {
                 Task {
                     guard await appState.refreshTriliumSession() else { return }
-                    if let client = appState.client, let profileId = appState.activeProfile?.id {
-                        appState.imageCachePrefetcher.cancel()
-                        appState.syncManager.fullSync(client: client, profileId: profileId)
-                    }
+                    await appState.runFullSync()
                 }
             } label: {
                 Label(String(localized: "Full Sync (All Notes)", comment: "Settings sync button"), systemImage: "arrow.triangle.2.circlepath")
@@ -736,6 +781,7 @@ struct SettingsView: View {
                     || appState.imageCachePrefetcher.isRunning
                     || appState.client == nil
                     || !appState.isOnline
+                    || !offlineCacheSettings.cachesMediaBodies
             )
 
             Text(

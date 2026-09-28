@@ -3,7 +3,16 @@ import SwiftData
 
 @Model
 final class CachedNote {
-    @Attribute(.unique) var noteId: String
+    // Offline-cache lookups filter by these columns; without indexes each one scans the whole table (issue #25).
+    // An index alone doesn't change a model's version hash, so an existing store would open without migrating and
+    // never get it: the `hashModifier` on `serverProfileId` here and in the other cache models forces that
+    // migration. Bump it whenever these indexes or uniqueness rules change.
+    #Index<CachedNote>([\.serverProfileId], [\.serverProfileId, \.utcDateModified])
+    // Unique per server: every Trilium server has notes with the same ids (`root`, `_hidden`, …), and a signed-in
+    // server's rows must not replace another's.
+    #Unique<CachedNote>([\.noteId, \.serverProfileId])
+
+    var noteId: String
     var title: String
     var noteType: String
     var mime: String
@@ -16,7 +25,16 @@ final class CachedNote {
     var contentFetchedAt: Date?
     var metadataFetchedAt: Date
     var utcDateModified: String?
-    var serverProfileId: String
+    @Attribute(hashModifier: "per-server-unique-v2") var serverProfileId: String
+    /// Server blob id of the note's current body (`tree/load` rows, sync note rows). Trilium blob ids hash the content,
+    /// so a new id means a new body.
+    var blobId: String?
+    /// `blobId` the body in `content` was downloaded for; the body is stale while it differs from `blobId`.
+    var contentBlobId: String?
+    /// `blobId` of a body sync skipped for its size; sync doesn't try it again until the body changes.
+    var contentSkippedBlobId: String?
+    /// Size of `content` in bytes, so the cache size can be summed without reading every body.
+    var contentByteCount: Int?
 
     init(
         noteId: String,
@@ -32,7 +50,8 @@ final class CachedNote {
         contentFetchedAt: Date? = nil,
         metadataFetchedAt: Date = .now,
         utcDateModified: String? = nil,
-        serverProfileId: String
+        serverProfileId: String,
+        blobId: String? = nil
     ) {
         self.noteId = noteId
         self.title = title
@@ -44,10 +63,12 @@ final class CachedNote {
         self.parentBranchIds = parentBranchIds
         self.childBranchIds = childBranchIds
         self.content = content
+        self.contentByteCount = content?.count
         self.contentFetchedAt = contentFetchedAt
         self.metadataFetchedAt = metadataFetchedAt
         self.utcDateModified = utcDateModified
         self.serverProfileId = serverProfileId
+        self.blobId = blobId
     }
 
     var parsedType: NoteType? {
@@ -57,13 +78,17 @@ final class CachedNote {
 
 @Model
 final class CachedBranch {
-    @Attribute(.unique) var branchId: String
+    #Index<CachedBranch>([\.parentNoteId, \.serverProfileId], [\.noteId, \.serverProfileId], [\.serverProfileId])
+    // Unique per server (see `CachedNote`): branch ids derive from note ids (`root__hidden`).
+    #Unique<CachedBranch>([\.branchId, \.serverProfileId])
+
+    var branchId: String
     var noteId: String
     var parentNoteId: String
     var prefix: String?
     var notePosition: Int
     var isExpanded: Bool
-    var serverProfileId: String
+    @Attribute(hashModifier: "per-server-unique-v2") var serverProfileId: String
     var fetchedAt: Date
 
     init(
@@ -89,14 +114,18 @@ final class CachedBranch {
 
 @Model
 final class CachedAttribute {
-    @Attribute(.unique) var attributeId: String
+    #Index<CachedAttribute>([\.noteId, \.serverProfileId], [\.name, \.type, \.serverProfileId])
+    // Unique per server (see `CachedNote`).
+    #Unique<CachedAttribute>([\.attributeId, \.serverProfileId])
+
+    var attributeId: String
     var noteId: String
     var type: String
     var name: String
     var value: String
     var position: Int
     var isInheritable: Bool
-    var serverProfileId: String
+    @Attribute(hashModifier: "per-server-unique-v2") var serverProfileId: String
 
     init(
         attributeId: String,
@@ -436,19 +465,24 @@ final class CacheExcludedRootNote {
 
 @Model
 final class CachedImageData {
+    #Index<CachedImageData>([\.entityId, \.serverProfileId])
+
     @Attribute(.unique) var id: String
     var entityId: String
     var entityType: String
     @Attribute(.externalStorage) var data: Data
+    /// Size of `data` in bytes, so the cache size can be summed without reading every image.
+    var byteCount: Int?
     var mime: String
     var fetchedAt: Date
-    var serverProfileId: String
+    @Attribute(hashModifier: "indexes-v1") var serverProfileId: String
 
     init(entityId: String, entityType: String, data: Data, mime: String, serverProfileId: String) {
         self.id = "\(serverProfileId):\(entityType):\(entityId)"
         self.entityId = entityId
         self.entityType = entityType
         self.data = data
+        self.byteCount = data.count
         self.mime = mime
         self.fetchedAt = .now
         self.serverProfileId = serverProfileId

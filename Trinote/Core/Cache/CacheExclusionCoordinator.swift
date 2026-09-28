@@ -76,21 +76,14 @@ enum CacheExclusionCoordinator {
     ) async {
         do {
             let (_, branches) = try await client.getNoteWithBranches(TriliumTreeConstants.rootNoteId)
-            var knownBranchIds = (try? persistence.prefetchExistingBranchIds(serverProfileId: profileId)) ?? []
-            var knownNoteIds = (try? persistence.prefetchExistingNoteIds(serverProfileId: profileId)) ?? []
-            for branch in branches where notebookIds.contains(branch.noteId) {
-                try? persistence.cacheBranchBatchForFullSync(
-                    from: branch,
-                    serverProfileId: profileId,
-                    knownExisting: &knownBranchIds
-                )
-                if !knownNoteIds.contains(branch.noteId) {
+            let placements = branches.filter { notebookIds.contains($0.noteId) }
+            let cachedBranches = (try? persistence.fetchCachedBranches(ids: placements.map(\.branchId), serverProfileId: profileId)) ?? [:]
+            let cachedNotes = (try? persistence.fetchCachedNotes(ids: placements.map(\.noteId), serverProfileId: profileId)) ?? [:]
+            for branch in placements {
+                persistence.upsertBranchForFullSync(branch, existing: cachedBranches[branch.branchId], serverProfileId: profileId)
+                if cachedNotes[branch.noteId] == nil {
                     let note = try await client.getNote(branch.noteId)
-                    try? persistence.cacheNoteBatchForFullSync(
-                        from: note,
-                        serverProfileId: profileId,
-                        knownExisting: &knownNoteIds
-                    )
+                    persistence.upsertNoteForFullSync(note, existing: nil, serverProfileId: profileId)
                 }
             }
             try? persistence.commitBatch()

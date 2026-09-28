@@ -781,6 +781,108 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(fallbackEntries.count, 2)
     }
 
+    func testCappedNoteContentStopsForBodiesOverTheLimit() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            func respond(_ body: Data, headers: [String: String]? = nil) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!, body)
+            }
+            if path.hasSuffix("/bootstrap") { return respond(Data(#"{"csrfToken":"x","device":"desktop"}"#.utf8)) }
+            if path.contains("/api/app-info") { return respond(Data(#"{"appVersion":"0.106.0","dbVersion":240}"#.utf8)) }
+            if path.hasSuffix("/api/notes/declared/open") { return respond(Data(count: 100), headers: ["Content-Length": "100"]) }
+            if path.hasSuffix("/api/notes/undeclared/open") { return respond(Data(count: 100)) }
+            if path.hasSuffix("/api/notes/small/open") { return respond(Data(count: 10), headers: ["Content-Length": "10"]) }
+            XCTFail("Unexpected path: \(path)")
+            return respond(Data())
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let declared = try await client.getNoteContent("declared", maxBytes: 50)
+        let undeclared = try await client.getNoteContent("undeclared", maxBytes: 50)
+        let small = try await client.getNoteContent("small", maxBytes: 50)
+        XCTAssertNil(declared, "too large by its Content-Length")
+        XCTAssertNil(undeclared, "too large once more than the limit arrived")
+        XCTAssertEqual(small?.count, 10)
+    }
+
+    func testFullSyncBatchBuildsEachNoteFromTheSharedTreeLoadResponse() async throws {
+        let treeJSON = #"""
+        {"notes":[
+          {"noteId":"p","title":"P","isProtected":false,"type":"text","mime":"text/html","blobId":"bp"},
+          {"noteId":"q","title":"Q","isProtected":false,"type":"text","mime":"text/html","blobId":"bq"},
+          {"noteId":"gone","title":"Gone","isProtected":false,"type":"text","mime":"text/html","blobId":"bg","isDeleted":true}
+        ],"branches":[
+          {"branchId":"root_p","noteId":"p","parentNoteId":"root","prefix":null,"notePosition":10,"isExpanded":false},
+          {"branchId":"x_q","noteId":"q","parentNoteId":"x","prefix":null,"notePosition":5,"isExpanded":false},
+          {"branchId":"share_x","noteId":"x","parentNoteId":"_share","prefix":null,"notePosition":5,"isExpanded":false},
+          {"branchId":"p_q","noteId":"q","parentNoteId":"p","prefix":null,"notePosition":20,"isExpanded":false},
+          {"branchId":"p_b","noteId":"b","parentNoteId":"p","prefix":"pre","notePosition":10,"isExpanded":true},
+          {"branchId":"p_a","noteId":"a","parentNoteId":"p","prefix":null,"notePosition":10,"isExpanded":false},
+          {"branchId":"p_gone","noteId":"gone","parentNoteId":"p","prefix":null,"notePosition":1,"isExpanded":false},
+          {"branchId":"p_del","noteId":"d","parentNoteId":"p","prefix":null,"notePosition":2,"isExpanded":false,"isDeleted":true}
+        ],"attributes":[
+          {"attributeId":"a2","noteId":"p","type":"label","name":"two","value":"","position":20,"isInheritable":false},
+          {"attributeId":"a1","noteId":"p","type":"label","name":"one","value":"","position":10,"isInheritable":true},
+          {"attributeId":"aq","noteId":"q","type":"relation","name":"template","value":"t","position":10,"isInheritable":false}
+        ]}
+        """#
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(#"{"appVersion":"0.106.0","dbVersion":240}"#) }
+            if path.hasSuffix("/api/tree/load") { return ok(treeJSON) }
+            if path.hasSuffix("/api/notes/metadata") {
+                return ok(#"{"p":{"utcDateModified":"2026-01-01 00:00:00.000Z"},"q":{"utcDateModified":"2026-01-02 00:00:00.000Z"}}"#)
+            }
+            XCTFail("Unexpected path: \(path)")
+            return ok("{}")
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let entries = try await client.fullSyncFetchTreeBatch(noteIds: ["p", "q"])
+        let p = try XCTUnwrap(entries.first { $0.note.noteId == "p" })
+        let q = try XCTUnwrap(entries.first { $0.note.noteId == "q" })
+
+        XCTAssertEqual(p.note.childBranchIds, ["p_a", "p_b", "p_q"], "position order, ties by branch id, deleted left out")
+        XCTAssertEqual(p.note.childNoteIds, ["a", "b", "q"])
+        XCTAssertEqual(p.childBranches.map(\.branchId), ["p_a", "p_b", "p_q"])
+        XCTAssertEqual(p.childBranches[1].prefix, "pre")
+        XCTAssertEqual(p.note.attributes.map(\.attributeId), ["a1", "a2"])
+        XCTAssertEqual(p.note.parentNoteIds, ["root"])
+        XCTAssertEqual(q.note.parentBranchIds, ["p_q", "x_q"], "clone parents by branch id")
+        XCTAssertEqual(q.note.parentNoteIds, ["p", "x"])
+        XCTAssertEqual(q.note.attributes.map(\.name), ["template"])
+        XCTAssertTrue(q.childBranches.isEmpty)
+        XCTAssertEqual(q.note.hasShareAncestor, true, "x, one of its clone parents, is shared")
+        XCTAssertEqual(p.note.hasShareAncestor, false)
+    }
+
+    func testFullSyncBatchOnOlderServersOnlyGetsNotesThatChangedSinceTheyWereCached() async throws {
+        let server = BatchDateServer()
+        MockURLProtocol.requestHandler = server.handler(appInfo: #"{"appVersion":"0.104.0","dbVersion":240}"#)
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let cached: [String: FullSyncCachedNoteState] = [
+            // Same body, title, type and mime as its tree/load row: keeps its cached date.
+            "n1": FullSyncCachedNoteState(blobId: "b1", title: "One", type: "text", mime: "text/html", isProtected: false, utcDateModified: "2024-03-03 00:00:00.000Z"),
+            // Its body changed on the server.
+            "n2": FullSyncCachedNoteState(blobId: "old", title: "Two", type: "code", mime: "text/plain", isProtected: false, utcDateModified: "2024-03-03 00:00:00.000Z"),
+        ]
+        let entries = try await client.fullSyncFetchTreeBatch(noteIds: ["n1", "n2"], cached: cached)
+        XCTAssertEqual(server.noteGets, ["n2"])
+        XCTAssertEqual(entries.map(\.note.noteId), ["n1", "n2"])
+        XCTAssertEqual(entries[0].note.utcDateModified, "2024-03-03 00:00:00.000Z")
+        XCTAssertEqual(entries[0].note.blobId, "b1")
+        XCTAssertEqual(entries[0].childBranches.map(\.branchId), ["n1_n2"])
+        XCTAssertEqual(entries[1].note.utcDateModified, "2025-06-01 00:00:00.000Z")
+    }
+
     func testSearchNoteIdTitlesUsesSearchThenSingleTreeLoad() async throws {
         var treeLoadCount = 0
         MockURLProtocol.requestHandler = { [appInfoJSON] request in
@@ -963,6 +1065,20 @@ final class TriliumClientTests: XCTestCase {
         let p = try SyncPullResponse.parseFromChanged(jsonData: json)
         XCTAssertEqual(p.maxEntityChangeId, 12_000)
         XCTAssertEqual(p.outstandingPullCount, 5)
+    }
+
+    func testSyncPullResponseKeepsChangeNumbersAndDropsTheOnesAlreadyApplied() throws {
+        let json = #"""
+        {"entityChanges":[
+          {"entityChange":{"id":41,"entityName":"notes","entityId":"a","isErased":0},"entity":{"noteId":"a"}},
+          {"entityChange":{"id":"42","entityName":"notes","entityId":"b","isErased":0},"entity":{"noteId":"b"}},
+          {"entityChange":{"entityName":"notes","entityId":"c","isErased":0},"entity":{"noteId":"c"}}
+        ],"lastEntityChangeId":42,"outstandingPullCount":0}
+        """#.data(using: .utf8)!
+        let p = try SyncPullResponse.parseFromChanged(jsonData: json)
+        XCTAssertEqual(p.entityChanges.map(\.id), [41, 42, nil])
+        XCTAssertEqual(p.droppingChanges(through: 41).entityChanges.map(\.entityId), ["b", "c"], "unnumbered changes stay")
+        XCTAssertEqual(p.droppingChanges(through: 41).maxEntityChangeId, 42)
     }
 
     func testSyncPullResponseParsesErasedEntity() throws {

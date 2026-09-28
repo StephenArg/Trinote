@@ -123,14 +123,56 @@ actor MockTriliumClient: TriliumClientProtocol {
         try appInfoResult.get()
     }
 
+    var syncCheckCallCount = 0
+    var syncPullCursors: [Int64] = []
+
     func syncCheck() async throws -> SyncCheckResponse {
-        try syncCheckResult.get()
+        syncCheckCallCount += 1
+        return try syncCheckResult.get()
+    }
+
+    /// When set, pulls answer like Trilium with no changes from other clients: the returned `lastEntityChangeId` is
+    /// this newest change when it's past the requested id, otherwise the requested id echoed back.
+    var syncPullServerMaxEntityChangeId: Int64?
+
+    /// Note changes the mock server's history holds (with `syncPullServerMaxEntityChangeId`), served to pulls
+    /// asking for anything before them.
+    var syncPullNoteChanges: [(id: Int64, note: [String: Any])] = []
+
+    func addPulledNoteChange(id: Int64, note: [String: Any]) {
+        syncPullNoteChanges.append((id, note))
     }
 
     func syncPull(instanceId: String, lastEntityChangeId: Int64) async throws -> SyncPullResponse {
         _ = instanceId
-        _ = lastEntityChangeId
+        syncPullCursors.append(lastEntityChangeId)
+        if let serverMax = syncPullServerMaxEntityChangeId {
+            let newer = syncPullNoteChanges.filter { $0.id > lastEntityChangeId }
+            return SyncPullResponse(
+                entityChanges: newer.map {
+                    .init(entityName: "notes", entityId: $0.note["noteId"] as? String ?? "", isErased: false, id: $0.id)
+                },
+                maxEntityChangeId: newer.map(\.id).max() ?? max(serverMax, lastEntityChangeId),
+                outstandingPullCount: 0,
+                notes: newer.map(\.note), branches: [], attributes: [], blobs: []
+            )
+        }
         return try syncPullResult.get()
+    }
+
+    /// Makes the mock server's history end at `maxEntityChangeId` (see `syncPullServerMaxEntityChangeId`), for both
+    /// `sync/check` and pulls.
+    func setServerHistory(maxEntityChangeId: Int64) {
+        syncPullServerMaxEntityChangeId = maxEntityChangeId
+        syncCheckResult = .success(SyncCheckResponse(maxEntityChangeId: maxEntityChangeId))
+    }
+
+    func setSyncCheckResult(_ result: Result<SyncCheckResponse, Error>) {
+        syncCheckResult = result
+    }
+
+    func setSyncPullResult(_ result: Result<SyncPullResponse, Error>) {
+        syncPullResult = result
     }
 
     func getNoteWithBranches(_ noteId: String) async throws -> (NoteResponse, [BranchResponse]) {
@@ -170,6 +212,7 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     var batchTreeLoadCalls: [[String]] = []
     var fullSyncFetchTreeBatchCalls: [[String]] = []
+    var fullSyncFetchTreeBatchCachedStates: [[String: FullSyncCachedNoteState]] = []
 
     func batchTreeLoad(noteIds: [String]) async throws -> TreeLoadResponse {
         batchTreeLoadCalls.append(noteIds)
@@ -197,8 +240,9 @@ actor MockTriliumClient: TriliumClientProtocol {
         return TreeLoadResponse(notes: notes, branches: [], attributes: [])
     }
 
-    func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry] {
+    func fullSyncFetchTreeBatch(noteIds: [String], cached: [String: FullSyncCachedNoteState]) async throws -> [FullSyncTreeBatchEntry] {
         fullSyncFetchTreeBatchCalls.append(noteIds)
+        fullSyncFetchTreeBatchCachedStates.append(cached)
         var out: [FullSyncTreeBatchEntry] = []
         for id in noteIds {
             let (note, branches) = try await getNoteWithBranches(id)
@@ -212,6 +256,21 @@ actor MockTriliumClient: TriliumClientProtocol {
         getNoteContentCalls.append(noteId)
         if let result = noteContentResults[noteId] { return try result.get() }
         return Data("<p>Content of \(noteId)</p>".utf8)
+    }
+
+    var cappedNoteContentCalls: [(noteId: String, maxBytes: Int)] = []
+
+    func getNoteContent(_ noteId: String, maxBytes: Int) async throws -> Data? {
+        cappedNoteContentCalls.append((noteId, maxBytes))
+        let data = try await getNoteContent(noteId)
+        return data.count > maxBytes ? nil : data
+    }
+
+    var subtreeSizeResult: Result<SubtreeSizeResponse, Error> = .success(SubtreeSizeResponse(subTreeSize: 0, subTreeNoteCount: 0))
+
+    func getSubtreeSize(_ noteId: String) async throws -> SubtreeSizeResponse {
+        _ = noteId
+        return try subtreeSizeResult.get()
     }
 
     func updateNote(_ noteId: String, request: UpdateNoteRequest) async throws -> NoteResponse {
@@ -374,9 +433,15 @@ actor MockTriliumClient: TriliumClientProtocol {
         return searchNoteIdsValue
     }
 
+    var quickSearchCalls: [String] = []
+
     func quickSearchResults(query: String) async throws -> [QuickSearchResult] {
-        _ = query
+        quickSearchCalls.append(query)
         return quickSearchResultsValue
+    }
+
+    func setSearchResult(_ result: Result<SearchResponse, Error>) {
+        searchResult = result
     }
 
     func renameBoardColumn(boardNoteId: String, request: RenameBoardColumnRequest) async throws {

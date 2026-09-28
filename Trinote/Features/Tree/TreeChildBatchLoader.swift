@@ -3,8 +3,9 @@ import Foundation
 /// Loads missing child branches + notes for a parent via one (or chunked) `fullSyncFetchTreeBatch`
 /// instead of N parallel `getBranch` + N `getNote` calls (each of which fires its own `tree/load`).
 enum TreeChildBatchLoader {
-    /// Matches `SyncManager.treeWalkBatchSize`.
-    static let chunkSize = 50
+    /// Matches `SyncManager.treeWalkBatchSize`: each `tree/load` repeats the parent's whole child list, so fewer,
+    /// bigger chunks load a large folder faster.
+    static let chunkSize = 200
 
     /// Populates `branchCache` / `noteCache` for `parentNote`'s direct children when anything is missing.
     /// No-ops when every child branch and note is already cached.
@@ -20,23 +21,19 @@ enum TreeChildBatchLoader {
         let missingNoteIds = parentNote.childNoteIds.filter { noteCache[$0] == nil }
         guard needsBranches || !missingNoteIds.isEmpty else { return }
 
-        var remainingChildren = missingNoteIds.filter { $0 != parentNote.noteId }
+        let remainingChildren = missingNoteIds.filter { $0 != parentNote.noteId }
+        var next = 0
         var isFirstChunk = true
 
-        while isFirstChunk || !remainingChildren.isEmpty {
+        while isFirstChunk || next < remainingChildren.count {
             var chunk: [String] = []
             if isFirstChunk {
                 chunk.append(parentNote.noteId)
-                let childCapacity = chunkSize - 1
-                let take = min(childCapacity, remainingChildren.count)
-                chunk.append(contentsOf: remainingChildren.prefix(take))
-                remainingChildren.removeFirst(take)
                 isFirstChunk = false
-            } else {
-                let take = min(chunkSize, remainingChildren.count)
-                chunk.append(contentsOf: remainingChildren.prefix(take))
-                remainingChildren.removeFirst(take)
             }
+            let take = min(chunkSize - chunk.count, remainingChildren.count - next)
+            chunk.append(contentsOf: remainingChildren[next..<(next + take)])
+            next += take
 
             let entries = try await client.fullSyncFetchTreeBatch(noteIds: chunk)
             apply(entries: entries, parentNoteId: parentNote.noteId, branchCache: &branchCache, noteCache: &noteCache)

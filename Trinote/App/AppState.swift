@@ -83,8 +83,9 @@ final class AppState {
     func runFullSync(maxWaitSeconds: TimeInterval = 0) async {
         guard networkMonitor.isConnected else { return }
         guard let client, let profile = activeProfile else { return }
+        let instanceId = try? await keychain.loadTriliumInstanceId(forServer: profile.id)
         imageCachePrefetcher.cancel()
-        syncManager.fullSync(client: client, profileId: profile.id)
+        syncManager.fullSync(client: client, profileId: profile.id, triliumInstanceId: instanceId)
         await waitWhileSyncing(atMost: maxWaitSeconds)
     }
 
@@ -1007,7 +1008,8 @@ final class AppState {
         }
     }
 
-    /// Runs after launch: `restoreSession`, offline queues, incremental sync, WebSocket — without blocking the main tab / cached tree.
+    /// Runs after launch: `restoreSession`, offline queues, a full or quick sync (`OfflineCacheSettings.fullSyncOnLaunch`),
+    /// WebSocket — without blocking the main tab / cached tree.
     private func finishOnlineProfileActivationAfterLaunch(profile: ServerProfile, hadPersistedSessionCookies: Bool) async {
         guard let client = self.client as? TriliumClient else { return }
         do {
@@ -1021,7 +1023,17 @@ final class AppState {
             syncManager.restoreSyncState(profileId: profile.id)
             _ = try await triliumInstanceId(for: profile)
             await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
-            await runFullSync(maxWaitSeconds: 0)
+            // With "Full sync on every launch" off (for large vaults), pull only what changed, unless there's been no
+            // full sync, it's over a week old, or there's no cursor to pull from.
+            var fullSyncNow = OfflineCacheSettings.load(profileId: profile.id).fullSyncOnLaunch
+            if !fullSyncNow {
+                fullSyncNow = await syncManager.launchNeedsFullSync(profileId: profile.id)
+            }
+            if fullSyncNow {
+                await runFullSync(maxWaitSeconds: 0)
+            } else {
+                await runIncrementalSync(maxWaitSeconds: 0)
+            }
             startRealtimeIfPossible()
         } catch {
             let apiError = APIError.from(error)
@@ -1330,6 +1342,7 @@ final class AppState {
             try? await keychain.clearServerAuthArtifacts(forServer: profile.id)
         }
         try? await keychain.deleteCloudflareAccessCredentials(forServer: profile.id)
+        OfflineCacheSettings.remove(profileId: profile.id)
         do {
             try persistence.clearCache(for: profile.id)
             try persistence.deleteProfile(profile)

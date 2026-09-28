@@ -31,8 +31,14 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func batchTreeLoad(noteIds: [String]) async throws -> TreeLoadResponse
     /// One batched `tree/load` plus the notes' dates (one `POST /api/notes/metadata` on Trilium 0.106+, otherwise a
     /// parallel `GET /api/notes/:id` per id), merged in request order.
-    func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry]
+    /// - Parameter cached: What the cache holds for these notes. Without `notes/metadata`, a note whose `tree/load`
+    ///   row still matches it keeps its cached date instead of costing a `GET`.
+    func fullSyncFetchTreeBatch(noteIds: [String], cached: [String: FullSyncCachedNoteState]) async throws -> [FullSyncTreeBatchEntry]
     func getNoteContent(_ noteId: String) async throws -> Data
+    /// A note's body, or `nil` when it's larger than `maxBytes`: the download stops as soon as that shows.
+    func getNoteContent(_ noteId: String, maxBytes: Int) async throws -> Data?
+    /// `GET /api/stats/subtree-size/:noteId`: how many notes are under the note and how much their content weighs.
+    func getSubtreeSize(_ noteId: String) async throws -> SubtreeSizeResponse
     func updateNote(_ noteId: String, request: UpdateNoteRequest) async throws -> NoteResponse
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws
     /// Soft-deletes by default (`eraseNotes: false`). When `eraseNotes` is true, Trilium erases the note and its subtree instead of sending them to Trash.
@@ -123,6 +129,12 @@ protocol TriliumClientProtocol: Actor, Sendable {
 
     func syncCheck() async throws -> SyncCheckResponse
     func syncPull(instanceId: String, lastEntityChangeId: Int64) async throws -> SyncPullResponse
+}
+
+extension TriliumClientProtocol {
+    func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry] {
+        try await fullSyncFetchTreeBatch(noteIds: noteIds, cached: [:])
+    }
 }
 
 // MARK: - Cookie archive (Keychain)
@@ -904,8 +916,9 @@ actor TriliumClient: TriliumClientProtocol {
         async let treeResponse: TreeLoadResponse = try await postJSON("/api/tree/load", body: TreeLoadRequest(noteIds: [noteId]), csrf: true)
         let detail = try await detailRow
         let tree = try await treeResponse
-        let note = Self.buildNoteResponse(detail: detail, tree: tree, noteId: noteId)
-        let branches = Self.liveChildBranchResponses(tree: tree, parentNoteId: noteId)
+        let index = TreeLoadIndex(tree)
+        let note = Self.buildNoteResponse(detail: detail, index: index, noteId: noteId)
+        let branches = Self.liveChildBranchResponses(index: index, parentNoteId: noteId)
         return (note, branches)
     }
 
@@ -913,13 +926,14 @@ actor TriliumClient: TriliumClientProtocol {
         try await postJSON("/api/tree/load", body: TreeLoadRequest(noteIds: noteIds), csrf: true)
     }
 
-    func fullSyncFetchTreeBatch(noteIds: [String]) async throws -> [FullSyncTreeBatchEntry] {
+    func fullSyncFetchTreeBatch(noteIds: [String], cached: [String: FullSyncCachedNoteState]) async throws -> [FullSyncTreeBatchEntry] {
         guard !noteIds.isEmpty else { return [] }
         let tree: TreeLoadResponse = try await postJSON("/api/tree/load", body: TreeLoadRequest(noteIds: noteIds), csrf: true)
         var rowsById: [String: TreeLoadNoteRow] = [:]
         rowsById.reserveCapacity(tree.notes.count)
         for n in tree.notes { rowsById[n.noteId] = n }
-        let details = await fetchNoteDetails(noteIds: noteIds, treeRows: rowsById)
+        let details = await fetchNoteDetails(noteIds: noteIds, treeRows: rowsById, cached: cached)
+        let index = TreeLoadIndex(tree)
         var entries: [FullSyncTreeBatchEntry] = []
         entries.reserveCapacity(noteIds.count)
         for noteId in noteIds {
@@ -932,16 +946,21 @@ actor TriliumClient: TriliumClientProtocol {
                 continue
             }
             if detail.isDeleted == true { continue }
-            let note = Self.buildNoteResponse(detail: detail, tree: tree, noteId: noteId)
-            let childBranches = Self.liveChildBranchResponses(tree: tree, parentNoteId: noteId)
+            let note = Self.buildNoteResponse(detail: detail, index: index, noteId: noteId)
+            let childBranches = Self.liveChildBranchResponses(index: index, parentNoteId: noteId)
             entries.append(FullSyncTreeBatchEntry(note: note, childBranches: childBranches))
         }
         return entries
     }
 
     /// Each note's row with its dates. Trilium 0.106+ gives the dates of the whole batch in one `POST /api/notes/metadata`,
-    /// merged with the batch's `tree/load` rows; older servers, or a failed batch call, take one `GET` per note.
-    private func fetchNoteDetails(noteIds: [String], treeRows: [String: TreeLoadNoteRow]) async -> [String: NativeNoteDetailRow] {
+    /// merged with the batch's `tree/load` rows. Older servers, or a failed batch call, take one `GET` per note that is
+    /// new or changed since it was cached; an unchanged note keeps its cached date.
+    private func fetchNoteDetails(
+        noteIds: [String],
+        treeRows: [String: TreeLoadNoteRow],
+        cached: [String: FullSyncCachedNoteState] = [:]
+    ) async -> [String: NativeNoteDetailRow] {
         if TriliumServerCompatibility.supportsBulkNoteMetadata(lastFetchedAppInfo) {
             do {
                 let timestamps: [String: NoteTimestampsRow] = try await postJSON(
@@ -962,7 +981,21 @@ actor TriliumClient: TriliumClientProtocol {
                 Log.api.warning("notes/metadata failed, loading notes one by one: \(error)")
             }
         }
-        return await fetchNativeNoteDetailsParallel(noteIds: noteIds, maxConcurrency: 8)
+        var details: [String: NativeNoteDetailRow] = [:]
+        var changedIds: [String] = []
+        for noteId in noteIds {
+            if let row = treeRows[noteId], let known = cached[noteId], known.matches(row) {
+                details[noteId] = Self.nativeDetailFallback(
+                    from: row,
+                    timestamps: NoteTimestampsRow(utcDateModified: known.utcDateModified)
+                )
+            } else {
+                changedIds.append(noteId)
+            }
+        }
+        let fetched = await fetchNativeNoteDetailsParallel(noteIds: changedIds, maxConcurrency: 8)
+        details.merge(fetched) { _, fetched in fetched }
+        return details
     }
 
     /// Parallel `GET /api/notes/:id` for full sync; failures return no key (caller may fall back to `tree.notes`).
@@ -1012,6 +1045,37 @@ actor TriliumClient: TriliumClientProtocol {
         let (data, response) = try await session.data(for: req)
         try validateResponse(response, data: data)
         return data
+    }
+
+    func getNoteContent(_ noteId: String, maxBytes: Int) async throws -> Data? {
+        var req = try buildRequest(path: "/api/notes/\(noteId)/open", method: "GET", queryParams: nil, csrf: false, jsonBody: false)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        let (bytes, response) = try await session.bytes(for: req)
+        let succeeded = ((response as? HTTPURLResponse)?.statusCode).map { (200...299).contains($0) } ?? false
+        // Stop before downloading anything when the server says up front it's too large.
+        if succeeded, response.expectedContentLength > Int64(maxBytes) {
+            bytes.task.cancel()
+            return nil
+        }
+        var data = Data()
+        if response.expectedContentLength > 0 {
+            data.reserveCapacity(Int(response.expectedContentLength))
+        }
+        for try await byte in bytes {
+            data.append(byte)
+            // No length up front (compressed or chunked): stop once it passes the limit.
+            if succeeded, data.count > maxBytes {
+                bytes.task.cancel()
+                return nil
+            }
+        }
+        try validateResponse(response, data: data)
+        return data
+    }
+
+    func getSubtreeSize(_ noteId: String) async throws -> SubtreeSizeResponse {
+        try await get("/api/stats/subtree-size/\(noteId)", csrf: false)
     }
 
     func updateNote(_ noteId: String, request: UpdateNoteRequest) async throws -> NoteResponse {
@@ -1825,19 +1889,38 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     private func dataForLongRunningRequest(_ request: URLRequest, timeout: TimeInterval) async throws -> (Data, URLResponse) {
+        var request = request
+        request.timeoutInterval = timeout
+        return try await longRunningSession.data(for: request)
+    }
+
+    /// One session for slow calls (OCR, Office previews, exports, bulk delete), kept for the client's life so each
+    /// call reuses its connection instead of a new TLS handshake. Each request sets its own idle timeout; the session
+    /// allows the longest total time any of them needs.
+    private var longRunningSession: URLSession {
+        if let longRunningSessionStorage { return longRunningSessionStorage }
         let cfg = URLSessionConfiguration.default
         cfg.httpCookieStorage = httpCookieStorage
         cfg.httpShouldSetCookies = true
         cfg.httpCookieAcceptPolicy = .always
-        cfg.timeoutIntervalForRequest = timeout
-        cfg.timeoutIntervalForResource = timeout
+        cfg.timeoutIntervalForResource = Self.longestRequestTimeout
         cfg.waitsForConnectivity = injectedProtocolClasses == nil
         if let injectedProtocolClasses {
             cfg.protocolClasses = injectedProtocolClasses
         }
-        let longSession = URLSession(configuration: cfg)
-        defer { longSession.finishTasksAndInvalidate() }
-        return try await longSession.data(for: request)
+        let session = URLSession(configuration: cfg)
+        longRunningSessionStorage = session
+        return session
+    }
+
+    private var longRunningSessionStorage: URLSession?
+
+    private static let longestRequestTimeout = max(
+        ocrRequestTimeout, bulkDeleteTimeout, officePreviewTimeout, spreadsheetXlsxExportTimeout
+    )
+
+    deinit {
+        longRunningSessionStorage?.finishTasksAndInvalidate()
     }
 
     // MARK: - Request helpers
@@ -2073,20 +2156,8 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     /// Child branches under `parentNoteId` as API models (same filtering as `buildNoteResponse`).
-    private static func liveChildBranchResponses(tree: TreeLoadResponse, parentNoteId: String) -> [BranchResponse] {
-        let childBranches = tree.branches.filter { $0.parentNoteId == parentNoteId }.sorted { $0.notePosition < $1.notePosition }
-        let deletedNoteIds: Set<String> = {
-            var ids = Set<String>()
-            for n in tree.notes where n.isDeleted == true {
-                ids.insert(n.noteId)
-            }
-            return ids
-        }()
-        let live = childBranches.filter { branch in
-            if branch.isDeleted == true { return false }
-            return !deletedNoteIds.contains(branch.noteId)
-        }
-        return live.map { row in
+    private static func liveChildBranchResponses(index: TreeLoadIndex, parentNoteId: String) -> [BranchResponse] {
+        index.liveChildBranches(of: parentNoteId).map { row in
             BranchResponse(
                 branchId: row.branchId,
                 noteId: row.noteId,
@@ -2099,17 +2170,12 @@ actor TriliumClient: TriliumClientProtocol {
         }
     }
 
-    private static func buildNoteResponse(detail: NativeNoteDetailRow, tree: TreeLoadResponse, noteId: String) -> NoteResponse {
-        let parentBranches = tree.branches.filter { $0.noteId == noteId }
-        let parentNoteIds = Array(Set(parentBranches.map(\.parentNoteId)))
-        let parentBranchIds = parentBranches.map(\.branchId)
-
-        let childBranches = tree.branches.filter { $0.parentNoteId == noteId }.sorted { $0.notePosition < $1.notePosition }
-        let childBranchIds = childBranches.map(\.branchId)
-        let childNoteIds = childBranches.map(\.noteId)
-
-        let attrs = tree.attributes.filter { $0.noteId == noteId }.sorted { $0.position < $1.position }
-        let attrResponses = attrs.map {
+    private static func buildNoteResponse(detail: NativeNoteDetailRow, index: TreeLoadIndex, noteId: String) -> NoteResponse {
+        let parentBranches = index.parentBranches(of: noteId)
+        var seenParents = Set<String>()
+        let parentNoteIds = parentBranches.map(\.parentNoteId).filter { seenParents.insert($0).inserted }
+        let liveChildBranches = index.liveChildBranches(of: noteId)
+        let attrResponses = index.attributes(of: noteId).map {
             AttributeResponse(
                 attributeId: $0.attributeId,
                 noteId: $0.noteId,
@@ -2122,23 +2188,7 @@ actor TriliumClient: TriliumClientProtocol {
             )
         }
 
-        // Filter out child branches whose note is marked isDeleted in the
-        // tree/load payload (when present — often child notes are omitted from notes[]).
-        let deletedNoteIds: Set<String> = {
-            var ids = Set<String>()
-            for n in tree.notes where n.isDeleted == true {
-                ids.insert(n.noteId)
-            }
-            return ids
-        }()
-        let liveChildBranches = childBranches.filter { branch in
-            if branch.isDeleted == true { return false }
-            return !deletedNoteIds.contains(branch.noteId)
-        }
-        let liveChildBranchIds = liveChildBranches.map(\.branchId)
-        let liveChildNoteIds = liveChildBranches.map(\.noteId)
-
-        return NoteResponse(
+        var response = NoteResponse(
             noteId: detail.noteId,
             isProtected: detail.isProtected,
             title: detail.title ?? "",
@@ -2151,11 +2201,72 @@ actor TriliumClient: TriliumClientProtocol {
             utcDateCreated: detail.utcDateCreated ?? "",
             utcDateModified: detail.utcDateModified ?? "",
             parentNoteIds: parentNoteIds,
-            childNoteIds: liveChildNoteIds,
-            parentBranchIds: parentBranchIds,
-            childBranchIds: liveChildBranchIds,
+            childNoteIds: liveChildBranches.map(\.noteId),
+            parentBranchIds: parentBranches.map(\.branchId),
+            childBranchIds: liveChildBranches.map(\.branchId),
             attributes: attrResponses
         )
+        response.hasShareAncestor = index.hasAncestor(TriliumSharing.shareRootNoteId, of: noteId)
+        return response
+    }
+}
+
+/// A `tree/load` response grouped in one pass, so building each note of a batch doesn't rescan the whole response
+/// (it repeats every ancestor's full child list, which for a big folder is thousands of rows per note).
+private struct TreeLoadIndex {
+    private var branchesByNoteId: [String: [TreeLoadBranchRow]] = [:]
+    private var branchesByParentId: [String: [TreeLoadBranchRow]] = [:]
+    private var attributesByNoteId: [String: [TreeLoadAttributeRow]] = [:]
+    private var deletedNoteIds = Set<String>()
+
+    init(_ tree: TreeLoadResponse) {
+        for branch in tree.branches {
+            branchesByNoteId[branch.noteId, default: []].append(branch)
+            branchesByParentId[branch.parentNoteId, default: []].append(branch)
+        }
+        for attribute in tree.attributes {
+            attributesByNoteId[attribute.noteId, default: []].append(attribute)
+        }
+        for note in tree.notes where note.isDeleted == true {
+            deletedNoteIds.insert(note.noteId)
+        }
+    }
+
+    /// Parents by branch id, as `reconcileCachedNoteBranchesMetadata` orders them.
+    func parentBranches(of noteId: String) -> [TreeLoadBranchRow] {
+        (branchesByNoteId[noteId] ?? []).sorted { $0.branchId < $1.branchId }
+    }
+
+    /// Children by `notePosition`, ties by branch id: the order `reconcileCachedNoteBranchesMetadata` rebuilds, so a
+    /// sync that changed nothing writes nothing. Leaves out deleted branches and branches to notes the response marks
+    /// deleted (when present — child notes are often omitted from `notes`).
+    func liveChildBranches(of parentNoteId: String) -> [TreeLoadBranchRow] {
+        (branchesByParentId[parentNoteId] ?? [])
+            .filter { $0.isDeleted != true && !deletedNoteIds.contains($0.noteId) }
+            .sorted { $0.notePosition != $1.notePosition ? $0.notePosition < $1.notePosition : $0.branchId < $1.branchId }
+    }
+
+    func attributes(of noteId: String) -> [TreeLoadAttributeRow] {
+        (attributesByNoteId[noteId] ?? []).sorted { $0.position < $1.position }
+    }
+
+    /// Whether `ancestorId` is above `noteId` on any path (clones included). `tree/load` returns every ancestor's
+    /// parent branches, so this needs no further requests.
+    func hasAncestor(_ ancestorId: String, of noteId: String) -> Bool {
+        var visited: Set<String> = [noteId]
+        var queue = [noteId]
+        var head = 0
+        while head < queue.count {
+            let id = queue[head]
+            head += 1
+            for branch in branchesByNoteId[id] ?? [] where branch.isDeleted != true {
+                if branch.parentNoteId == ancestorId { return true }
+                if visited.insert(branch.parentNoteId).inserted {
+                    queue.append(branch.parentNoteId)
+                }
+            }
+        }
+        return false
     }
 }
 
@@ -2299,10 +2410,18 @@ private struct TreeLoadRequest: Encodable {
 
 /// One note's entry in the `POST /api/notes/metadata` answer (Trilium 0.106+).
 private struct NoteTimestampsRow: Decodable {
-    let dateCreated: String?
-    let dateModified: String?
-    let utcDateCreated: String?
-    let utcDateModified: String?
+    var dateCreated: String?
+    var dateModified: String?
+    var utcDateCreated: String?
+    var utcDateModified: String?
+}
+
+extension FullSyncCachedNoteState {
+    /// The `tree/load` row shows nothing new: same body, title, type, mime and protection.
+    fileprivate func matches(_ row: TreeLoadNoteRow) -> Bool {
+        guard let blobId, blobId == row.blobId else { return false }
+        return title == row.title && type == row.type && mime == row.mime && isProtected == row.isProtected
+    }
 }
 
 private struct CreateNoteNativeResponse: Decodable {

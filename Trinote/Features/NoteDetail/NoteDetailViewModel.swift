@@ -214,37 +214,38 @@ final class NoteDetailViewModel {
     /// Refetches this note, ancestors, and direct children so titles match the current protected session (decrypted vs encrypted).
     func resyncNoteTitlesWithProtectedSession() async {
         guard let client, let profileId = serverProfileId else { return }
-        var visited = Set<String>()
-        var currentId: String? = noteId
 
-        while let nid = currentId, nid != "root", !visited.contains(nid) {
-            visited.insert(nid)
-            do {
-                let response = try await client.getNote(nid)
-                persistNoteResponse(response, profileId: profileId)
-                if nid == noteId {
-                    self.note = NoteItem(from: response)
-                    self.serverUtcDateModified = response.utcDateModified
-                    await updateSharedPublicState(client: client)
-                }
-                currentId = response.parentNoteIds.first
-            } catch {
-                Log.api.warning("Protected title resync: getNote failed for \(nid): \(error)")
-                break
+        // One `tree/load` gives the note's whole ancestry: follow first parents up to root for the breadcrumb.
+        let noteId = self.noteId
+        var chain: [String] = [noteId]
+        do {
+            let tree = try await client.batchTreeLoad(noteIds: [noteId])
+            var visited: Set<String> = [noteId]
+            var current = noteId
+            while let parent = tree.branches
+                .filter({ $0.noteId == current && $0.isDeleted != true })
+                .min(by: { $0.branchId < $1.branchId })?.parentNoteId,
+                parent != "root", parent != "none", visited.insert(parent).inserted {
+                chain.append(parent)
+                current = parent
+            }
+        } catch {
+            Log.api.warning("Protected title resync: tree/load failed for \(noteId): \(error)")
+        }
+        let childIds = (self.note?.childNoteIds ?? []).filter { !chain.contains($0) }
+
+        // Their titles (decrypted now) in batches, instead of one `getNote` per ancestor and per child.
+        for response in await fetchNotesBatched(chain + childIds, client: client) {
+            persistNoteResponse(response, profileId: profileId)
+            if response.noteId == noteId {
+                self.note = NoteItem(from: response)
+                self.serverUtcDateModified = response.utcDateModified
+                await updateSharedPublicState(client: client, fromResponse: response)
             }
         }
         try? persistence.commitBatch()
 
         if let n = self.note {
-            for childId in n.childNoteIds where !visited.contains(childId) {
-                do {
-                    let response = try await client.getNote(childId)
-                    persistNoteResponse(response, profileId: profileId)
-                } catch {
-                    Log.api.debug("Protected title resync: child getNote failed for \(childId)")
-                }
-            }
-            try? persistence.commitBatch()
             try? persistence.recordRecentNote(
                 noteId: n.noteId, title: n.title,
                 noteType: n.type.rawValue, serverProfileId: profileId
@@ -254,6 +255,23 @@ final class NoteDetailViewModel {
         rebuildBreadcrumbsFromCache()
         await loadChildNotes()
     }
+
+    /// Notes by id through batched `tree/load` (plus their dates), 100 per request, instead of one `getNote` each.
+    /// Chunks that fail are logged and skipped.
+    func fetchNotesBatched(_ noteIds: [String], client: any TriliumClientProtocol) async -> [NoteResponse] {
+        var responses: [NoteResponse] = []
+        for chunk in noteIds.chunked(into: Self.noteBatchSize) {
+            do {
+                responses += try await client.fullSyncFetchTreeBatch(noteIds: chunk).map(\.note)
+            } catch {
+                if case .cancelled = APIError.from(error) { break }
+                Log.api.warning("Batched note load failed for \(chunk.count) notes: \(error)")
+            }
+        }
+        return responses
+    }
+
+    static let noteBatchSize = 100
 
     /// Display title for another note (include-note chip); uses current note, children, SwiftData cache, then `getNote`.
     func resolveDisplayTitle(forReferencedNoteId refId: String) async -> String {
@@ -339,20 +357,15 @@ final class NoteDetailViewModel {
 
         rebuildBreadcrumbsFromCache()
 
-        await loadNotesEditedOnDay()
-
         // Pending local creates are not on the server yet — same stall as offline when interface is “up”.
-        if nid.isOfflineLocalNoteId {
-            return
-        }
-
         // Do not await getNote while offline — same long URLSession stall as bootstrap “Connecting…”.
-        if !appState.isOnline {
+        guard !nid.isOfflineLocalNoteId, appState.isOnline, client != nil else {
+            await loadNotesEditedOnDay()
             return
         }
 
-        // Background server refresh
-        guard client != nil else { return }
+        // Background server refresh. A journal day's edited notes load once, after it, when the note's labels and
+        // the server's answer are both current.
         await startOrGetMetadataRefresh().value
         await loadNotesEditedOnDay()
     }
@@ -392,7 +405,7 @@ final class NoteDetailViewModel {
             self.serverUtcDateModified = response.utcDateModified
             self.serverBlobId = response.blobId
             self.serverVerified = true
-            await updateSharedPublicState(client: client)
+            await updateSharedPublicState(client: client, fromResponse: response)
 
             if let profileId = self.serverProfileId {
                 persistNoteResponse(response, profileId: profileId)
@@ -3142,7 +3155,8 @@ final class NoteDetailViewModel {
         }
 
         let canFetch = isOnline && client != nil && !noteId.isOfflineLocalNoteId
-        let cached: [NoteIdTitle] = {
+        // The offline answer, only built when the server's can't be had.
+        func cachedList() -> [NoteIdTitle] {
             guard let profileId = serverProfileId else { return [] }
             return (try? persistence.fetchCachedNotesEditedOnISODay(
                 dayISO: day,
@@ -3150,9 +3164,10 @@ final class NoteDetailViewModel {
                 serverProfileId: profileId,
                 limit: JournalDayEditedNotes.resultLimit
             )) ?? []
-        }()
+        }
 
         if !canFetch {
+            let cached = cachedList()
             if notesEditedOnDay != cached {
                 notesEditedOnDay = cached
             }
@@ -3167,8 +3182,11 @@ final class NoteDetailViewModel {
                 notesEditedOnDay = list
             }
         } catch {
-            if notesEditedOnDay.isEmpty, !cached.isEmpty {
-                notesEditedOnDay = cached
+            if notesEditedOnDay.isEmpty {
+                let cached = cachedList()
+                if !cached.isEmpty {
+                    notesEditedOnDay = cached
+                }
             }
             Log.api.debug("Notes edited on day request failed: \(error.localizedDescription)")
         }
@@ -3247,26 +3265,35 @@ final class NoteDetailViewModel {
 
             let hidden = TriliumSharing.hiddenSystemChildNoteIds
             let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
+            let childBranches = liveBranches
+                .sorted(by: { $0.notePosition < $1.notePosition })
+                .filter { !hidden.contains($0.noteId) && !ghosts.contains($0.noteId) }
+            let childIds = childBranches.map(\.noteId)
+
+            // Branch rows in one pass (rules read once, existing rows fetched together, one save below).
+            let rules = cacheExclusion.snapshot(serverProfileId: profileId)
+            let cachedBranches = (try? persistence.fetchCachedBranches(ids: childBranches.map(\.branchId), serverProfileId: profileId)) ?? [:]
+            for branch in childBranches where !rules.isNoteExcludedFromCache(noteId: branch.noteId, parentNoteIds: [noteId]) {
+                persistence.upsertBranchForFullSync(branch, existing: cachedBranches[branch.branchId], serverProfileId: profileId)
+            }
+
+            // Children the cache doesn't have come from the server in batches, not one `getNote` each.
+            let cachedChildren = (try? persistence.fetchCachedNotes(ids: childIds, serverProfileId: profileId)) ?? [:]
+            var fetchedChildren: [String: NoteResponse] = [:]
+            let missing = childIds.filter { cachedChildren[$0] == nil }
+            for response in await fetchNotesBatched(missing, client: client) where !response.isDeleted {
+                persistNoteResponse(response, profileId: profileId)
+                fetchedChildren[response.noteId] = response
+            }
+
             var results: [ChildNoteSummary] = []
-            results.reserveCapacity(liveBranches.count)
-
-            for branch in liveBranches.sorted(by: { $0.notePosition < $1.notePosition }) {
-                let childId = branch.noteId
-                guard !hidden.contains(childId), !ghosts.contains(childId) else { continue }
-
-                try? persistence.cacheBranchIfAllowed(
-                    from: branch,
-                    parentNoteIdsForNote: [noteId],
-                    serverProfileId: profileId,
-                    policy: cacheExclusion
-                )
-
-                guard let summary = await childSummaryForDetail(
-                    childId: childId,
-                    profileId: profileId,
-                    client: client
-                ) else { continue }
-                results.append(summary)
+            results.reserveCapacity(childIds.count)
+            for childId in childIds {
+                if let cached = cachedChildren[childId] {
+                    results.append(childSummaryFromCachedNote(cached, profileId: profileId))
+                } else if let response = fetchedChildren[childId] {
+                    results.append(childSummaryFromNoteResponse(response, profileId: profileId))
+                }
             }
 
             try? persistence.commitBatch()
@@ -3275,26 +3302,6 @@ final class NoteDetailViewModel {
             applySeedChildMetadataMerge()
         } catch {
             Log.api.error("fetchDirectChildrenFromServer failed: \(error)")
-        }
-    }
-
-    private func childSummaryForDetail(
-        childId: String,
-        profileId: String,
-        client: any TriliumClientProtocol
-    ) async -> ChildNoteSummary? {
-        if let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) {
-            return childSummaryFromCachedNote(cached, profileId: profileId)
-        }
-        do {
-            let response = try await client.getNote(childId)
-            if response.isDeleted { return nil }
-            persistNoteResponse(response, profileId: profileId)
-            return childSummaryFromNoteResponse(response, profileId: profileId)
-        } catch {
-            if case .notFound = APIError.from(error) { return nil }
-            Log.api.debug("childSummaryForDetail getNote failed for \(childId): \(error)")
-            return nil
         }
     }
 
@@ -3425,50 +3432,59 @@ final class NoteDetailViewModel {
         return shapes
     }
 
-    /// Fetches pin positions from the server (when online). Returns empty if there is no client or the app is offline.
-    func fetchGeoMapPinsFromServer(note: NoteItem) async -> [GeoMapPin] {
-        await fetchGeoMapPinsAndShapesFromServer(note: note).pins
-    }
-
-    /// Pins (`#geolocation`) and shapes (`#geoShape`) among the map's children, read in one pass over them.
-    func fetchGeoMapPinsAndShapesFromServer(note: NoteItem) async -> (pins: [GeoMapPin], shapes: [GeoMapShape]) {
-        guard let client, isOnline else { return ([], []) }
+    /// Pins (`#geolocation`), shapes (`#geoShape`) and GPX tracks among the map's children, from one batched load of
+    /// the children (bodies only for tracks). Empty when there is no client or the app is offline.
+    func fetchGeoMapLayersFromServer(note: NoteItem) async -> (pins: [GeoMapPin], shapes: [GeoMapShape], tracks: [GeoMapTrack]) {
+        guard let client, isOnline else { return ([], [], []) }
         var pins: [GeoMapPin] = []
         var shapes: [GeoMapShape] = []
+        var tracks: [GeoMapTrack] = []
         let parentNote = try? await client.getNote(note.noteId)
         let childIds = parentNote?.childNoteIds ?? note.childNoteIds
+        let children = Dictionary(
+            await fetchNotesBatched(childIds, client: client).map { ($0.noteId, NoteItem(from: $0)) },
+            uniquingKeysWith: { first, _ in first }
+        )
         for childId in childIds {
-            do {
-                let childResp = try await client.getNote(childId)
-                let childItem = NoteItem(from: childResp)
-                if let shapeAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == GeoMapShape.label }),
-                   let shape = GeoMapShape(
-                       noteId: childId,
-                       title: childItem.title,
-                       value: shapeAttr.value,
-                       color: childItem.colorLabelValue
-                   ) {
-                    shapes.append(shape)
+            guard let childItem = children[childId] else { continue }
+            if let shapeAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == GeoMapShape.label }),
+               let shape = GeoMapShape(
+                   noteId: childId,
+                   title: childItem.title,
+                   value: shapeAttr.value,
+                   color: childItem.colorLabelValue
+               ) {
+                shapes.append(shape)
+            }
+            if let geoAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == "geolocation" }) {
+                let parts = geoAttr.value.split(separator: ",")
+                if parts.count == 2,
+                   let lat = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+                   let lng = Double(parts[1].trimmingCharacters(in: .whitespaces)) {
+                    pins.append(GeoMapPin(
+                        noteId: childId,
+                        title: childItem.title,
+                        lat: lat,
+                        lng: lng,
+                        iconClass: GeoMapMarkerIconClass.forNoteItem(childItem),
+                        color: childItem.colorLabelValue
+                    ))
                 }
-                if let geoAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == "geolocation" }) {
-                    let parts = geoAttr.value.split(separator: ",")
-                    if parts.count == 2,
-                       let lat = Double(parts[0].trimmingCharacters(in: .whitespaces)),
-                       let lng = Double(parts[1].trimmingCharacters(in: .whitespaces)) {
-                        pins.append(GeoMapPin(
-                            noteId: childId,
-                            title: childItem.title,
-                            lat: lat,
-                            lng: lng,
-                            iconClass: GeoMapMarkerIconClass.forNoteItem(childItem),
-                            color: childItem.colorLabelValue
-                        ))
-                    }
-                }
-            } catch {
+            }
+            if childItem.mime == GeoMapDisplaySettings.gpxMIME,
+               let content = try? await client.getNoteContent(childId),
+               let xml = String(data: content, encoding: .utf8),
+               let track = GeoMapTrack.make(
+                   noteId: childId,
+                   title: childItem.title,
+                   gpxXML: xml,
+                   iconClass: GeoMapMarkerIconClass.forNoteItem(childItem),
+                   color: childItem.colorLabelValue
+               ) {
+                tracks.append(track)
             }
         }
-        return (pins, shapes)
+        return (pins, shapes, tracks)
     }
 
     func geoMapTracksFromCache() -> [GeoMapTrack] {
@@ -3497,32 +3513,6 @@ final class NoteDetailViewModel {
                 color: color
             ) else { continue }
             tracks.append(track)
-        }
-        return tracks
-    }
-
-    func fetchGeoMapTracksFromServer(note: NoteItem) async -> [GeoMapTrack] {
-        guard let client, isOnline else { return [] }
-        var tracks: [GeoMapTrack] = []
-        let parentNote = try? await client.getNote(note.noteId)
-        let childIds = parentNote?.childNoteIds ?? note.childNoteIds
-        for childId in childIds {
-            do {
-                let childResp = try await client.getNote(childId)
-                let childItem = NoteItem(from: childResp)
-                guard childItem.mime == GeoMapDisplaySettings.gpxMIME else { continue }
-                let content = try await client.getNoteContent(childId)
-                guard let xml = String(data: content, encoding: .utf8) else { continue }
-                guard let track = GeoMapTrack.make(
-                    noteId: childId,
-                    title: childItem.title,
-                    gpxXML: xml,
-                    iconClass: GeoMapMarkerIconClass.forNoteItem(childItem),
-                    color: childItem.colorLabelValue
-                ) else { continue }
-                tracks.append(track)
-            } catch {
-            }
         }
         return tracks
     }
@@ -4422,88 +4412,98 @@ final class NoteDetailViewModel {
     }
 
     /// Slides plus the presentation's `#presentation:theme` as the server has it (`nil` when the fetch fell back to cache).
+    /// Slide notes and their vertical slides come from batched `tree/load`s (each entry carries its own child
+    /// branches); bodies download a few at a time.
     func fetchPresentationSlidesFromServer(note: NoteItem) async -> (slides: [PresentationModels.Slide], theme: String?) {
         guard let client, isOnline else { return (await presentationSlidesFromCache(), nil) }
+        typealias SlideRow = (noteId: String, branchId: String, title: String, html: String, background: String?)
         do {
             let (parentResp, liveBranches) = try await client.getNoteWithBranches(note.noteId)
             let serverTheme = Self.presentationThemeLabel(in: NoteItem(from: parentResp).attributes)
+            let horizontalBranches = liveBranches.sorted(by: { $0.notePosition < $1.notePosition })
+            let horizontalEntries = try await fetchTreeEntriesBatched(horizontalBranches.map(\.noteId), client: client)
+            let verticalBranchesByParent = horizontalEntries.mapValues { entry in
+                entry.childBranches.sorted(by: { $0.notePosition < $1.notePosition })
+            }
+            let verticalIds = horizontalBranches.flatMap { verticalBranchesByParent[$0.noteId]?.map(\.noteId) ?? [] }
+            let verticalEntries = try await fetchTreeEntriesBatched(verticalIds, client: client)
+            let slideNotes = horizontalEntries.merging(verticalEntries) { first, _ in first }.mapValues(\.note)
+            let bodies = await fetchBodies(Array(slideNotes.keys), client: client)
+
             if let profileId = serverProfileId {
                 persistNoteResponse(parentResp, profileId: profileId)
-                for branch in liveBranches {
-                    try? persistence.cacheBranchIfAllowed(
-                        from: branch,
-                        parentNoteIdsForNote: [note.noteId],
-                        serverProfileId: profileId,
-                        policy: cacheExclusion
-                    )
+                for response in slideNotes.values {
+                    persistNoteResponse(response, profileId: profileId)
+                }
+                let rules = cacheExclusion.snapshot(serverProfileId: profileId)
+                var placements = horizontalBranches.map { ($0, note.noteId) }
+                for branch in horizontalBranches {
+                    placements += (verticalBranchesByParent[branch.noteId] ?? []).map { ($0, branch.noteId) }
+                }
+                let cachedBranches = (try? persistence.fetchCachedBranches(ids: placements.map(\.0.branchId), serverProfileId: profileId)) ?? [:]
+                for (branch, parentId) in placements where !rules.isNoteExcludedFromCache(noteId: branch.noteId, parentNoteIds: [parentId]) {
+                    persistence.upsertBranchForFullSync(branch, existing: cachedBranches[branch.branchId], serverProfileId: profileId)
+                }
+                for (noteId, data) in bodies where !data.isEmpty {
+                    cacheNoteContentIfAllowed(noteId, content: data, profileId: profileId, utcDateModified: slideNotes[noteId]?.utcDateModified)
                 }
                 try? persistence.commitBatch()
             }
 
-            var horizontal: [(noteId: String, branchId: String, title: String, html: String, background: String?)] = []
-            var verticalByParent: [String: [(noteId: String, branchId: String, title: String, html: String, background: String?)]] = [:]
-
-            for branch in liveBranches.sorted(by: { $0.notePosition < $1.notePosition }) {
-                let childResp = try await client.getNote(branch.noteId)
-                let childItem = NoteItem(from: childResp)
-                if let profileId = serverProfileId {
-                    persistNoteResponse(childResp, profileId: profileId)
-                }
-                let htmlData = (try? await client.getNoteContent(branch.noteId)) ?? Data()
-                let html = String(data: htmlData, encoding: .utf8) ?? ""
-                if let profileId = serverProfileId, !htmlData.isEmpty {
-                    cacheNoteContentIfAllowed(branch.noteId, content: htmlData, profileId: profileId, utcDateModified: childResp.utcDateModified)
-                }
-                let background = childItem.attributes.first(where: {
+            func slideRow(_ branch: BranchResponse) -> SlideRow? {
+                guard let response = slideNotes[branch.noteId] else { return nil }
+                let item = NoteItem(from: response)
+                let background = item.attributes.first(where: {
                     $0.type == .label && $0.name.caseInsensitiveCompare("slide:background") == .orderedSame
                 })?.value
-                horizontal.append((
-                    noteId: childItem.noteId,
-                    branchId: branch.branchId,
-                    title: childItem.title,
-                    html: html,
-                    background: background
-                ))
-
-                let (_, childBranches) = (try? await client.getNoteWithBranches(branch.noteId)) ?? (childResp, [])
-                var vertical: [(noteId: String, branchId: String, title: String, html: String, background: String?)] = []
-                for vBranch in childBranches.sorted(by: { $0.notePosition < $1.notePosition }) {
-                    let vResp = try await client.getNote(vBranch.noteId)
-                    let vItem = NoteItem(from: vResp)
-                    if let profileId = serverProfileId {
-                        persistNoteResponse(vResp, profileId: profileId)
-                        try? persistence.cacheBranchIfAllowed(
-                            from: vBranch,
-                            parentNoteIdsForNote: [branch.noteId],
-                            serverProfileId: profileId,
-                            policy: cacheExclusion
-                        )
-                    }
-                    let vData = (try? await client.getNoteContent(vBranch.noteId)) ?? Data()
-                    let vHtml = String(data: vData, encoding: .utf8) ?? ""
-                    if let profileId = serverProfileId, !vData.isEmpty {
-                        cacheNoteContentIfAllowed(vBranch.noteId, content: vData, profileId: profileId, utcDateModified: vResp.utcDateModified)
-                    }
-                    let vBg = vItem.attributes.first(where: {
-                        $0.type == .label && $0.name.caseInsensitiveCompare("slide:background") == .orderedSame
-                    })?.value
-                    vertical.append((
-                        noteId: vItem.noteId,
-                        branchId: vBranch.branchId,
-                        title: vItem.title,
-                        html: vHtml,
-                        background: vBg
-                    ))
-                }
+                let html = bodies[branch.noteId].flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                return (noteId: item.noteId, branchId: branch.branchId, title: item.title, html: html, background: background)
+            }
+            var horizontal: [SlideRow] = []
+            var verticalByParent: [String: [SlideRow]] = [:]
+            for branch in horizontalBranches {
+                guard let row = slideRow(branch) else { continue }
+                horizontal.append(row)
+                let vertical = (verticalBranchesByParent[branch.noteId] ?? []).compactMap(slideRow)
                 if !vertical.isEmpty {
                     verticalByParent[branch.noteId] = vertical
                 }
             }
-            try? persistence.commitBatch()
             return (PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent), serverTheme)
         } catch {
             Log.api.error("fetchPresentationSlidesFromServer failed: \(error)")
             return (await presentationSlidesFromCache(), nil)
+        }
+    }
+
+    /// Batched `tree/load` entries (note plus its child branches) keyed by note id, 100 notes per request.
+    private func fetchTreeEntriesBatched(_ noteIds: [String], client: any TriliumClientProtocol) async throws -> [String: FullSyncTreeBatchEntry] {
+        var entries: [String: FullSyncTreeBatchEntry] = [:]
+        for chunk in noteIds.chunked(into: Self.noteBatchSize) {
+            for entry in try await client.fullSyncFetchTreeBatch(noteIds: chunk) {
+                entries[entry.note.noteId] = entry
+            }
+        }
+        return entries
+    }
+
+    /// Note bodies, a few requests at a time; a body that fails is left out.
+    private func fetchBodies(_ noteIds: [String], client: any TriliumClientProtocol) async -> [String: Data] {
+        await withTaskGroup(of: (String, Data?).self) { group in
+            var bodies: [String: Data] = [:]
+            var next = 0
+            func startNext() {
+                guard next < noteIds.count else { return }
+                let id = noteIds[next]
+                next += 1
+                group.addTask { (id, try? await client.getNoteContent(id)) }
+            }
+            for _ in 0..<min(6, noteIds.count) { startNext() }
+            for await (id, data) in group {
+                if let data { bodies[id] = data }
+                startNext()
+            }
+            return bodies
         }
     }
 
@@ -4699,14 +4699,18 @@ final class NoteDetailViewModel {
         return TriliumSharing.publicShareURL(baseURL: base, note: note)
     }
 
-    /// Updates `isSharedPublicly` from current `note` (fast path) or by walking parents on the server.
-    private func updateSharedPublicState(client: any TriliumClientProtocol) async {
+    /// Updates `isSharedPublicly` from current `note` (fast path), the ancestry a server response carried, or the server.
+    private func updateSharedPublicState(client: any TriliumClientProtocol, fromResponse response: NoteResponse? = nil) async {
         guard let note else {
             isSharedPublicly = false
             return
         }
         if TriliumSharing.isPublishedUnderShareRoot(note: note) {
             isSharedPublicly = true
+            return
+        }
+        if let known = response?.hasShareAncestor {
+            isSharedPublicly = known
             return
         }
         do {

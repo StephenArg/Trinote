@@ -65,18 +65,19 @@ final class CacheExclusionPolicy {
         parentNoteIds: [String],
         serverProfileId: String
     ) -> Bool {
+        snapshot(serverProfileId: serverProfileId).isNoteExcludedFromCache(noteId: noteId, parentNoteIds: parentNoteIds)
+    }
+
+    /// The rules as they stand now, to check many notes against (a sync run, a tree batch) without reading the
+    /// excluded roots and walking their cached subtrees for each note.
+    func snapshot(serverProfileId: String) -> CacheExclusionSnapshot {
         let excludedRoots = excludedRootNoteIds(serverProfileId: serverProfileId)
-        guard !excludedRoots.isEmpty else { return false }
-
-        if excludedRoots.contains(noteId) { return true }
-
-        let descendants = descendantNoteIds(ofExcludedRoots: excludedRoots, serverProfileId: serverProfileId)
-        guard descendants.contains(noteId) else { return false }
-
-        return !hasParentOutsideExcludedSubtrees(
-            parentNoteIds: parentNoteIds,
+        return CacheExclusionSnapshot(
+            serverProfileId: serverProfileId,
             excludedRoots: excludedRoots,
-            serverProfileId: serverProfileId
+            excludedSubtreeNoteIds: excludedRoots.isEmpty
+                ? []
+                : descendantNoteIds(ofExcludedRoots: excludedRoots, serverProfileId: serverProfileId)
         )
     }
 
@@ -95,30 +96,29 @@ final class CacheExclusionPolicy {
     func isExcludedRootNote(_ noteId: String, serverProfileId: String) -> Bool {
         excludedRootNoteIds(serverProfileId: serverProfileId).contains(noteId)
     }
+}
 
-    // MARK: - Private
+/// Cache-exclusion rules frozen for one pass over many notes.
+struct CacheExclusionSnapshot: Sendable, Equatable {
+    let serverProfileId: String
+    let excludedRoots: Set<String>
+    /// Every cached note in an excluded root's subtree, roots included.
+    let excludedSubtreeNoteIds: Set<String>
 
-    private func hasParentOutsideExcludedSubtrees(
-        parentNoteIds: [String],
-        excludedRoots: Set<String>,
-        serverProfileId: String
-    ) -> Bool {
-        for parentId in parentNoteIds {
-            if parentId == TriliumTreeConstants.rootNoteId { return true }
-            if excludedRoots.contains(parentId) { continue }
-            var inAnyExcludedSubtree = false
-            for rootId in excludedRoots {
-                let subtree = persistence.cachedDescendantNoteIds(
-                    rootNoteId: rootId,
-                    serverProfileId: serverProfileId
-                )
-                if subtree.contains(parentId) {
-                    inAnyExcludedSubtree = true
-                    break
-                }
-            }
-            if !inAnyExcludedSubtree { return true }
+    /// True when this id is an excluded root (do not traverse children during full sync walk).
+    func isExcludedRoot(_ noteId: String) -> Bool {
+        excludedRoots.contains(noteId)
+    }
+
+    /// Excluded roots, and notes in their subtrees unless they also sit somewhere outside them (a clone elsewhere
+    /// keeps a note cached).
+    func isNoteExcludedFromCache(noteId: String, parentNoteIds: [String]) -> Bool {
+        guard !excludedRoots.isEmpty else { return false }
+        if excludedRoots.contains(noteId) { return true }
+        guard excludedSubtreeNoteIds.contains(noteId) else { return false }
+        return !parentNoteIds.contains { parentId in
+            parentId == TriliumTreeConstants.rootNoteId
+                || (!excludedRoots.contains(parentId) && !excludedSubtreeNoteIds.contains(parentId))
         }
-        return false
     }
 }
