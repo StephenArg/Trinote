@@ -647,6 +647,16 @@ struct SettingsView: View {
                 LabeledContent(String(localized: "Last Quick Sync", comment: "Settings sync"), value: lastIncr.relativeDisplay)
             }
 
+            if let server = appState.syncManager.serverPullProgress {
+                HStack(spacing: 8) {
+                    ProgressView(value: server.fraction)
+                        .frame(width: 60)
+                    Text(String(localized: "Server syncing \(server.pulled)/\(server.total) changes…", comment: "Settings: the server pulls from its own sync server"))
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
+
             if appState.syncManager.isSyncing {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -655,7 +665,12 @@ struct SettingsView: View {
                     case .walkingTree:
                         Text(String(localized: "Discovering notes…", comment: "Sync phase"))
                     case .fetchingChanges:
-                        Text(String(localized: "Checking for changes…", comment: "Sync phase"))
+                        let sm = appState.syncManager
+                        if sm.totalNoteCount > 0 {
+                            Text(String(localized: "Syncing \(sm.syncedNoteCount)/\(sm.totalNoteCount) changes…", comment: "Sync progress: entity changes"))
+                        } else {
+                            Text(String(localized: "Checking for changes…", comment: "Sync phase"))
+                        }
                     case .downloadingContent:
                         let sm = appState.syncManager
                         if sm.totalNoteCount > 0 {
@@ -896,9 +911,13 @@ struct SettingsView: View {
         isLoadingInfo = true
         defer { isLoadingInfo = false }
         let ok = await appState.refreshTriliumSession()
-        guard ok, let client = appState.client else { return }
+        guard ok, appState.client != nil else { return }
+        // The session refresh just re-read the version; show the same one the app now uses.
+        appInfo = appState.serverAppInfo
         do {
-            appInfo = try await client.getAppInfo()
+            if appInfo == nil, let client = appState.client {
+                appInfo = try await client.getAppInfo()
+            }
         } catch {
             appState.connectionError = APIError.from(error).localizedDescription
             Log.api.error("Failed to load app info: \(error)")
@@ -906,9 +925,11 @@ struct SettingsView: View {
     }
 
     private func loadDiagnostics() async {
-        if let client = appState.client {
+        if appState.client != nil {
             isLoadingInfo = true
-            appInfo = try? await client.getAppInfo()
+            // Also updates the version the rest of the app checks, so Settings never shows a newer one than it uses.
+            await appState.refreshServerAppInfo()
+            appInfo = appState.serverAppInfo
             isLoadingInfo = false
         }
 

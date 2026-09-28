@@ -66,6 +66,21 @@ struct SearchView: View {
     private func searchContent(_ vm: SearchViewModel) -> some View {
         VStack(spacing: 0) {
             searchBar(vm)
+            if let problem = vm.queryProblem, !vm.query.isEmpty {
+                Label {
+                    Text(problem)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.bottom, 6)
+                .accessibilityLabel(String(format: String(localized: "Search query problem: %@", comment: "VoiceOver: search lint message"), problem))
+            }
 
             if vm.isSearching {
                 Spacer()

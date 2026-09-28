@@ -7498,6 +7498,30 @@ var TipTapCollapsible = (() => {
   };
 
   // collapsible-entry.mjs
+  function collapsibleWithEmptySummary(selection) {
+    if (!selection.empty) return null;
+    const { $from } = selection;
+    if ($from.parent.type.name !== "collapsibleSummary" || $from.parent.content.size) return null;
+    const depth = $from.depth - 1;
+    const node = $from.node(depth);
+    if (node.type.name !== "collapsible") return null;
+    return { node, pos: $from.before(depth) };
+  }
+  function firstTextblockStart(doc, pos) {
+    const block = doc.nodeAt(pos);
+    if (!block) return null;
+    if (block.isTextblock) return pos + 1;
+    let found2 = null;
+    block.descendants((child, offset) => {
+      if (found2 != null) return false;
+      if (child.isTextblock) {
+        found2 = pos + 1 + offset + 1;
+        return false;
+      }
+      return true;
+    });
+    return found2;
+  }
   var CollapsibleSummary = Node2.create({
     name: "collapsibleSummary",
     content: "inline*",
@@ -7590,7 +7614,26 @@ var TipTapCollapsible = (() => {
             return true;
           }
           return false;
+        },
+        unwrapCollapsibleFromEmptySummary: () => ({ state, tr, dispatch, commands: commands2 }) => {
+          const target = collapsibleWithEmptySummary(state.selection);
+          if (!target) return false;
+          if (dispatch) {
+            const { node, pos } = target;
+            const body = node.content.cut(node.firstChild.nodeSize);
+            tr.replaceWith(pos, pos + node.nodeSize, body);
+            const caret = firstTextblockStart(tr.doc, pos);
+            if (caret != null) commands2.setTextSelection(caret);
+            else commands2.setNodeSelection(pos);
+            tr.scrollIntoView();
+          }
+          return true;
         }
+      };
+    },
+    addKeyboardShortcuts() {
+      return {
+        Backspace: () => this.editor.commands.unwrapCollapsibleFromEmptySummary()
       };
     },
     addNodeView() {

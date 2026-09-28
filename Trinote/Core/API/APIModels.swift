@@ -105,6 +105,52 @@ enum TriliumServerCompatibility {
         return isAppVersion(info.appVersion, atLeast: bulkNoteMetadataMinAppVersion)
     }
 
+    /// Trilium release that added `POST /api/search/lint` (a query checked without running it).
+    static let searchLintMinAppVersion = "0.106.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (search query checking).
+    static func supportsSearchLint(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: searchLintMinAppVersion)
+    }
+
+    /// Trilium release that added `GET /api/special-notes/inbox-target` (where a captured note would go, made nowhere).
+    static let inboxTargetMinAppVersion = "0.106.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (inbox target lookup).
+    static func supportsInboxTarget(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: inboxTargetMinAppVersion)
+    }
+
+    /// Trilium release that added the light/dark geo map styles (Colorful/Eclipse, Graybeard/Shadow) and made
+    /// Colorful/Eclipse the default.
+    static let darkModeMapStylesMinAppVersion = "0.106.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (geo map styles that follow dark mode).
+    static func supportsDarkModeMapStyles(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: darkModeMapStylesMinAppVersion)
+    }
+
+    /// Trilium release that added `GET /api/spreadsheet/:noteId/xlsx` (a spreadsheet note as an Excel workbook).
+    static let spreadsheetXlsxExportMinAppVersion = "0.106.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (spreadsheet export to `.xlsx`).
+    static func supportsSpreadsheetXlsxExport(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: spreadsheetXlsxExportMinAppVersion)
+    }
+
+    /// Trilium release that added `POST /api/delete-notes` (a whole selection deleted in one transaction).
+    static let bulkNoteDeletionMinAppVersion = "0.106.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (one request for a multi-note delete).
+    static func supportsBulkNoteDeletion(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: bulkNoteDeletionMinAppVersion)
+    }
+
     /// Semantic compare for Trilium `appVersion` strings (`0.103.0`, `v0.102.1`, `0.103.0-beta.1`).
     static func isAppVersion(_ version: String, atLeast minimum: String) -> Bool {
         compareAppVersions(version, minimum) != .orderedAscending
@@ -663,6 +709,14 @@ struct SearchResponse: Decodable {
 }
 
 /// Title-only search hit (calendar “edited that day” chips, etc.).
+/// `GET /api/special-notes/inbox-target`: `kind` is `inbox` / `workspaceInbox` (a `#inbox` note), `dayNote` (today's
+/// journal note, which may not exist yet, so no id), or `root` / `workspaceRoot`.
+struct InboxTargetResponse: Decodable, Sendable, Equatable {
+    let kind: String
+    let noteId: String?
+    let title: String?
+}
+
 struct NoteIdTitle: Sendable, Equatable, Identifiable {
     let noteId: String
     let title: String

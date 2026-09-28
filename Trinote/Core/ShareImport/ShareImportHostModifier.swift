@@ -75,9 +75,17 @@ struct ShareImportHostModifier: ViewModifier {
                     ),
                     onPick: { parentNoteId, _, _ in
                         appState.shareImport.parentDidSelect(parentNoteId)
-                    }
+                    },
+                    quickDestination: ParentPickerSheet.QuickDestination(
+                        title: String(localized: "Add to Inbox", comment: "Share import: put the note where Trilium puts captures"),
+                        subtitle: appState.shareImport.inboxDestination?.displayTitle,
+                        systemImage: "tray.and.arrow.down",
+                        isBusy: appState.shareImport.isPlacingInInbox,
+                        action: { Task { await appState.shareImport.inboxDidSelect() } }
+                    )
                 )
                 .environment(appState)
+                .task { await appState.shareImport.refreshInboxDestination() }
             }
             .sheet(isPresented: createNoteBinding(phase)) {
                 ShareImportCreateNoteSheet(

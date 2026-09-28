@@ -17,6 +17,8 @@ final class TrinoteEditorWebView: WKWebView {
 
 enum RichTextEditorBridgeRequest: Equatable {
     case pickIncludeNote
+    /// Toolbar Icon button: pick a Boxicons glyph to insert as a Trilium inline icon.
+    case pickInlineIcon
     case resolveNoteTitle(noteId: String)
     case openNote(noteId: String)
     /// Stable id from the TipTap NodeView; native resolves HTML and calls `applyIncludeNotePreviewJSON` for that host only.
@@ -434,6 +436,8 @@ struct RichTextEditorView: UIViewRepresentable {
                 switch action {
                 case "pickIncludeNote":
                     DispatchQueue.main.async { callback?(.pickIncludeNote) }
+                case "pickInlineIcon":
+                    DispatchQueue.main.async { callback?(.pickInlineIcon) }
                 case "resolveNoteTitle":
                     if let nid = dict["noteId"] as? String, !nid.isEmpty {
                         DispatchQueue.main.async { callback?(.resolveNoteTitle(noteId: nid)) }

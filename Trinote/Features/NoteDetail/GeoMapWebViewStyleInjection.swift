@@ -1,27 +1,35 @@
 import WebKit
 
-/// Injects bundled VersaTiles style JSON into geo map WebViews.
-/// WKWebView often blocks `fetch()` for local `file://` resources, so the map engine reads this instead.
+/// Injects the bundled VersaTiles styles into geo map WebViews, keyed by name (`colorful`, `eclipse`, …).
+/// WKWebView often blocks `fetch()` for local `file://` resources, so the map engine reads these instead. Each stays
+/// base64 until the map draws with it.
+@MainActor
 enum GeoMapWebViewStyleInjection {
-    private static let bundledStylePath = "vendor/geomap-styles/versatiles-colorful.json"
+    static let styleNames = ["colorful", "eclipse", "graybeard", "neutrino", "shadow"]
 
-    static func inject(into userContentController: WKUserContentController) {
-        guard let script = makeUserScript() else { return }
-        userContentController.addUserScript(script)
+    static func bundledStylePath(_ name: String) -> String {
+        "vendor/geomap-styles/versatiles-\(name).json"
     }
 
-    private static func makeUserScript() -> WKUserScript? {
-        let fileURL = Bundle.main.bundleURL.appendingPathComponent(bundledStylePath)
-        guard let data = try? Data(contentsOf: fileURL), !data.isEmpty else {
-            Log.geoMap.error("Geo map style missing from bundle: \(bundledStylePath)")
-            return nil
+    static func inject(into userContentController: WKUserContentController) {
+        userContentController.addUserScript(userScript)
+    }
+
+    /// Built once: the styles never change while the app runs.
+    private static let userScript: WKUserScript = {
+        var entries: [String] = []
+        for name in styleNames {
+            let fileURL = Bundle.main.bundleURL.appendingPathComponent(bundledStylePath(name))
+            guard let data = try? Data(contentsOf: fileURL), !data.isEmpty else {
+                Log.geoMap.error("Geo map style missing from bundle: \(bundledStylePath(name))")
+                continue
+            }
+            entries.append("\"\(name)\":\"\(data.base64EncodedString())\"")
         }
-        let encoded = data.base64EncodedString()
-        let source = "window.__TRINOTE_VERSATILES_COLORFUL_STYLE_B64__='\(encoded)';"
         return WKUserScript(
-            source: source,
+            source: "window.__TRINOTE_VERSATILES_STYLES_B64__={\(entries.joined(separator: ","))};",
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         )
-    }
+    }()
 }

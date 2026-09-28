@@ -16,6 +16,15 @@ struct KanbanBoardView: View {
     @State private var cardProperties: [KanbanBoardModels.CardProperty] = []
     @State private var relationTitles: [String: String] = [:]
     @State private var boardSort: KanbanBoardModels.ColumnSort?
+    /// `#includeArchived`: archived columns (greyed) and `#archived` cards are shown.
+    @State private var showsArchived = false
+    @State private var groupingOptions: [KanbanBoardModels.GroupingOption] = []
+    /// Selection mode: tapping a card ticks it; the toolbar moves or deletes the ticked cards together.
+    @State private var isSelecting = false
+    @State private var selectedCardIds: Set<String> = []
+    @State private var showDeleteSelectedConfirm = false
+    @State private var showOtherGrouping = false
+    @State private var otherGroupingName = ""
     /// The column "Add Existing Note as Card" puts the picked note in.
     @State private var addExistingNoteColumn: KanbanColumnTarget?
     /// A card that is only on this board, awaiting delete confirmation.
@@ -25,6 +34,8 @@ struct KanbanBoardView: View {
     @State private var alsoRemoveClones = false
     /// The column whose card limit is being edited.
     @State private var columnLimitEdit: KanbanColumnLimitRequest?
+    /// The column whose icon and colour are being picked.
+    @State private var appearanceColumn: KanbanColumnTarget?
     /// Collapsed (`true`) or open (`false`) for this session, over what `board.json` stores: a kept-collapsed
     /// column opened here, or a collapse made while offline.
     @State private var collapseOverrides: [String: Bool] = [:]
@@ -131,6 +142,22 @@ struct KanbanBoardView: View {
             }
         }
         .alert(
+            String(localized: "Group By Label", comment: "Kanban group by typed label title"),
+            isPresented: $showOtherGrouping
+        ) {
+            TextField(String(localized: "Label name", comment: "Kanban group by label field"), text: $otherGroupingName)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button(String(localized: "Cancel", comment: "Cancel"), role: .cancel) {}
+            Button(String(localized: "Group", comment: "Kanban apply grouping")) {
+                let name = otherGroupingName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return }
+                setGroupBy(name)
+            }
+        } message: {
+            Text(String(localized: "Cards are put in a column per value of this label. Start with ~ to group by a relation.", comment: "Kanban group by typed label explanation"))
+        }
+        .alert(
             String(localized: "Add Card", comment: "Kanban add card"),
             isPresented: Binding(
                 get: { showAddCardForColumn != nil },
@@ -182,6 +209,24 @@ struct KanbanBoardView: View {
         } message: {
             Text(String(localized: "Only empty columns can be deleted.", comment: "Kanban delete column message"))
         }
+        .confirmationDialog(
+            String(
+                format: String(localized: "Delete %lld Cards?", comment: "Kanban delete selected cards title"),
+                selectedCardIds.count
+            ),
+            isPresented: $showDeleteSelectedConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(String(localized: "Delete", comment: "Delete"), role: .destructive) {
+                Task { await deleteSelectedCards() }
+            }
+            Button(String(localized: "Cancel", comment: "Cancel"), role: .cancel) {}
+        } message: {
+            Text(String(
+                localized: "Cards that are also elsewhere in the tree are only taken off this board. The others are deleted with their subnotes.",
+                comment: "Kanban delete selected cards explanation"
+            ))
+        }
         // The column snapshot travels as the sheet's item: filling a separate draft right before an
         // `isPresented` sheet could present it built from the previous, empty draft.
         .sheet(item: $columnReorder) { request in
@@ -191,6 +236,16 @@ struct KanbanBoardView: View {
             } onCancel: {
                 columnReorder = nil
             }
+        }
+        .sheet(item: $appearanceColumn) { target in
+            let column = columns.first { $0.value == target.value }
+            NoteAppearancePickerSheet(
+                title: target.title,
+                currentIconClass: column?.icon,
+                currentColorLabel: column?.color,
+                onSelectIcon: { setColumnAppearance(target.value, icon: $0) },
+                onSelectColor: { setColumnAppearance(target.value, color: $0) }
+            )
         }
         .sheet(item: $columnLimitEdit) { request in
             KanbanColumnLimitSheet(request: request) { limit in
@@ -265,6 +320,53 @@ struct KanbanBoardView: View {
 
     @ViewBuilder
     private var toolbar: some View {
+        if isSelecting {
+            selectionToolbar
+        } else {
+            boardToolbar
+        }
+    }
+
+    /// While selecting: how many cards are ticked, and what can be done with them.
+    private var selectionToolbar: some View {
+        HStack(spacing: 12) {
+            Button(String(localized: "Done", comment: "Kanban end card selection")) {
+                endSelection()
+            }
+            .font(.subheadline.weight(.semibold))
+            Text(String(
+                format: String(localized: "%lld Selected", comment: "Kanban selected card count"),
+                selectedCardIds.count
+            ))
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            Spacer()
+            Menu {
+                ForEach(columns) { target in
+                    Button(target.displayTitle) {
+                        Task { await moveSelectedCards(to: target.value) }
+                    }
+                }
+            } label: {
+                Label(String(localized: "Move To", comment: "Kanban move selected cards"), systemImage: "arrow.right.square")
+            }
+            .labelStyle(.iconOnly)
+            .disabled(selectedCardIds.isEmpty)
+            Button(role: .destructive) {
+                showDeleteSelectedConfirm = true
+            } label: {
+                Label(String(localized: "Delete", comment: "Kanban delete selected cards"), systemImage: "trash")
+            }
+            .labelStyle(.iconOnly)
+            .disabled(selectedCardIds.isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var boardToolbar: some View {
         HStack(spacing: 12) {
             Text(String(localized: "Kanban Board", comment: "Kanban toolbar label"))
                 .font(.subheadline.weight(.semibold))
@@ -314,6 +416,7 @@ struct KanbanBoardView: View {
                 Label(String(localized: "Refresh", comment: "Refresh"), systemImage: "arrow.clockwise")
             }
             .labelStyle(.iconOnly)
+            boardMenu
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -330,6 +433,12 @@ struct KanbanBoardView: View {
                     Text(column.displayTitle)
                         .font(.headline)
                         .lineLimit(1)
+                    if column.isArchived {
+                        Image(systemName: "archivebox")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel(String(localized: "Archived", comment: "Kanban archived column badge"))
+                    }
                     Spacer()
                     columnCount(column)
                 }
@@ -399,13 +508,36 @@ struct KanbanBoardView: View {
                             )
                         }
                     }
+                    Button {
+                        startSelection(with: column.cards.map(\.noteId))
+                    } label: {
+                        Label(String(localized: "Select All Cards", comment: "Kanban select every card in a column"), systemImage: "checkmark.circle")
+                    }
+                    .disabled(column.cards.isEmpty)
                     Divider()
+                    Button {
+                        appearanceColumn = KanbanColumnTarget(value: column.value, title: column.displayTitle)
+                    } label: {
+                        Label(String(localized: "Icon & Color…", comment: "Kanban column icon and colour"), systemImage: "paintpalette")
+                    }
                     if !column.isInbox && !groupsByRelation {
                         Button {
                             renameColumnText = column.value
                             renameColumnTarget = column.value
                         } label: {
                             Label(String(localized: "Rename Column", comment: "Kanban rename column"), systemImage: "pencil")
+                        }
+                    }
+                    if !column.isInbox {
+                        Button {
+                            setColumnArchived(column.value, archived: !column.isArchived)
+                        } label: {
+                            Label(
+                                column.isArchived
+                                    ? String(localized: "Unarchive Column", comment: "Kanban unarchive column")
+                                    : String(localized: "Archive Column", comment: "Kanban archive column"),
+                                systemImage: column.isArchived ? "archivebox.fill" : "archivebox"
+                            )
                         }
                     }
                     if !column.isInbox {
@@ -454,6 +586,8 @@ struct KanbanBoardView: View {
         .frame(width: columnWidth)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(columnBackground(column))
+        // Archived columns only show while the board shows archived notes, greyed as on the web board.
+        .opacity(column.isArchived ? 0.55 : 1)
     }
 
     /// A collapsed column: a narrow strip with its icon, count and name. Tapping opens it.
@@ -737,6 +871,190 @@ struct KanbanBoardView: View {
         }
     }
 
+    // MARK: - Icon and colour
+
+    /// Shows the column's new icon or colour at once and saves it to the board (`nil` clears it); a failed save puts
+    /// the old one back. Pass only the one being changed.
+    private func setColumnAppearance(_ value: String, icon: String?? = .none, color: String?? = .none) {
+        guard let column = columns.first(where: { $0.value == value }) else { return }
+        guard viewModel.isOnline else {
+            viewModel.saveError = String(localized: "Connect to the server to edit board columns.", comment: "Kanban offline column edit")
+            viewModel.showSaveError = true
+            return
+        }
+        var patch: [String: KanbanBoardModels.JSONValue?] = [:]
+        // `updateValue` keeps a cleared field in the patch as `nil` (a subscript assignment of nil would drop the key).
+        if let icon { patch.updateValue(icon.map { .string($0) }, forKey: "icon") }
+        if let color { patch.updateValue(color.map { .string($0) }, forKey: "color") }
+        guard !patch.isEmpty else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            updateColumn(value) { updated in
+                if let icon { updated.icon = icon ?? (updated.isInbox ? "bx bxs-inbox" : nil) }
+                if let color { updated.color = color }
+            }
+        }
+        saveColumnFields(value, patch: patch) { saved in
+            guard !saved else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                updateColumn(value) { $0 = column }
+            }
+        }
+    }
+
+    // MARK: - Selecting cards
+
+    private func startSelection(with noteIds: [String]) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isSelecting = true
+            selectedCardIds = Set(noteIds)
+        }
+    }
+
+    private func endSelection() {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isSelecting = false
+            selectedCardIds = []
+        }
+    }
+
+    private var selectedCards: [KanbanBoardModels.Card] {
+        columns.flatMap(\.cards).filter { selectedCardIds.contains($0.noteId) }
+    }
+
+    /// Moves every ticked card to `target` (each card's grouping value is rewritten, one after another).
+    private func moveSelectedCards(to target: String) async {
+        let moving = selectedCards.filter { $0.columnValue != target }
+        guard !moving.isEmpty else {
+            endSelection()
+            return
+        }
+        guard viewModel.isOnline else {
+            viewModel.saveError = String(localized: "Connect to the server to move cards.", comment: "Kanban offline move")
+            viewModel.showSaveError = true
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            for card in moving { applyLocalCardMove(card, to: target) }
+        }
+        endSelection()
+        isMutating = true
+        defer { isMutating = false }
+        for card in moving {
+            guard await viewModel.moveKanbanCard(noteId: card.noteId, toColumn: target, groupBy: groupBy) else { break }
+        }
+        await reload(showSpinner: false)
+    }
+
+    /// Takes every ticked card off the board: notes cloned elsewhere stay there, the rest are deleted.
+    private func deleteSelectedCards() async {
+        let deleting = selectedCards
+        guard !deleting.isEmpty else { return }
+        guard viewModel.isOnline else {
+            viewModel.saveError = String(localized: "Connect to the server to delete cards.", comment: "Kanban offline delete card")
+            viewModel.showSaveError = true
+            return
+        }
+        let ids = Set(deleting.map(\.noteId))
+        withAnimation(.easeInOut(duration: 0.2)) {
+            for index in columns.indices {
+                columns[index].cards.removeAll { ids.contains($0.noteId) }
+            }
+        }
+        endSelection()
+        isMutating = true
+        defer { isMutating = false }
+        await viewModel.deleteKanbanCards(deleting.map { (noteId: $0.noteId, branchId: $0.branchId) })
+        await reload(showSpinner: false)
+    }
+
+    // MARK: - Archiving
+
+    /// The board's own settings: whether archived columns and notes show.
+    private var boardMenu: some View {
+        Menu {
+            Menu {
+                Picker(selection: Binding(get: { groupBy }, set: { setGroupBy($0) })) {
+                    ForEach(groupingOptions, id: \.value) { option in
+                        Text(option.title).tag(option.value)
+                    }
+                } label: {
+                    EmptyView()
+                }
+                .pickerStyle(.inline)
+                Button {
+                    otherGroupingName = ""
+                    showOtherGrouping = true
+                } label: {
+                    Label(String(localized: "Other Label…", comment: "Kanban group by a label typed by name"), systemImage: "tag")
+                }
+            } label: {
+                Label(String(localized: "Group By", comment: "Kanban grouping menu"), systemImage: "rectangle.3.group")
+            }
+            Button {
+                startSelection(with: [])
+            } label: {
+                Label(String(localized: "Select Cards", comment: "Kanban start selecting cards"), systemImage: "checkmark.circle")
+            }
+            .disabled(columns.allSatisfy { $0.cards.isEmpty })
+            Toggle(isOn: Binding(get: { showsArchived }, set: { setShowsArchived($0) })) {
+                Label(String(localized: "Show Archived", comment: "Kanban show archived columns and notes"), systemImage: "archivebox")
+            }
+        } label: {
+            Label(String(localized: "Board Options", comment: "Kanban board menu"), systemImage: "ellipsis.circle")
+        }
+        .labelStyle(.iconOnly)
+    }
+
+    /// Groups the cards by another attribute (`#board:groupBy`, saved on the board); the columns are that grouping's own.
+    private func setGroupBy(_ value: String) {
+        let grouping = KanbanBoardModels.GroupBy(value)
+        guard grouping.rawValue != groupBy else { return }
+        Task {
+            await collapseSaveTask?.value
+            isMutating = true
+            defer { isMutating = false }
+            if await viewModel.setKanbanGroupBy(grouping.rawValue, for: note) {
+                collapseOverrides = [:]
+                await reload(showSpinner: false)
+            }
+        }
+    }
+
+    /// Archives a column (hiding it and its cards unless archived notes show) or brings it back; saved to the board.
+    private func setColumnArchived(_ value: String, archived: Bool) {
+        guard viewModel.isOnline else {
+            viewModel.saveError = String(localized: "Connect to the server to edit board columns.", comment: "Kanban offline column edit")
+            viewModel.showSaveError = true
+            return
+        }
+        let previous = columns
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if archived && !showsArchived {
+                columns.removeAll { $0.value == value }
+            } else {
+                updateColumn(value) { $0.isArchived = archived }
+            }
+        }
+        saveColumnFields(value, patch: ["archived": .bool(archived)]) { saved in
+            guard !saved else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { columns = previous }
+        }
+    }
+
+    /// Saves `#includeArchived` on the board (as the web board's "Show archived notes"), then redraws it.
+    private func setShowsArchived(_ show: Bool) {
+        guard show != showsArchived else { return }
+        Task {
+            await collapseSaveTask?.value
+            isMutating = true
+            defer { isMutating = false }
+            let saved = show
+                ? await viewModel.setNoteLabel(noteId: note.noteId, name: KanbanBoardModels.includeArchivedLabel, value: "")
+                : await viewModel.removeNoteLabel(noteId: note.noteId, name: KanbanBoardModels.includeArchivedLabel)
+            if saved { await reload(showSpinner: false) }
+        }
+    }
+
     // MARK: - Card limit
 
     /// Shows the new limit at once and saves it to the board (`nil` removes it); a failed save puts the old one back.
@@ -839,9 +1157,22 @@ struct KanbanBoardView: View {
     @ViewBuilder
     private func cardCell(_ card: KanbanBoardModels.Card, in column: KanbanBoardModels.Column) -> some View {
         Button {
-            onOpenCard(card.redirectNoteId ?? card.noteId)
+            if isSelecting {
+                if selectedCardIds.contains(card.noteId) {
+                    selectedCardIds.remove(card.noteId)
+                } else {
+                    selectedCardIds.insert(card.noteId)
+                }
+            } else {
+                onOpenCard(card.redirectNoteId ?? card.noteId)
+            }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if isSelecting {
+                    Image(systemName: selectedCardIds.contains(card.noteId) ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selectedCardIds.contains(card.noteId) ? Color.accentColor : Color.secondary)
+                        .accessibilityHidden(true)
+                }
                 NoteIconView(
                     iconClass: card.iconClass,
                     fallbackNoteType: card.fallbackNoteType,
@@ -867,14 +1198,22 @@ struct KanbanBoardView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                if !isSelecting {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
             .padding(12)
             .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                if isSelecting && selectedCardIds.contains(card.noteId) {
+                    RoundedRectangle(cornerRadius: 10).strokeBorder(Color.accentColor, lineWidth: 2)
+                }
+            }
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelecting && selectedCardIds.contains(card.noteId) ? .isSelected : [])
         .contextMenu {
             let currentIndex = columns.firstIndex { $0.value == column.value } ?? 0
             ForEach(Array(columns.enumerated()), id: \.element.id) { index, target in
@@ -956,6 +1295,8 @@ struct KanbanBoardView: View {
         cardProperties = result.cardProperties
         relationTitles = result.relationTitles
         boardSort = result.boardSort
+        showsArchived = result.showsArchived
+        groupingOptions = result.groupingOptions
         // Avoid a no-op reassignment flash when optimistic UI already matches the server.
         guard result.columns != columns || result.groupBy != groupBy else { return }
         withAnimation(.easeInOut(duration: 0.2)) {

@@ -19,6 +19,31 @@ final class SyncManager {
 
     var hasCompletedFullSync: Bool { self.lastFullSyncDate != nil }
 
+    /// How far the server is through pulling from its own sync server (Trilium's `sync-pull-in-progress` progress),
+    /// or `nil` when it is not pulling. Only an instance that syncs with an upstream server sends this.
+    struct ServerPullProgress: Equatable, Sendable {
+        let pulled: Int
+        let total: Int
+        var fraction: Double { total > 0 ? min(1, Double(pulled) / Double(total)) : 0 }
+    }
+    private(set) var serverPullProgress: ServerPullProgress?
+
+    func setServerPullProgress(_ progress: ServerPullProgress?) {
+        guard progress != serverPullProgress else { return }
+        serverPullProgress = progress
+    }
+
+    /// Quick syncs stay a spinner; a progress bar is worth showing from this many changes or notes.
+    static let incrementalProgressMinimum = 100
+
+    /// A quick (incremental) sync large enough for a progress bar: `syncedNoteCount` of `totalNoteCount` changes
+    /// while pulling (`.fetchingChanges`), then notes while downloading their bodies (`.downloadingContent`).
+    var showsIncrementalProgress: Bool {
+        isSyncing && hasCompletedFullSync
+            && (phase == .fetchingChanges || phase == .downloadingContent)
+            && totalNoteCount >= Self.incrementalProgressMinimum
+    }
+
     enum SyncPhase: Equatable {
         case idle
         case walkingTree
@@ -403,6 +428,11 @@ final class SyncManager {
                 try? self.persistence.commitBatch()
 
                 totalApplied += pull.entityChanges.count
+                // `outstandingPullCount` is what is still waiting after this batch, so the pull's total is known
+                // from the first batch on.
+                self.syncedNoteCount = totalApplied
+                self.totalNoteCount = totalApplied + max(0, pull.outstandingPullCount)
+                self.syncProgress = Double(totalApplied) / Double(max(self.totalNoteCount, 1))
                 cursor = pull.maxEntityChangeId
                 try? self.persistence.setEntityPullCursor(serverProfileId: profileId, lastEntityChangeId: cursor)
                 // Always pull again; only an empty batch + outstanding==0 exits the loop.
@@ -439,7 +469,10 @@ final class SyncManager {
 
             let ranContentPass: Bool
             if downloadChangedBodies {
-                self.totalNoteCount = max(serverNotesForContent.count, totalApplied, 1)
+                // Counts notes from here on (`downloadContent` counts up from those already current).
+                self.totalNoteCount = max(serverNotesForContent.count, 1)
+                self.syncedNoteCount = 0
+                self.syncProgress = 0
                 if !serverNotesForContent.isEmpty {
                     self.phase = .downloadingContent
                     let ghostIds = try await self.downloadContent(

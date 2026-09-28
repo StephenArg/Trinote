@@ -18,7 +18,39 @@
     layers: [{ id: "osm", type: "raster", source: "osm" }],
   };
 
-  const VERSATILES_COLORFUL_PATH = "vendor/geomap-styles/versatiles-colorful.json";
+  /**
+   * Trilium's map styles (`#map:style`): OpenStreetMap tiles (null), or a bundled VersaTiles style, or a light one with
+   * a dark one for dark mode (Trilium 0.106+, whose keys are spelled "versatile-"). Unknown keys draw OpenStreetMap;
+   * the app sends only these.
+   */
+  const MAP_STYLES = {
+    "openstreetmap": null,
+    "versatiles-colorful": { light: "colorful" },
+    "versatiles-eclipse": { light: "eclipse" },
+    "versatile-colorful-eclipse": { light: "colorful", dark: "eclipse" },
+    "versatiles-graybeard": { light: "graybeard" },
+    "versatiles-shadow": { light: "shadow" },
+    "versatile-graybeard-shadow": { light: "graybeard", dark: "shadow" },
+    "versatiles-neutrino": { light: "neutrino" },
+  };
+
+  const darkModeQuery = global.matchMedia ? global.matchMedia("(prefers-color-scheme: dark)") : null;
+
+  /** The VersaTiles style that draws `styleId` right now, or null for OpenStreetMap. */
+  function versatilesStyleName(styleId) {
+    const entry = MAP_STYLES[styleId];
+    if (!entry) return null;
+    return entry.dark && darkModeQuery && darkModeQuery.matches ? entry.dark : entry.light;
+  }
+
+  function styleFollowsDarkMode(styleId) {
+    const entry = MAP_STYLES[styleId];
+    return !!(entry && entry.dark);
+  }
+
+  function versatilesStylePath(name) {
+    return "vendor/geomap-styles/versatiles-" + name + ".json";
+  }
 
   const SHORTBREAD_SOURCE = "versatiles-shortbread";
   const BUILDINGS_3D_LAYER = "buildings-3d";
@@ -30,6 +62,23 @@
     '<svg class="geomap-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">' +
     '<path fill="currentColor" d="M14.844 20H6.5C5.121 20 4 18.879 4 17.5S5.121 15 6.5 15h7c1.93 0 3.5-1.57 3.5-3.5S15.43 8 13.5 8H8.639a9.812 9.812 0 0 1-1.354 2H13.5c.827 0 1.5.673 1.5 1.5s-.673 1.5-1.5 1.5h-7C4.019 13 2 15.019 2 17.5S4.019 22 6.5 22h9.593a10.415 10.415 0 0 1-1.249-2zM5 2C3.346 2 2 3.346 2 5c0 3.188 3 5 3 5s3-1.813 3-5c0-1.654-1.346-3-3-3zm0 4.5a1.5 1.5 0 1 1 .001-3.001A1.5 1.5 0 0 1 5 6.5z"/>' +
     '<path fill="currentColor" d="M19 14c-1.654 0-3 1.346-3 3 0 3.188 3 5 3 5s3-1.813 3-5c0-1.654-1.346-3-3-3zm0 4.5a1.5 1.5 0 1 1 .001-3.001A1.5 1.5 0 0 1 19 18.5z"/>' +
+    "</svg>";
+
+  const LOCATE_ICON_SVG =
+    '<svg class="geomap-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path fill="currentColor" d="M20.5 3.5 3.4 10.6c-.5.2-.5.9 0 1.1l6.9 2.8 2.8 6.9c.2.5.9.5 1.1 0L21.4 4.3c.2-.5-.4-1-.9-.8z"/>' +
+    "</svg>";
+
+  const SEARCH_ICON_SVG =
+    '<svg class="geomap-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path fill="currentColor" d="M10 2a8 8 0 0 1 6.32 12.9l5.39 5.39-1.42 1.42-5.39-5.39A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/>' +
+    "</svg>";
+
+  const DRAW_ICON_SVG =
+    '<svg class="geomap-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 18 8 6l8 3 4 9z"/>' +
+    '<circle cx="4" cy="18" r="1.8" fill="currentColor"/><circle cx="8" cy="6" r="1.8" fill="currentColor"/>' +
+    '<circle cx="16" cy="9" r="1.8" fill="currentColor"/><circle cx="20" cy="18" r="1.8" fill="currentColor"/>' +
     "</svg>";
 
   const TRACK_HIT_WIDTH = 20;
@@ -79,9 +128,10 @@
     return DEFAULT_CENTER;
   }
 
-  function decodeInjectedVersatilesStyle() {
+  function decodeInjectedVersatilesStyle(name) {
     try {
-      const b64 = global.__TRINOTE_VERSATILES_COLORFUL_STYLE_B64__;
+      const styles = global.__TRINOTE_VERSATILES_STYLES_B64__;
+      const b64 = styles && styles[name];
       if (!b64) return null;
       const binary = atob(b64);
       const bytes = new Uint8Array(binary.length);
@@ -119,17 +169,18 @@
   }
 
   function loadStyleSpec(styleId) {
-    const id = styleId === "versatiles-colorful" ? "versatiles-colorful" : "openstreetmap";
-    if (id === "openstreetmap") {
+    const name = versatilesStyleName(styleId);
+    if (!name) {
       return Promise.resolve(OSM_RASTER_STYLE);
     }
-    const injected = decodeInjectedVersatilesStyle();
+    const injected = decodeInjectedVersatilesStyle(name);
     if (injected) {
       return Promise.resolve(injected);
     }
-    return fetchLocalJSON(VERSATILES_COLORFUL_PATH)
+    const path = versatilesStylePath(name);
+    return fetchLocalJSON(path)
       .catch(function () {
-        return fetch(new URL(VERSATILES_COLORFUL_PATH, window.location.href).href).then(function (response) {
+        return fetch(new URL(path, window.location.href).href).then(function (response) {
           if (!response.ok) throw new Error("style fetch failed: " + response.status);
           return response.json();
         });
@@ -1335,6 +1386,17 @@
       return symbol ? symbol.id : undefined;
     }
 
+    /** The flat buildings' colour in the current style, so raised ones match it (dark on a dark map). */
+    function styleBuildingColor() {
+      try {
+        if (map && map.getLayer("building")) {
+          const color = map.getPaintProperty("building", "fill-color");
+          if (color) return color;
+        }
+      } catch (e) {}
+      return "#d8d3cc";
+    }
+
     function buildings3DLayerSpec() {
       return {
         id: BUILDINGS_3D_LAYER,
@@ -1344,7 +1406,7 @@
         minzoom: BUILDINGS_MIN_ZOOM,
         filter: ["!=", ["get", "hide_3d"], true],
         paint: {
-          "fill-extrusion-color": "#d8d3cc",
+          "fill-extrusion-color": styleBuildingColor(),
           "fill-extrusion-height": ["coalesce", ["get", "height"], ASSUMED_BUILDING_HEIGHT],
           "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
           "fill-extrusion-opacity": [
@@ -1663,6 +1725,7 @@
       logGeoMapDebug("wireInteractions ATTACH");
 
       map.on("click", "clusters", (e) => {
+        if (drawSession) return;
         e.preventDefault();
         markFeatureClickHandled();
         const features = map.queryRenderedFeatures(e.point, { layers: ["clusters"] });
@@ -1679,6 +1742,7 @@
       const pinLayers = ["unclustered-pin", "unclustered-pin-fallback"];
       pinLayers.forEach((layer) => {
         map.on("click", layer, (e) => {
+          if (drawSession) return;
           if (!e.features || !e.features.length) return;
           e.preventDefault();
           markFeatureClickHandled();
@@ -1692,6 +1756,7 @@
       });
 
       function handleTrackFeatureClick(e) {
+        if (drawSession) return;
         if (!e.features || !e.features.length) return;
         e.preventDefault();
         markFeatureClickHandled();
@@ -1736,6 +1801,7 @@
 
       // Pins and tracks win over the shape underneath them.
       function handleShapeClick(e) {
+        if (drawSession) return;
         if (!e.features || !e.features.length) return;
         const above = [
           "unclustered-pin", "unclustered-pin-fallback", "clusters",
@@ -1756,6 +1822,10 @@
       });
 
       map.on("click", (e) => {
+        if (drawSession) {
+          addDrawPoint(e.lngLat);
+          return;
+        }
         if (e.defaultPrevented || shouldSuppressMapClickClear()) {
           return;
         }
@@ -1816,6 +1886,7 @@
         const startY = touch.clientY;
         longPressTimer = setTimeout(() => {
           longPressTimer = null;
+          if (drawSession) return;
           const rect = mapEl.getBoundingClientRect();
           const point = [startX - rect.left, startY - rect.top];
           if (markerFeatureAtPoint(point)) return;
@@ -1856,6 +1927,255 @@
       });
     }
 
+    // ---- Shape drawing (Trilium v0.106 draws with Terra Draw; this is a small touch version of its four tools).
+    // Taps add points while a session is open; the finished shape goes to Swift, which saves it as a #geoShape note.
+    let drawSession = null;
+    const DRAW_TOOLS = [
+      { id: "line", label: "Line", hint: "Tap to add points, then Done.", minPoints: 2 },
+      { id: "polygon", label: "Area", hint: "Tap the corners, then Done.", minPoints: 3 },
+      { id: "rectangle", label: "Rectangle", hint: "Tap one corner, then the opposite corner.", minPoints: 2 },
+      { id: "circle", label: "Circle", hint: "Tap the centre, then a point on the edge.", minPoints: 2 },
+    ];
+    const DRAW_LAYERS = ["draw-preview-fill", "draw-preview-line", "draw-preview-points"];
+
+    function drawTool() {
+      return DRAW_TOOLS.find((t) => drawSession && t.id === drawSession.tool) || DRAW_TOOLS[0];
+    }
+
+    function metersBetween(a, b) {
+      const toRad = Math.PI / 180;
+      const dLat = (b[1] - a[1]) * toRad;
+      const dLng = (b[0] - a[0]) * toRad;
+      const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * toRad) * Math.cos(b[1] * toRad) * Math.sin(dLng / 2) ** 2;
+      return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(h)));
+    }
+
+    function ensureDrawBanner() {
+      let banner = document.getElementById("draw-banner");
+      if (banner) return banner;
+      banner = document.createElement("div");
+      banner.id = "draw-banner";
+      const tools = document.createElement("div");
+      tools.className = "draw-tools";
+      DRAW_TOOLS.forEach((tool) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.dataset.tool = tool.id;
+        b.textContent = tool.label;
+        b.addEventListener("click", () => {
+          if (!drawSession) return;
+          drawSession = { tool: tool.id, points: [] };
+          renderDrawPreview();
+          updateDrawBanner();
+        });
+        tools.appendChild(b);
+      });
+      const hint = document.createElement("div");
+      hint.className = "draw-hint";
+      const actions = document.createElement("div");
+      actions.className = "draw-actions";
+      [["undo", "Undo"], ["cancel", "Cancel"], ["done", "Done"]].forEach(([id, label]) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.dataset.action = id;
+        b.textContent = label;
+        if (id === "done") b.className = "primary";
+        b.addEventListener("click", () => {
+          if (!drawSession) return;
+          if (id === "undo") {
+            drawSession.points.pop();
+            renderDrawPreview();
+            updateDrawBanner();
+          } else if (id === "cancel") {
+            endDrawSession();
+          } else {
+            finishDrawing();
+          }
+        });
+        actions.appendChild(b);
+      });
+      banner.appendChild(tools);
+      banner.appendChild(hint);
+      banner.appendChild(actions);
+      document.body.appendChild(banner);
+      return banner;
+    }
+
+    function updateDrawBanner() {
+      const banner = ensureDrawBanner();
+      banner.classList.toggle("visible", !!drawSession);
+      if (!drawSession) return;
+      const tool = drawTool();
+      banner.querySelectorAll("[data-tool]").forEach((b) => b.classList.toggle("selected", b.dataset.tool === tool.id));
+      banner.querySelector(".draw-hint").textContent = tool.hint;
+      banner.querySelector('[data-action="undo"]').disabled = drawSession.points.length === 0;
+      const done = banner.querySelector('[data-action="done"]');
+      // Rectangle and circle finish on their second tap.
+      done.style.display = tool.id === "line" || tool.id === "polygon" ? "" : "none";
+      done.disabled = drawSession.points.length < tool.minPoints;
+    }
+
+    function startDrawSession() {
+      if (readOnly) return;
+      clearMovePinMode();
+      clearSelectionInternal();
+      drawSession = { tool: drawSession ? drawSession.tool : "polygon", points: [] };
+      renderDrawPreview();
+      updateDrawBanner();
+    }
+
+    function endDrawSession() {
+      drawSession = null;
+      renderDrawPreview();
+      updateDrawBanner();
+    }
+
+    function renderDrawPreview() {
+      if (!map || !styleLoaded) return;
+      const features = [];
+      const points = drawSession ? drawSession.points : [];
+      const tool = drawSession ? drawSession.tool : null;
+      if (tool === "polygon" && points.length >= 3) {
+        features.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[...points, points[0]]] } });
+      }
+      if ((tool === "line" || tool === "polygon") && points.length >= 2) {
+        const line = tool === "polygon" && points.length >= 3 ? [...points, points[0]] : points;
+        features.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: line } });
+      }
+      points.forEach((p) => features.push({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: p } }));
+      const data = { type: "FeatureCollection", features };
+      if (map.getSource("draw-preview")) {
+        map.getSource("draw-preview").setData(data);
+        return;
+      }
+      map.addSource("draw-preview", { type: "geojson", data });
+      map.addLayer({ id: "draw-preview-fill", type: "fill", source: "draw-preview",
+        filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": "#007aff", "fill-opacity": 0.18 } });
+      map.addLayer({ id: "draw-preview-line", type: "line", source: "draw-preview",
+        filter: ["==", ["geometry-type"], "LineString"],
+        paint: { "line-color": "#007aff", "line-width": 3, "line-dasharray": [2, 1] } });
+      map.addLayer({ id: "draw-preview-points", type: "circle", source: "draw-preview",
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: { "circle-radius": 6, "circle-color": "#ffffff", "circle-stroke-color": "#007aff", "circle-stroke-width": 3 } });
+    }
+
+    function addDrawPoint(lngLat) {
+      if (!drawSession) return;
+      const point = [lngLat.lng, lngLat.lat];
+      const tool = drawSession.tool;
+      if ((tool === "rectangle" || tool === "circle") && drawSession.points.length === 1) {
+        const first = drawSession.points[0];
+        if (tool === "rectangle") {
+          if (first[0] === point[0] || first[1] === point[1]) return;
+          drawSession.points = [first, [point[0], first[1]], point, [first[0], point[1]]];
+          finishDrawing("polygon");
+        } else {
+          const radius = metersBetween(first, point);
+          if (radius <= 0) return;
+          post("geoMapShapeDrawn", JSON.stringify({ kind: "circle", coordinates: [first], radiusMeters: radius }));
+          endDrawSession();
+        }
+        return;
+      }
+      drawSession.points.push(point);
+      renderDrawPreview();
+      updateDrawBanner();
+    }
+
+    function finishDrawing(kindOverride) {
+      if (!drawSession) return;
+      const tool = drawTool();
+      const kind = kindOverride || (tool.id === "line" ? "line" : "polygon");
+      if (drawSession.points.length < (kind === "line" ? 2 : 3)) return;
+      post("geoMapShapeDrawn", JSON.stringify({ kind, coordinates: drawSession.points }));
+      endDrawSession();
+    }
+
+    // "Locate me": the device's position as a blue dot in its accuracy circle (set from Swift).
+    let userLocation = null;
+
+    function renderUserLocation() {
+      if (!map || !styleLoaded || !userLocation) return;
+      const center = [userLocation.lng, userLocation.lat];
+      const pointData = {
+        type: "FeatureCollection",
+        features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: center } }],
+      };
+      const accuracyData = {
+        type: "FeatureCollection",
+        features: userLocation.accuracy > 0
+          ? [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [circleRing(center, userLocation.accuracy)] } }]
+          : [],
+      };
+      if (map.getSource("user-location")) {
+        map.getSource("user-location").setData(pointData);
+        map.getSource("user-location-accuracy").setData(accuracyData);
+        return;
+      }
+      map.addSource("user-location-accuracy", { type: "geojson", data: accuracyData });
+      map.addSource("user-location", { type: "geojson", data: pointData });
+      map.addLayer({ id: "user-location-accuracy", type: "fill", source: "user-location-accuracy",
+        paint: { "fill-color": "#007aff", "fill-opacity": 0.12 } });
+      map.addLayer({ id: "user-location-halo", type: "circle", source: "user-location",
+        paint: { "circle-radius": 10, "circle-color": "#ffffff", "circle-opacity": 0.95 } });
+      map.addLayer({ id: "user-location-dot", type: "circle", source: "user-location",
+        paint: { "circle-radius": 7, "circle-color": "#007aff" } });
+    }
+
+    // A place picked in the search sheet, marked until another is picked.
+    let searchPlace = null;
+
+    function renderSearchPlace() {
+      if (!map || !styleLoaded) return;
+      const data = {
+        type: "FeatureCollection",
+        features: searchPlace
+          ? [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [searchPlace.lng, searchPlace.lat] } }]
+          : [],
+      };
+      if (map.getSource("search-place")) {
+        map.getSource("search-place").setData(data);
+        return;
+      }
+      map.addSource("search-place", { type: "geojson", data });
+      map.addLayer({ id: "search-place", type: "circle", source: "search-place",
+        paint: { "circle-radius": 8, "circle-color": "#ff3b30", "circle-stroke-color": "#ffffff", "circle-stroke-width": 3 } });
+    }
+
+    function showPlaceInternal(lat, lng, bounds) {
+      searchPlace = { lat: Number(lat), lng: Number(lng) };
+      renderSearchPlace();
+      if (!map) return;
+      suppressViewportFor(2500);
+      if (Array.isArray(bounds) && bounds.length === 4 && bounds[2] > bounds[0] && bounds[3] > bounds[1]) {
+        map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]], { padding: 40, maxZoom: 17, essential: true });
+      } else {
+        map.flyTo({ center: [searchPlace.lng, searchPlace.lat], zoom: Math.max(map.getZoom(), 16), essential: true });
+      }
+    }
+
+    /** What the map shows, [west, south, east, north]. */
+    function visibleBounds() {
+      if (!map) return null;
+      const b = map.getBounds();
+      return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    }
+
+    function setLocatingInternal(on) {
+      const btn = document.getElementById("geomap-btn-locate");
+      if (btn) btn.classList.toggle("locating", !!on);
+    }
+
+    function showUserLocationInternal(lat, lng, accuracy) {
+      setLocatingInternal(false);
+      userLocation = { lat: Number(lat), lng: Number(lng), accuracy: Math.max(0, Number(accuracy) || 0) };
+      renderUserLocation();
+      if (!map) return;
+      // Looking around is not editing the map: the note keeps the view it was saved with.
+      suppressViewportFor(2500);
+      map.flyTo({ center: [userLocation.lng, userLocation.lat], zoom: Math.max(map.getZoom(), 15), essential: true });
+    }
+
     function buildToolbar() {
       if (readOnly) return;
       let bar = document.getElementById("geomap-toolbar");
@@ -1864,6 +2184,15 @@
         bar.id = "geomap-toolbar";
         bar.className = "geomap-toolbar";
         bar.innerHTML =
+          '<button type="button" id="geomap-btn-search" class="geomap-tool-btn" aria-label="Find a place">' +
+          SEARCH_ICON_SVG +
+          "</button>" +
+          '<button type="button" id="geomap-btn-locate" class="geomap-tool-btn" aria-label="Show my location">' +
+          LOCATE_ICON_SVG +
+          "</button>" +
+          '<button type="button" id="geomap-btn-draw" class="geomap-tool-btn" aria-label="Draw a shape">' +
+          DRAW_ICON_SVG +
+          "</button>" +
           '<button type="button" id="geomap-btn-3d" class="geomap-tool-btn" aria-label="3D view">3D</button>' +
           '<button type="button" id="geomap-btn-gpx" class="geomap-tool-btn" aria-label="Add GPX track">' +
           GPX_TRIP_ICON_SVG +
@@ -1874,6 +2203,18 @@
         });
         document.getElementById("geomap-btn-gpx").addEventListener("click", () => {
           post("geoMapImportGpxRequested", "");
+        });
+        document.getElementById("geomap-btn-locate").addEventListener("click", () => {
+          // Pulses until the app answers with a position (showUserLocation) or gives up (stopLocating).
+          setLocatingInternal(true);
+          post("geoMapLocateRequested", "");
+        });
+        document.getElementById("geomap-btn-draw").addEventListener("click", () => {
+          if (drawSession) endDrawSession();
+          else startDrawSession();
+        });
+        document.getElementById("geomap-btn-search").addEventListener("click", () => {
+          post("geoMapSearchRequested", JSON.stringify({ bounds: visibleBounds() }));
         });
       }
     }
@@ -1895,6 +2236,9 @@
       rebuildMarkers();
       rebuildTracks();
       rebuildShapes();
+      renderUserLocation();
+      renderSearchPlace();
+      renderDrawPreview();
       updateScaleControl();
       updateBuildings3D();
       if (is3DViewActive() && hasShortbreadSource()) {
@@ -1945,6 +2289,16 @@
           onStyleReady();
         });
       });
+    }
+
+    // A light/dark style redraws when the appearance changes, keeping the view where it is.
+    if (darkModeQuery) {
+      const onAppearanceChange = function () {
+        if (!map || !styleFollowsDarkMode(settings.mapStyle)) return;
+        applyMapStyle({ center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() });
+      };
+      if (darkModeQuery.addEventListener) darkModeQuery.addEventListener("change", onAppearanceChange);
+      else if (darkModeQuery.addListener) darkModeQuery.addListener(onAppearanceChange);
     }
 
     function createMap(viewport, styleSpec) {
@@ -2264,6 +2618,22 @@
         rebuildMarkers();
       },
 
+      showUserLocation(lat, lng, accuracy) {
+        showUserLocationInternal(lat, lng, accuracy);
+      },
+      stopLocating() {
+        setLocatingInternal(false);
+      },
+      showPlace(lat, lng, bounds) {
+        showPlaceInternal(lat, lng, bounds);
+      },
+      cancelDrawing() {
+        endDrawSession();
+      },
+      clearPlace() {
+        searchPlace = null;
+        renderSearchPlace();
+      },
       removePin(noteId) {
         markers = markers.filter((m) => m.noteId !== noteId);
         rebuildMarkers();
@@ -2311,6 +2681,10 @@
 
       selectFeature(noteId, kind) {
         selectFeatureInternal(noteId, kind || "pin");
+        flyToFeature(noteId, kind || "pin");
+      },
+      /** Moves the map to a feature without selecting it (the sub-notes list's pin buttons). */
+      focusFeature(noteId, kind) {
         flyToFeature(noteId, kind || "pin");
       },
 

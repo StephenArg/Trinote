@@ -524,6 +524,179 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertTrue(bare.success, "an answer without a body is taken as done")
     }
 
+    // MARK: - Spreadsheet export (v0.106 GET /api/spreadsheet/:id/xlsx)
+
+    func testSpreadsheetExportReturnsTheWorkbookAndRejectsAnythingElse() async throws {
+        final class Body: @unchecked Sendable { var data = Data([0x50, 0x4B, 0x03, 0x04, 0x14]) }
+        let body = Body()
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            func ok(_ data: Data, type: String = "application/json") -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": type])!, data)
+            }
+            if path.hasSuffix("/bootstrap") { return ok(Data(#"{"csrfToken":"x","device":"desktop"}"#.utf8)) }
+            if path.contains("/api/app-info") { return ok(Data(#"{"appVersion":"0.106.0","dbVersion":240}"#.utf8)) }
+            if path == "/api/spreadsheet/sheet1/xlsx" {
+                XCTAssertEqual(request.httpMethod, "GET")
+                return ok(body.data, type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            }
+            XCTFail("Unexpected path: \(path)")
+            return ok(Data())
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let workbook = try await client.exportSpreadsheetXlsx(noteId: "sheet1")
+        XCTAssertEqual(workbook, body.data)
+
+        body.data = Data("<!doctype html><html></html>".utf8)
+        do {
+            _ = try await client.exportSpreadsheetXlsx(noteId: "sheet1")
+            XCTFail("a page that isn't a zip archive is not a workbook")
+        } catch {}
+    }
+
+    func testSpreadsheetExportNeedsTrilium0106() {
+        func info(_ version: String) -> AppInfoResponse? {
+            try? JSONDecoder().decode(AppInfoResponse.self, from: Data(#"{"appVersion":"\#(version)","dbVersion":240}"#.utf8))
+        }
+        XCTAssertFalse(TriliumServerCompatibility.supportsSpreadsheetXlsxExport(info("0.105.0")))
+        XCTAssertTrue(TriliumServerCompatibility.supportsSpreadsheetXlsxExport(info("0.106.0")))
+    }
+
+    func testExportedWorkbookIsNamedAfterTheNote() {
+        XCTAssertEqual(NoteDetailViewModel.xlsxExportFileName(forTitle: "Budget 2026"), "Budget 2026.xlsx")
+        XCTAssertEqual(NoteDetailViewModel.xlsxExportFileName(forTitle: "Q3/Q4: plan?"), "Q3 Q4  plan.xlsx")
+        XCTAssertEqual(NoteDetailViewModel.xlsxExportFileName(forTitle: ".hidden"), "hidden.xlsx")
+        XCTAssertEqual(NoteDetailViewModel.xlsxExportFileName(forTitle: "  "), "Spreadsheet.xlsx")
+        XCTAssertEqual(NoteDetailViewModel.xlsxExportFileName(forTitle: String(repeating: "a", count: 300)).count, 125)
+    }
+
+    // MARK: - Search lint and inbox target (v0.106)
+
+    func testSearchLintAndInboxTargetRequests() async throws {
+        final class Lint: @unchecked Sendable { var answer = #"{"error":"Unexpected token"}"#; var sent: String? }
+        let lint = Lint()
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(#"{"appVersion":"0.106.0","dbVersion":240}"#) }
+            if path == "/api/search/lint" {
+                XCTAssertEqual(request.httpMethod, "POST")
+                let body = request.httpBody ?? request.httpBodyStream.map { stream in
+                    stream.open(); defer { stream.close() }
+                    var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+                    while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
+                    return data
+                } ?? Data()
+                lint.sent = (try? JSONSerialization.jsonObject(with: body) as? [String: String])?["searchString"]
+                return ok(lint.answer)
+            }
+            if path == "/api/special-notes/inbox-target" { return ok(#"{"kind":"dayNote"}"#) }
+            XCTFail("Unexpected path: \(path)")
+            return ok("{}")
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let problem = try await client.lintSearchQuery("#book and")
+        XCTAssertEqual(problem, "Unexpected token")
+        XCTAssertEqual(lint.sent, "#book and")
+        lint.answer = #"{"error":null}"#
+        let clean = try await client.lintSearchQuery("#book")
+        XCTAssertNil(clean)
+
+        let target = try await client.getInboxTarget()
+        XCTAssertEqual(target, InboxTargetResponse(kind: "dayNote", noteId: nil, title: nil))
+    }
+
+    // MARK: - Today's journal note
+
+    func testDayNoteComesFromTheSpecialNotesRoute() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(appInfoJSON) }
+            if path == "/api/special-notes/days/2026-09-27" {
+                XCTAssertEqual(request.httpMethod, "GET")
+                return ok(#"{"noteId":"dayNote1","title":"27 - Sunday","type":"text","mime":"text/html","isProtected":false,"blobId":"b1"}"#)
+            }
+            XCTFail("Unexpected path: \(path)")
+            return ok("{}")
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let note = try await client.getOrCreateDayNote(onISODay: "2026-09-27")
+        XCTAssertEqual(note, NoteIdTitle(noteId: "dayNote1", title: "27 - Sunday", isProtected: false))
+        do {
+            _ = try await client.getOrCreateDayNote(onISODay: "27/09/2026")
+            XCTFail("a day that isn't yyyy-MM-dd never reaches the server")
+        } catch {}
+    }
+
+    // MARK: - Bulk delete (v0.106 POST /api/delete-notes)
+
+    func testBulkDeleteSendsTheSelectionInOneRequestAfterAPreview() async throws {
+        final class Bodies: @unchecked Sendable { var byPath: [String: [String: Any]] = [:] }
+        let bodies = Bodies()
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(#"{"appVersion":"0.106.0","dbVersion":240}"#) }
+            let body = request.httpBody ?? request.httpBodyStream.map { stream in
+                stream.open(); defer { stream.close() }
+                var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
+                return data
+            } ?? Data()
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "x-csrf-token"), "x")
+            bodies.byPath[path] = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            if path == "/api/delete-notes-preview" {
+                return ok(#"{"noteIdsToBeDeleted":["a","a1","b"],"brokenRelations":[]}"#)
+            }
+            if path == "/api/delete-notes" { return ok("") }
+            XCTFail("Unexpected path: \(path)")
+            return ok("{}")
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let previewed = try await client.previewNoteDeletion(branchIds: ["root_a", "root_b"], deleteAllClones: true)
+        XCTAssertEqual(previewed, ["a", "a1", "b"])
+        let preview = try XCTUnwrap(bodies.byPath["/api/delete-notes-preview"])
+        XCTAssertEqual(preview["branchIdsToDelete"] as? [String], ["root_a", "root_b"])
+        XCTAssertEqual(preview["deleteAllClones"] as? Bool, true)
+
+        try await client.deleteNotes(branchIds: ["root_a", "root_b"], deleteAllClones: true, eraseNotes: false, totalCount: 3, taskId: "task123456")
+        let delete = try XCTUnwrap(bodies.byPath["/api/delete-notes"])
+        XCTAssertEqual(delete["branchIdsToDelete"] as? [String], ["root_a", "root_b"])
+        XCTAssertEqual(delete["deleteAllClones"] as? Bool, true)
+        XCTAssertEqual(delete["eraseNotes"] as? Bool, false)
+        XCTAssertEqual(delete["totalCount"] as? Int, 3)
+        XCTAssertEqual(delete["taskId"] as? String, "task123456")
+    }
+
+    func testBulkDeletionNeedsTrilium0106() {
+        func info(_ version: String) -> AppInfoResponse? {
+            try? JSONDecoder().decode(AppInfoResponse.self, from: Data(#"{"appVersion":"\#(version)","dbVersion":240}"#.utf8))
+        }
+        XCTAssertFalse(TriliumServerCompatibility.supportsBulkNoteDeletion(info("0.105.0")))
+        XCTAssertTrue(TriliumServerCompatibility.supportsBulkNoteDeletion(info("0.106.0")))
+        XCTAssertTrue(TriliumServerCompatibility.supportsBulkNoteDeletion(info("v0.107.1")))
+        XCTAssertFalse(TriliumServerCompatibility.supportsBulkNoteDeletion(nil))
+    }
+
     // MARK: - Full sync batch dates (v0.106 POST /api/notes/metadata)
 
     /// Serves a two-note `tree/load`, `/api/notes/metadata` (unless `metadataStatus` fails it) and per-note GETs,

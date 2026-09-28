@@ -1,5 +1,13 @@
 import Foundation
 
+/// A Trilium `taskProgressCount` message: how far a server task (a delete, an import) has got.
+struct ServerTaskProgress: Equatable, Sendable {
+    let taskId: String
+    let progressCount: Int
+    /// Only when the request that started the task said how much there is to do.
+    let totalCount: Int?
+}
+
 /// Minimal Trilium-style WebSocket client: same host/path as HTTP, shared cookies, debounced sync trigger.
 @MainActor
 final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
@@ -22,19 +30,32 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     private let cloudflareAccessCredentials: CloudflareAccessCredentials?
     private let onEvent: @Sendable () -> Void
     private let onProtectedSessionLogout: (@Sendable () -> Void)?
+    /// `(pulled, total)` while the server pulls from its own sync server; `nil` once it finishes.
+    private let onServerPullProgress: (@Sendable (_ progress: (pulled: Int, total: Int)?) -> Void)?
+    /// Every client hears every task's progress, so the receiver keeps only the tasks it started.
+    private let onTaskProgress: (@Sendable (ServerTaskProgress) -> Void)?
+    /// Called when the socket opens again after dropping (the server restarted), not on the first open.
+    private let onReconnected: (@Sendable () -> Void)?
+    private var hasOpenedBefore = false
 
     init(
         baseURL: URL,
         cookieStorage: HTTPCookieStorage,
         cloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
         onEvent: @escaping @Sendable () -> Void,
-        onProtectedSessionLogout: (@Sendable () -> Void)? = nil
+        onProtectedSessionLogout: (@Sendable () -> Void)? = nil,
+        onServerPullProgress: (@Sendable (_ progress: (pulled: Int, total: Int)?) -> Void)? = nil,
+        onTaskProgress: (@Sendable (ServerTaskProgress) -> Void)? = nil,
+        onReconnected: (@Sendable () -> Void)? = nil
     ) {
         self.baseURL = baseURL
         self.cookieStorage = cookieStorage
         self.cloudflareAccessCredentials = cloudflareAccessCredentials?.isComplete == true ? cloudflareAccessCredentials : nil
         self.onEvent = onEvent
         self.onProtectedSessionLogout = onProtectedSessionLogout
+        self.onServerPullProgress = onServerPullProgress
+        self.onTaskProgress = onTaskProgress
+        self.onReconnected = onReconnected
         super.init()
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = cookieStorage
@@ -59,6 +80,7 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     }
 
     func stop() {
+        onServerPullProgress?(nil)
         connectionGeneration &+= 1
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -97,8 +119,24 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
               let type = obj["type"] as? String else { return }
 
         switch type {
-        case "frontend-update", "sync-finished", "sync-pull-in-progress", "sync-push-in-progress":
+        case "frontend-update":
             scheduleDebouncedNotify()
+        case "sync-finished":
+            onServerPullProgress?(nil)
+            scheduleDebouncedNotify()
+        case "sync-pull-in-progress":
+            // The server is pulling from its own sync server. What it applies reaches us as `frontend-update`, and
+            // `sync-finished` pulls once more at the end, so a pull per progress message would only repeat work.
+            if let progress = Self.pullProgress(from: obj) {
+                onServerPullProgress?(progress)
+            }
+        case "sync-push-in-progress":
+            // The server sending its own changes upstream: nothing new for us.
+            break
+        case "taskProgressCount":
+            if let progress = Self.taskProgress(from: obj) {
+                onTaskProgress?(progress)
+            }
         case "protectedSessionLogout":
             onProtectedSessionLogout?()
         case "ping":
@@ -106,6 +144,25 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
         default:
             break
         }
+    }
+
+    /// Trilium v0.106+ `progress: { pulled, total }` on `sync-pull-in-progress`.
+    nonisolated static func pullProgress(from message: [String: Any]) -> (pulled: Int, total: Int)? {
+        guard let progress = message["progress"] as? [String: Any],
+              let pulled = (progress["pulled"] as? NSNumber)?.intValue,
+              let total = (progress["total"] as? NSNumber)?.intValue,
+              total > 0
+        else { return nil }
+        return (max(0, pulled), total)
+    }
+
+    /// `{ type: "taskProgressCount", taskId, progressCount, totalCount? }`. Trilium sends at most one every 300 ms.
+    nonisolated static func taskProgress(from message: [String: Any]) -> ServerTaskProgress? {
+        guard let taskId = message["taskId"] as? String, !taskId.isEmpty,
+              let count = (message["progressCount"] as? NSNumber)?.intValue
+        else { return nil }
+        let total = (message["totalCount"] as? NSNumber)?.intValue
+        return ServerTaskProgress(taskId: taskId, progressCount: max(0, count), totalCount: total.flatMap { $0 > 0 ? $0 : nil })
     }
 
     private func scheduleDebouncedNotify() {
@@ -154,6 +211,10 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     ) {
         Task { @MainActor in
             self.reconnectAttempt = 0
+            if self.hasOpenedBefore {
+                self.onReconnected?()
+            }
+            self.hasOpenedBefore = true
         }
     }
 

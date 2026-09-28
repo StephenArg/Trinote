@@ -229,6 +229,23 @@ actor MockTriliumClient: TriliumClientProtocol {
         if let error = deleteNoteError { throw error }
     }
 
+    var previewNoteDeletionCalls: [(branchIds: [String], deleteAllClones: Bool)] = []
+    var previewNoteDeletionResult: [String] = []
+    var previewNoteDeletionError: Error?
+    var deleteNotesCalls: [(branchIds: [String], deleteAllClones: Bool, eraseNotes: Bool, totalCount: Int?, taskId: String)] = []
+    var deleteNotesError: Error?
+
+    func previewNoteDeletion(branchIds: [String], deleteAllClones: Bool) async throws -> [String] {
+        previewNoteDeletionCalls.append((branchIds, deleteAllClones))
+        if let error = previewNoteDeletionError { throw error }
+        return previewNoteDeletionResult
+    }
+
+    func deleteNotes(branchIds: [String], deleteAllClones: Bool, eraseNotes: Bool, totalCount: Int?, taskId: String) async throws {
+        deleteNotesCalls.append((branchIds, deleteAllClones, eraseNotes, totalCount, taskId))
+        if let error = deleteNotesError { throw error }
+    }
+
     func createNote(_ request: CreateNoteRequest) async throws -> CreateNoteResponse {
         createNoteCalls.append(request)
         if let limit = createNoteFailureAfterCount, createNoteCalls.count > limit {
@@ -299,6 +316,28 @@ actor MockTriliumClient: TriliumClientProtocol {
         return try searchNoteIdTitlesResult.get()
     }
 
+    var getOrCreateDayNoteCalls: [String] = []
+    var getOrCreateDayNoteResult = NoteIdTitle(noteId: "day1", title: "27 - Sunday", isProtected: false)
+
+    func getOrCreateDayNote(onISODay day: String) async throws -> NoteIdTitle {
+        getOrCreateDayNoteCalls.append(day)
+        return getOrCreateDayNoteResult
+    }
+
+    var exportSpreadsheetXlsxCalls: [String] = []
+    var exportSpreadsheetXlsxResult: Result<Data, Error> = .success(Data([0x50, 0x4B, 0x03, 0x04]))
+
+    func exportSpreadsheetXlsx(noteId: String) async throws -> Data {
+        exportSpreadsheetXlsxCalls.append(noteId)
+        return try exportSpreadsheetXlsxResult.get()
+    }
+
+    var inboxTargetResult: Result<InboxTargetResponse, Error> = .success(InboxTargetResponse(kind: "root", noteId: "root", title: "root"))
+
+    func getInboxTarget() async throws -> InboxTargetResponse {
+        try inboxTargetResult.get()
+    }
+
     func getEditedNotes(onISODay day: String) async throws -> [NoteIdTitle] {
         editedNotesCalls.append(day)
         return try editedNotesResult.get()
@@ -324,6 +363,12 @@ actor MockTriliumClient: TriliumClientProtocol {
     }
 
     var searchNoteIdsValue: [String] = []
+    var lintSearchQueryResult: String?
+
+    func lintSearchQuery(_ query: String) async throws -> String? {
+        lintSearchQueryResult
+    }
+
     func searchNoteIds(query: String, ancestorNoteId: String?) async throws -> [String] {
         searchCalls.append(query)
         return searchNoteIdsValue

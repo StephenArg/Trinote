@@ -484,6 +484,26 @@ final class PersistenceManager {
         return try context.fetch(descriptor).first
     }
 
+    /// Branches Trilium calls weak: its delete preview skips them, and they don't count as a clone.
+    static let weakBranchParentNoteIds: Set<String> = ["_share", "_lbBookmarks"]
+
+    /// A cached branch of `noteId` to name the note in `POST /api/delete-notes`: one the server has (not created
+    /// offline) and not weak. `nil` when there is none.
+    func cachedBranchIdForDeletion(noteId: String, serverProfileId: String) -> String? {
+        let nid = noteId
+        let profileId = serverProfileId
+        let descriptor = FetchDescriptor<CachedBranch>(
+            predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == profileId },
+            sortBy: [SortDescriptor(\.branchId)]
+        )
+        let branches = (try? context.fetch(descriptor)) ?? []
+        return branches.first { branch in
+            !Self.weakBranchParentNoteIds.contains(branch.parentNoteId)
+                && !branch.branchId.hasPrefix("olb_")
+                && !branch.parentNoteId.isOfflineLocalNoteId
+        }?.branchId
+    }
+
     /// Child note ids under `parentNoteId` from `CachedBranch` only, tree order (`notePosition`).
     /// Use when `CachedNote.childNoteIds` is empty (common after incremental sync) but branches are present.
     func fetchChildNoteIdsOrderedFromBranches(parentNoteId: String, serverProfileId: String) throws -> [String] {
@@ -536,6 +556,33 @@ final class PersistenceManager {
             }
         }
         return result
+    }
+
+    /// Cached notes carrying an own label `name` (e.g. `#template`).
+    func cachedNoteIds(withLabel name: String, serverProfileId: String) -> [String] {
+        let labelName = name
+        let pid = serverProfileId
+        let rows = (try? context.fetch(FetchDescriptor<CachedAttribute>(
+            predicate: #Predicate { $0.name == labelName && $0.type == "label" && $0.serverProfileId == pid }
+        ))) ?? []
+        var seen = Set<String>()
+        return rows.map(\.noteId).filter { seen.insert($0).inserted }
+    }
+
+    /// Cached notes carrying an own label `name` with exactly `value` (e.g. `#dateNote=2026-09-27`), still cached.
+    func cachedNoteIds(withLabel name: String, value: String, serverProfileId: String) -> [String] {
+        let labelName = name
+        let labelValue = value
+        let pid = serverProfileId
+        let rows = (try? context.fetch(FetchDescriptor<CachedAttribute>(
+            predicate: #Predicate {
+                $0.name == labelName && $0.value == labelValue && $0.type == "label" && $0.serverProfileId == pid
+            }
+        ))) ?? []
+        var seen = Set<String>()
+        return rows.map(\.noteId).filter { noteId in
+            seen.insert(noteId).inserted && (try? fetchCachedNote(id: noteId, serverProfileId: pid)) != nil
+        }
     }
 
     func fetchCachedAttributes(noteId: String, serverProfileId: String) throws -> [CachedAttribute] {
@@ -1983,6 +2030,14 @@ final class PersistenceManager {
                 sortBy: [SortDescriptor(\.queuedAt, order: .forward)]
             )
         )
+    }
+
+    /// Whether a saved body for `noteId` is still waiting to be uploaded.
+    func hasPendingNoteBodyUpload(noteId: String, serverProfileId: String) -> Bool {
+        let rowId = "\(serverProfileId):\(noteId)"
+        var descriptor = FetchDescriptor<PendingNoteBodyUpload>(predicate: #Predicate { $0.id == rowId })
+        descriptor.fetchLimit = 1
+        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
     }
 
     func deletePendingNoteBodyUpload(noteId: String, serverProfileId: String) throws {

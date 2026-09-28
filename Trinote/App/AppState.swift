@@ -29,6 +29,8 @@ final class AppState {
     private let keychain = KeychainManager.shared
 
     private var realtime: TriliumWebSocketConnection?
+    /// Progress handlers for the server tasks this app started, by task id (see `trackServerTask`).
+    @ObservationIgnored private var serverTaskProgressHandlers: [String: @MainActor (ServerTaskProgress) -> Void] = [:]
 
     /// Ensures only one offline queue flush runs at a time. Concurrent callers await the same run (then return without duplicating work).
     private var offlineFlushInFlight = false
@@ -141,6 +143,14 @@ final class AppState {
 
     /// Creates notes queued while offline (`PendingNoteCreation`), then pushes pending body uploads. Order matters for nested offline children.
     /// - Parameter assumeSessionIsReady: Set `true` when this is called immediately after `restoreSession` / login so we don’t repeat a network round-trip for the creation phase.
+    /// Server ids given this session to notes created offline (`ol_…`), for work that needs the note on the server.
+    @ObservationIgnored private var offlineNoteIdReplacements: [String: String] = [:]
+
+    /// The server id of a note created offline once it has been uploaded; any other id is returned as it is.
+    func serverNoteId(for noteId: String) -> String {
+        offlineNoteIdReplacements[noteId] ?? noteId
+    }
+
     func flushPendingLocalChangesIfPossible(assumeSessionIsReady: Bool = false) async {
         if offlineFlushInFlight {
             await withCheckedContinuation { offlineFlushWaiters.append($0) }
@@ -310,6 +320,7 @@ final class AppState {
                     response: response,
                     serverProfileId: profileId
                 )
+                offlineNoteIdReplacements[row.localNoteId] = newId
                 NotificationCenter.default.post(
                     name: .trinoteOfflineNoteIdReplaced,
                     object: nil,
@@ -887,9 +898,49 @@ final class AppState {
                 Task { @MainActor in
                     self?.protectedSessionActive = false
                 }
+            },
+            onServerPullProgress: { [weak self] progress in
+                Task { @MainActor in
+                    self?.syncManager.setServerPullProgress(
+                        progress.map { SyncManager.ServerPullProgress(pulled: $0.pulled, total: $0.total) }
+                    )
+                }
+            },
+            onTaskProgress: { [weak self] progress in
+                Task { @MainActor in
+                    self?.serverTaskProgressHandlers[progress.taskId]?(progress)
+                }
+            },
+            onReconnected: { [weak self] in
+                // The server restarted (an upgrade does that), so its version may have changed.
+                Task { @MainActor in await self?.refreshServerAppInfo() }
             }
         )
         realtime?.start()
+    }
+
+    /// Re-reads the server's version (`/api/app-info`) for the `TriliumServerCompatibility` gates, which otherwise
+    /// only refresh with the session. A server upgraded while Trinote stays open is picked up here.
+    func refreshServerAppInfo() async {
+        guard networkMonitor.isConnected, let client else { return }
+        do {
+            let info = try await client.getAppInfo()
+            if info.appVersion != serverAppInfo?.appVersion {
+                Log.api.info("Server version now \(info.appVersion) (was \(self.serverAppInfo?.appVersion ?? "unknown"))")
+            }
+            serverAppInfo = info
+        } catch {
+            Log.api.warning("Could not re-read the server version: \(error)")
+        }
+    }
+
+    /// Calls `onProgress` with each WebSocket progress message for `taskId` until `stopTrackingServerTask`.
+    func trackServerTask(_ taskId: String, onProgress: @escaping @MainActor (ServerTaskProgress) -> Void) {
+        serverTaskProgressHandlers[taskId] = onProgress
+    }
+
+    func stopTrackingServerTask(_ taskId: String) {
+        serverTaskProgressHandlers[taskId] = nil
     }
 
     /// Bounded wait so offline / captive networks don’t leave bootstrap on “Connecting…” until URLSession’s default timeout.

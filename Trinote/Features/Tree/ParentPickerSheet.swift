@@ -11,6 +11,17 @@ struct ParentPickerSheet: View {
     var rootHeaderPlacementTitle: String? = nil
     /// `(parentNoteId, displayTitle, parentBranchId)` — `parentBranchId` is the tree branch for the chosen parent (see `TriliumTreeConstants.rootBranchId` for top level).
     let onPick: (String, String, String) -> Void
+    /// A one-tap destination above the tree (share import's "Add to Inbox").
+    var quickDestination: QuickDestination? = nil
+
+    struct QuickDestination {
+        let title: String
+        /// Where it goes; nil while that's being worked out.
+        let subtitle: String?
+        let systemImage: String
+        let isBusy: Bool
+        let action: () -> Void
+    }
 
     @Environment(\.dismiss) private var dismiss
 
@@ -22,6 +33,32 @@ struct ParentPickerSheet: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding()
+
+                if let quick = quickDestination {
+                    Button(action: quick.action) {
+                        HStack(spacing: 10) {
+                            Image(systemName: quick.systemImage)
+                                .font(.title3)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(quick.title)
+                                    .font(.body.weight(.semibold))
+                                Text(quick.subtitle ?? " ")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            if quick.isBusy {
+                                ProgressView()
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(quick.isBusy)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                }
 
                 if showsTopLevelButton {
                     Button {

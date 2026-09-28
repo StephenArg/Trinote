@@ -237,6 +237,34 @@ final class KanbanPresentationModelTests: XCTestCase {
         XCTAssertEqual(columns.map(\.value), ["To Do"])
     }
 
+    func testArchivedColumnsAndCardsShowOnlyWhenTheBoardShowsArchivedNotes() {
+        let stored = [Models.BoardColumn(value: "Todo"), Models.BoardColumn(value: "Old", fields: ["archived": .bool(true)])]
+        let cards = [
+            Models.Card(noteId: "c1", branchId: "b1", title: "Live", columnValue: "Todo", notePosition: 0),
+            Models.Card(noteId: "c2", branchId: "b2", title: "Filed", columnValue: "Todo", notePosition: 1, labels: ["archived": ""]),
+            Models.Card(noteId: "c3", branchId: "b3", title: "Old card", columnValue: "Old", notePosition: 0),
+        ]
+        let hidden = Models.buildColumns(storedColumns: stored, cards: cards)
+        XCTAssertEqual(hidden.map(\.value), ["Todo"])
+        XCTAssertEqual(hidden[0].cards.map(\.noteId), ["c1"])
+
+        let shown = Models.buildColumns(storedColumns: stored, cards: cards, showArchived: true)
+        XCTAssertEqual(shown.map(\.value), ["Todo", "Old"])
+        XCTAssertEqual(shown.map(\.isArchived), [false, true])
+        XCTAssertEqual(shown[0].cards.map(\.noteId), ["c1", "c2"])
+
+        let attrs = [AttributeItem(attributeId: "a", noteId: "board", type: .label, name: "includeArchived", value: "", position: 0, isInheritable: false)]
+        XCTAssertTrue(Models.showsArchived(attrs))
+        XCTAssertFalse(Models.showsArchived([]))
+    }
+
+    func testReorderWithArchivedColumnsShownMovesThemToo() {
+        let stored = [Models.BoardColumn(value: "A"), Models.BoardColumn(value: "Old", fields: ["archived": .bool(true)]), Models.BoardColumn(value: "B")]
+        let reordered = Models.reorderedColumns(stored: stored, shownOrder: ["B", "Old", "A"], showInbox: false, showArchived: true, makeColumnId: { "x" })
+        XCTAssertEqual(reordered.map(\.value), ["B", "Old", "A"])
+        XCTAssertTrue(reordered[1].isArchived)
+    }
+
     func testBuildColumnsAddsInboxForCardsWithoutValue() {
         let cards = [
             Models.Card(noteId: "c1", branchId: "b1", title: "A", columnValue: "", notePosition: 0),
@@ -287,6 +315,27 @@ final class KanbanPresentationModelTests: XCTestCase {
         XCTAssertTrue(Models.showsInbox(label("")))
         XCTAssertTrue(Models.showsInbox(label("true")))
         XCTAssertFalse(Models.showsInbox(label("false")))
+    }
+
+    func testGroupingOptionsListStatusSelectDefinitionsAndTheCurrentGrouping() {
+        func definition(_ name: String, _ value: String, position: Int) -> AttributeItem {
+            AttributeItem(attributeId: name, noteId: "board", type: .label, name: name, value: value, position: position, isInheritable: true)
+        }
+        let attrs = [
+            definition("label:status", "promoted,alias=Stage,single,select", position: 0),
+            definition("label:priority", "promoted,single,select", position: 1),
+            definition("label:due", "promoted,single,date", position: 2),
+            definition("label:area", "promoted,alias=Area,single,select", position: 3),
+        ]
+        let byDefault = Models.groupingOptions(boardAttributes: attrs, current: .default)
+        XCTAssertEqual(byDefault, [
+            Models.GroupingOption(value: "status", title: "Stage"),
+            Models.GroupingOption(value: "priority", title: "priority"),
+            Models.GroupingOption(value: "area", title: "Area"),
+        ])
+        let byRelation = Models.groupingOptions(boardAttributes: [], current: Models.GroupBy("~owner"))
+        XCTAssertEqual(byRelation.map(\.value), ["status", "~owner"])
+        XCTAssertEqual(byRelation[0].title, "Status")
     }
 
     func testRelationGroupingReadsRelationsOnly() {

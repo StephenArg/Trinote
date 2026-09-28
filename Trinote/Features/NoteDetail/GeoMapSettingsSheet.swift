@@ -2,14 +2,16 @@ import SwiftUI
 
 struct GeoMapSettingsSheet: View {
     @Binding var settings: GeoMapDisplaySettings
+    /// The styles the server's Trilium offers (`GeoMapStyleID.available(for:)`).
+    let styles: [GeoMapStyleID]
     let onSave: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
-                Section(String(localized: "Map style", comment: "Geo map settings section")) {
-                    ForEach(GeoMapStyleID.allCases) { style in
+                Section {
+                    ForEach(styles) { style in
                         Button {
                             settings.mapStyle = style
                         } label: {
@@ -23,6 +25,15 @@ struct GeoMapSettingsSheet: View {
                                 }
                             }
                         }
+                    }
+                } header: {
+                    Text(String(localized: "Map style", comment: "Geo map settings section"))
+                } footer: {
+                    if settings.mapStyle.followsDarkMode {
+                        Text(String(
+                            localized: "Switches to its dark version when Trinote is in dark mode.",
+                            comment: "Geo map settings: light/dark style footer"
+                        ))
                     }
                 }
 

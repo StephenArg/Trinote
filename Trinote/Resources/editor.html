@@ -176,6 +176,13 @@ body { display: flex; flex-direction: column; }
 }
 .heading-popup-row:active { opacity: 0.7; }
 .heading-popup-row.active { color: var(--btn-active); background: var(--btn-active-bg); }
+/* Date/time menu: the format's name, then what it inserts right now. Wider than the other menus so the
+   previews fit; the layout keeps it on screen, so it opens out to the left of the button. */
+.heading-popup.datetime-popup { width: min(94vw, 380px); max-width: min(94vw, 380px); box-sizing: border-box; }
+.datetime-popup .heading-popup-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.datetime-popup .heading-popup-row > span:first-child { flex-shrink: 0; }
+.datetime-popup-preview { opacity: 0.6; font-size: 0.9em; font-variant-numeric: tabular-nums; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Color popup — fixed to viewport (appended to body) so toolbar overflow never clips or scrolls it */
 .color-popup {
@@ -650,6 +657,9 @@ body { display: flex; flex-direction: column; }
   background: transparent;
 }
 .image-popup-size-btn:active { opacity: 0.7; }
+/* Inline icon menu: previews of the selected icon under each transform. */
+.inline-icon-popup .tn-icon { display: inline-block; width: 22px; text-align: center; font-size: 18px; flex-shrink: 0; }
+.tiptap span.tn-icon.ProseMirror-selectednode { outline: 2px solid var(--btn-active); outline-offset: 1px; border-radius: 3px; }
 .image-popup-size-btn.active { background: var(--btn-active-bg); color: var(--btn-active); border-color: var(--btn-active); }
 
 .tiptap hr { border: none; border-top: 2px solid var(--border); margin: 1em 0; clear: both; }
@@ -2198,6 +2208,109 @@ function insertTrinoteDateTimeStamp() {
   const stamp = formatTrinoteDateTimeStamp(new Date());
   editor.chain().focus().insertContent(stamp).run();
 }
+
+/** ISO 8601 with the local UTC offset, e.g. 2026-09-27T13:45:07-04:00. */
+function formatIsoDateTimeWithOffset(d) {
+  const pad = (n) => (n < 10 ? '0' + n : '' + n);
+  const offset = -d.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const abs = Math.abs(offset);
+  return formatTrinoteDateTimeStamp(d).replace(' ', 'T') + ':' + pad(d.getSeconds())
+    + sign + pad(Math.floor(abs / 60)) + ':' + pad(abs % 60);
+}
+
+/* The Date/time menu. The first is Trilium's Alt+T default; the locale ones follow the device's language. */
+const DATETIME_FORMATS = [
+  { label: 'Date & time', format: (d) => formatTrinoteDateTimeStamp(d) },
+  { label: 'Date', format: (d) => formatTrinoteDateTimeStamp(d).slice(0, 10) },
+  { label: 'Time', format: (d) => formatTrinoteDateTimeStamp(d).slice(11) },
+  { label: 'Long date', format: (d) => d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) },
+  { label: 'Local date & time', format: (d) => d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) },
+  { label: 'ISO 8601', format: (d) => formatIsoDateTimeWithOffset(d) },
+];
+
+function makeDateTimeToolbar() {
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'inline-flex';
+  wrapper.style.alignItems = 'center';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = 'Date/time';
+  b.classList.add('toolbar-btn-with-chevron');
+  b.innerHTML = DATETIME_TOOLBAR_SVG + TOOLBAR_CHEVRON_SVG;
+  // A heading-popup, so the toolbar's shared outside-tap and keyboard handling treat it like the block-type menu.
+  const popup = document.createElement('div');
+  popup.className = 'heading-popup datetime-popup';
+  popup._anchorButton = b;
+  function fillRows() {
+    popup.innerHTML = '';
+    const now = new Date();
+    DATETIME_FORMATS.forEach((f) => {
+      const row = document.createElement('div');
+      row.className = 'heading-popup-row';
+      row.style.fontWeight = '400';
+      const label = document.createElement('span');
+      label.textContent = f.label;
+      const preview = document.createElement('span');
+      preview.className = 'datetime-popup-preview';
+      preview.textContent = f.format(now);
+      row.appendChild(label);
+      row.appendChild(preview);
+      function pick(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const sel = editor.state.selection;
+        hideHeadingPopup(popup);
+        editor.chain().focus().insertContentAt({ from: sel.from, to: sel.to }, f.format(new Date())).run();
+      }
+      row.addEventListener('pointerdown', pick, true);
+      row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+      row.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); }, true);
+      popup.appendChild(row);
+    });
+  }
+  document.body.appendChild(popup);
+  b.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    if (!popup.classList.contains('visible')) markHeadingPopupJustOpened(popup);
+  }, true);
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    document.querySelectorAll('.heading-popup.visible').forEach((p) => { if (p !== popup) hideHeadingPopup(p); });
+    document.querySelectorAll('.color-popup.visible').forEach((p) => hideColorPopup(p));
+    document.querySelectorAll('.callout-popup.visible').forEach((p) => hideCalloutPopup(p));
+    document.querySelectorAll('.link-popup.visible, .math-popup.visible').forEach((p) => hideLinkPopup(p));
+    document.querySelectorAll('.font-size-popup.visible').forEach((p) => hideFontSizePopup(p));
+    document.querySelectorAll('.list-style-popup.visible').forEach((p) => hideListStylePopup(p));
+    hideImagePopup();
+    if (opening) {
+      markHeadingPopupJustOpened(popup);
+      fillRows();
+      popup.classList.add('visible');
+      requestAnimationFrame(() => {
+        layoutCalloutPopup(b, popup);
+        requestAnimationFrame(() => layoutCalloutPopup(b, popup));
+      });
+    } else {
+      hideHeadingPopup(popup);
+    }
+  });
+  wrapper.appendChild(b);
+  appendToToolbarMount(wrapper);
+  b._isActive = () => false;
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideHeadingPopup(popup);
+  });
+}
+
+/* Trilium v0.106 inline icon (a Boxicons glyph set in the text; see TriliumInlineIcon). */
+/* Boxicons 2.1.4 `bx-sticker`, the icon Trilium's toolbar uses for it. */
+const INLINE_ICON_TOOLBAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+  + '<path d="M21.796 9.982C20.849 5.357 16.729 2 12 2 6.486 2 2 6.486 2 12c0 4.729 3.357 8.849 7.982 9.796a.988.988 0 0 0 .908-.272l10.633-10.633c.238-.238.34-.578.273-.909zM11 18a7.93 7.93 0 0 1 1.365-4.471 8.18 8.18 0 0 1 .978-1.186 8.211 8.211 0 0 1 1.184-.977 8.128 8.128 0 0 1 1.36-.738c.481-.203.986-.36 1.501-.466a8.112 8.112 0 0 1 2.17-.134l-8.529 8.529c-.013-.185-.029-.37-.029-.557zm-7-6c0-4.411 3.589-8 8-8 2.909 0 5.528 1.589 6.929 4.005a9.99 9.99 0 0 0-1.943.198c-.643.132-1.274.328-1.879.583a10.15 10.15 0 0 0-1.699.923c-.533.361-1.03.771-1.479 1.22s-.858.945-1.221 1.48c-.359.533-.67 1.104-.922 1.698A10.013 10.013 0 0 0 9 18c0 .491.048.979.119 1.461C6.089 18.288 4 15.336 4 12z"/></svg>';
 /** Placeholder-focused templates (CKE / Trilium-style quick picks). */
 const MATH_FORMULA_PRESETS = [
   { label: 'a² + b² = c²', tex: 'a^2 + b^2 = c^2' },
@@ -2938,6 +3051,158 @@ document.addEventListener('click', function(e) {
   editor.commands.setNodeSelection(pos);
   showImagePopup(img, pos);
 }, true);
+
+/* ---- Inline icon menu (Trilium's icon balloon: Change icon, and one transform at a time) ---- */
+const INLINE_ICON_TRANSFORMS = [
+  { cls: null, label: 'No transform' },
+  { cls: 'bx-rotate-90', label: 'Rotate 90°' },
+  { cls: 'bx-rotate-180', label: 'Rotate 180°' },
+  { cls: 'bx-rotate-270', label: 'Rotate 270°' },
+  { cls: 'bx-flip-horizontal', label: 'Flip horizontally' },
+  { cls: 'bx-flip-vertical', label: 'Flip vertically' },
+];
+const INLINE_ICON_TRANSFORM_CLASSES = INLINE_ICON_TRANSFORMS.map(t => t.cls).filter(Boolean);
+/** Set while the icon picker is open for "Change Icon…": the icon it replaces. */
+let inlineIconReplacePos = null;
+
+const inlineIconPopup = document.createElement('div');
+inlineIconPopup.className = 'image-popup inline-icon-popup';
+inlineIconPopup._targetPos = null;
+document.body.appendChild(inlineIconPopup);
+
+function inlineIconClassesAt(pos) {
+  const node = pos == null ? null : editor.state.doc.nodeAt(pos);
+  if (!node || node.type.name !== 'triliumInlineIcon') return null;
+  return String(node.attrs.iconClass || '').split(/\s+/).filter(Boolean);
+}
+
+function fillInlineIconPopup() {
+  const classes = inlineIconClassesAt(inlineIconPopup._targetPos);
+  if (!classes) { hideInlineIconPopup(); return; }
+  const glyph = classes.filter(c => !INLINE_ICON_TRANSFORM_CLASSES.includes(c));
+  const current = classes.find(c => INLINE_ICON_TRANSFORM_CLASSES.includes(c)) || null;
+  inlineIconPopup.innerHTML = '';
+  const addLabel = (text) => {
+    const l = document.createElement('div');
+    l.className = 'image-popup-section-label';
+    l.textContent = text;
+    inlineIconPopup.appendChild(l);
+  };
+  const addRow = (html, active, onPick) => {
+    const row = document.createElement('div');
+    row.className = 'image-popup-row' + (active ? ' active' : '');
+    row.innerHTML = html;
+    function pick(e) { e.preventDefault(); e.stopPropagation(); onPick(); }
+    row.addEventListener('pointerdown', pick, true);
+    row.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
+    row.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+    inlineIconPopup.appendChild(row);
+  };
+  addLabel('Icon');
+  addRow(INLINE_ICON_TOOLBAR_SVG + '<span>Change Icon…</span>', false, () => {
+    inlineIconReplacePos = inlineIconPopup._targetPos;
+    hideInlineIconPopup();
+    try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'pickInlineIcon' }); } catch (e) {}
+  });
+  addLabel('Transform');
+  INLINE_ICON_TRANSFORMS.forEach((t) => {
+    const preview = '<span class="tn-icon ' + [...glyph, t.cls].filter(Boolean).join(' ') + '"></span>';
+    addRow(preview + '<span>' + t.label + '</span>', t.cls === current, () => {
+      const pos = inlineIconPopup._targetPos;
+      if (pos == null) return;
+      const iconClass = [...glyph, t.cls].filter(Boolean).join(' ');
+      editor.chain().setNodeSelection(pos).updateAttributes('triliumInlineIcon', { iconClass }).run();
+      fillInlineIconPopup();
+      requestAnimationFrame(relayoutInlineIconPopup);
+    });
+  });
+}
+
+function layoutInlineIconPopup(anchor) {
+  if (!inlineIconPopup.classList.contains('visible') || !anchor) return;
+  inlineIconPopup.style.visibility = 'hidden';
+  inlineIconPopup.style.left = '0px';
+  inlineIconPopup.style.top = '0px';
+  const pr = inlineIconPopup.getBoundingClientRect();
+  const ar = anchor.getBoundingClientRect();
+  const margin = 8;
+  const vv = window.visualViewport;
+  const viewTop = vv ? vv.offsetTop : 0;
+  const viewBottom = vv ? (vv.offsetTop + vv.height) : window.innerHeight;
+  let left = Math.max(margin, Math.min(ar.left + (ar.width - pr.width) / 2, window.innerWidth - pr.width - margin));
+  let top = ar.bottom + 8;
+  if (top + pr.height > viewBottom - margin) {
+    top = ar.top - pr.height - 8;
+    if (top < viewTop + margin) top = Math.max(viewTop + margin, viewBottom - pr.height - margin);
+  }
+  inlineIconPopup.style.left = Math.round(left) + 'px';
+  inlineIconPopup.style.top = Math.round(top) + 'px';
+  inlineIconPopup.style.visibility = '';
+}
+
+function relayoutInlineIconPopup() {
+  const pos = inlineIconPopup._targetPos;
+  if (pos == null) return;
+  try { layoutInlineIconPopup(editor.view.nodeDOM(pos)); } catch (_) {}
+}
+
+function showInlineIconPopup(el, pos) {
+  hideImagePopup();
+  document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
+  inlineIconPopup._targetPos = pos;
+  inlineIconPopup.classList.add('visible');
+  fillInlineIconPopup();
+  layoutInlineIconPopup(el);
+}
+
+function hideInlineIconPopup() {
+  inlineIconPopup.classList.remove('visible');
+  inlineIconPopup._targetPos = null;
+}
+
+function findInlineIconPos(el) {
+  let found = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (found != null) return false;
+    if (node.type.name === 'triliumInlineIcon' && editor.view.nodeDOM(pos) === el) { found = pos; return false; }
+    return true;
+  });
+  return found;
+}
+
+// Tapping an icon in the text selects it and opens its menu; tapping it again closes the menu.
+document.getElementById('editor-container').addEventListener('click', function(e) {
+  const el = e.target.closest && e.target.closest('.tiptap span.tn-icon[data-trinote-inline-icon]');
+  if (!el) return;
+  const pos = findInlineIconPos(el);
+  if (pos == null) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (inlineIconPopup.classList.contains('visible') && inlineIconPopup._targetPos === pos) {
+    hideInlineIconPopup();
+    editor.commands.setTextSelection(pos + 1);
+    return;
+  }
+  editor.commands.setNodeSelection(pos);
+  showInlineIconPopup(el, pos);
+}, true);
+
+document.addEventListener('pointerdown', function(e) {
+  if (!inlineIconPopup.classList.contains('visible')) return;
+  if (e.target.closest('.inline-icon-popup') || e.target.closest('span.tn-icon[data-trinote-inline-icon]')) return;
+  hideInlineIconPopup();
+}, true);
+
+// Keep the menu on its icon through edits; close it when the icon goes (deleted, undone).
+editor.on('transaction', ({ transaction }) => {
+  if (!inlineIconPopup.classList.contains('visible')) return;
+  let pos = inlineIconPopup._targetPos;
+  if (transaction && transaction.docChanged && pos != null) {
+    try { pos = transaction.mapping.map(pos, -1); } catch (_) { pos = null; }
+  }
+  if (inlineIconClassesAt(pos) == null) { hideInlineIconPopup(); return; }
+  inlineIconPopup._targetPos = pos;
+});
 
 function afterColorMarkEdit() {
   const dom = editor.view && editor.view.dom;
@@ -4288,13 +4553,23 @@ makeLinkToolbar();
 btn('Include', '<span style="font-weight:800;font-size:14px;line-height:1">⊕</span>', () => {
   try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'pickIncludeNote' }); } catch(e) {}
 }, () => editor.isActive('includeNote'));
+// The native icon picker blurs the editor, so the caret is frozen first (as for Image) and the icon lands there.
+const inlineIconToolbarBtn = btn('Icon', INLINE_ICON_TOOLBAR_SVG, () => {
+  inlineIconReplacePos = null;
+  capturePendingMediaInsertPos();
+  try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'pickInlineIcon' }); } catch(e) {}
+}, () => editor.isActive('triliumInlineIcon'));
+inlineIconToolbarBtn.addEventListener('pointerdown', (e) => {
+  if (e.isPrimary === false) return;
+  capturePendingMediaInsertPos();
+}, true);
 makeTableGridPicker();
 btn('Collapsible block', COLLAPSIBLE_TOOLBAR_SVG, () => insertOrWrapCollapsible(), () => editor.isActive('collapsible'));
 btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () => false);
 btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
 makeCalloutToolbar();
 makeMathToolbar();
-btn('Date/time', DATETIME_TOOLBAR_SVG, () => insertTrinoteDateTimeStamp(), () => false);
+makeDateTimeToolbar();
 btn('Code', codeInlineGlyph(), () => editor.chain().focus().toggleCode().run(), () => editor.isActive('code'));
 
 btn('Code block', ic('brackets-curly-fill-svgrepo-com.svg'), () => editor.chain().focus().toggleCodeBlock().run(), () => editor.isActive('codeBlock'));
@@ -4838,6 +5113,34 @@ window.editorBridge = {
   setFloatingChipScrollClearance(px) {
     const n = Math.max(0, Number(px) || 0);
     document.documentElement.style.setProperty('--editor-floating-chip-clearance', n + 'px');
+  },
+  // Inserts an inline icon at the caret frozen when the Icon button was pressed. `css` is that glyph's style: the
+  // styles set on load cover only the icons the note already had.
+  insertInlineIcon(iconClass, css) {
+    const cls = (iconClass || '').trim();
+    if (!cls) return;
+    if (css) {
+      let style = document.getElementById('trinote-inline-icon-styles-added');
+      if (!style) {
+        style = document.createElement('style');
+        style.id = 'trinote-inline-icon-styles-added';
+        document.head.appendChild(style);
+      }
+      style.textContent += '\n' + css;
+    }
+    // "Change Icon…" on a selected icon replaces it (keeping its marks, such as colour); the web drops the
+    // transform with the old glyph, and so does this.
+    const replacePos = inlineIconReplacePos;
+    inlineIconReplacePos = null;
+    if (replacePos != null) {
+      const node = editor.state.doc.nodeAt(replacePos);
+      if (node && node.type.name === 'triliumInlineIcon') {
+        editor.chain().focus().setNodeSelection(replacePos).updateAttributes('triliumInlineIcon', { iconClass: cls }).run();
+        try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+        return;
+      }
+    }
+    insertContentAtPendingPos({ type: 'triliumInlineIcon', attrs: { iconClass: cls } });
   },
   // Glyph CSS for the inline icons in the content being loaded (see TriliumInlineIcon); replaces any earlier set.
   setInlineIconStyles(css) {

@@ -50,6 +50,8 @@
 	<string>Trinote needs camera access to capture photos for notes.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Trinote uses Face ID to unlock the app.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Trinote shows where you are on a geo map when you tap its location button.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Trinote uses the local network to send and receive notes with nearby devices running Trinote.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

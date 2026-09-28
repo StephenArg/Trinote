@@ -1973,6 +1973,61 @@ final class NoteDetailViewModel {
         appState.backgroundSyncPendingChanges()
     }
 
+    // MARK: - Spreadsheet export
+
+    enum SpreadsheetExportError: LocalizedError {
+        case changesNotUploaded
+
+        var errorDescription: String? {
+            String(
+                localized: "Your latest changes haven't reached the server yet, so the export would miss them. Try again once they've synced.",
+                comment: "Spreadsheet .xlsx export while a save is still queued"
+            )
+        }
+    }
+
+    /// "Export to Excel (.xlsx)" (Trilium 0.106+). The server renders the note's stored workbook, so a save still
+    /// queued on the phone goes up first, as Trilium's web app saves before it exports. Returns the file, named after
+    /// the note, in a temporary folder for the share sheet.
+    func exportSpreadsheetToXlsx() async throws -> URL {
+        guard let client, isOnline else { throw APIError.networkUnavailable }
+        guard let profileId = serverProfileId else { throw APIError.noToken }
+        if noteId.isOfflineLocalNoteId || persistence.hasPendingNoteBodyUpload(noteId: noteId, serverProfileId: profileId) {
+            await appState.flushPendingLocalChangesIfPossible()
+        }
+        let serverNoteId = appState.serverNoteId(for: noteId)
+        if serverNoteId.isOfflineLocalNoteId
+            || persistence.hasPendingNoteBodyUpload(noteId: noteId, serverProfileId: profileId)
+            || persistence.hasPendingNoteBodyUpload(noteId: serverNoteId, serverProfileId: profileId) {
+            throw SpreadsheetExportError.changesNotUploaded
+        }
+        let data = try await client.exportSpreadsheetXlsx(noteId: serverNoteId)
+        return try Self.writeXlsxExport(data, title: note?.title ?? "")
+    }
+
+    /// The note's title as a file name: no path or reserved characters, no leading dot, and not too long.
+    nonisolated static func xlsxExportFileName(forTitle title: String) -> String {
+        let unsafe = CharacterSet(charactersIn: "/\\:?%*|\"<>").union(.controlCharacters).union(.newlines)
+        let cleaned = title.components(separatedBy: unsafe).joined(separator: " ")
+            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".")))
+        let base = cleaned.isEmpty
+            ? String(localized: "Spreadsheet", comment: "File name of an exported spreadsheet without a title")
+            : String(cleaned.prefix(120))
+        return base + ".xlsx"
+    }
+
+    private static func writeXlsxExport(_ data: Data, title: String) throws -> URL {
+        let fileManager = FileManager.default
+        let folder = fileManager.temporaryDirectory.appendingPathComponent("SpreadsheetExports", isDirectory: true)
+        // The previous export's share sheet is done with its file.
+        try? fileManager.removeItem(at: folder)
+        let directory = folder.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(xlsxExportFileName(forTitle: title))
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
     /// Uploads or updates the `canvas-export.svg` attachment for the current canvas note.
     private func uploadCanvasSVGAttachment(svg: String) async {
         guard let client else { return }
@@ -2481,6 +2536,30 @@ final class NoteDetailViewModel {
             self.saveError = APIError.from(error).localizedDescription
             self.showSaveError = true
             Log.api.error("Failed to create child note locally: \(error)")
+            return nil
+        }
+    }
+
+    /// Creates a note from a user template under `parentNoteId` (this note, or the template's default parent).
+    func createChildNote(fromTemplate template: UserNoteTemplate, parentNoteId: String) async -> String? {
+        guard appState.isAuthenticated else {
+            self.saveError = String(localized: "Sign in to create notes.", comment: "Error when creating child offline without session")
+            self.showSaveError = true
+            return nil
+        }
+        self.isSaving = true
+        defer { self.isSaving = false }
+        do {
+            let newId = try NoteTemplates.createNote(from: template, parentNoteId: parentNoteId, title: newNoteTitle, appState: appState)
+            self.showCreateChild = false
+            self.newNoteTitle = ""
+            await self.loadChildNotes()
+            appState.backgroundSyncPendingChanges()
+            return newId
+        } catch {
+            self.saveError = APIError.from(error).localizedDescription
+            self.showSaveError = true
+            Log.api.error("Failed to create note from template: \(error)")
             return nil
         }
     }
@@ -3568,8 +3647,12 @@ final class NoteDetailViewModel {
     /// Loads Kanban cards + `board.json` columns.
     /// When online, merges server children with cache so freshly queued offline cards (`ol_*`) still appear
     /// before `backgroundSyncPendingChanges` finishes flushing them.
-    func loadKanbanBoard(for note: NoteItem) async -> KanbanBoardModels.BoardLoad {
+    func loadKanbanBoard(for requestedNote: NoteItem) async -> KanbanBoardModels.BoardLoad {
+        // The board's labels as last loaded here: a view holding an older copy still sees a grouping or setting
+        // just changed from the board.
+        let note = self.note?.noteId == requestedNote.noteId ? (self.note ?? requestedNote) : requestedNote
         let groupBy = KanbanBoardModels.GroupBy(kanbanGroupByAttributeName(for: note))
+        let showArchived = KanbanBoardModels.showsArchived(note.attributes)
         let showInbox = KanbanBoardModels.showsInbox(note.attributes)
         let cacheCards = kanbanCardsFromCache(groupBy: groupBy, showInbox: showInbox)
         var cards: [KanbanBoardModels.Card]
@@ -3609,6 +3692,7 @@ final class NoteDetailViewModel {
             storedColumns: stored,
             cards: cards,
             showInbox: showInbox,
+            showArchived: showArchived,
             boardSort: boardSort,
             relationTitle: { relationTitles[$0] }
         )
@@ -3622,7 +3706,9 @@ final class NoteDetailViewModel {
             filterQuery: filterApplied ? filterQuery : nil,
             cardProperties: cardProperties,
             relationTitles: relationTitles,
-            boardSort: boardSort
+            boardSort: boardSort,
+            showsArchived: showArchived,
+            groupingOptions: KanbanBoardModels.groupingOptions(boardAttributes: note.attributes, current: groupBy)
         )
     }
 
@@ -3877,7 +3963,8 @@ final class NoteDetailViewModel {
         let columns = KanbanBoardModels.reorderedColumns(
             stored: config.columns(forKey: key) ?? [],
             shownOrder: shownOrder,
-            showInbox: KanbanBoardModels.showsInbox(note.attributes),
+            showInbox: KanbanBoardModels.showsInbox(currentBoardAttributes(note)),
+            showArchived: KanbanBoardModels.showsArchived(currentBoardAttributes(note)),
             makeColumnId: KanbanBoardModels.makeColumnId
         )
         return await saveBoardConfig(config.settingColumns(columns, forKey: key))
@@ -3989,21 +4076,7 @@ final class NoteDetailViewModel {
                 }
                 guard !resolvedBranchId.isEmpty else { throw APIError.notFound(cardNoteId) }
                 try await client.deleteBranchWithNoProgressTask(resolvedBranchId)
-                if let profileId = serverProfileId {
-                    // Without another parent, Trilium deleted the note with its last branch, so its tabs close too.
-                    let otherParents = ((try? persistence.fetchCachedNote(id: cardNoteId, serverProfileId: profileId))?.parentNoteIds ?? [])
-                        .filter { $0 != noteId }
-                    if otherParents.isEmpty {
-                        persistence.closeOpenNoteTabs(forDeletedNoteId: cardNoteId, serverProfileId: profileId)
-                    }
-                    try? persistence.deleteCachedBranchAndReconcilePlacement(
-                        branchId: resolvedBranchId,
-                        noteId: cardNoteId,
-                        parentNoteId: noteId,
-                        serverProfileId: profileId,
-                        hiddenNoteIds: []
-                    )
-                }
+                forgetRemovedKanbanCardBranch(noteId: cardNoteId, branchId: resolvedBranchId)
             }
             NotificationCenter.default.post(name: .noteDeleted, object: nil, userInfo: ["noteId": cardNoteId])
             return true
@@ -4013,6 +4086,64 @@ final class NoteDetailViewModel {
             Log.api.error("deleteKanbanCard failed: \(error)")
             return false
         }
+    }
+
+    /// Takes several cards off the board as `deleteKanbanCard` does, without `alsoRemoveClones`. Trilium 0.106+
+    /// removes them in one `POST /api/delete-notes`, so all go or none; older servers take one request per card.
+    /// Stops at the first failure. Online-only.
+    @discardableResult
+    func deleteKanbanCards(_ cards: [(noteId: String, branchId: String)]) async -> Bool {
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to delete cards.", comment: "Kanban offline delete card")
+            showSaveError = true
+            return false
+        }
+        let canSendAtOnce = cards.count > 1
+            && cards.allSatisfy { !$0.branchId.isEmpty }
+            && TriliumServerCompatibility.supportsBulkNoteDeletion(appState.serverAppInfo)
+        guard canSendAtOnce else {
+            for card in cards {
+                guard await deleteKanbanCard(noteId: card.noteId, branchId: card.branchId, alsoRemoveClones: false) else { return false }
+            }
+            return true
+        }
+        do {
+            try await client.deleteNotes(
+                branchIds: cards.map(\.branchId),
+                deleteAllClones: false,
+                eraseNotes: false,
+                totalCount: nil,
+                taskId: "no-progress-reporting"
+            )
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            Log.api.error("deleteKanbanCards failed: \(error)")
+            return false
+        }
+        for card in cards {
+            forgetRemovedKanbanCardBranch(noteId: card.noteId, branchId: card.branchId)
+            NotificationCenter.default.post(name: .noteDeleted, object: nil, userInfo: ["noteId": card.noteId])
+        }
+        return true
+    }
+
+    /// Cache cleanup once the board's branch of a card is gone on the server.
+    private func forgetRemovedKanbanCardBranch(noteId cardNoteId: String, branchId: String) {
+        guard let profileId = serverProfileId else { return }
+        // Without another parent, Trilium deleted the note with its last branch, so its tabs close too.
+        let otherParents = ((try? persistence.fetchCachedNote(id: cardNoteId, serverProfileId: profileId))?.parentNoteIds ?? [])
+            .filter { $0 != noteId }
+        if otherParents.isEmpty {
+            persistence.closeOpenNoteTabs(forDeletedNoteId: cardNoteId, serverProfileId: profileId)
+        }
+        try? persistence.deleteCachedBranchAndReconcilePlacement(
+            branchId: branchId,
+            noteId: cardNoteId,
+            parentNoteId: noteId,
+            serverProfileId: profileId,
+            hiddenNoteIds: []
+        )
     }
 
     /// Moves a card to another column by rewriting its group-by label or relation (delete + create).
@@ -4189,7 +4320,8 @@ final class NoteDetailViewModel {
         let columns = KanbanBoardModels.reorderedColumns(
             stored: renamedStored,
             shownOrder: shownOrder.map { $0 == oldValue ? trimmed : $0 },
-            showInbox: KanbanBoardModels.showsInbox(note.attributes),
+            showInbox: KanbanBoardModels.showsInbox(currentBoardAttributes(note)),
+            showArchived: KanbanBoardModels.showsArchived(currentBoardAttributes(note)),
             makeColumnId: KanbanBoardModels.makeColumnId
         )
         return await saveBoardConfig(config.settingColumns(columns, forKey: key))
@@ -4416,6 +4548,49 @@ final class NoteDetailViewModel {
         do {
             try await client.placeBranchInSiblingOrder(branchId, orderedSiblingBranchIds: orderedSiblingBranchIds)
             await loadChildNotes()
+            return true
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return false
+        }
+    }
+
+    /// The board's labels as last loaded here (newer than a copy a view may hold).
+    private func currentBoardAttributes(_ board: NoteItem) -> [AttributeItem] {
+        self.note?.noteId == board.noteId ? (self.note?.attributes ?? board.attributes) : board.attributes
+    }
+
+    /// Switches the board's grouping: `#board:groupBy` holds it, and the default grouping is no label at all.
+    @discardableResult
+    func setKanbanGroupBy(_ value: String, for board: NoteItem) async -> Bool {
+        let grouping = KanbanBoardModels.GroupBy(value)
+        if grouping == .default {
+            return await removeNoteLabel(noteId: board.noteId, name: "board:groupBy")
+        }
+        return await setNoteLabel(noteId: board.noteId, name: "board:groupBy", value: grouping.rawValue)
+    }
+
+    /// Removes a note's own label(s) named `name`. Online-only.
+    @discardableResult
+    func removeNoteLabel(noteId targetNoteId: String, name: String) async -> Bool {
+        guard let client, isOnline else {
+            saveError = String(localized: "Connect to the server to update this label.", comment: "Label edit offline")
+            showSaveError = true
+            return false
+        }
+        do {
+            let item = NoteItem(from: try await client.getNote(targetNoteId))
+            for existing in item.attributes where existing.type == .label && existing.name.caseInsensitiveCompare(name) == .orderedSame {
+                try await client.deleteAttribute(noteId: targetNoteId, attributeId: existing.attributeId)
+            }
+            if let profileId = serverProfileId {
+                persistNoteResponse(try await client.getNote(targetNoteId), profileId: profileId)
+                try? persistence.commitBatch()
+            }
+            if targetNoteId == noteId {
+                await load()
+            }
             return true
         } catch {
             saveError = APIError.from(error).localizedDescription

@@ -18,6 +18,8 @@ private enum NoteAppearanceTab: String, CaseIterable, Identifiable {
 
 /// Tabbed sheet for choosing a note’s Trilium `#iconClass` and `#color` labels.
 struct NoteAppearancePickerSheet: View {
+    /// Shown instead of "Appearance" (e.g. the Kanban column being styled).
+    var title: String? = nil
     let currentIconClass: String?
     let currentColorLabel: String?
     let onSelectIcon: (String?) -> Void
@@ -52,7 +54,7 @@ struct NoteAppearancePickerSheet: View {
                     }
                 }
             }
-            .navigationTitle(String(localized: "Appearance", comment: "Note appearance picker title"))
+            .navigationTitle(title ?? String(localized: "Appearance", comment: "Note appearance picker title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -68,6 +70,29 @@ struct NoteAppearancePickerSheet: View {
                         }
                         dismiss()
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Picks a Boxicons glyph to insert in text as a Trilium inline icon.
+struct InlineIconPickerSheet: View {
+    let onPick: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            NoteIconPickerContent(currentIconClass: nil) { iconClass in
+                if let iconClass { onPick(iconClass) }
+                dismiss()
+            }
+            .navigationTitle(String(localized: "Insert Icon", comment: "Editor inline icon picker title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(String(localized: "Cancel", comment: "Inline icon picker")) { dismiss() }
                 }
             }
         }

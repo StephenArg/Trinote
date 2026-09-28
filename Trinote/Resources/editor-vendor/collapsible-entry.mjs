@@ -7,7 +7,36 @@ import { Fragment } from "@tiptap/pm/model";
  *
  * Nested collapsibles are allowed. The `open` attribute is persisted.
  * Editor chrome (chevron vs title-edit) lives in the NodeView; saved HTML stays native details/summary.
+ * Backspace in an empty title removes the block but keeps its body, like Trilium's CKEditor plugin.
  */
+
+/** The collapsible whose empty title holds the caret, or null. */
+function collapsibleWithEmptySummary(selection) {
+  if (!selection.empty) return null;
+  const { $from } = selection;
+  if ($from.parent.type.name !== "collapsibleSummary" || $from.parent.content.size) return null;
+  const depth = $from.depth - 1;
+  const node = $from.node(depth);
+  if (node.type.name !== "collapsible") return null;
+  return { node, pos: $from.before(depth) };
+}
+
+/** Start of the first textblock inside the block at `pos`, or null when it has none (image, rule). */
+function firstTextblockStart(doc, pos) {
+  const block = doc.nodeAt(pos);
+  if (!block) return null;
+  if (block.isTextblock) return pos + 1;
+  let found = null;
+  block.descendants((child, offset) => {
+    if (found != null) return false;
+    if (child.isTextblock) {
+      found = pos + 1 + offset + 1;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
 
 export const CollapsibleSummary = Node.create({
   name: "collapsibleSummary",
@@ -110,6 +139,28 @@ export const Collapsible = Node.create({
           }
           return false;
         },
+      unwrapCollapsibleFromEmptySummary:
+        () =>
+        ({ state, tr, dispatch, commands }) => {
+          const target = collapsibleWithEmptySummary(state.selection);
+          if (!target) return false;
+          if (dispatch) {
+            const { node, pos } = target;
+            // Body is `block+`, so something always takes the block's place.
+            const body = node.content.cut(node.firstChild.nodeSize);
+            tr.replaceWith(pos, pos + node.nodeSize, body);
+            const caret = firstTextblockStart(tr.doc, pos);
+            if (caret != null) commands.setTextSelection(caret);
+            else commands.setNodeSelection(pos);
+            tr.scrollIntoView();
+          }
+          return true;
+        },
+    };
+  },
+  addKeyboardShortcuts() {
+    return {
+      Backspace: () => this.editor.commands.unwrapCollapsibleFromEmptySummary(),
     };
   },
   addNodeView() {

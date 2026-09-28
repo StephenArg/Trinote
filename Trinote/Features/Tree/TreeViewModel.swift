@@ -665,18 +665,132 @@ final class TreeViewModel {
     }
 
     func deleteNoteAndSubnotes(noteId: String, eraseNotes: Bool = false) async -> Bool {
+        guard await deleteNoteAndSubnotesWithoutRefresh(noteId: noteId, eraseNotes: eraseNotes) else { return false }
+        await refresh()
+        return true
+    }
+
+    /// How far a multi-note delete has got, in notes (subnotes included); `nil` when none is running.
+    struct DeletionProgress: Equatable {
+        var completed: Int
+        /// Unknown until the notes to delete are counted.
+        var total: Int?
+    }
+
+    private(set) var deletionProgress: DeletionProgress?
+
+    /// Deletes each note with its subnotes, everywhere it's cloned (as `deleteNoteAndSubnotes` does for one), then
+    /// refreshes the tree once. Trilium 0.106+ takes the selection in one `POST /api/delete-notes`, so all of it goes
+    /// or none; older servers, offline, and notes created offline go one by one. Returns how many could not be deleted.
+    func deleteNotesAndSubnotes(noteIds: [String], eraseNotes: Bool) async -> Int {
+        let noteIds = noteIds.filter { $0 != "root" }
+        guard !noteIds.isEmpty else { return 0 }
+        deletionProgress = DeletionProgress(completed: 0, total: nil)
+        defer { deletionProgress = nil }
+
+        var failures = 0
+        var oneByOne = noteIds
+        if let client, appState.isOnline, let profileId = serverProfileId,
+           TriliumServerCompatibility.supportsBulkNoteDeletion(appState.serverAppInfo) {
+            let result = await deleteInOneRequest(noteIds: noteIds, eraseNotes: eraseNotes, client: client, profileId: profileId)
+            failures += result.failures
+            oneByOne = result.notSent
+        }
+
+        if !oneByOne.isEmpty {
+            let sizes = oneByOne.map { noteId in
+                serverProfileId.map { persistence.cachedDescendantNoteIds(rootNoteId: noteId, serverProfileId: $0).count } ?? 1
+            }
+            let total = sizes.reduce(0, +)
+            var completed = 0
+            deletionProgress = DeletionProgress(completed: 0, total: total)
+            for (noteId, size) in zip(oneByOne, sizes) {
+                if !(await deleteNoteAndSubnotesWithoutRefresh(noteId: noteId, eraseNotes: eraseNotes)) {
+                    failures += 1
+                }
+                completed += size
+                deletionProgress = DeletionProgress(completed: completed, total: total)
+            }
+        }
+
+        await refresh()
+        return failures
+    }
+
+    /// The part of a multi-note delete that goes in one request. Each note is named by a cached branch, which the
+    /// delete preview confirms; notes it can't confirm (created offline, or a stale cache) come back in `notSent`.
+    private func deleteInOneRequest(
+        noteIds: [String],
+        eraseNotes: Bool,
+        client: any TriliumClientProtocol,
+        profileId: String
+    ) async -> (failures: Int, notSent: [String]) {
+        var branchIdByNoteId: [String: String] = [:]
+        for noteId in noteIds where !noteId.isOfflineLocalNoteId {
+            branchIdByNoteId[noteId] = persistence.cachedBranchIdForDeletion(noteId: noteId, serverProfileId: profileId)
+        }
+        guard !branchIdByNoteId.isEmpty else { return (0, noteIds) }
+
+        let previewed: Set<String>
+        do {
+            let branchIds = noteIds.compactMap { branchIdByNoteId[$0] }
+            previewed = Set(try await client.previewNoteDeletion(branchIds: branchIds, deleteAllClones: true))
+        } catch {
+            Log.api.warning("delete-notes-preview failed, deleting notes one by one: \(error)")
+            return (0, noteIds)
+        }
+        let (sending, notSent) = Self.splitForOneRequest(noteIds: noteIds, branchIdByNoteId: branchIdByNoteId, previewed: previewed)
+        guard !sending.isEmpty else { return (0, noteIds) }
+
+        let total = previewed.count
+        deletionProgress = DeletionProgress(completed: 0, total: total)
+        let taskId = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10))
+        appState.trackServerTask(taskId) { [weak self] progress in
+            // Trilium counts deleted branches, so clones can take the count past the notes.
+            self?.deletionProgress = DeletionProgress(completed: min(progress.progressCount, total), total: total)
+        }
+        defer { appState.stopTrackingServerTask(taskId) }
+
+        do {
+            try await client.deleteNotes(
+                branchIds: sending.compactMap { branchIdByNoteId[$0] },
+                deleteAllClones: true,
+                eraseNotes: eraseNotes,
+                totalCount: total,
+                taskId: taskId
+            )
+            forgetDeletedNotes(sending)
+            deletionProgress = DeletionProgress(completed: total, total: total)
+            return (0, notSent)
+        } catch {
+            // The request is one transaction, so none of it was deleted.
+            self.error = APIError.from(error).localizedDescription
+            Log.api.error("delete-notes failed: \(error)")
+            return (sending.count, notSent)
+        }
+    }
+
+    /// Notes sent in the one request: those with a branch the delete preview confirmed. `notSent` go one by one,
+    /// except notes the preview counts anyway (a subnote of another), which the request deletes with their parent.
+    nonisolated static func splitForOneRequest(
+        noteIds: [String],
+        branchIdByNoteId: [String: String],
+        previewed: Set<String>
+    ) -> (sending: [String], notSent: [String]) {
+        let sending = noteIds.filter { branchIdByNoteId[$0] != nil && previewed.contains($0) }
+        let notSent = noteIds.filter { !previewed.contains($0) }
+        return (sending, notSent)
+    }
+
+    /// `deleteNoteAndSubnotes` without the tree refresh, so a multi-note delete refreshes once at the end.
+    private func deleteNoteAndSubnotesWithoutRefresh(noteId: String, eraseNotes: Bool) async -> Bool {
         guard noteId != "root" else { return false }
 
-        if let client, appState.isOnline {
+        // A note created offline isn't on the server yet: the offline path cancels its upload instead.
+        if let client, appState.isOnline, !noteId.isOfflineLocalNoteId {
             do {
                 try await client.deleteNote(noteId, eraseNotes: eraseNotes)
-                if let profileId = serverProfileId {
-                    GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
-                    persistence.removeFavoritesForCachedSubtree(rootNoteId: noteId, serverProfileId: profileId)
-                    persistence.closeOpenNoteTabs(forDeletedNoteId: noteId, serverProfileId: profileId)
-                    try? persistence.deleteCachedNotes(noteIds: [noteId], serverProfileId: profileId)
-                }
-                await refresh()
+                forgetDeletedNotes([noteId])
                 return true
             } catch {
                 self.error = APIError.from(error).localizedDescription
@@ -689,13 +803,23 @@ final class TreeViewModel {
         do {
             try persistence.enqueueOfflineNoteDeletion(noteId: noteId, serverProfileId: profileId, eraseNotes: eraseNotes)
             appState.backgroundSyncPendingChanges()
-            await refresh()
             return true
         } catch {
             self.error = APIError.from(error).localizedDescription
             Log.api.error("Failed to enqueue offline deletion: \(error)")
             return false
         }
+    }
+
+    /// Local cleanup once the server has deleted these notes and their subnotes.
+    private func forgetDeletedNotes(_ noteIds: [String]) {
+        guard let profileId = serverProfileId else { return }
+        for noteId in noteIds {
+            GhostNoteTracker.shared.add(noteId, serverProfileId: profileId)
+            persistence.removeFavoritesForCachedSubtree(rootNoteId: noteId, serverProfileId: profileId)
+            persistence.closeOpenNoteTabs(forDeletedNoteId: noteId, serverProfileId: profileId)
+        }
+        try? persistence.deleteCachedNotes(noteIds: noteIds, serverProfileId: profileId)
     }
 
     /// Copies note content into a new sibling under the same parent (same placement as in the tree). Returns the new note for navigation.
@@ -748,6 +872,21 @@ final class TreeViewModel {
         } catch {
             self.error = APIError.from(error).localizedDescription
             Log.api.error("Failed to create child note locally: \(error)")
+            return nil
+        }
+    }
+
+    /// Creates a note from a user template (see `NoteTemplates.createNote`).
+    func createNoteFromTemplate(_ template: UserNoteTemplate, parentNoteId: String, title: String) async -> String? {
+        guard appState.isAuthenticated else { return nil }
+        do {
+            let noteId = try NoteTemplates.createNote(from: template, parentNoteId: parentNoteId, title: title, appState: appState)
+            reloadFromCache()
+            appState.backgroundSyncPendingChanges()
+            return noteId
+        } catch {
+            self.error = APIError.from(error).localizedDescription
+            Log.api.error("Failed to create note from template: \(error)")
             return nil
         }
     }
@@ -928,6 +1067,13 @@ final class TreeViewModel {
             }
         }
         return result
+    }
+
+    // MARK: - Today's journal note
+
+    /// Today's journal note, as Trilium's "Open Today's Journal Note" finds it (see `TodaysJournalNote.find`).
+    func todaysJournalNote(now: Date = Date()) async throws -> NoteNavItem {
+        try await TodaysJournalNote.find(appState: appState, now: now)
     }
 
     // MARK: - Helpers

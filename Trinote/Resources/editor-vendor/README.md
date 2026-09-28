@@ -46,7 +46,7 @@ npm run build:indent
 
 ## `collapsible-extension.js`
 
-Built from `collapsible-entry.mjs` for Trilium-style **collapsible blocks** (`<details class="trilium-collapsible">` / `<summary>`, with a persisted `open` attribute).
+Built from `collapsible-entry.mjs` for Trilium-style **collapsible blocks** (`<details class="trilium-collapsible">` / `<summary>`, with a persisted `open` attribute). Backspace in an empty title removes the block and keeps its body, as Trilium's CKEditor plugin does.
 
 ```bash
 cd Trinote/Resources/editor-vendor

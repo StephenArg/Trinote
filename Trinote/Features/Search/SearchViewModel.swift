@@ -283,6 +283,8 @@ final class SearchViewModel {
     var isOfflineResults = false
     /// Trilium's snippet and breadcrumb per result note, when the server provides them.
     var snippetsByNoteId: [String: SearchResultSnippet] = [:]
+    /// What's wrong with the query, as Trilium 0.106+ reads it (`POST /api/search/lint`); nil when nothing is.
+    var queryProblem: String?
 
     /// Disclosure rows: note IDs expanded to show in-note match lines.
     var expandedMatchNoteIds: Set<String> = []
@@ -320,6 +322,7 @@ final class SearchViewModel {
             results = []
             hasSearched = false
             isOfflineResults = false
+            queryProblem = nil
             return
         }
 
@@ -343,6 +346,23 @@ final class SearchViewModel {
         defer { isSearching = false }
 
         if let client {
+            // Checked beside the search, which still runs: the message only explains a query that finds nothing.
+            let checksQuery = TriliumServerCompatibility.supportsSearchLint(appState.serverAppInfo) && appState.isOnline
+            Task { [weak self] in
+                var problem: String?
+                if checksQuery {
+                    do {
+                        problem = try await client.lintSearchQuery(trimmed)
+                        Log.api.info("Search lint: \(problem ?? "no problem")")
+                    } catch {
+                        Log.api.warning("Search lint failed: \(error)")
+                    }
+                } else {
+                    Log.api.info("Search lint skipped: server \(self?.appState.serverAppInfo?.appVersion ?? "unknown"), online \(self?.appState.isOnline == true)")
+                }
+                guard let self, self.query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
+                self.queryProblem = problem
+            }
             // Snippets come from a second request so the result list and its ranking stay the full search's.
             async let snippetFetch = Self.fetchSnippets(client: client, query: trimmed)
             do {
@@ -370,6 +390,7 @@ final class SearchViewModel {
                 performOfflineSearch(trimmed)
             }
         } else {
+            queryProblem = nil
             performOfflineSearch(trimmed)
         }
     }
@@ -465,6 +486,7 @@ final class SearchViewModel {
         query = ""
         results = []
         snippetsByNoteId = [:]
+        queryProblem = nil
         hasSearched = false
         isOfflineResults = false
         clearMatchExpansionState()

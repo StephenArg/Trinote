@@ -313,6 +313,23 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(fetched[0].value, "v1")
     }
 
+    func testCachedNoteIdsWithLabelValueSkipsOtherDaysAndUncachedNotes() throws {
+        for noteId in ["today", "yesterday"] {
+            try persistence.cacheNote(from: TestFixtures.noteResponse(id: noteId, title: noteId), serverProfileId: "server1")
+        }
+        let labels = [("a1", "today", "2026-09-27"), ("a2", "yesterday", "2026-09-26"), ("a3", "gone", "2026-09-27")]
+        for (attributeId, noteId, value) in labels {
+            try persistence.cacheAttributeBatch(
+                from: TestFixtures.attributeResponse(attributeId: attributeId, noteId: noteId, name: "dateNote", value: value),
+                serverProfileId: "server1"
+            )
+        }
+        try persistence.commitBatch()
+
+        XCTAssertEqual(persistence.cachedNoteIds(withLabel: "dateNote", value: "2026-09-27", serverProfileId: "server1"), ["today"])
+        XCTAssertEqual(persistence.cachedNoteIds(withLabel: "dateNote", value: "2026-09-27", serverProfileId: "server2"), [])
+    }
+
     // MARK: - Drafts
 
     func testSaveAndLoadDraft() throws {

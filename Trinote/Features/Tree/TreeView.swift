@@ -52,6 +52,34 @@ private struct MoveNoteConfirmPayload {
     let targetParentBranchId: String
 }
 
+/// Shown over the bulk delete sheet while the selection is deleted.
+private struct NoteDeletionProgressView: View {
+    let progress: TreeViewModel.DeletionProgress?
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if let progress, let total = progress.total, total > 1 {
+                ProgressView(value: Double(min(progress.completed, total)), total: Double(total))
+                    .frame(maxWidth: 240)
+                Text(
+                    String(
+                        format: String(localized: "Deleting %1$d of %2$d notes…", comment: "Tree bulk delete progress"),
+                        min(progress.completed, total),
+                        total
+                    )
+                )
+            } else {
+                ProgressView()
+                Text(String(localized: "Deleting notes…", comment: "Tree bulk delete progress before the count is known"))
+            }
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+        .padding()
+    }
+}
+
 struct TreeView: View {
     let parentNoteId: String
     let parentTitle: String
@@ -103,7 +131,10 @@ struct TreeView: View {
     @State private var moveNoteSheetContext: MoveNoteSheetContext?
     @State private var moveNoteConfirmPayload: MoveNoteConfirmPayload?
     @State private var moveNoteError: String?
+    /// Opens a note by id and title: tab bar taps, and today's journal note.
     @State private var tabsBarNav: NoteNavItem?
+    @State private var isOpeningTodaysJournalNote = false
+    @State private var todaysJournalNoteError: String?
     /// Mirrors `LastActiveOpenTabStore` for the active profile so the tab bar updates when the store changes.
     @State private var lastActiveOpenTabIdForBar: String = ""
     /// Branch id to scroll into view after revealing a note’s ancestors.
@@ -298,6 +329,18 @@ struct TreeView: View {
                 treeBulkDeleteConfirmSheet
             }
             .alert(
+                String(localized: "Couldn't Open Today's Journal Note", comment: "Today's journal note error title"),
+                isPresented: todaysJournalNoteErrorBinding,
+                actions: {
+                    Button(String(localized: "OK", comment: "Dismiss"), role: .cancel) { todaysJournalNoteError = nil }
+                },
+                message: {
+                    if let todaysJournalNoteError {
+                        Text(todaysJournalNoteError)
+                    }
+                }
+            )
+            .alert(
                 String(localized: "Delete Failed", comment: "Tree bulk delete error"),
                 isPresented: bulkDeleteErrorBinding,
                 actions: {
@@ -309,6 +352,30 @@ struct TreeView: View {
                     }
                 }
             )
+    }
+
+    private func openTodaysJournalNote() {
+        guard let vm = viewModel, !isOpeningTodaysJournalNote else { return }
+        isOpeningTodaysJournalNote = true
+        Task {
+            defer { isOpeningTodaysJournalNote = false }
+            do {
+                let note = try await vm.todaysJournalNote()
+                navigateToNote = nil
+                navigateToNoteForEdit = nil
+                drillDownTarget = nil
+                tabsBarNav = note
+            } catch {
+                todaysJournalNoteError = error.localizedDescription
+            }
+        }
+    }
+
+    private var todaysJournalNoteErrorBinding: Binding<Bool> {
+        Binding(
+            get: { todaysJournalNoteError != nil },
+            set: { if !$0 { todaysJournalNoteError = nil } }
+        )
     }
 
     private var bulkDeleteErrorBinding: Binding<Bool> {
@@ -367,7 +434,7 @@ struct TreeView: View {
             .interactiveDismissDisabled(isBulkDeleting)
             .overlay {
                 if isBulkDeleting {
-                    ProgressView()
+                    NoteDeletionProgressView(progress: viewModel?.deletionProgress)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(.ultraThinMaterial)
                 }
@@ -406,11 +473,7 @@ struct TreeView: View {
             idsToDelete = selectedIds.filter { $0 != "root" }.sorted()
         }
 
-        var failures = 0
-        for noteId in idsToDelete {
-            let ok = await vm.deleteNoteAndSubnotes(noteId: noteId, eraseNotes: eraseNotesOnBulkDelete)
-            if !ok { failures += 1 }
-        }
+        let failures = await vm.deleteNotesAndSubnotes(noteIds: idsToDelete, eraseNotes: eraseNotesOnBulkDelete)
 
         showBulkDeleteConfirm = false
         exitSelectMode()
@@ -643,6 +706,16 @@ struct TreeView: View {
                     }
 
                     if onPickParent == nil {
+                        Button {
+                            openTodaysJournalNote()
+                        } label: {
+                            Label(
+                                String(localized: "Open Today's Journal Note", comment: "Tree menu: open (or create) today's journal day note, as in Trilium"),
+                                systemImage: "calendar"
+                            )
+                        }
+                        .disabled(isOpeningTodaysJournalNote)
+
                         Button {
                             isSelectMode = true
                             selectedIds.removeAll()
@@ -1153,6 +1226,30 @@ struct TreeView: View {
         .listRowBackground(Color.accentColor.opacity(0.08))
     }
 
+    /// Slim bar for a large quick sync (or the server's own sync); small ones keep to the toolbar spinner.
+    private func syncProgressBar(title: String, done: Int, total: Int, fraction: Double) -> some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(.caption.weight(.medium))
+                Spacer()
+                Text(String(
+                    format: String(localized: "%1$@ of %2$@", comment: "Tree sync progress count"),
+                    done.formatted(),
+                    total.formatted()
+                ))
+                .font(.caption.monospacedDigit())
+            }
+            .foregroundStyle(.secondary)
+            ProgressView(value: min(max(fraction, 0), 1))
+                .tint(.accentColor)
+                .animation(.easeOut(duration: 0.25), value: fraction)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+
     private func fullSyncPhaseLabel(_ sync: SyncManager) -> String {
         switch sync.phase {
         case .walkingTree:       String(localized: "Building note tree…", comment: "Full sync phase")
@@ -1272,6 +1369,28 @@ struct TreeView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.accentColor.opacity(0.08))
+                } else if sync.showsIncrementalProgress {
+                    syncProgressBar(
+                        title: sync.phase == .downloadingContent
+                            ? String(localized: "Downloading notes", comment: "Tree sync progress: note bodies")
+                            : String(localized: "Syncing changes", comment: "Tree sync progress: entity changes"),
+                        done: sync.syncedNoteCount,
+                        total: sync.totalNoteCount,
+                        fraction: sync.syncProgress
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.accentColor.opacity(0.06))
+                } else if sync.hasCompletedFullSync, let server = sync.serverPullProgress {
+                    syncProgressBar(
+                        title: String(localized: "Server is syncing", comment: "Tree progress: the server pulls from its own sync server"),
+                        done: server.pulled,
+                        total: server.total,
+                        fraction: server.fraction
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.accentColor.opacity(0.06))
                 }
                 if parentNoteId == "root", showsRootNotebookHeader {
                     rootNotebookHeaderRow(viewModel: vm)
@@ -1672,6 +1791,7 @@ private struct CreateChildNoteFromTreeSheet: View {
     @State private var newNoteTitle = ""
     @State private var newNoteType: NoteType = .text
     @State private var isCreating = false
+    @State private var templateChoice = NewNoteTemplateChoice()
 
     private var supportsSpreadsheetNoteType: Bool {
         TriliumServerCompatibility.supportsSpreadsheetNotes(appState.serverAppInfo)
@@ -1694,13 +1814,18 @@ private struct CreateChildNoteFromTreeSheet: View {
                 )
                     .textInputAutocapitalization(.sentences)
 
-                NewNoteTypePicker(
-                    selection: $newNoteType,
-                    supportsSpreadsheet: supportsSpreadsheetNoteType,
-                    supportsKanban: supportsKanbanNoteType,
-                    supportsPresentation: supportsPresentationNoteType
-                )
+                if templateChoice.template == nil {
+                    NewNoteTypePicker(
+                        selection: $newNoteType,
+                        supportsSpreadsheet: supportsSpreadsheetNoteType,
+                        supportsKanban: supportsKanbanNoteType,
+                        supportsPresentation: supportsPresentationNoteType
+                    )
+                }
+
+                NewNoteTemplateSection(choice: $templateChoice)
             }
+
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1718,7 +1843,7 @@ private struct CreateChildNoteFromTreeSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     private func createAndDismiss() async {
@@ -1726,11 +1851,24 @@ private struct CreateChildNoteFromTreeSheet: View {
         defer { isCreating = false }
 
         let title = NoteCreationTitle.resolved(from: newNoteTitle)
-        let noteId = await viewModel.createChildNote(
-            parentNoteId: parentNote.noteId,
-            title: title,
-            type: newNoteType
-        )
+        let noteId: String?
+        if let template = templateChoice.template {
+            noteId = await viewModel.createNoteFromTemplate(
+                template,
+                parentNoteId: templateChoice.parentNoteId(defaultParentNoteId: parentNote.noteId),
+                title: newNoteTitle
+            )
+            let clones = templateChoice.cloneParentNoteIds
+            if let noteId, !clones.isEmpty {
+                Task { await NoteTemplates.cloneNewNote(noteId, into: clones, appState: appState) }
+            }
+        } else {
+            noteId = await viewModel.createChildNote(
+                parentNoteId: parentNote.noteId,
+                title: title,
+                type: newNoteType
+            )
+        }
         onDismiss()
         dismiss()
         if let noteId {

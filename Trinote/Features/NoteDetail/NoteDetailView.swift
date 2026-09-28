@@ -201,6 +201,7 @@ struct NoteDetailView: View {
     /// Reference to the rich-text editor WKWebView so the save button can call JS `getContent()`.
     @State private var editorWebView: WKWebView?
     @State private var showIncludeNotePicker = false
+    @State private var showInlineIconPicker = false
 
     /// Bridge to communicate with the canvas editor WKWebView (call getSceneData on save).
     @StateObject private var canvasEditorBridge = CanvasEditorBridge()
@@ -209,6 +210,8 @@ struct NoteDetailView: View {
     /// Bridge to communicate with the spreadsheet editor WKWebView (call getWorkbook on save).
     @StateObject private var spreadsheetEditorBridge = SpreadsheetEditorBridge()
     @State private var spreadsheetHasUnsavedChanges = false
+    @State private var isExportingSpreadsheetXlsx = false
+    @State private var spreadsheetXlsxExportError: String?
 
     /// Bridge to communicate with the mind map editor WKWebView (call getMapData on save).
     @StateObject private var mindMapEditorBridge = MindMapEditorBridge()
@@ -226,6 +229,11 @@ struct NoteDetailView: View {
     @State private var geoMapSelection: GeoMapSelection?
     @State private var geoMapShowSettings = false
     @State private var geoMapShowGpxImporter = false
+    @State private var geoMapLocator = GeoMapLocator()
+    /// Why the Locate button could not show a position (`nil` while there is nothing to say).
+    @State private var geoMapLocateFailure: GeoMapLocator.Failure?
+    /// The place search sheet, with the area the map showed when it opened.
+    @State private var geoMapSearchViewport: GeoMapSearchRequest?
     @State private var geoMapDetailHTML: String?
     @State private var geoMapDetailGPXStats: GeoMapGPXParser.Stats?
     @State private var geoMapFocusedMarkId: String?
@@ -690,6 +698,16 @@ struct NoteDetailView: View {
         let boxEsc = javaScriptTemplateLiteralContent(boxSize)
         let script = "window.editorBridge.insertIncludeNote(`\(idEsc)`, `\(boxEsc)`, `\(titleEsc)`);"
         webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    /// Inserts a Trilium inline icon at the editor's frozen caret, with that glyph's CSS (the editor only styles the icons
+    /// the note had when it loaded).
+    private static func insertInlineIconInEditor(webView: WKWebView?, iconClass: String) {
+        guard let webView else { return }
+        let classEsc = javaScriptTemplateLiteralContent(iconClass)
+        let css = TriliumInlineIconStyles.css(forHTML: "<span class=\"tn-icon \(iconClass)\"></span>")
+        let cssEsc = javaScriptTemplateLiteralContent(css)
+        webView.evaluateJavaScript("window.editorBridge.insertInlineIcon(`\(classEsc)`, `\(cssEsc)`);", completionHandler: nil)
     }
 
     private static func pushIncludeNoteTitleToEditor(webView: WKWebView?, noteId: String, title: String) {
@@ -1598,6 +1616,31 @@ struct NoteDetailView: View {
                 Text(vm.saveError ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
             }
             .alert(
+                String(localized: "Export Failed", comment: "Spreadsheet .xlsx export error title"),
+                isPresented: Binding(
+                    get: { spreadsheetXlsxExportError != nil },
+                    set: { if !$0 { spreadsheetXlsxExportError = nil } }
+                )
+            ) {
+                Button(String(localized: "OK", comment: "Alert dismiss")) { spreadsheetXlsxExportError = nil }
+            } message: {
+                Text(spreadsheetXlsxExportError ?? "")
+            }
+            .overlay(alignment: .top) {
+                if isExportingSpreadsheetXlsx {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(String(localized: "Exporting to Excel…", comment: "Spreadsheet .xlsx export in progress"))
+                            .font(.subheadline)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .alert(
                 String(localized: "Rename Attachment", comment: "Rename attachment alert title"),
                 isPresented: Binding(
                     get: { attachmentRenameContext != nil },
@@ -2253,8 +2296,15 @@ struct NoteDetailView: View {
         }
     }
 
+    /// - Parameters:
+    ///   - mapFeature: Under a geo map, what each child is on the map (nil when it isn't). Those rows end in a pin
+    ///     that moves the map to it (`onShowOnMap`) instead of a chevron; the rest of the row still opens the note.
     @ViewBuilder
-    private func childNotesSection(_ vm: NoteDetailViewModel) -> some View {
+    private func childNotesSection(
+        _ vm: NoteDetailViewModel,
+        mapFeature: ((String) -> GeoMapFeatureKind?)? = nil,
+        onShowOnMap: ((String, GeoMapFeatureKind) -> Void)? = nil
+    ) -> some View {
         if !vm.childNotes.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 Divider()
@@ -2266,36 +2316,57 @@ struct NoteDetailView: View {
                     .padding(.bottom, 4)
 
                 ForEach(vm.childNotes) { child in
-                    Button {
-                        navigateToNoteId = child.noteId
-                    } label: {
-                        HStack(spacing: 10) {
-                            NoteIconView(
-                                iconClass: child.iconClass,
-                                fallbackNoteType: child.iconFallbackNoteType,
-                                size: .regular,
-                                foregroundStyle: .secondary
-                            )
-                            .frame(width: 22)
-                            Text(NoteItem.maskedStoredTitle(child.title, isProtected: child.isProtected, protectedSessionActive: appState.protectedSessionActive))
-                                .font(.body)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                            Spacer()
-                            if child.childCount > 0 {
-                                Text("\(child.childCount)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                    let feature = mapFeature?(child.noteId)
+                    HStack(spacing: 0) {
+                        Button {
+                            navigateToNoteId = child.noteId
+                        } label: {
+                            HStack(spacing: 10) {
+                                NoteIconView(
+                                    iconClass: child.iconClass,
+                                    fallbackNoteType: child.iconFallbackNoteType,
+                                    size: .regular,
+                                    foregroundStyle: .secondary
+                                )
+                                .frame(width: 22)
+                                Text(NoteItem.maskedStoredTitle(child.title, isProtected: child.isProtected, protectedSessionActive: appState.protectedSessionActive))
+                                    .font(.body)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                Spacer()
+                                if child.childCount > 0 {
+                                    Text("\(child.childCount)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                if feature == nil {
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
                             }
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                            .padding(.leading)
+                            .padding(.trailing, feature == nil ? 16 : 4)
+                            .padding(.vertical, 10)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.horizontal)
-                        .padding(.vertical, 10)
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+
+                        if let feature, let onShowOnMap {
+                            Button {
+                                onShowOnMap(child.noteId, feature)
+                            } label: {
+                                Image(systemName: "mappin.circle")
+                                    .font(.title3)
+                                    .foregroundStyle(.tint)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 8)
+                            .accessibilityLabel(String(localized: "Show on map", comment: "Geo map sub-note row: move the map to this note's location"))
+                        }
                     }
-                    .buttonStyle(.plain)
 
                     if child.id != vm.childNotes.last?.id {
                         Divider().padding(.leading, 48)
@@ -2371,6 +2442,8 @@ struct NoteDetailView: View {
                     switch req {
                     case .pickIncludeNote:
                         showIncludeNotePicker = true
+                    case .pickInlineIcon:
+                        showInlineIconPicker = true
                     case .resolveNoteTitle(let nid):
                         Task { @MainActor in
                             let t = await vm.resolveDisplayTitle(forReferencedNoteId: nid)
@@ -2471,6 +2544,11 @@ struct NoteDetailView: View {
             allowsMultipleSelection: false
         ) { result in
             Task { await handleEditorFilePick(result) }
+        }
+        .sheet(isPresented: $showInlineIconPicker) {
+            InlineIconPickerSheet { iconClass in
+                Self.insertInlineIconInEditor(webView: editorWebView, iconClass: iconClass)
+            }
         }
         .sheet(isPresented: $showIncludeNotePicker) {
             NotePickerSheet(
@@ -2619,6 +2697,30 @@ struct NoteDetailView: View {
         .buttonStyle(.plain)
         .disabled(vm.isSaving)
         .accessibilityLabel(String(localized: "Save", comment: "Spreadsheet save chip"))
+    }
+
+    /// Saves an open edit first (Trilium exports the stored workbook), then shares the downloaded file.
+    private func exportSpreadsheetToXlsx(vm: NoteDetailViewModel) {
+        guard !isExportingSpreadsheetXlsx else { return }
+        withAnimation { isExportingSpreadsheetXlsx = true }
+        Task {
+            defer { withAnimation { isExportingSpreadsheetXlsx = false } }
+            if vm.isEditing, spreadsheetHasUnsavedChanges {
+                let json = await withCheckedContinuation { continuation in
+                    spreadsheetEditorBridge.getWorkbook { continuation.resume(returning: $0) }
+                }
+                vm.saveSpreadsheetContent(json: json)
+                spreadsheetHasUnsavedChanges = false
+                // The save explains its own failure.
+                guard !vm.showSaveError else { return }
+            }
+            do {
+                let url = try await vm.exportSpreadsheetToXlsx()
+                scheduleNoteDetailShareURLSheet(url: url)
+            } catch {
+                spreadsheetXlsxExportError = error.localizedDescription
+            }
+        }
     }
 
     private func saveSpreadsheetContent(vm: NoteDetailViewModel) {
@@ -2921,6 +3023,27 @@ struct NoteDetailView: View {
                 },
                 onImportGpxRequested: {
                     geoMapShowGpxImporter = true
+                },
+                onLocateRequested: {
+                    Task { @MainActor in
+                        switch await geoMapLocator.currentLocation() {
+                        case .success(let location):
+                            geoMapEditorBridge.showUserLocation(
+                                lat: location.coordinate.latitude,
+                                lng: location.coordinate.longitude,
+                                accuracyMeters: max(0, location.horizontalAccuracy)
+                            )
+                        case .failure(let failure):
+                            geoMapEditorBridge.stopLocating()
+                            geoMapLocateFailure = failure
+                        }
+                    }
+                },
+                onSearchRequested: { viewport in
+                    geoMapSearchViewport = GeoMapSearchRequest(viewport: viewport)
+                },
+                onShapeDrawn: { kind, coordinates, radius in
+                    handleGeoMapShapeDrawn(vm: vm, note: note, kind: kind, coordinates: coordinates, radiusMeters: radius)
                 }
             )
             .equatable()
@@ -2932,7 +3055,7 @@ struct NoteDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            geoMapDisplaySettings = GeoMapDisplaySettings(from: note)
+            geoMapDisplaySettings = GeoMapDisplaySettings(from: note, defaultStyle: GeoMapStyleID.triliumDefault(for: appState.serverAppInfo))
             geoMapCachedSettingsJSON = geoMapDisplaySettings.bridgeJSON()
             geoMapInitialViewportJSON = effectiveGeoMapViewportJSONForDisplay(vm.contentString)
             if !vm.hasDraft {
@@ -2945,7 +3068,7 @@ struct NoteDetailView: View {
             geoMapTracks = []
             geoMapShapes = []
             clearGeoMapSelection()
-            geoMapDisplaySettings = GeoMapDisplaySettings(from: note)
+            geoMapDisplaySettings = GeoMapDisplaySettings(from: note, defaultStyle: GeoMapStyleID.triliumDefault(for: appState.serverAppInfo))
             geoMapCachedSettingsJSON = geoMapDisplaySettings.bridgeJSON()
             geoMapInitialViewportJSON = effectiveGeoMapViewportJSONForDisplay(vm.contentString)
             if !vm.hasDraft {
@@ -2956,8 +3079,36 @@ struct NoteDetailView: View {
         .onChange(of: geoMapDisplaySettings) { _, newSettings in
             geoMapCachedSettingsJSON = newSettings.bridgeJSON()
         }
+        .alert(
+            geoMapLocateFailure == .denied
+                ? String(localized: "Location Is Off", comment: "Geo map locate: permission denied title")
+                : String(localized: "Location Unavailable", comment: "Geo map locate: no fix title"),
+            isPresented: Binding(get: { geoMapLocateFailure != nil }, set: { if !$0 { geoMapLocateFailure = nil } })
+        ) {
+            if geoMapLocateFailure == .denied, let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                Button(String(localized: "Open Settings", comment: "Geo map locate: open app settings")) {
+                    UIApplication.shared.open(settingsURL)
+                }
+            }
+            Button(String(localized: "OK", comment: "Dismiss"), role: .cancel) {}
+        } message: {
+            Text(geoMapLocateFailure == .denied
+                ? String(localized: "Allow Trinote to use your location in Settings to show where you are on the map.", comment: "Geo map locate: permission denied")
+                : String(localized: "Your location couldn't be found right now. Try again in a moment.", comment: "Geo map locate: no fix"))
+        }
+        .sheet(item: $geoMapSearchViewport) { request in
+            GeoMapPlaceSearchSheet(viewport: request.viewport) { place in
+                geoMapEditorBridge.showPlace(place)
+            } onAddPin: { place in
+                geoMapEditorBridge.showPlace(place)
+                handleGeoMapCreatePin(vm: vm, note: note, lat: place.lat, lng: place.lng, title: place.isUnnamed ? nil : place.name)
+            }
+        }
         .sheet(isPresented: $geoMapShowSettings) {
-            GeoMapSettingsSheet(settings: $geoMapDisplaySettings) {
+            GeoMapSettingsSheet(
+                settings: $geoMapDisplaySettings,
+                styles: GeoMapStyleID.available(for: appState.serverAppInfo)
+            ) {
                 saveGeoMapSettings(vm: vm, note: note)
             }
         }
@@ -3098,7 +3249,13 @@ struct NoteDetailView: View {
                             .padding(.horizontal, 20)
                             .padding(.bottom, 12)
                         }
-                        childNotesSection(vm)
+                        childNotesSection(
+                            vm,
+                            mapFeature: { geoMapFeatureKind(forNoteId: $0) },
+                            onShowOnMap: { noteId, kind in
+                                geoMapEditorBridge.focusFeature(noteId: noteId, kind: kind)
+                            }
+                        )
                     }
                     Color.clear.frame(minHeight: 80)
                 }
@@ -3135,7 +3292,7 @@ struct NoteDetailView: View {
         }
         geoMapLastLoadNoteId = note.noteId
         geoMapLastLoadAt = now
-        let newSettings = GeoMapDisplaySettings(from: note)
+        let newSettings = GeoMapDisplaySettings(from: note, defaultStyle: GeoMapStyleID.triliumDefault(for: appState.serverAppInfo))
         if newSettings != geoMapDisplaySettings {
             geoMapDisplaySettings = newSettings
             geoMapCachedSettingsJSON = newSettings.bridgeJSON()
@@ -3168,6 +3325,14 @@ struct NoteDetailView: View {
 
     private func loadGeoMapPins(vm: NoteDetailViewModel, note: NoteItem) {
         loadGeoMapData(vm: vm, note: note)
+    }
+
+    /// What a note is on this map: a pin, a GPX track or a drawn shape (nil when it isn't on it).
+    private func geoMapFeatureKind(forNoteId noteId: String) -> GeoMapFeatureKind? {
+        if geoMapPins.contains(where: { $0.noteId == noteId }) { return .pin }
+        if geoMapTracks.contains(where: { $0.noteId == noteId }) { return .track }
+        if geoMapShapes.contains(where: { $0.noteId == noteId }) { return .shape }
+        return nil
     }
 
     private func clearGeoMapSelection() {
@@ -3289,10 +3454,47 @@ struct NoteDetailView: View {
         }
     }
 
-    private func handleGeoMapCreatePin(vm: NoteDetailViewModel, note: NoteItem, lat: Double, lng: Double) {
+    /// Saves a shape drawn on the map as Trilium v0.106 does: a text note under the map carrying `#geoShape`, named by
+    /// a map's `#titleTemplate` where it has one, with no `#iconClass` (the shape's own icon shows). Drawn at once.
+    private func handleGeoMapShapeDrawn(
+        vm: NoteDetailViewModel,
+        note: NoteItem,
+        kind: GeoMapShape.Kind,
+        coordinates: [[Double]],
+        radiusMeters: Double?
+    ) {
+        guard let value = GeoMapShape.serializedValue(kind: kind, coordinates: coordinates, radiusMeters: radiusMeters) else { return }
         Task {
             guard let profileId = vm.serverProfileId else { return }
-            let title = String(localized: "New Location", comment: "Default title for new geo map pin")
+            let title = String(localized: "New Shape", comment: "Default title for a shape drawn on a geo map")
+            do {
+                let (newNoteId, _) = try PersistenceManager.shared.createOfflineChildNote(
+                    parentNoteId: note.noteId,
+                    title: title,
+                    noteType: "text",
+                    mime: "text/html",
+                    initialContent: "",
+                    serverProfileId: profileId,
+                    initialAttributes: [NoteCreationAttribute(type: "label", name: GeoMapShape.label, value: value)],
+                    useParentTitleTemplate: true
+                )
+                if let shape = GeoMapShape(noteId: newNoteId, title: title, value: value, color: nil) {
+                    geoMapShapes.append(shape)
+                }
+                await vm.loadChildNotes()
+                appState.backgroundSyncPendingChanges()
+            } catch {
+                Log.geoMap.error("Failed to create geo map shape: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// `placeName` titles a pin dropped on a searched place (as the web map does); without one, the default title
+    /// stands in and a map's `#titleTemplate` names the pin.
+    private func handleGeoMapCreatePin(vm: NoteDetailViewModel, note: NoteItem, lat: Double, lng: Double, title placeName: String? = nil) {
+        Task {
+            guard let profileId = vm.serverProfileId else { return }
+            let title = placeName ?? String(localized: "New Location", comment: "Default title for new geo map pin")
             do {
                 let (newNoteId, _) = try PersistenceManager.shared.createOfflineChildNote(
                     parentNoteId: note.noteId,
@@ -3308,7 +3510,7 @@ struct NoteDetailView: View {
                             ? []
                             : [NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-map-pin")]),
                     // "New Location" is a placeholder: a map's #titleTemplate names new markers, as on the web.
-                    useParentTitleTemplate: true
+                    useParentTitleTemplate: placeName == nil
                 )
 
                 let pin = GeoMapPin(noteId: newNoteId, title: title, lat: lat, lng: lng)
@@ -3822,6 +4024,21 @@ struct NoteDetailView: View {
 
         Divider().padding(.leading, 20)
 
+        if note.type == .spreadsheet, TriliumServerCompatibility.supportsSpreadsheetXlsxExport(appState.serverAppInfo) {
+            Button {
+                dismissNoteOverflowThen { exportSpreadsheetToXlsx(vm: vm) }
+            } label: {
+                noteOverflowLabel(
+                    vm.isOnline
+                        ? String(localized: "Export to Excel (.xlsx)", comment: "Note overflow: spreadsheet export, as in Trilium")
+                        : String(localized: "Export to Excel needs a connection", comment: "Note overflow: spreadsheet export offline"),
+                    systemImage: "tablecells"
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!vm.isOnline || isExportingSpreadsheetXlsx || vm.needsProtectedSession || vm.isSaving)
+        }
+
         if note.isProtected || vm.needsProtectedSession {
             noteOverflowLabel(
                 String(localized: "Share locally unavailable (protected note)", comment: "Local share disabled"),
@@ -4207,6 +4424,7 @@ struct CreateChildNoteSheet: View {
     var onNoteCreated: ((String, String) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @State private var templateChoice = NewNoteTemplateChoice()
 
     private var supportsSpreadsheetNoteType: Bool {
         TriliumServerCompatibility.supportsSpreadsheetNotes(appState.serverAppInfo)
@@ -4229,12 +4447,16 @@ struct CreateChildNoteSheet: View {
                 )
                     .textInputAutocapitalization(.sentences)
 
-                NewNoteTypePicker(
-                    selection: $viewModel.newNoteType,
-                    supportsSpreadsheet: supportsSpreadsheetNoteType,
-                    supportsKanban: supportsKanbanNoteType,
-                    supportsPresentation: supportsPresentationNoteType
-                )
+                if templateChoice.template == nil {
+                    NewNoteTypePicker(
+                        selection: $viewModel.newNoteType,
+                        supportsSpreadsheet: supportsSpreadsheetNoteType,
+                        supportsKanban: supportsKanbanNoteType,
+                        supportsPresentation: supportsPresentationNoteType
+                    )
+                }
+
+                NewNoteTemplateSection(choice: $templateChoice)
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))
             .navigationBarTitleDisplayMode(.inline)
@@ -4250,12 +4472,25 @@ struct CreateChildNoteSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     private func createAndDismiss() async {
         let title = NoteCreationTitle.resolved(from: viewModel.newNoteTitle)
-        if let noteId = await viewModel.createChildNote() {
+        let noteId: String?
+        if let template = templateChoice.template {
+            noteId = await viewModel.createChildNote(
+                fromTemplate: template,
+                parentNoteId: templateChoice.parentNoteId(defaultParentNoteId: viewModel.noteId)
+            )
+            let clones = templateChoice.cloneParentNoteIds
+            if let noteId, !clones.isEmpty {
+                Task { await NoteTemplates.cloneNewNote(noteId, into: clones, appState: appState) }
+            }
+        } else {
+            noteId = await viewModel.createChildNote()
+        }
+        if let noteId {
             dismiss()
             onNoteCreated?(noteId, title)
         }
@@ -4301,3 +4536,9 @@ extension String: @retroactive Identifiable {
     public var id: String { self }
 }
 
+
+/// The geo map's place search sheet, opened with the area the map showed.
+private struct GeoMapSearchRequest: Identifiable {
+    let id = UUID()
+    let viewport: [Double]?
+}

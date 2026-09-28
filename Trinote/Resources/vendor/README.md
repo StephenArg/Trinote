@@ -77,15 +77,19 @@ Replaced by MapLibre GL for geo-map notes (see below).
 
 ## `maplibre-gl.js` / `maplibre-gl.css`
 
-MapLibre GL **5.24.0** for geo-map editor/viewer (`geomap-*.html`). Matches Trilium v0.105 desktop
-(v0.106 moved to MapLibre 6.10; the map's stored data is unchanged, so this bump is optional).
+MapLibre GL **6.10.0** for geo-map editor/viewer (`geomap-*.html`). Matches Trilium v0.106.
+
+MapLibre 6 ships as ES modules only, and WKWebView runs neither module scripts nor module workers on the
+`file://` pages the maps load from. `Scripts/build_maplibre.sh` therefore rebuilds the release into one classic
+script: it sets `window.maplibregl` as the 5.x UMD build did, and starts MapLibre's worker from a blob URL
+(the `#.cjs` fragment makes MapLibre start it as a classic worker). To upgrade:
 
 ```bash
-curl -sSfL -o Trinote/Resources/vendor/maplibre-gl.js \
-  https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js
-curl -sSfL -o Trinote/Resources/vendor/maplibre-gl.css \
-  https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css
+Scripts/build_maplibre.sh <VERSION>   # needs node and canvas-editor-build's esbuild (npm install there)
 ```
+
+After an upgrade, check a geo map with both styles (OpenStreetMap raster and VersaTiles vector, whose
+style JSON still uses legacy filters), pins, GPX tracks, shapes, and the 3D view.
 
 ## `geomap-core.js` / `geomap-marker-images.js` / `gpx.js`
 

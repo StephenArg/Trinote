@@ -37,6 +37,13 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws
     /// Soft-deletes by default (`eraseNotes: false`). When `eraseNotes` is true, Trilium erases the note and its subtree instead of sending them to Trash.
     func deleteNote(_ noteId: String, eraseNotes: Bool) async throws
+    /// `POST /api/delete-notes-preview`: the ids of every note deleting `branchIds` would delete, subtrees included.
+    /// Branches Trilium can't find (stale, or under `_share` / `_lbBookmarks`) add nothing.
+    func previewNoteDeletion(branchIds: [String], deleteAllClones: Bool) async throws -> [String]
+    /// `POST /api/delete-notes` (Trilium 0.106+): deletes the branches in one transaction, so either all go or none.
+    /// `deleteAllClones` deletes each note everywhere, like `deleteNote`. Progress arrives over the WebSocket as
+    /// `taskProgressCount` messages for `taskId`, out of `totalCount` when given.
+    func deleteNotes(branchIds: [String], deleteAllClones: Bool, eraseNotes: Bool, totalCount: Int?, taskId: String) async throws
     func createNote(_ request: CreateNoteRequest) async throws -> CreateNoteResponse
     /// New note under `parentNoteId` with copied title, type, mime, and body (child notes are not copied).
     func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse
@@ -50,11 +57,21 @@ protocol TriliumClientProtocol: Actor, Sendable {
     /// Matching note ids only. `ancestorNoteId` limits the search to that subtree on Trilium 0.106+; older servers
     /// ignore it, so callers that need the scope intersect with the notes they hold.
     func searchNoteIds(query: String, ancestorNoteId: String?) async throws -> [String]
+    /// `POST /api/search/lint` (Trilium 0.106+): reads a query without running it. The first fault's message, or nil
+    /// when there is none; Trilium doesn't say where in the query it is.
+    func lintSearchQuery(_ query: String) async throws -> String?
     /// Existing journal day notes for `yyyy-MM` under `calendarRootId`. Does not create notes.
     /// `GET /api/special-notes/notes-for-month/{month}?calendarRoot=`
     func getDayNotesForMonth(month: String, calendarRootId: String) async throws -> [String: String]
     /// Notes created or modified on this local calendar day. Same as desktop Edited Notes: `GET /api/edited-notes/{yyyy-MM-dd}`.
     func getEditedNotes(onISODay day: String) async throws -> [NoteIdTitle]
+    /// `GET /api/special-notes/days/{yyyy-MM-dd}`, behind Trilium's "Open Today's Journal Note": the journal's day
+    /// note, which the server makes first when missing, with its month (or week) and year notes, the journal's title
+    /// patterns and templates, and a "Calendar" journal when there is none.
+    func getOrCreateDayNote(onISODay day: String) async throws -> NoteIdTitle
+    /// `GET /api/special-notes/inbox-target` (Trilium 0.106+): where Trilium would put a captured note, without making
+    /// anything (no day note, no journal).
+    func getInboxTarget() async throws -> InboxTargetResponse
 
     func getBranch(_ branchId: String, parentNoteId: String) async throws -> BranchResponse
     func placeBranchInSiblingOrder(_ branchId: String, orderedSiblingBranchIds: [String]) async throws
@@ -96,6 +113,9 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func processAttachmentOCR(attachmentId: String, forceReprocess: Bool) async throws -> ProcessAttachmentOCRResponse
     /// `GET /api/notes/:id/office-preview` — Trilium 0.105+. Server-rendered HTML for Office / EPUB.
     func getNoteOfficePreview(_ noteId: String) async throws -> OfficePreviewResponse
+    /// `GET /api/spreadsheet/:noteId/xlsx` (Trilium 0.106+): the spreadsheet as an Excel workbook, which the server
+    /// renders from the note's stored content (not from edits still queued on the phone).
+    func exportSpreadsheetXlsx(noteId: String) async throws -> Data
     /// `GET /api/attachments/:id/office-preview` — Trilium 0.105+. Server-rendered HTML for Office / EPUB.
     func getAttachmentOfficePreview(_ attachmentId: String) async throws -> OfficePreviewResponse
 
@@ -1061,6 +1081,45 @@ actor TriliumClient: TriliumClientProtocol {
         try await delete("/api/notes/\(noteId)", queryParams: q, csrf: true)
     }
 
+    func previewNoteDeletion(branchIds: [String], deleteAllClones: Bool) async throws -> [String] {
+        struct Body: Encodable {
+            let branchIdsToDelete: [String]
+            let deleteAllClones: Bool
+        }
+        struct Preview: Decodable { let noteIdsToBeDeleted: [String] }
+        let preview: Preview = try await postJSON(
+            "/api/delete-notes-preview",
+            body: Body(branchIdsToDelete: branchIds, deleteAllClones: deleteAllClones),
+            csrf: true
+        )
+        return preview.noteIdsToBeDeleted
+    }
+
+    /// The whole selection deletes inside one request, which the default 30 s timeout can cut short on a large subtree.
+    private static let bulkDeleteTimeout: TimeInterval = 300
+
+    func deleteNotes(branchIds: [String], deleteAllClones: Bool, eraseNotes: Bool, totalCount: Int?, taskId: String) async throws {
+        struct Body: Encodable {
+            let branchIdsToDelete: [String]
+            let deleteAllClones: Bool
+            let eraseNotes: Bool
+            let totalCount: Int?
+            let taskId: String
+        }
+        var request = try buildRequest(path: "/api/delete-notes", method: "POST", queryParams: nil, csrf: true, jsonBody: true)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(Body(
+            branchIdsToDelete: branchIds,
+            deleteAllClones: deleteAllClones,
+            eraseNotes: eraseNotes,
+            totalCount: totalCount,
+            taskId: taskId
+        ))
+        request.timeoutInterval = Self.bulkDeleteTimeout
+        let (data, response) = try await dataForLongRunningRequest(request, timeout: Self.bulkDeleteTimeout)
+        try validateResponse(response, data: data)
+    }
+
     func createNote(_ request: CreateNoteRequest) async throws -> CreateNoteResponse {
         struct Body: Encodable {
             let title: String?
@@ -1215,6 +1274,14 @@ actor TriliumClient: TriliumClientProtocol {
         )
     }
 
+    func lintSearchQuery(_ query: String) async throws -> String? {
+        struct Body: Encodable { let searchString: String }
+        struct Lint: Decodable { let error: String? }
+        let lint: Lint = try await postJSON("/api/search/lint", body: Body(searchString: query), csrf: true)
+        let message = lint.error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return message.isEmpty ? nil : message
+    }
+
     func quickSearchResults(query: String) async throws -> [QuickSearchResult] {
         let response: QuickSearchResponse = try await get(
             "/api/quick-search/\(Self.percentEncodePathSegment(query))",
@@ -1272,6 +1339,23 @@ actor TriliumClient: TriliumClientProtocol {
             guard !title.isEmpty else { return nil }
             return NoteIdTitle(noteId: hit.noteId, title: title, isProtected: false)
         }
+    }
+
+    func getOrCreateDayNote(onISODay day: String) async throws -> NoteIdTitle {
+        guard JournalDayEditedNotes.isISODay(day) else {
+            throw APIError.unknown("Invalid journal day \(day)")
+        }
+        struct DayNote: Decodable {
+            let noteId: String
+            let title: String?
+            let isProtected: Bool?
+        }
+        let note: DayNote = try await get("/api/special-notes/days/\(day)", csrf: true)
+        return NoteIdTitle(noteId: note.noteId, title: note.title ?? "", isProtected: note.isProtected ?? false)
+    }
+
+    func getInboxTarget() async throws -> InboxTargetResponse {
+        try await get("/api/special-notes/inbox-target", csrf: true)
     }
 
     /// Returns template note IDs from Trilium's built-in endpoint used by desktop/web clients.
@@ -1686,6 +1770,22 @@ actor TriliumClient: TriliumClientProtocol {
     private static let ocrRequestTimeout: TimeInterval = 600
     /// Office conversion is CPU-bound; the default session times out at 30s.
     private static let officePreviewTimeout: TimeInterval = 120
+
+    /// Rendering a large workbook with images can outlast the default 30 s timeout.
+    private static let spreadsheetXlsxExportTimeout: TimeInterval = 120
+
+    func exportSpreadsheetXlsx(noteId: String) async throws -> Data {
+        var request = try buildRequest(path: "/api/spreadsheet/\(noteId)/xlsx", method: "GET", queryParams: nil, csrf: false, jsonBody: false)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = Self.spreadsheetXlsxExportTimeout
+        let (data, response) = try await dataForLongRunningRequest(request, timeout: Self.spreadsheetXlsxExportTimeout)
+        try validateResponse(response, data: data)
+        // An .xlsx file is a zip archive; anything else (an HTML page from an older server) is not a workbook.
+        guard data.starts(with: [0x50, 0x4B]) else {
+            throw APIError.invalidResponse
+        }
+        return data
+    }
 
     func getNoteOfficePreview(_ noteId: String) async throws -> OfficePreviewResponse {
         try await getOfficePreview(path: "/api/notes/\(noteId)/office-preview")

@@ -146,6 +146,36 @@ struct GeoMapShape: Identifiable, Sendable, Hashable {
         self.color = color
     }
 
+    /// The `#geoShape` value for a shape, as Trilium's `serializeGeoShape` writes it: `lat,lng` points to 6 decimals
+    /// without trailing zeros, space-separated after the kind; a ring without its closing repeat; a circle's
+    /// centre and radius (to 0.1 m). `coordinates` are `[longitude, latitude]` pairs.
+    static func serializedValue(kind: Kind, coordinates: [[Double]], radiusMeters: Double? = nil) -> String? {
+        let points = coordinates.filter { $0.count == 2 && $0[0].isFinite && $0[1].isFinite }
+        switch kind {
+        case .circle:
+            guard let center = points.first, let radiusMeters, radiusMeters.isFinite, radiusMeters > 0 else { return nil }
+            return "circle:\(formatCoordinate(center[1])),\(formatCoordinate(center[0])) \(formatNumber((radiusMeters * 10).rounded() / 10))"
+        case .line, .polygon:
+            var ring = points
+            if kind == .polygon, ring.count > 1, ring.first == ring.last { ring.removeLast() }
+            guard ring.count >= (kind == .line ? 2 : 3) else { return nil }
+            return "\(kind.rawValue):" + ring.map { "\(formatCoordinate($0[1])),\(formatCoordinate($0[0]))" }.joined(separator: " ")
+        }
+    }
+
+    private static func formatCoordinate(_ value: Double) -> String {
+        formatNumber((value * 1_000_000).rounded() / 1_000_000)
+    }
+
+    /// JavaScript's number formatting for these values: no trailing zeros, no `-0`.
+    private static func formatNumber(_ value: Double) -> String {
+        if value == 0 { return "0" }
+        var text = String(format: "%.6f", value)
+        while text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return text
+    }
+
     private static func parsePoints(_ value: String) -> [[Double]]? {
         var points: [[Double]] = []
         for point in value.split(whereSeparator: \.isWhitespace) {
@@ -307,11 +337,12 @@ struct GeoMapDisplaySettings: Equatable, Sendable {
 
     static let gpxMIME = "application/gpx+xml"
 
-    init(from note: NoteItem) {
+    /// - Parameter defaultStyle: The style when the note has none (`GeoMapStyleID.triliumDefault(for:)`).
+    init(from note: NoteItem, defaultStyle: GeoMapStyleID) {
         func label(_ name: String) -> String? {
             note.attributes.first(where: { $0.type == .label && $0.name == name })?.value
         }
-        mapStyle = GeoMapStyleID(rawStored: label("map:style"))
+        mapStyle = GeoMapStyleID(rawStored: label("map:style"), default: defaultStyle)
         showScale = Self.boolLabel(label("map:scale"), default: false)
         scaleUnit = GeoMapScaleUnit(rawStored: label("map:scaleUnit"))
         hideLabels = Self.boolLabel(label("map:hideLabels"), default: true)
@@ -387,31 +418,54 @@ struct GeoMapDisplaySettings: Equatable, Sendable {
     }
 }
 
+/// Trilium's map styles (`#map:style`), in its menu's order. The raw values are Trilium's keys, including the
+/// "versatile-" spelling of the light/dark ones.
 enum GeoMapStyleID: String, CaseIterable, Identifiable, Sendable {
     case openstreetmap
     case versatilesColorful = "versatiles-colorful"
+    case versatilesEclipse = "versatiles-eclipse"
+    case versatilesColorfulEclipse = "versatile-colorful-eclipse"
+    case versatilesGraybeard = "versatiles-graybeard"
+    case versatilesShadow = "versatiles-shadow"
+    case versatilesGraybeardShadow = "versatile-graybeard-shadow"
+    case versatilesNeutrino = "versatiles-neutrino"
 
     var id: String { rawValue }
 
-    init(rawStored: String?) {
+    /// A stored style, or `defaultStyle` when there is none or Trinote doesn't know it (as Trilium falls back).
+    init(rawStored: String?, default defaultStyle: GeoMapStyleID) {
         let trimmed = rawStored?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        switch trimmed {
-        case GeoMapStyleID.versatilesColorful.rawValue:
-            self = .versatilesColorful
-        case GeoMapStyleID.openstreetmap.rawValue:
-            self = .openstreetmap
-        case let s where s.hasPrefix("versatiles-"):
-            // Trilium supports more vector styles; Trinote offers VersaTiles Colorful only.
-            self = .versatilesColorful
-        default:
-            self = .openstreetmap
-        }
+        self = GeoMapStyleID(rawValue: trimmed) ?? defaultStyle
+    }
+
+    /// Light in light mode and dark in dark mode (Trilium 0.106+).
+    var followsDarkMode: Bool {
+        self == .versatilesColorfulEclipse || self == .versatilesGraybeardShadow
+    }
+
+    /// What Trilium draws a map with no style with: Colorful/Eclipse from v0.106, Colorful before.
+    static func triliumDefault(for info: AppInfoResponse?) -> GeoMapStyleID {
+        TriliumServerCompatibility.supportsDarkModeMapStyles(info) ? .versatilesColorfulEclipse : .versatilesColorful
+    }
+
+    /// The styles this server's Trilium offers, so a style Trinote saves is one Trilium can draw.
+    static func available(for info: AppInfoResponse?) -> [GeoMapStyleID] {
+        let lightDark = TriliumServerCompatibility.supportsDarkModeMapStyles(info)
+        return allCases.filter { lightDark || !$0.followsDarkMode }
     }
 
     var displayName: String {
         switch self {
         case .openstreetmap: return String(localized: "OpenStreetMap", comment: "Geo map raster style")
         case .versatilesColorful: return String(localized: "VersaTiles Colorful", comment: "Geo map vector style")
+        case .versatilesEclipse: return String(localized: "VersaTiles Eclipse", comment: "Geo map vector style (dark)")
+        case .versatilesColorfulEclipse:
+            return String(localized: "VersaTiles Colorful/Eclipse", comment: "Geo map vector style: light, dark in dark mode")
+        case .versatilesGraybeard: return String(localized: "VersaTiles Graybeard", comment: "Geo map vector style")
+        case .versatilesShadow: return String(localized: "VersaTiles Shadow", comment: "Geo map vector style (dark)")
+        case .versatilesGraybeardShadow:
+            return String(localized: "VersaTiles Graybeard/Shadow", comment: "Geo map vector style: light, dark in dark mode")
+        case .versatilesNeutrino: return String(localized: "VersaTiles Neutrino", comment: "Geo map vector style")
         }
     }
 }

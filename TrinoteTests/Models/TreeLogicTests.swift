@@ -717,6 +717,44 @@ final class TreeLogicTests: XCTestCase {
         )
         return TreeNode(branch: branch, note: note)
     }
+
+    // MARK: - Multi-note delete in one request
+
+    func testOneRequestDeleteSendsOnlyNotesThePreviewConfirmed() {
+        let split = TreeViewModel.splitForOneRequest(
+            noteIds: ["a", "b", "stale", "ol_new", "clonedUnderA"],
+            // "clonedUnderA" has no usable branch of its own, but the preview counts it as a subnote of "a".
+            branchIdByNoteId: ["a": "root_a", "b": "root_b", "stale": "gone_stale"],
+            previewed: ["a", "a1", "b", "clonedUnderA"]
+        )
+        XCTAssertEqual(split.sending, ["a", "b"])
+        XCTAssertEqual(split.notSent, ["stale", "ol_new"], "unconfirmed notes go one by one; subnotes of sent notes go with them")
+    }
+
+    // MARK: - Today's journal note
+
+    func testTodayIsTheDeviceTimeZonesDate() throws {
+        // 2026-09-28 02:30 UTC is still the 27th in New York and already the 28th in Tokyo.
+        let instant = Date(timeIntervalSince1970: 1_790_562_600)
+        XCTAssertEqual(TodaysJournalNote.localISODay(instant, timeZone: try XCTUnwrap(TimeZone(identifier: "UTC"))), "2026-09-28")
+        XCTAssertEqual(TodaysJournalNote.localISODay(instant, timeZone: try XCTUnwrap(TimeZone(identifier: "America/New_York"))), "2026-09-27")
+        XCTAssertEqual(TodaysJournalNote.localISODay(instant, timeZone: try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))), "2026-09-28")
+    }
+
+    @MainActor
+    func testTodaysJournalNoteAsksTheServerWhenOnline() async throws {
+        let appState = AppState()
+        let mock = MockTriliumClient()
+        appState.client = mock
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try XCTSkipUnless(appState.isOnline, "the network monitor reports offline")
+
+        let now = Date()
+        let note = try await TreeViewModel(appState: appState).todaysJournalNote(now: now)
+        XCTAssertEqual(note, NoteNavItem(noteId: "day1", title: "27 - Sunday"))
+        let calls = await mock.getOrCreateDayNoteCalls
+        XCTAssertEqual(calls, [TodaysJournalNote.localISODay(now)])
+    }
 }
 
 final class NoteDeleteConfirmationCopyTests: XCTestCase {

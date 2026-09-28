@@ -10,6 +10,8 @@ enum KanbanBoardModels {
     static let groupedColumnsKeySuffix = "ViewColumns"
     /// `#board:showInbox` adds a column for cards with no grouping value.
     static let showInboxLabel = "board:showInbox"
+    /// Board label that shows archived columns and `#archived` cards (the web board's "Show archived notes").
+    static let includeArchivedLabel = "includeArchived"
     /// The inbox column's value: the empty string, which is what a card with no grouping value has.
     static let inboxColumnValue = ""
 
@@ -277,6 +279,8 @@ enum KanbanBoardModels {
         var isStoredDescending: Bool
         /// The order the cards are drawn in (the column's own or the board's); `nil` is tree order.
         var effectiveSort: ColumnSort?
+        /// Stored as archived; only on the board while it shows archived notes.
+        var isArchived: Bool = false
 
         init(
             value: String,
@@ -365,11 +369,12 @@ enum KanbanBoardModels {
         storedColumns: [BoardColumn]?,
         cards: [Card],
         showInbox: Bool = false,
+        showArchived: Bool = false,
         boardSort: ColumnSort? = nil,
         relationTitle: (String) -> String? = { _ in nil }
     ) -> [Column] {
         var buckets: [String: [Card]] = [:]
-        for card in cards {
+        for card in cards where showArchived || card.labels["archived"] == nil {
             buckets[card.columnValue, default: []].append(card)
         }
         for key in buckets.keys {
@@ -392,7 +397,7 @@ enum KanbanBoardModels {
                 ordered.append((inboxColumnValue, col.displayName))
                 continue
             }
-            guard seen.insert(value).inserted, !col.isArchived else { continue }
+            guard seen.insert(value).inserted, showArchived || !col.isArchived else { continue }
             ordered.append((value, nil))
         }
         if showInbox, !inboxPlaced {
@@ -410,7 +415,7 @@ enum KanbanBoardModels {
         return ordered.map { entry in
             let stored = storedByValue[entry.value]
             let sort = columnSort(for: stored, boardSort: boardSort)
-            return Column(
+            var column = Column(
                 value: entry.value,
                 cards: orderedCards(buckets[entry.value] ?? [], by: sort, relationTitle: relationTitle),
                 title: entry.title,
@@ -423,6 +428,8 @@ enum KanbanBoardModels {
                 isStoredDescending: stored?.fields["descendingOrder"] == .bool(true),
                 effectiveSort: sort
             )
+            column.isArchived = stored?.isArchived ?? false
+            return column
         }
     }
 
@@ -597,6 +604,40 @@ enum KanbanBoardModels {
         }
     }
 
+    // MARK: - Grouping (Trilium v0.106 "Group by")
+
+    /// One attribute the board can group its cards by.
+    struct GroupingOption: Equatable, Sendable, Hashable {
+        /// What `#board:groupBy` holds for it (`~name` for a relation).
+        let value: String
+        let title: String
+    }
+
+    /// Trilium's `groupingOptions`: the default grouping first (titled by its definition's alias, else "Status"), then
+    /// the select labels the board defines (`#label:<name>` with `select` in its value), and the grouping in force
+    /// whatever defines it.
+    static func groupingOptions(boardAttributes: [AttributeItem], current: GroupBy) -> [GroupingOption] {
+        var defaultTitle = String(localized: "Status", comment: "Kanban default grouping name")
+        var options: [GroupingOption] = []
+        for attribute in boardAttributes.sorted(by: { $0.position < $1.position }) where attribute.type == .label {
+            let parts = attribute.name.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[0] == "label", !parts[1].isEmpty else { continue }
+            let tokens = attribute.value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            let alias = tokens.first { $0.hasPrefix("alias=") }.map { String($0.dropFirst("alias=".count)) }
+            if parts[1] == defaultGroupByAttribute {
+                if let alias, !alias.isEmpty { defaultTitle = alias }
+                continue
+            }
+            guard tokens.contains("select"), !options.contains(where: { $0.value == parts[1] }) else { continue }
+            options.append(GroupingOption(value: parts[1], title: alias.flatMap { $0.isEmpty ? nil : $0 } ?? parts[1]))
+        }
+        if current != .default, !options.contains(where: { $0.value == current.rawValue }) {
+            options.insert(GroupingOption(value: current.rawValue, title: current.name), at: 0)
+        }
+        options.insert(GroupingOption(value: GroupBy.default.rawValue, title: defaultTitle), at: 0)
+        return options
+    }
+
     /// A loaded board, as the view draws it.
     struct BoardLoad: Equatable, Sendable {
         var columns: [Column]
@@ -609,6 +650,9 @@ enum KanbanBoardModels {
         var relationTitles: [String: String]
         /// `#board:sortColumns` / `#board:sortColumnsDescending`, which columns set to the board's default follow.
         var boardSort: ColumnSort?
+        /// `#includeArchived`: archived columns and cards are on the board.
+        var showsArchived: Bool = false
+        var groupingOptions: [GroupingOption] = []
     }
 
     // MARK: - Card templates
@@ -701,10 +745,11 @@ enum KanbanBoardModels {
         stored: [BoardColumn],
         shownOrder: [String],
         showInbox: Bool,
+        showArchived: Bool = false,
         makeColumnId: () -> String
     ) -> [BoardColumn] {
         func isShown(_ column: BoardColumn) -> Bool {
-            guard !column.isArchived else { return false }
+            guard showArchived || !column.isArchived else { return false }
             return column.value != inboxColumnValue || showInbox
         }
 
@@ -769,6 +814,14 @@ enum KanbanBoardModels {
     }
 
     /// `#board:showInbox` is a boolean label: present and not `false`.
+    /// `#includeArchived`, unless its value is `false`.
+    static func showsArchived(_ attributes: [AttributeItem]) -> Bool {
+        guard let label = attributes.first(where: {
+            $0.type == .label && $0.name.caseInsensitiveCompare(includeArchivedLabel) == .orderedSame
+        }) else { return false }
+        return label.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "false"
+    }
+
     static func showsInbox(_ attributes: [AttributeItem]) -> Bool {
         guard let label = attributes.first(where: {
             $0.type == .label && $0.name.caseInsensitiveCompare(showInboxLabel) == .orderedSame

@@ -49,6 +49,10 @@ final class ShareImportCoordinator {
     private(set) var suggestedNoteTitle: String = ""
     /// Set after a successful import so the Notes tab can open the new note.
     private(set) var pendingOpenNote: PendingOpenSharedNote?
+    /// Where "Add to Inbox" puts the note; nil until worked out (see `refreshInboxDestination`).
+    private(set) var inboxDestination: InboxDestination?
+    /// While "Add to Inbox" finds (or makes) today's journal note.
+    private(set) var isPlacingInInbox = false
     /// Bumped whenever UI-relevant share-import state changes (for reliable SwiftUI refresh).
     private(set) var activationToken: Int = 0
 
@@ -100,6 +104,33 @@ final class ShareImportCoordinator {
     func parentPickerWasDismissedWithoutSelection() {
         guard phase == .showParentPicker else { return }
         cancel()
+    }
+
+    /// Works out where "Add to Inbox" goes, for its button to name.
+    func refreshInboxDestination() async {
+        guard let appState else { return }
+        inboxDestination = await InboxDestination.resolve(appState: appState)
+    }
+
+    /// "Add to Inbox": Trilium's capture destination becomes the parent.
+    func inboxDidSelect() async {
+        guard phase == .showParentPicker, !isPlacingInInbox, let appState else { return }
+        isPlacingInInbox = true
+        defer { isPlacingInInbox = false }
+        do {
+            let destination: InboxDestination
+            if let known = inboxDestination {
+                destination = known
+            } else {
+                destination = await InboxDestination.resolve(appState: appState)
+            }
+            let parentNoteId = try await destination.parentNoteId(appState: appState)
+            guard phase == .showParentPicker else { return }
+            parentDidSelect(parentNoteId)
+        } catch {
+            phase = .failed(error.localizedDescription)
+            bumpActivation()
+        }
     }
 
     /// Parent chosen — next show the new-note naming sheet (text type only).
