@@ -20,6 +20,8 @@ struct TreeListRowContextMenuModel {
     var onCopyToAnotherInstance: () -> Void
     var showsCopyToAnotherInstance: Bool
     var onMove: () -> Void
+    /// iPad split layout with tabs on: Trilium's "Open in a new tab". `nil` hides the item.
+    var onOpenInNewTab: (() -> Void)? = nil
 }
 
 struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
@@ -99,9 +101,17 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
                 }
             }
 
-            var sections: [UIMenuElement] = [
-                UIMenu(title: "", options: .displayInline, children: [newNote]),
-            ]
+            var sections: [UIMenuElement] = []
+            if let onOpenInNewTab = model.onOpenInNewTab, !model.isRootRow {
+                let openInNewTab = UIAction(
+                    title: String(localized: "Open in New Tab", comment: "Tree context menu (iPad): open the note in a new open-note tab"),
+                    image: UIImage(systemName: "plus.square.on.square")
+                ) { _ in
+                    DispatchQueue.main.async { onOpenInNewTab() }
+                }
+                sections.append(UIMenu(title: "", options: .displayInline, children: [openInNewTab]))
+            }
+            sections.append(UIMenu(title: "", options: .displayInline, children: [newNote]))
 
             guard !model.isRootRow else { return sections }
 

@@ -172,13 +172,13 @@ struct CodeNoteView: View {
         }
     }
 
-    /// Width from `GeometryReader` is often `0` on the first pass; using that for measurement forces a ~`minH` frame until a second pass, which can never arrive. Fall back to screen width (minus a typical inset) for **measurement** only; the real width still applies once layout settles.
+    /// Width from `GeometryReader` is often `0` on the first pass; using that for measurement forces a ~`minH` frame until a second pass, which can never arrive. Fall back to the window width (minus a typical inset) for **measurement** only; the real width still applies once layout settles.
     private static func widthForTextMeasurement(geometryWidth: CGFloat) -> CGFloat {
         if geometryWidth > 1 {
             return geometryWidth
         }
-        let screen = UIScreen.main.bounds.width
-        return max(280, screen - 64)
+        let window = AppDelegate.foregroundWindowFrameInScreen.width
+        return max(280, window - 64)
     }
 
     /// Read-only code body height. Uses `UITextView`’s `sizeThatFits` to match `CodeReadonlyTextView` (NSString `boundingRect` often over-estimates and leaves a blank band at the bottom).

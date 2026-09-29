@@ -1,18 +1,24 @@
 import UIKit
 
 /// Process-wide interface orientation lock so the note-editor camera can force portrait.
-/// Apple’s camera picker is portrait-only; a SwiftUI host that still advertises landscape
-/// leaves the preview black or stretched.
+/// Apple’s camera picker is portrait-only on iPhone; a SwiftUI host that still advertises landscape
+/// leaves the preview black or stretched. iPad supports every orientation (multitasking requires it)
+/// and its camera works in landscape, so neither lock applies there.
 final class AppDelegate: NSObject, UIApplicationDelegate {
     static let lockPortraitOrientationKey = "lockPortraitOrientation"
     static let defaultOrientationMask: UIInterfaceOrientationMask = .allButUpsideDown
 
+    @MainActor
+    static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+
+    @MainActor
     static var preferredOrientationMask: UIInterfaceOrientationMask {
-        UserDefaults.standard.bool(forKey: lockPortraitOrientationKey) ? .portrait : defaultOrientationMask
+        if isPad { return .all }
+        return UserDefaults.standard.bool(forKey: lockPortraitOrientationKey) ? .portrait : defaultOrientationMask
     }
 
     @MainActor
-    private static var orientationLock: UIInterfaceOrientationMask = defaultOrientationMask
+    private static var orientationLock: UIInterfaceOrientationMask = isPad ? .all : defaultOrientationMask
 
     @MainActor
     private static var maskBeforeTemporaryLock: UIInterfaceOrientationMask?
@@ -105,6 +111,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     static var foregroundWindowScene: UIWindowScene? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         return scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+    }
+
+    /// The app window's frame in screen coordinates. Use instead of `UIScreen.main.bounds`: on iPad the
+    /// window can be smaller than the screen (Split View, Slide Over, Stage Manager, resizable windows).
+    @MainActor
+    static var foregroundWindowFrameInScreen: CGRect {
+        guard let scene = foregroundWindowScene else { return .zero }
+        guard let window = scene.keyWindow ?? scene.windows.first else { return scene.screen.bounds }
+        return window.convert(window.bounds, to: scene.screen.coordinateSpace)
     }
 
     private static func mask(for orientation: UIInterfaceOrientation) -> UIInterfaceOrientationMask {

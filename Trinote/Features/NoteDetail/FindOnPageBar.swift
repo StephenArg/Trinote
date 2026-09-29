@@ -80,8 +80,9 @@ struct FindOnPageBar: View {
             guard
                 let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
             else { return }
-            let screenMaxY = UIScreen.main.bounds.maxY
-            let overlap = max(0, screenMaxY - frame.minY)
+            // Keyboard frames are in screen coordinates; the window can end above the screen's bottom on iPad.
+            let windowMaxY = AppDelegate.foregroundWindowFrameInScreen.maxY
+            let overlap = max(0, windowMaxY - frame.minY)
             keyboardScreenOverlap = overlap
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in

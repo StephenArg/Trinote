@@ -25,6 +25,11 @@ struct SettingsView: View {
     /// When true, Image–Code insert tools sit in a top bar below the nav header instead of the bottom formatting toolbar.
     @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
+    @AppStorage(NoteContentWidth.storageKey) private var noteMaxContentWidth: Int = 0
+    /// The iPad split layout's own tab strip setting (see `NoteDetailView.showNoteTabsBar`).
+    @AppStorage("showNoteTabsBarPad") private var showNoteTabsBarPad: Bool = true
+    /// Set when Settings is opened from the iPad split layout.
+    @Environment(\.noteWorkspace) private var noteWorkspace
     @AppStorage("highlightCurrentNoteInTree") private var highlightCurrentNoteInTree: Bool = true
     @AppStorage(SSOLoginPreferences.showSetupWarningKey) private var showSSOSetupWarning = true
     @AppStorage(SettingsTabPreferences.lastOpenedTabKey) private var lastOpenedTabRaw: String = SettingsTab.appearance.rawValue
@@ -188,12 +193,26 @@ struct SettingsView: View {
             }
             .foregroundStyle(.tint)
 
-            Toggle(
-                String(localized: "Lock Portrait Orientation", comment: "Settings: prevent landscape rotation"),
-                isOn: $lockPortraitOrientation
-            )
-            .onChange(of: lockPortraitOrientation) { _, _ in
-                AppDelegate.applyUserOrientationPreference()
+            if AppDelegate.isPad {
+                Picker(
+                    String(localized: "Maximum Content Width", comment: "Settings (iPad): cap note text width for readability"),
+                    selection: $noteMaxContentWidth
+                ) {
+                    ForEach(NoteContentWidth.options, id: \.self) { width in
+                        Text(NoteContentWidth.title(for: width)).tag(width)
+                    }
+                }
+            }
+
+            // iPad always follows the device (multitasking needs every orientation).
+            if !AppDelegate.isPad {
+                Toggle(
+                    String(localized: "Lock Portrait Orientation", comment: "Settings: prevent landscape rotation"),
+                    isOn: $lockPortraitOrientation
+                )
+                .onChange(of: lockPortraitOrientation) { _, _ in
+                    AppDelegate.applyUserOrientationPreference()
+                }
             }
         }
         .alert(String(localized: "Reset Colors to Default?", comment: "Settings alert title"), isPresented: $showResetColorsConfirm) {
@@ -224,7 +243,7 @@ struct SettingsView: View {
         Section(String(localized: "Tree View", comment: "Settings section")) {
             Toggle(
                 String(localized: "Show tab bar", comment: "Settings: show open-note tab strip at bottom of tree"),
-                isOn: $showNoteTabsBar
+                isOn: noteWorkspace != nil ? $showNoteTabsBarPad : $showNoteTabsBar
             )
 
             Toggle(

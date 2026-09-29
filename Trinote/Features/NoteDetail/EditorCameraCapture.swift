@@ -6,8 +6,13 @@ import UIKit
 /// were popping the note off the NavigationStack and dropping the captured image.
 @MainActor
 enum EditorCameraCapture {
-    /// Locks to portrait (and waits if currently landscape) before `show`.
+    /// Locks to portrait (and waits if currently landscape) before `show`. iPad's camera works in any
+    /// orientation, and forcing portrait there would rotate the whole app.
     static func preparePortraitSession(then show: @escaping () -> Void) {
+        guard !AppDelegate.isPad else {
+            show()
+            return
+        }
         AppDelegate.lockTemporarily(.portrait)
         if AppDelegate.isInterfaceLandscape {
             AppDelegate.waitUntilInterfaceMatches(.portrait, completion: show)
@@ -17,6 +22,7 @@ enum EditorCameraCapture {
     }
 
     static func endPortraitSession() {
+        guard !AppDelegate.isPad else { return }
         AppDelegate.restore()
     }
 }

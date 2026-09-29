@@ -91,5 +91,20 @@
 	<array>
 		<string>boxicons.ttf</string>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.trinote.tree-note</string>
+			<key>UTTypeDescription</key>
+			<string>Trinote Note</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict/>
+		</dict>
+	</array>
 </dict>
 </plist>

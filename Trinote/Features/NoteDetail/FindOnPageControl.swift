@@ -3,7 +3,18 @@ import Observation
 import UIKit
 import WebKit
 
-/// Coordinates in-page find for read-only HTML (WKWebView) and code (UITextView) notes.
+/// A heading in the read-only note, for the iPad table of contents.
+struct NoteHeading: Identifiable, Equatable {
+    /// Position among the page's h1–h6 elements; `FindOnPageControl.scrollToHeading(at:)` takes it.
+    let index: Int
+    let level: Int
+    let text: String
+
+    var id: Int { index }
+}
+
+/// Coordinates in-page find for read-only HTML (WKWebView) and code (UITextView) notes, and the iPad table of
+/// contents (headings of the same web view).
 @MainActor
 @Observable
 final class FindOnPageControl {
@@ -28,6 +39,9 @@ final class FindOnPageControl {
     /// Whether the find bar should focus its field when it appears: not for a deep link, whose match the keyboard
     /// would cover.
     private(set) var focusesFieldOnPresent = true
+    /// Bumped each time the read-only web view finishes loading a document, so the iPad table of contents
+    /// re-reads its headings.
+    private(set) var loadedHTMLDocumentCount = 0
 
     /// Opens the find bar with the given text and jumps to `matchIndex1Based` once matches are computed.
     func prepareFindDeepLink(findQuery: String, matchIndex1Based: Int) {
@@ -98,6 +112,7 @@ final class FindOnPageControl {
     /// Call after WebKit finishes loading document HTML so highlights can be restored (on the same match: the note
     /// reloads when fresher content arrives, and that shouldn't send the reader back to match 1).
     func reapplyHTMLSearchIfNeeded() {
+        loadedHTMLDocumentCount += 1
         guard htmlWebView != nil, !query.isEmpty else { return }
         keepActiveMatchForNextSearch()
         applyHTMLQueryDebounced(immediate: true)
@@ -350,6 +365,67 @@ final class FindOnPageControl {
                 Self.scrollOuterScrollViewToCenterMatch(for: wv, matchRectInWebView: rect, animated: animated)
             }
         }
+    }
+
+    // MARK: - Table of contents (iPad note inspector)
+
+    /// Headings of the read-only HTML note in document order, as rendered (includes expanded included notes).
+    func readHeadings(completion: @escaping ([NoteHeading]) -> Void) {
+        guard let wv = htmlWebView else {
+            completion([])
+            return
+        }
+        let js = """
+        (function(){
+          return Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6')).map(function(h){
+            return [parseInt(h.tagName.substring(1), 10), (h.innerText || h.textContent || '').trim()];
+          });
+        })();
+        """
+        wv.evaluateJavaScript(js) { result, _ in
+            let rows = result as? [[Any]] ?? []
+            let headings = rows.enumerated().compactMap { index, row -> NoteHeading? in
+                guard row.count == 2,
+                      let level = (row[0] as? NSNumber)?.intValue,
+                      let text = row[1] as? String,
+                      !text.isEmpty
+                else { return nil }
+                return NoteHeading(index: index, level: level, text: text)
+            }
+            Task { @MainActor in completion(headings) }
+        }
+    }
+
+    /// Scrolls the note so heading `index` (from `readHeadings`) sits at the top of the visible area.
+    func scrollToHeading(at index: Int) {
+        guard let wv = htmlWebView else { return }
+        let js = """
+        (function(){
+          var h = document.querySelectorAll('h1,h2,h3,h4,h5,h6')[\(index)];
+          if (!h) return null;
+          var r = h.getBoundingClientRect();
+          return { top: r.top, left: r.left, width: r.width, height: r.height };
+        })();
+        """
+        wv.evaluateJavaScript(js) { result, _ in
+            guard let dict = result as? [String: Any] else { return }
+            let top = Self.cgFloat(from: dict["top"]) ?? 0
+            Task { @MainActor in
+                Self.scrollOuterScrollView(for: wv, toShowTopOf: top)
+            }
+        }
+    }
+
+    /// Puts web-view point `y` just below the navigation bar in the note's outer scroll view.
+    private static func scrollOuterScrollView(for webView: WKWebView, toShowTopOf y: CGFloat) {
+        guard let sv = outerScrollView(for: webView) else { return }
+        let point = webView.convert(CGPoint(x: 0, y: y), to: sv)
+        let inset = sv.adjustedContentInset
+        let margin: CGFloat = 12
+        let minY = -inset.top
+        let maxY = max(minY, sv.contentSize.height - sv.bounds.height + inset.bottom)
+        let target = min(max(point.y - inset.top - margin, minY), maxY)
+        sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: target), animated: true)
     }
 
     private static func cgFloat(from value: Any?) -> CGFloat? {

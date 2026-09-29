@@ -8,8 +8,12 @@ struct NoteTabsBar: View {
     var onOpenTabRemoved: ((OpenNoteTab) -> Void)? = nil
     var onTabsBecameEmpty: (() -> Void)? = nil
     var onReorderActiveChanged: ((Bool) -> Void)? = nil
+    /// Above the note (iPad split layout, like Trilium's tab row) rather than below it: the hairline moves
+    /// to the bottom edge.
+    var isAtTop: Bool = false
 
     @Environment(AppState.self) private var appState
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var tabs: [OpenNoteTab] = []
     @State private var showAddNotePicker = false
     @State private var draggingTabId: String?
@@ -29,6 +33,8 @@ struct NoteTabsBar: View {
     private static let tabChromeWidth: CGFloat = reorderHandleWidth + 2 + 16 + 4 + 22
     private static let titleWidthSlack: CGFloat = 4
     private static let minTabWidth: CGFloat = 64
+    /// Wide (iPad) bars fit more tabs: each tab is capped here instead of taking a third of the bar.
+    private static let regularMaxTabWidth: CGFloat = 220
     /// Outer bar height; matches the original single-line look while still fitting 2 wrapped lines of footnote text.
     private static let barHeight: CGFloat = 50
     /// Inner cell height — leaves a small vertical pad inside the bar.
@@ -85,6 +91,9 @@ struct NoteTabsBar: View {
                                 dragTranslation = 0
                                 onReorderActiveChanged?(false)
                                 scheduleTabSelectionSuppressionReset()
+                            },
+                            menuForTab: { index in
+                                tabs.indices.contains(index) ? tabMenu(for: tabs[index]) : nil
                             }
                         ) {
                             HStack(spacing: Self.tabGap) {
@@ -124,7 +133,7 @@ struct NoteTabsBar: View {
                 }
                 .frame(height: Self.barHeight)
                 .background(.bar)
-                .overlay(alignment: .top) { Divider() }
+                .overlay(alignment: isAtTop ? .bottom : .top) { Divider() }
             }
         }
         .accessibilityElement(children: .contain)
@@ -166,12 +175,14 @@ struct NoteTabsBar: View {
     private func maxTabWidth(scrollInnerWidth: CGFloat, tabCount: Int) -> CGFloat {
         let inner = max(0, scrollInnerWidth)
         let base = max(Self.minTabWidth, (inner - Self.tabGap * 2) / Self.visibleTabSlots)
+        let width: CGFloat
         switch tabCount {
-        case 1: return base * 2
-        case 2: return base * 1.5
-        case 3: return base * 1.25
-        default: return base
+        case 1: width = base * 2
+        case 2: width = base * 1.5
+        case 3: width = base * 1.25
+        default: width = base
         }
+        return horizontalSizeClass == .regular ? min(width, Self.regularMaxTabWidth) : width
     }
 
     /// Size each tab to its title, clamped between the chrome minimum and `maxWidth`.
@@ -217,6 +228,51 @@ struct NoteTabsBar: View {
         ),
            let row = try? PersistenceManager.shared.fetchOpenNoteTab(id: newId, serverProfileId: profileId) {
             onSelect(row)
+        }
+    }
+
+    /// Right-click menu, like Trilium's tab menu.
+    private func tabMenu(for tab: OpenNoteTab) -> UIMenu {
+        let index = tabs.firstIndex(where: { $0.id == tab.id }) ?? 0
+        let others = tabs.filter { $0.id != tab.id }
+        let toTheRight = Array(tabs.dropFirst(index + 1))
+        var closeGroup: [UIMenuElement] = [
+            UIAction(
+                title: String(localized: "Close Tab", comment: "Open-tab right-click menu"),
+                image: UIImage(systemName: "xmark")
+            ) { _ in DispatchQueue.main.async { removeTab(tab) } },
+        ]
+        if !others.isEmpty {
+            closeGroup.append(UIAction(
+                title: String(localized: "Close Other Tabs", comment: "Open-tab right-click menu")
+            ) { _ in DispatchQueue.main.async { removeTabs(others, keeping: tab) } })
+        }
+        if !toTheRight.isEmpty {
+            closeGroup.append(UIAction(
+                title: String(localized: "Close Tabs to the Right", comment: "Open-tab right-click menu")
+            ) { _ in DispatchQueue.main.async { removeTabs(toTheRight, keeping: tab) } })
+        }
+        let duplicate = UIAction(
+            title: String(localized: "Duplicate Tab", comment: "Open-tab right-click menu"),
+            image: UIImage(systemName: "plus.square.on.square")
+        ) { _ in DispatchQueue.main.async { addTabForPickedNote(noteId: tab.noteId, title: tab.title) } }
+        return UIMenu(children: [
+            UIMenu(options: .displayInline, children: [duplicate]),
+            UIMenu(options: .displayInline, children: closeGroup),
+        ])
+    }
+
+    /// Closes several tabs at once, then shows `kept` if the tab on screen was among them.
+    private func removeTabs(_ removing: [OpenNoteTab], keeping kept: OpenNoteTab) {
+        guard let profileId = appState.activeProfile?.id, !removing.isEmpty else { return }
+        let removedActive = removing.contains { $0.id == currentOpenTabId }
+        for tab in removing {
+            try? PersistenceManager.shared.removeOpenNoteTab(id: tab.id, serverProfileId: profileId)
+            OpenTabSessionStore.clearReadScrollState(for: tab.id)
+        }
+        reload()
+        if removedActive {
+            onSelect(kept)
         }
     }
 
@@ -329,6 +385,8 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
     let onReorderChanged: (CGFloat) -> Void
     let onReorderEnded: (CGFloat) -> Void
     let onReorderCancelled: () -> Void
+    /// Right-click menu for the tab at an index. Touch long-press stays reserved for reordering.
+    let menuForTab: (Int) -> UIMenu?
     @ViewBuilder var content: () -> Content
 
     func makeCoordinator() -> Coordinator {
@@ -375,6 +433,7 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
         context.coordinator.widthConstraint = widthConstraint
         context.coordinator.scrollView = scrollView
         context.coordinator.installReorderGesture(on: scrollView)
+        scrollView.addInteraction(UIContextMenuInteraction(delegate: context.coordinator))
         return scrollView
     }
 
@@ -391,6 +450,7 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
         context.coordinator.onReorderChanged = onReorderChanged
         context.coordinator.onReorderEnded = onReorderEnded
         context.coordinator.onReorderCancelled = onReorderCancelled
+        context.coordinator.menuForTab = menuForTab
 
         if !context.coordinator.isReordering {
             scrollView.isScrollEnabled = isScrollEnabled
@@ -410,8 +470,9 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
         }
     }
 
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate, UIContextMenuInteractionDelegate {
         var hostingController: UIHostingController<Content>?
+        var menuForTab: ((Int) -> UIMenu?)?
         var widthConstraint: NSLayoutConstraint?
         weak var scrollView: UIScrollView?
         var lastScrollSignature = ""
@@ -485,6 +546,19 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
             default:
                 break
             }
+        }
+
+        /// Only a pointer's secondary click (compact menu) opens the tab menu; a touch long-press is the
+        /// reorder gesture.
+        func contextMenuInteraction(
+            _ interaction: UIContextMenuInteraction,
+            configurationForMenuAtLocation location: CGPoint
+        ) -> UIContextMenuConfiguration? {
+            guard interaction.menuAppearance == .compact, !isReordering, let scrollView else { return nil }
+            let contentView = hostingController?.view ?? scrollView
+            let x = interaction.view.map { contentView.convert(location, from: $0).x } ?? location.x
+            guard let index = tabIndex(at: x), let menu = menuForTab?(index) else { return nil }
+            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in menu }
         }
 
         private func contentX(for recognizer: UIGestureRecognizer) -> CGFloat {
@@ -587,6 +661,7 @@ private struct NoteTabCell: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverEffect(.highlight)
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -596,6 +671,7 @@ private struct NoteTabCell: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverEffect(.highlight)
             .accessibilityLabel(String(localized: "Close tab", comment: "A11y: close open note tab"))
         }
         .frame(width: width, height: NoteTabsBar.cellHeight, alignment: .center)

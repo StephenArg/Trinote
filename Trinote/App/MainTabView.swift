@@ -41,9 +41,6 @@ struct MainTabView: View {
     }
 
     var body: some View {
-        // Observe share-import activation so we can switch to Notes when a share arrives.
-        let _ = appState.shareImport.activationToken
-
         TabView(selection: $selectedTab) {
             ForEach(Tab.allCases, id: \.self) { tab in
                 tabContent(for: tab)
@@ -53,37 +50,7 @@ struct MainTabView: View {
                     .tag(tab)
             }
         }
-        .overlay(alignment: .top) {
-            if let message = appState.localTransfer.successNotification {
-                LocalTransferSuccessBanner(message: message)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .animation(.easeInOut(duration: 0.25), value: appState.localTransfer.successNotification)
-        .onChange(of: appState.networkMonitor.isConnected) { _, online in
-            guard online, appState.isAuthenticated else { return }
-            Task {
-                let refreshed = await appState.refreshTriliumSession()
-                await appState.flushPendingLocalChangesIfPossible(assumeSessionIsReady: refreshed)
-                await appState.runIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
-            }
-        }
-        .onChange(of: appState.shareImport.activationToken) { _, _ in
-            if appState.shareImport.phase != .idle {
-                selectedTab = .notes
-            }
-        }
-        .sheet(item: firstSyncRequest) { request in
-            FirstSyncChoiceSheet(request: request)
-                .environment(appState)
-        }
-    }
-
-    /// A server's first full sync waits here for what to keep offline.
-    private var firstSyncRequest: Binding<SyncManager.FirstSyncRequest?> {
-        Binding(get: { appState.syncManager.pendingFirstSync }, set: { _ in })
+        .modifier(MainShellModifiers(onShareImportActivated: { selectedTab = .notes }))
     }
 
     @ViewBuilder
@@ -117,6 +84,53 @@ struct MainTabView: View {
             }
             .id(navigationStackInstanceId)
         }
+    }
+}
+
+/// Signed-in app chrome shared by the tab layout (`MainTabView`) and the iPad split layout
+/// (`SplitWorkspaceView`): local-transfer banner, catch-up sync when back online, share-import
+/// activation, and the first-sync choice sheet.
+struct MainShellModifiers: ViewModifier {
+    @Environment(AppState.self) private var appState
+    /// Called when a share arrives, so the layout can bring the notes tree forward.
+    let onShareImportActivated: () -> Void
+
+    func body(content: Content) -> some View {
+        // Observe share-import activation so we can switch to Notes when a share arrives.
+        let _ = appState.shareImport.activationToken
+
+        content
+            .overlay(alignment: .top) {
+                if let message = appState.localTransfer.successNotification {
+                    LocalTransferSuccessBanner(message: message)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.25), value: appState.localTransfer.successNotification)
+            .onChange(of: appState.networkMonitor.isConnected) { _, online in
+                guard online, appState.isAuthenticated else { return }
+                Task {
+                    let refreshed = await appState.refreshTriliumSession()
+                    await appState.flushPendingLocalChangesIfPossible(assumeSessionIsReady: refreshed)
+                    await appState.runIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
+                }
+            }
+            .onChange(of: appState.shareImport.activationToken) { _, _ in
+                if appState.shareImport.phase != .idle {
+                    onShareImportActivated()
+                }
+            }
+            .sheet(item: firstSyncRequest) { request in
+                FirstSyncChoiceSheet(request: request)
+                    .environment(appState)
+            }
+    }
+
+    /// A server's first full sync waits here for what to keep offline.
+    private var firstSyncRequest: Binding<SyncManager.FirstSyncRequest?> {
+        Binding(get: { appState.syncManager.pendingFirstSync }, set: { _ in })
     }
 }
 

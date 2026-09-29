@@ -18,6 +18,8 @@ struct FavoritesView: View {
 
     @Environment(AppState.self) private var appState
     @Environment(\.colorScheme) private var colorScheme
+    /// Set in the iPad split layout: notes open in the note pane instead of being pushed here.
+    @Environment(\.noteWorkspace) private var noteWorkspace
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#F2F2F7"
@@ -123,7 +125,7 @@ struct FavoritesView: View {
 
     var body: some View {
         mainContent
-            .navigationTitle(String(localized: "Favorites", comment: "Favorites tab title"))
+            .screenLargeTitle(String(localized: "Favorites", comment: "Favorites tab title"), background: treeChromeBackground)
             .toolbar { toolbarContent }
             .task { loadFavorites() }
             .onAppear { loadFavorites() }
@@ -313,7 +315,11 @@ struct FavoritesView: View {
             } else {
                 Button {
                     let navTitle = displayTitleByNoteId[fav.noteId] ?? fav.title
-                    navigateToNote = (fav.noteId, navTitle)
+                    if let noteWorkspace {
+                        noteWorkspace.open(NoteRoute(noteId: fav.noteId, title: navTitle))
+                    } else {
+                        navigateToNote = (fav.noteId, navTitle)
+                    }
                 } label: { favoriteRow(fav) }
                     .buttonStyle(.plain)
             }

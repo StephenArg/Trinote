@@ -205,6 +205,7 @@ struct TrinoteApp: App {
                 AppDelegate.applyUserOrientationPreference()
             }
         }
+        .commands { TrinoteCommands() }
     }
 
     private func deliverPendingIncomingURLIfNeeded(to appState: AppState) {

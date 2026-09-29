@@ -3,6 +3,8 @@ import SwiftUI
 struct RecentsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.colorScheme) private var colorScheme
+    /// Set in the iPad split layout: notes open in the note pane instead of being pushed here.
+    @Environment(\.noteWorkspace) private var noteWorkspace
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
     /// Mirrors the tree's background settings so the Recents list shares the same chrome
     /// (in particular when the user has chosen a custom tree background colour).
@@ -46,7 +48,11 @@ struct RecentsView: View {
                     ForEach(recentNotes, id: \.id) { recent in
                         Button {
                             let navTitle = displayTitleByNoteId[recent.noteId] ?? recent.title
-                            navigateToNote = (recent.noteId, navTitle)
+                            if let noteWorkspace {
+                                noteWorkspace.open(NoteRoute(noteId: recent.noteId, title: navTitle))
+                            } else {
+                                navigateToNote = (recent.noteId, navTitle)
+                            }
                         } label: {
                             HStack(spacing: 12) {
                                 let rowIcon = recentsRowIcon(for: recent)
@@ -100,7 +106,7 @@ struct RecentsView: View {
                 .background(treeChromeBackground)
             }
         }
-        .navigationTitle(String(localized: "Recents", comment: "Recents tab title"))
+        .screenLargeTitle(String(localized: "Recents", comment: "Recents tab title"), background: treeChromeBackground)
         .task { loadRecents() }
         .refreshable { loadRecents() }
         .onChange(of: appState.protectedSessionActive) { _, _ in loadRecents() }

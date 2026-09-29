@@ -114,6 +114,8 @@ struct TreeView: View {
 
     @Environment(AppState.self) private var appState
     @Environment(\.colorScheme) private var colorScheme
+    /// Set in the iPad split layout: notes open in the note pane instead of being pushed here.
+    @Environment(\.noteWorkspace) private var noteWorkspace
     @State private var viewModel: TreeViewModel?
     /// Pull-to-refresh / toolbar refresh in progress; it reloads the tree after its sync, so a finished sync needn't.
     @State private var isRefreshingWithSync = false
@@ -151,7 +153,16 @@ struct TreeView: View {
     @State private var isBulkDeleting = false
     @State private var bulkDeleteError: String?
 
-    @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
+    @AppStorage("showNoteTabsBar") private var showNoteTabsBarCompact: Bool = false
+    /// The iPad split layout has its own setting, on by default: Trilium desktop always shows tabs.
+    @AppStorage("showNoteTabsBarPad") private var showNoteTabsBarPad: Bool = true
+    /// Open-note tabs setting for the layout on screen.
+    private var showNoteTabsBar: Bool {
+        get { noteWorkspace != nil ? showNoteTabsBarPad : showNoteTabsBarCompact }
+        nonmutating set {
+            if noteWorkspace != nil { showNoteTabsBarPad = newValue } else { showNoteTabsBarCompact = newValue }
+        }
+    }
     @AppStorage("highlightCurrentNoteInTree") private var highlightCurrentNoteInTree: Bool = true
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
@@ -363,6 +374,10 @@ struct TreeView: View {
             defer { isOpeningTodaysJournalNote = false }
             do {
                 let note = try await vm.todaysJournalNote()
+                if let paneWorkspace {
+                    paneWorkspace.open(NoteRoute(noteId: note.noteId, title: note.title, openTabId: note.openTabId))
+                    return
+                }
                 navigateToNote = nil
                 navigateToNoteForEdit = nil
                 drillDownTarget = nil
@@ -595,6 +610,7 @@ struct TreeView: View {
             loadFavoriteIds()
             lastActiveOpenTabIdForBar = LastActiveOpenTabStore.get(profileId: appState.activeProfile?.id)
             autoRestoreOpenTabOnLaunchIfNeeded()
+            followPaneNote(paneWorkspace?.visibleNoteId)
         }
         .onChange(of: hideCalendarChildNotesInTree) { _, _ in
             if let viewModel {
@@ -630,6 +646,19 @@ struct TreeView: View {
             guard newValue == nil, let old = oldValue else { return }
             revealPreviousNoteAfterPop(fallbackNoteId: old.noteId)
         }
+        .onChange(of: paneWorkspace?.visibleNoteId) { _, noteId in
+            followPaneNote(noteId)
+        }
+        .onChange(of: paneWorkspace?.commandRequest) { _, request in
+            // ⌘N with no note open makes a top-level note; with one open, the note makes a child.
+            guard request?.command == .newNote,
+                  parentNoteId == TriliumTreeConstants.rootNoteId,
+                  paneWorkspace?.route == nil,
+                  !isSelectMode,
+                  let viewModel
+            else { return }
+            createSheetContext = CreateNoteSheetContext(parentNote: syntheticRootNoteItem(), viewModel: viewModel)
+        }
         .onChange(of: navigateToNoteForEdit) { oldValue, newValue in
             guard newValue == nil, let old = oldValue else { return }
             revealPreviousNoteAfterPop(fallbackNoteId: old.noteId)
@@ -637,15 +666,14 @@ struct TreeView: View {
         // Returning from a nested tree must not re-reveal / re-center: the user was browsing the
         // tree and expects this page’s expand + scroll position to stay where they left it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if showNoteTabsBar, showsNoteTabsBarInset {
+            // The iPad split layout shows tabs above the note pane instead.
+            if showNoteTabsBar, showsNoteTabsBarInset, noteWorkspace == nil {
                 NoteTabsBar(
                     currentOpenTabId: lastActiveOpenTabIdForBar.isEmpty ? nil : lastActiveOpenTabIdForBar,
                     onSelect: { tab in
                         LastActiveOpenTabStore.set(tab.id, profileId: appState.activeProfile?.id)
                         lastActiveOpenTabIdForBar = tab.id
-                        tabsBarNav = NoteNavItem(
-                            noteId: tab.noteId, title: tab.title, openTabId: tab.id
-                        )
+                        openNoteNavItem(NoteNavItem(noteId: tab.noteId, title: tab.title, openTabId: tab.id))
                     },
                     onOpenTabRemoved: { _ in },
                     onTabsBecameEmpty: {
@@ -842,6 +870,66 @@ struct TreeView: View {
         }
     }
 
+    /// The iPad note pane's workspace, for the main tree only; picker-embedded trees pick instead of opening.
+    private var paneWorkspace: NoteWorkspace? {
+        onPickParent == nil ? noteWorkspace : nil
+    }
+
+    /// Opens `note` in the iPad note pane, or pushes it onto this stack.
+    private func openNoteDetail(_ note: NoteItem) {
+        guard let paneWorkspace else {
+            navigateToNote = note
+            return
+        }
+        paneWorkspace.open(NoteRoute(
+            noteId: note.noteId,
+            title: note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive),
+            seedChildSummaries: viewModel?.childNoteSummariesForDetailNavigation(parentNoteId: note.noteId)
+        ))
+    }
+
+    /// Opens a note in edit mode in the iPad note pane, or pushes it onto this stack.
+    private func openNoteForEdit(_ target: NoteEditTarget) {
+        guard let paneWorkspace else {
+            navigateToNoteForEdit = target
+            return
+        }
+        paneWorkspace.open(NoteRoute(
+            noteId: target.noteId,
+            title: target.title,
+            startInEditMode: true,
+            attachmentIdToInsert: target.attachmentIdToInsert,
+            attachmentTitleToInsert: target.attachmentTitleToInsert
+        ))
+    }
+
+    /// iPad: adds a tab for `note` and shows it, like Trilium's "Open in a new tab".
+    private func openNoteInNewTab(_ note: NoteItem) {
+        guard let paneWorkspace, let profileId = appState.activeProfile?.id,
+              let tabId = try? PersistenceManager.shared.addOpenNoteTab(
+                  noteId: note.noteId,
+                  title: note.title,
+                  noteType: note.type.rawValue,
+                  serverProfileId: profileId
+              )
+        else { return }
+        LastActiveOpenTabStore.set(tabId, profileId: profileId)
+        paneWorkspace.open(NoteRoute(
+            noteId: note.noteId,
+            title: note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive),
+            openTabId: tabId
+        ))
+    }
+
+    /// Opens an open-tab / journal destination in the iPad note pane, or pushes it onto this stack.
+    private func openNoteNavItem(_ item: NoteNavItem) {
+        guard let paneWorkspace else {
+            tabsBarNav = item
+            return
+        }
+        paneWorkspace.open(NoteRoute(noteId: item.noteId, title: item.title, openTabId: item.openTabId))
+    }
+
     private func noteDetailDestination(_ note: NoteItem) -> some View {
         NoteDetailView(
             noteId: note.noteId,
@@ -877,7 +965,7 @@ struct TreeView: View {
             viewModel: ctx.viewModel,
             onDismiss: { createSheetContext = nil },
             onNoteCreated: { noteId, title in
-                navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
+                openNoteForEdit(NoteEditTarget(noteId: noteId, title: title))
             }
         )
     }
@@ -1123,6 +1211,12 @@ struct TreeView: View {
         Self.autoRestoreOpenTabHandledForProfileId = profileId
         LastActiveOpenTabStore.set(tab.id, profileId: profileId)
         lastActiveOpenTabIdForBar = tab.id
+        if let paneWorkspace {
+            if paneWorkspace.route == nil {
+                paneWorkspace.open(NoteRoute(noteId: tab.noteId, title: tab.title, openTabId: tab.id))
+            }
+            return
+        }
         // Only push if we're not already showing a destination from this stack.
         if navigateToNote == nil, navigateToNoteForEdit == nil, drillDownTarget == nil, tabsBarNav == nil {
             tabsBarNav = NoteNavItem(noteId: tab.noteId, title: tab.title, openTabId: tab.id)
@@ -1211,11 +1305,7 @@ struct TreeView: View {
     private func rootNotebookHeaderRow(viewModel vm: TreeViewModel) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(String(localized: "Notes", comment: "Root notebook screen title"))
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                    .foregroundStyle(.primary)
-                    .accessibilityAddTraits(.isHeader)
+                ScreenLargeTitleText(title: String(localized: "Notes", comment: "Root notebook screen title"))
                 if !appState.isOnline, vm.isFromCache {
                     Image(systemName: "icloud.slash")
                         .font(.headline)
@@ -1281,6 +1371,10 @@ struct TreeView: View {
             attachmentIdToInsert: attachmentIdToInsert,
             attachmentTitleToInsert: attachmentTitleToInsert
         )
+        if paneWorkspace != nil {
+            openNoteForEdit(target)
+            return
+        }
         // Pop any open note / subtree / tab destination first. Setting `navigateToNoteForEdit`
         // while another destination is already pushed leaves the user on the old note.
         let hadExistingDestination = navigateToNote != nil
@@ -1316,7 +1410,7 @@ struct TreeView: View {
                 TreeSyncStatusRows(sync: appState.syncManager)
                 if parentNoteId == "root", showsRootNotebookHeader {
                     rootNotebookHeaderRow(viewModel: vm)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                        .listRowInsets(ScreenLargeTitle.insets)
                         .listRowSeparator(.hidden)
                         .listRowBackground(treeBgColor ?? Color(.systemGroupedBackground))
                 }
@@ -1360,15 +1454,39 @@ struct TreeView: View {
             else { return }
 
             let noteId = resolveNoteIdForTreeReveal(fallbackNoteId: fallbackNoteId)
-            guard let vm = viewModel else { return }
-            if let target = await vm.expandAncestorsTowardNote(noteId) {
-                highlightedNoteId = target.noteId
-                // Let the list apply the unanimated expansion before scrolling.
-                await Task.yield()
-                pendingScrollBranchId = target.branchId
-            } else {
-                highlightedNoteId = nil
-            }
+            await revealNoteInTree(noteId, collapsingOthers: true)
+        }
+    }
+
+    /// iPad split layout: highlights the note in the note pane, as Trilium's tree follows the active note.
+    /// When its row isn't in the list yet (opened from search, a link, another tab…), expands its folders
+    /// without closing others and scrolls to it.
+    private func followPaneNote(_ noteId: String?) {
+        guard paneWorkspace != nil else { return }
+        guard let noteId else {
+            highlightedNoteId = nil
+            return
+        }
+        guard let vm = viewModel else { return }
+        if vm.visibleNodes.contains(where: { $0.node.note.noteId == noteId }) {
+            highlightedNoteId = noteId
+            return
+        }
+        Task { @MainActor in
+            await revealNoteInTree(noteId, collapsingOthers: false)
+        }
+    }
+
+    /// Expands ancestors toward `noteId`, highlights the deepest visible row on its path and centers it.
+    private func revealNoteInTree(_ noteId: String, collapsingOthers: Bool) async {
+        guard let vm = viewModel else { return }
+        if let target = await vm.expandAncestorsTowardNote(noteId, collapsingOthers: collapsingOthers) {
+            highlightedNoteId = target.noteId
+            // Let the list apply the unanimated expansion before scrolling.
+            await Task.yield()
+            pendingScrollBranchId = target.branchId
+        } else {
+            highlightedNoteId = nil
         }
     }
 
@@ -1421,7 +1539,7 @@ struct TreeView: View {
                 } else if let pick = onPickParent {
                     pick(note.noteId, note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive), parentBranchId)
                 } else {
-                    navigateToNote = note
+                    openNoteDetail(note)
                 }
             },
             onDrillDown: { noteId, title in
@@ -1446,7 +1564,7 @@ struct TreeView: View {
             onNewNote: {
                 createSheetContext = CreateNoteSheetContext(parentNote: flat.node.note, viewModel: vm)
             },
-            onDuplicateSuccess: { navigateToNote = $0 },
+            onDuplicateSuccess: { openNoteDetail($0) },
             onFavoriteToggle: {
                 toggleFavorite(flat.node.note, isFav: isFav, onFavoriteChanged: onFavoriteChanged)
             },
@@ -1472,7 +1590,10 @@ struct TreeView: View {
                     sourceTitle: flat.node.displayTitle(protectedSessionActive: appState.protectedSessionActive),
                     oldParentNoteId: flat.node.branch.parentNoteId
                 )
-            }
+            },
+            onOpenInNewTab: paneWorkspace != nil && showNoteTabsBar
+                ? { openNoteInNewTab(flat.node.note) }
+                : nil
         )
     }
 
@@ -1494,10 +1615,24 @@ struct TreeView: View {
                 row
             }
         }
+        // iPad: a row dragged out of the tree into the editor becomes a link to the note. `itemProvider` (not
+        // `onDrag`) keeps the List's own drag-to-reorder working.
+        .if(paneWorkspace != nil && !isSelectMode && flat.node.note.noteId != TriliumTreeConstants.rootNoteId) { view in
+            view.itemProvider { treeNoteDrag(for: flat).itemProvider() }
+        }
         .listRowInsets(EdgeInsets(top: 8, leading: leading, bottom: 8, trailing: 16))
         .listRowBackground(treeRowBackground(isHighlighted: isHighlighted))
         .listRowSeparatorTint(Color(.separator))
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
+    }
+
+    private func treeNoteDrag(for flat: FlatTreeNode) -> TreeNoteDrag {
+        TreeNoteDrag(
+            noteId: flat.node.note.noteId,
+            branchId: flat.node.branch.branchId,
+            parentNoteId: flat.node.branch.parentNoteId,
+            title: flat.node.displayTitle(protectedSessionActive: appState.protectedSessionActive)
+        )
     }
 
     private func treeRowBackground(isHighlighted: Bool) -> some View {
@@ -1692,6 +1827,7 @@ struct TreeNodeRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
+        .hoverEffect(.highlight)
         .accessibilityLabel(
             isSelectMode
                 ? "\(displayTitle), \(isSelected ? "selected" : "not selected")"

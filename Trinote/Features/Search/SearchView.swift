@@ -12,6 +12,8 @@ private struct SearchNoteDestination: Hashable {
 struct SearchView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.colorScheme) private var colorScheme
+    /// Set in the iPad split layout: notes open in the note pane instead of being pushed here.
+    @Environment(\.noteWorkspace) private var noteWorkspace
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#F2F2F7"
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
@@ -41,7 +43,7 @@ struct SearchView: View {
             }
         }
         .background(treeChromeBackground)
-        .navigationTitle(String(localized: "Search", comment: "Search tab title"))
+        .screenLargeTitle(String(localized: "Search", comment: "Search tab title"), background: treeChromeBackground)
         .task {
             if viewModel == nil {
                 let vm = SearchViewModel(appState: appState)
@@ -59,6 +61,14 @@ struct SearchView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .trinoteWillSwitchServerProfile)) { _ in
             navigateTo = nil
+        }
+        // iPad ⌘⇧F. The first press also mounts this view, so check once on appear too.
+        .onChange(of: noteWorkspace?.commandRequest) { _, request in
+            if request?.command == .focusSearch { isSearchFieldFocused = true }
+        }
+        .onAppear {
+            guard noteWorkspace?.commandRequest?.command == .focusSearch else { return }
+            DispatchQueue.main.async { isSearchFieldFocused = true }
         }
     }
 
@@ -184,9 +194,19 @@ struct SearchView: View {
     }
 
     private func openNote(_ note: NoteItem, findQuery: String?, matchIndex1Based: Int?) {
+        let title = note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
+        if let noteWorkspace {
+            noteWorkspace.open(NoteRoute(
+                noteId: note.noteId,
+                title: title,
+                pendingFindQuery: findQuery,
+                pendingFindMatchIndex: matchIndex1Based
+            ))
+            return
+        }
         navigateTo = SearchNoteDestination(
             noteId: note.noteId,
-            title: note.uiTitle(forProtectedSessionActive: appState.protectedSessionActive),
+            title: title,
             findQuery: findQuery,
             findMatchIndex1Based: matchIndex1Based
         )

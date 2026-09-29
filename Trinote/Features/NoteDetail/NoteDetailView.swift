@@ -16,6 +16,12 @@ private enum NoteDetailToolbarQuickAction: String, CaseIterable {
     case findOnPage
 }
 
+/// Tabs of the iPad note inspector (Trilium's right pane).
+private enum NoteInspectorTab: String {
+    case contents
+    case info
+}
+
 private enum EditorFullscreenCover: String, Identifiable {
     case photoLibrary
     case camera
@@ -60,6 +66,9 @@ struct NoteDetailView: View {
     /// Share-import file attachment to insert once the rich-text editor is ready (toolbar-equivalent chip).
     var attachmentIdToInsert: String? = nil
     var attachmentTitleToInsert: String? = nil
+    /// Set only for the root note of the iPad note pane, which has nothing to go back to: closing asks the
+    /// pane to show another note (the parent after a delete) or none. Otherwise the note dismisses itself.
+    var onClose: ((NoteRoute?) -> Void)? = nil
 
     init(
         noteId: String,
@@ -71,7 +80,8 @@ struct NoteDetailView: View {
         openTabId: String? = nil,
         retargetActiveOpenTab: Bool = true,
         attachmentIdToInsert: String? = nil,
-        attachmentTitleToInsert: String? = nil
+        attachmentTitleToInsert: String? = nil,
+        onClose: ((NoteRoute?) -> Void)? = nil
     ) {
         self.noteId = noteId
         self.title = title
@@ -83,6 +93,7 @@ struct NoteDetailView: View {
         self.retargetActiveOpenTab = retargetActiveOpenTab
         self.attachmentIdToInsert = attachmentIdToInsert
         self.attachmentTitleToInsert = attachmentTitleToInsert
+        self.onClose = onClose
         _activeNoteId = State(initialValue: noteId)
         _activeOpenTabId = State(initialValue: openTabId)
 
@@ -113,6 +124,7 @@ struct NoteDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.noteWorkspace) private var noteWorkspace
     @State private var activeNoteId: String
     @State private var viewModel: NoteDetailViewModel?
     @State private var navigateToNoteId: String?
@@ -144,7 +156,16 @@ struct NoteDetailView: View {
     @State private var moveNoteDetailConfirm: MoveNoteDetailConfirm?
     /// Last note menu action repeated on the trailing toolbar (persists across notes and launches).
     @AppStorage("noteDetailLastToolbarMenuAction") private var lastToolbarQuickActionRaw: String = NoteDetailToolbarQuickAction.noteDetails.rawValue
-    @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
+    @AppStorage("showNoteTabsBar") private var showNoteTabsBarCompact: Bool = false
+    /// The iPad split layout has its own setting, on by default: Trilium desktop always shows tabs.
+    @AppStorage("showNoteTabsBarPad") private var showNoteTabsBarPad: Bool = true
+    /// Open-note tabs setting for the layout on screen.
+    private var showNoteTabsBar: Bool {
+        get { noteWorkspace != nil ? showNoteTabsBarPad : showNoteTabsBarCompact }
+        nonmutating set {
+            if noteWorkspace != nil { showNoteTabsBarPad = newValue } else { showNoteTabsBarCompact = newValue }
+        }
+    }
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
@@ -153,10 +174,21 @@ struct NoteDetailView: View {
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     /// When `true`, Image–Code block tools appear in a top toolbar below the nav header instead of the bottom bar.
     @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
+    @AppStorage(NoteContentWidth.storageKey) private var noteMaxContentWidth: Int = 0
     /// Journal day notes: “Notes edited on that day” pill row starts collapsed.
     @AppStorage("journalNotesEditedOnDayExpanded") private var notesEditedOnDayExpanded: Bool = false
     @State private var activeOpenTabId: String?
     @State private var openNoteTabListNonEmpty: Bool = false
+    /// Identifies this screen as `NoteWorkspace.visibleNoteInstanceId` so iPad keyboard commands reach
+    /// only the note on screen.
+    @State private var paneInstanceId = UUID()
+    /// iPad note inspector (Trilium's right pane). Stays open across notes and launches, like Trilium's.
+    @AppStorage("noteInspectorVisible") private var showsNoteInspector = false
+    @AppStorage("noteInspectorTab") private var noteInspectorTabRaw = NoteInspectorTab.contents.rawValue
+    /// Headings of the note on screen, for the inspector's table of contents.
+    @State private var tocHeadings: [NoteHeading] = []
+    /// A file is being dragged over the note (iPad layout); dropping it adds an attachment.
+    @State private var isFileDropTargeted = false
     @State private var isTabBarReordering = false
 
     private var persistedLastActiveOpenTabId: String {
@@ -940,6 +972,8 @@ struct NoteDetailView: View {
                 Log.popGesture.info("NoteDetail shouldBlock=\(blocked) noteType=\(type, privacy: .public) editing=\(viewModel?.isEditing == true)")
             }
             .task(id: activeNoteId) { await initialLoad() }
+            // Tab switches swap the note in place, so report on change as well as on (re)appear.
+            .onChange(of: activeNoteId, initial: true) { _, id in noteWorkspace?.visibleNoteId = id }
             .navigationDestination(item: $navigateToNoteId) { linkedNoteId in
                 NoteDetailView(noteId: linkedNoteId, title: "", startInEditMode: false)
             }
@@ -947,7 +981,7 @@ struct NoteDetailView: View {
                 NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if showNoteTabsBar, openNoteTabListNonEmpty, viewModel?.isEditing != true {
+                if noteWorkspace == nil, showNoteTabsBar, openNoteTabListNonEmpty, viewModel?.isEditing != true {
                     NoteTabsBar(
                         currentOpenTabId: activeOpenTabId,
                         onSelect: { selectOpenNoteTab($0) },
@@ -961,10 +995,13 @@ struct NoteDetailView: View {
                 }
             }
             .toolbar(viewModel?.isEditing == true ? .hidden : .visible, for: .tabBar)
+            .onChange(of: viewModel?.isEditing == true, initial: true) { _, editing in
+                noteWorkspace?.isEditingNote = editing
+            }
             .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing == true)
             .onChange(of: viewModel?.note?.noteId) { _, _ in refreshOpenNoteTabListNonEmpty() }
             .onChange(of: viewModel?.shouldDismissAfterServerDeletion) { _, shouldDismiss in
-                if shouldDismiss == true { dismiss() }
+                if shouldDismiss == true { closeNote() }
             }
             .onChange(of: showNoteTabsBar) { _, _ in refreshOpenNoteTabListNonEmpty() }
             .onChange(of: activeOpenTabId) { _, newTab in
@@ -979,6 +1016,10 @@ struct NoteDetailView: View {
                 validateOrphanedActiveOpenTabId()
             }
             .onAppear {
+                noteWorkspace?.visibleNoteId = activeNoteId
+                noteWorkspace?.visibleNoteInstanceId = paneInstanceId
+                // Leaving a linked note that was mid-edit doesn't change this note's own value.
+                noteWorkspace?.isEditingNote = viewModel?.isEditing == true
                 refreshOpenNoteTabListNonEmpty()
                 if showNoteTabsBar, let t = activeOpenTabId { LastActiveOpenTabStore.set(t, profileId: appState.activeProfile?.id) }
                 if showNoteTabsBar, retargetActiveOpenTab { restoreActiveOpenTabToCurrentNoteIfDrifted() }
@@ -994,13 +1035,73 @@ struct NoteDetailView: View {
                 }
             }
             .onChange(of: appState.activeProfile?.id) { _, _ in
-                dismiss()
+                closeNote()
             }
             .onChange(of: navigateToNoteId) { oldValue, newValue in
                 guard oldValue != nil, newValue == nil else { return }
                 if showNoteTabsBar, retargetActiveOpenTab { restoreActiveOpenTabToCurrentNoteIfDrifted() }
             }
             .overlay { bodyChangeListeners }
+    }
+
+    /// Saves whichever editor is open, fetching the latest state from its web view first.
+    private func saveEditedContent(vm: NoteDetailViewModel, note: NoteItem) {
+        switch note.type {
+        case .canvas:
+            saveCanvasContent(vm: vm)
+        case .spreadsheet:
+            saveSpreadsheetContent(vm: vm)
+        case .mindMap:
+            saveMindMapContent(vm: vm)
+        default:
+            saveRichTextContent(vm: vm)
+        }
+    }
+
+    /// iPad keyboard / menu-bar commands for the note on screen (see `TrinoteCommands`). Commands that
+    /// don't apply right now (Save while reading, Edit while editing…) do nothing.
+    private func handleWorkspaceCommand(_ command: WorkspaceCommand) {
+        guard let vm = viewModel, let note = vm.note else { return }
+        switch command {
+        case .newNote:
+            guard !vm.isEditing else { return }
+            vm.showCreateChild = true
+        case .editNote:
+            guard !vm.isEditing, note.type.isEditable, !vm.needsProtectedSession else { return }
+            vm.startEditing()
+        case .saveNote:
+            guard vm.isEditing, !vm.isSaving else { return }
+            saveEditedContent(vm: vm, note: note)
+        case .findInNote:
+            guard !vm.isEditing, note.type.supportsReadOnlyOnPageFind else { return }
+            findControl.isPresented = true
+        case .back:
+            // Only a linked note pushed inside the pane has somewhere to go back to.
+            guard onClose == nil, !vm.isEditing else { return }
+            dismiss()
+        case .jumpToNote, .showSection, .focusSearch, .toggleSidebar, .nextTab, .previousTab, .closeTab:
+            break
+        }
+    }
+
+    /// Leaves this note: the iPad pane root asks the pane to show `next` (or nothing); anywhere else the
+    /// note is popped or dismissed.
+    private func closeNote(showing next: NoteRoute? = nil) {
+        if let onClose {
+            onClose(next)
+        } else {
+            dismiss()
+        }
+    }
+
+    /// The parent to show in the iPad pane after deleting this note, as Trilium does. `nil` at top level.
+    private func parentRouteForClose(_ vm: NoteDetailViewModel) -> NoteRoute? {
+        guard onClose != nil else { return nil }
+        let crumbs = vm.breadcrumbs
+        guard let index = crumbs.firstIndex(where: { $0.noteId == vm.noteId }), index > 0 else { return nil }
+        let parent = crumbs[index - 1]
+        guard parent.noteId != "root" else { return nil }
+        return NoteRoute(noteId: parent.noteId, title: parent.title)
     }
 
     private func refreshOpenNoteTabListNonEmpty() {
@@ -1025,7 +1126,7 @@ struct NoteDetailView: View {
         .navigationBarBackButtonHidden(viewModel?.isEditing == true)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if viewModel?.isEditing == true {
+            if viewModel?.isEditing == true, onClose == nil {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         dismiss()
@@ -1333,6 +1434,10 @@ struct NoteDetailView: View {
 
         Color.clear
             .frame(width: 0, height: 0)
+            .onChange(of: noteWorkspace?.commandRequest) { _, request in
+                guard let request, noteWorkspace?.visibleNoteInstanceId == paneInstanceId else { return }
+                handleWorkspaceCommand(request.command)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .trinoteOfflineNoteIdReplaced)) { notification in
                 guard let from = notification.userInfo?["from"] as? String,
                       let to = notification.userInfo?["to"] as? String,
@@ -1419,6 +1524,30 @@ struct NoteDetailView: View {
         pendingFindQuery != nil && pendingFindMatchIndex != nil
     }
 
+    private var fileDropHint: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+            .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                Label(
+                    String(localized: "Drop to Attach to This Note", comment: "iPad: file dragged over a note"),
+                    systemImage: "paperclip"
+                )
+                .font(.headline)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.regularMaterial, in: Capsule())
+            }
+            .padding(8)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+    }
+
+    /// Maximum Content Width setting (iPad); the note column is centered within it.
+    private var contentWidthLimit: CGFloat {
+        NoteContentWidth.limit(forStored: noteMaxContentWidth)
+    }
+
     @ViewBuilder
     private func readOnlyNoteSurface(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
         ZStack(alignment: .bottomTrailing) {
@@ -1433,7 +1562,7 @@ struct NoteDetailView: View {
                     noteBody(vm, note: note, findControl: findControl)
                     childNotesSection(vm)
 
-                    if vm.showDetails {
+                    if vm.showDetails, !usesNoteInspector {
                         attachmentsSection(vm)
                         metadataSection(note)
                     }
@@ -1474,6 +1603,8 @@ struct NoteDetailView: View {
                     }
                     .frame(width: 0, height: 0)
                 )
+                .frame(maxWidth: contentWidthLimit)
+                .frame(maxWidth: .infinity)
             }
             .simultaneousGesture(longPressToEditGesture(vm: vm, note: note))
             .opacity(isReadOnlyScrollRevealPending ? 0 : 1)
@@ -1492,6 +1623,21 @@ struct NoteDetailView: View {
                 Color(uiColor: .systemBackground)
                     .transition(.opacity)
                     .allowsHitTesting(false)
+            }
+        }
+        .onDrop(
+            of: [.data],
+            delegate: NoteFileDropDelegate(
+                isEnabled: noteWorkspace != nil && !vm.needsProtectedSession,
+                isTargeted: $isFileDropTargeted,
+                onFile: { data, mime, filename in
+                    presentAttachmentUploadNamePrompt(data: data, mime: mime, filename: filename)
+                }
+            )
+        )
+        .overlay {
+            if isFileDropTargeted {
+                fileDropHint
             }
         }
         .animation(.easeInOut(duration: 0.22), value: findControl.isPresented)
@@ -1585,6 +1731,7 @@ struct NoteDetailView: View {
                             editorStatusBanner(vm)
                             notesEditedOnDaySection(vm, compact: true)
                             richTextEditingView(vm)
+                                .frame(maxWidth: contentWidthLimit)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         }
                         .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
@@ -1595,6 +1742,7 @@ struct NoteDetailView: View {
                             editorStatusBanner(vm)
                             notesEditedOnDaySection(vm, compact: true)
                             codeEditingView(vm)
+                                .frame(maxWidth: contentWidthLimit)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         }
                         .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
@@ -1614,6 +1762,10 @@ struct NoteDetailView: View {
                 }
             }
             .toolbar { noteToolbar(vm, note: note) }
+            .inspector(isPresented: noteInspectorBinding) {
+                noteInspector(vm, note: note)
+                    .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
+            }
             .onAppear { loadFavoriteNoteIds() }
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavoriteNoteIds() }
             .onReceive(NotificationCenter.default.publisher(for: .trinoteTreeShouldRefresh)) { _ in
@@ -1760,7 +1912,7 @@ struct NoteDetailView: View {
                         .environment(appState)
                 }
             }
-            .sheet(isPresented: $showNoteOverflowMenu) {
+            .sheet(isPresented: noteOverflowPresentationBinding(asPopover: false)) {
                 noteOverflowActionsSheet(vm: vm, note: note)
             }
             .alert(
@@ -1801,7 +1953,8 @@ struct NoteDetailView: View {
                 onConfirm: {
                     let erase = eraseNotesOnDelete
                     Task {
-                        if await vm.deleteNote(eraseNotes: erase) { dismiss() }
+                        let parent = parentRouteForClose(vm)
+                        if await vm.deleteNote(eraseNotes: erase) { closeNote(showing: parent) }
                     }
                 },
                 onCancel: { eraseNotesOnDelete = false }
@@ -3894,7 +4047,147 @@ struct NoteDetailView: View {
                 Image(systemName: "ellipsis.circle")
             }
             .accessibilityLabel(String(localized: "Note actions", comment: "Overflow menu"))
+            .popover(isPresented: noteOverflowPresentationBinding(asPopover: true), arrowEdge: .top) {
+                VStack(spacing: 0) {
+                    noteOverflowActionButtons(vm: vm, note: note)
+                }
+                .padding(.vertical, 8)
+                .modifier(NoteOverflowPopoverSizingModifier())
+            }
+
+            if usesNoteInspector {
+                Button {
+                    showsNoteInspector.toggle()
+                } label: {
+                    Image(systemName: "sidebar.right")
+                }
+                .accessibilityLabel(
+                    showsNoteInspector
+                        ? String(localized: "Hide Note Panel", comment: "iPad: hide the table of contents / info column")
+                        : String(localized: "Show Note Panel", comment: "iPad: show the table of contents / info column")
+                )
+            }
         }
+    }
+
+    // MARK: - Note inspector (iPad)
+
+    /// iPad split layout: table of contents and note details in a column beside the note (Trilium's right
+    /// pane) instead of below it.
+    private var usesNoteInspector: Bool {
+        noteWorkspace != nil && horizontalSizeClass == .regular
+    }
+
+    private var noteInspectorTab: NoteInspectorTab {
+        get { NoteInspectorTab(rawValue: noteInspectorTabRaw) ?? .contents }
+        nonmutating set { noteInspectorTabRaw = newValue.rawValue }
+    }
+
+    private var noteInspectorBinding: Binding<Bool> {
+        Binding(
+            get: { usesNoteInspector && showsNoteInspector },
+            set: { showsNoteInspector = $0 }
+        )
+    }
+
+    private func noteDetailsShown(_ vm: NoteDetailViewModel) -> Bool {
+        usesNoteInspector ? showsNoteInspector && noteInspectorTab == .info : vm.showDetails
+    }
+
+    /// "Note Details": the inspector's Info tab on iPad, the section below the note elsewhere.
+    private func toggleNoteDetails(_ vm: NoteDetailViewModel) {
+        guard usesNoteInspector else {
+            withAnimation { vm.showDetails.toggle() }
+            return
+        }
+        if noteDetailsShown(vm) {
+            showsNoteInspector = false
+        } else {
+            noteInspectorTab = .info
+            showsNoteInspector = true
+        }
+    }
+
+    @ViewBuilder
+    private func noteInspector(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        VStack(spacing: 0) {
+            Picker(
+                String(localized: "Note Panel", comment: "iPad note inspector tab picker"),
+                selection: Binding(get: { noteInspectorTab }, set: { noteInspectorTab = $0 })
+            ) {
+                Text(String(localized: "Contents", comment: "iPad note inspector tab: table of contents")).tag(NoteInspectorTab.contents)
+                Text(String(localized: "Info", comment: "iPad note inspector tab: note details")).tag(NoteInspectorTab.info)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            Divider()
+            switch noteInspectorTab {
+            case .contents:
+                tableOfContents(vm)
+            case .info:
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        metadataSection(note)
+                        attachmentsSection(vm)
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        // Re-read headings when a document finishes loading, editing ends, or the tab shows.
+        .task(id: "\(findControl.loadedHTMLDocumentCount)-\(vm.isEditing)-\(noteInspectorTabRaw)") {
+            guard noteInspectorTab == .contents, !vm.isEditing else { return }
+            let control = findControl
+            tocHeadings = await withCheckedContinuation { continuation in
+                control.readHeadings { continuation.resume(returning: $0) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tableOfContents(_ vm: NoteDetailViewModel) -> some View {
+        if vm.isEditing {
+            ContentUnavailableView(
+                String(localized: "Contents Show While Reading", comment: "iPad table of contents while editing"),
+                systemImage: "list.bullet.indent",
+                description: Text(String(localized: "Save or cancel your edit to see this note's headings.", comment: "iPad table of contents while editing"))
+            )
+        } else if tocHeadings.isEmpty {
+            ContentUnavailableView(
+                String(localized: "No Headings", comment: "iPad table of contents empty"),
+                systemImage: "list.bullet.indent",
+                description: Text(String(localized: "Headings in this note appear here.", comment: "iPad table of contents empty hint"))
+            )
+        } else {
+            let topLevel = tocHeadings.map(\.level).min() ?? 1
+            List(tocHeadings) { heading in
+                Button {
+                    findControl.scrollToHeading(at: heading.index)
+                } label: {
+                    Text(heading.text)
+                        .font(heading.level == topLevel ? .subheadline.weight(.semibold) : .subheadline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .padding(.leading, CGFloat(heading.level - topLevel) * 14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hoverEffect(.highlight)
+            }
+            .listStyle(.plain)
+        }
+    }
+
+    /// Wide windows (iPad) show the ⋯ actions as a popover on the button, like a desktop menu; narrow
+    /// ones keep the bottom sheet.
+    private func noteOverflowPresentationBinding(asPopover: Bool) -> Binding<Bool> {
+        Binding(
+            get: { showNoteOverflowMenu && (horizontalSizeClass == .regular) == asPopover },
+            set: { if !$0 { showNoteOverflowMenu = false } }
+        )
     }
 
     @ViewBuilder
@@ -3913,14 +4206,7 @@ struct NoteDetailView: View {
             Button {
                 dismissNoteOverflow()
                 if vm.isEditing {
-                    switch note.type {
-                    case .canvas:
-                        saveCanvasContent(vm: vm)
-                    case .spreadsheet:
-                        saveSpreadsheetContent(vm: vm)
-                    default:
-                        saveRichTextContent(vm: vm)
-                    }
+                    saveEditedContent(vm: vm, note: note)
                 } else {
                     vm.startEditing()
                 }
@@ -4024,13 +4310,13 @@ struct NoteDetailView: View {
         Button {
             recordToolbarQuickAction(.noteDetails)
             dismissNoteOverflow()
-            withAnimation { vm.showDetails.toggle() }
+            toggleNoteDetails(vm)
         } label: {
             noteOverflowLabel(
-                vm.showDetails
+                noteDetailsShown(vm)
                     ? String(localized: "Hide Details", comment: "Note overflow toggle details")
                     : String(localized: "Note Details", comment: "Note overflow toggle details"),
-                systemImage: vm.showDetails ? "info.circle.fill" : "info.circle"
+                systemImage: noteDetailsShown(vm) ? "info.circle.fill" : "info.circle"
             )
         }
         .buttonStyle(.plain)
@@ -4278,7 +4564,7 @@ struct NoteDetailView: View {
         case .newChild:
             vm.showCreateChild = true
         case .noteDetails:
-            withAnimation { vm.showDetails.toggle() }
+            toggleNoteDetails(vm)
         case .duplicate:
             Task {
                 if let dup = await vm.duplicateNote() {
@@ -4305,7 +4591,7 @@ struct NoteDetailView: View {
         case .newChild:
             Image(systemName: "plus")
         case .noteDetails:
-            Image(systemName: vm.showDetails ? "info.circle.fill" : "info.circle")
+            Image(systemName: noteDetailsShown(vm) ? "info.circle.fill" : "info.circle")
         case .duplicate:
             Image(systemName: "doc.on.doc")
         case .findOnPage:
@@ -4322,7 +4608,7 @@ struct NoteDetailView: View {
         case .newChild:
             return String(localized: "New child note", comment: "Toolbar repeat last action")
         case .noteDetails:
-            return vm.showDetails
+            return noteDetailsShown(vm)
                 ? String(localized: "Hide note details", comment: "Toolbar repeat last action")
                 : String(localized: "Show note details", comment: "Toolbar repeat last action")
         case .duplicate:
@@ -4522,7 +4808,7 @@ private struct NoteOverflowSheetSizingModifier: ViewModifier {
     @State private var contentHeight: CGFloat = 740
 
     func body(content: Content) -> some View {
-        let maxHeight = UIScreen.main.bounds.height * 0.92
+        let maxHeight = AppDelegate.foregroundWindowFrameInScreen.height * 0.92
         let detentHeight = min(max(contentHeight, 280), maxHeight)
         content
             .frame(maxWidth: .infinity)
@@ -4541,6 +4827,80 @@ private struct NoteOverflowSheetSizingModifier: ViewModifier {
             }
             .presentationDetents([.height(detentHeight)])
             .presentationDragIndicator(.visible)
+    }
+}
+
+/// Files dropped on a note in the iPad layout become attachments, through the usual name prompt. Notes dragged
+/// from the tree, and text or links from other apps, aren't files and are left alone.
+private struct NoteFileDropDelegate: DropDelegate {
+    let isEnabled: Bool
+    @Binding var isTargeted: Bool
+    /// Data, MIME type, file name.
+    let onFile: @MainActor @Sendable (Data, String, String) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        guard isEnabled,
+              !info.hasItemsConforming(to: [TreeNoteDrag.type]),
+              let provider = info.itemProviders(for: [.data]).first
+        else { return false }
+        return provider.suggestedName != nil || !info.hasItemsConforming(to: [.text, .url])
+    }
+
+    func dropEntered(info: DropInfo) {
+        withAnimation(.easeOut(duration: 0.15)) { isTargeted = true }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .copy)
+    }
+
+    func dropExited(info: DropInfo) {
+        withAnimation(.easeOut(duration: 0.15)) { isTargeted = false }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        isTargeted = false
+        guard let provider = info.itemProviders(for: [.data]).first else { return false }
+        let typeIdentifier = provider.registeredTypeIdentifiers.first { UTType($0)?.conforms(to: .data) == true }
+            ?? UTType.data.identifier
+        let onFile = onFile
+        provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, _ in
+            // The file is only there during this callback.
+            guard let url, let data = try? Data(contentsOf: url) else { return }
+            let type = UTType(typeIdentifier)
+            let filename = url.pathExtension.isEmpty
+                ? url.lastPathComponent + (type?.preferredFilenameExtension.map { ".\($0)" } ?? "")
+                : url.lastPathComponent
+            let mime = type?.preferredMIMEType
+                ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                ?? "application/octet-stream"
+            Task { @MainActor in onFile(data, mime, filename) }
+        }
+        return true
+    }
+}
+
+/// The ⋯ actions as a popover: a fixed width, scrolling when the list is taller than the window allows.
+private struct NoteOverflowPopoverSizingModifier: ViewModifier {
+    @State private var contentHeight: CGFloat = 600
+    private static let width: CGFloat = 320
+
+    func body(content: Content) -> some View {
+        let maxHeight = AppDelegate.foregroundWindowFrameInScreen.height * 0.8
+        ScrollView {
+            content
+                .fixedSize(horizontal: false, vertical: true)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: NoteOverflowSheetHeightKey.self, value: proxy.size.height)
+                    }
+                }
+        }
+        .onPreferenceChange(NoteOverflowSheetHeightKey.self) { measured in
+            guard measured > 100, abs(contentHeight - measured) > 1 else { return }
+            contentHeight = measured
+        }
+        .frame(width: Self.width, height: min(contentHeight, maxHeight))
     }
 }
 

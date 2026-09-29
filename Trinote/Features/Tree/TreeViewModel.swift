@@ -586,12 +586,16 @@ final class TreeViewModel {
         }
     }
 
-    /// Reveals `noteId` on this tree page: collapses every other open path, then expands only this note’s
-    /// ancestors (up to `maxInlineDepth`), without drilling deeper.
+    /// Reveals `noteId` on this tree page: collapses every other open path (unless `collapsingOthers` is
+    /// `false`, as in the iPad sidebar, which keeps other folders open like Trilium), then expands only this
+    /// note’s ancestors (up to `maxInlineDepth`), without drilling deeper.
     /// Returns the branch id and note id of the deepest visible path row for scrolling / highlighting.
     /// List updates are unanimated so returning from a note does not whip scroll top↔bottom.
     @discardableResult
-    func expandAncestorsTowardNote(_ noteId: String) async -> (branchId: String, noteId: String)? {
+    func expandAncestorsTowardNote(
+        _ noteId: String,
+        collapsingOthers: Bool = true
+    ) async -> (branchId: String, noteId: String)? {
         let path = await resolvePathUnderThisTree(to: noteId)
         let (expandNoteIds, revealNoteId) = TreePathReveal.ancestorsToExpandAndRevealNoteId(
             pathFromTreeChildrenToTarget: path
@@ -602,7 +606,9 @@ final class TreeViewModel {
         defer { suppressVisibleNodeAnimation = false }
 
         // Exclusive: only the active note’s path may stay open.
-        collapseAllExpanded()
+        if collapsingOthers {
+            collapseAllExpanded()
+        }
 
         // Expand level-by-level along the path (avoids expanding a shallow clone elsewhere in the tree).
         var level = rootChildren
