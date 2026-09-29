@@ -1,4 +1,5 @@
 import SwiftUI
+import PDFKit
 import UniformTypeIdentifiers
 
 struct FileNoteView: View {
@@ -11,9 +12,24 @@ struct FileNoteView: View {
     @State private var previewItem: AttachmentPreviewItem?
     @State private var showShareSheet = false
     @State private var shareURL: URL?
+    /// Parsed body of a PDF file note; nil for other files or a PDF that can't be shown inline.
+    @State private var pdfDocument: PDFDocument?
+    @State private var pdfPageIndex = 0
+    @State private var pdfWidth: CGFloat = 0
+    /// Visible height of the note `ScrollView`, so a tall page never fills more than the screen.
+    @State private var viewportHeight: CGFloat = 0
 
     private var isOfficeFile: Bool {
         OfficeMimeTypes.isOfficeMimeType(note.mime)
+    }
+
+    private var hasFileBytes: Bool {
+        !(viewModel.content?.isEmpty ?? true)
+    }
+
+    /// Trilium's `pdfHistory.json` is viewer state, not something the user attached.
+    private var visibleAttachments: [AttachmentItem] {
+        attachments.filter { !$0.isPDFViewerState }
     }
 
     var body: some View {
@@ -21,12 +37,14 @@ struct FileNoteView: View {
             if isOfficeFile {
                 officeHeader
                 officePreviewSection
+            } else if let pdfDocument {
+                pdfSection(pdfDocument)
             } else {
                 legacyHeader
             }
 
-            if !attachments.isEmpty {
-                ForEach(attachments) { attachment in
+            if !visibleAttachments.isEmpty {
+                ForEach(visibleAttachments) { attachment in
                     AttachmentRow(attachment: attachment, viewModel: viewModel, onOpenNote: onOpenNote)
                 }
             }
@@ -44,10 +62,14 @@ struct FileNoteView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, isOfficeFile ? 16 : 40)
+        .padding(.vertical, isOfficeFile || pdfDocument != nil ? 16 : 40)
         .task(id: viewModel.officePreviewLoadToken) {
             guard isOfficeFile else { return }
             await viewModel.loadFileNoteOfficePreviewIfNeeded()
+        }
+        .onChange(of: viewModel.content, initial: true) { _, data in
+            pdfDocument = Self.inlinePDFDocument(mime: note.mime, data: data)
+            pdfPageIndex = 0
         }
         .fullScreenCover(item: $previewItem) { item in
             AttachmentPreviewView(item: item) {
@@ -123,6 +145,57 @@ struct FileNoteView: View {
         }
     }
 
+    private func pdfSection(_ document: PDFDocument) -> some View {
+        VStack(spacing: 8) {
+            PDFPagedView(document: document, pageIndex: $pdfPageIndex)
+                .frame(maxWidth: .infinity)
+                .frame(height: pdfHeight(for: document))
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pdfWidth = $0 }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal)
+
+            HStack(spacing: 12) {
+                if document.pageCount > 1 {
+                    Text(String(localized: "Page \(pdfPageIndex + 1) of \(document.pageCount)", comment: "PDF file note page indicator"))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    previewItem = viewModel.prepareFileNoteBodyPreviewItem()
+                } label: {
+                    Label(String(localized: "Full Screen", comment: "Open PDF file note full screen"), systemImage: "arrow.up.left.and.arrow.down.right")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button {
+                    shareFileNote()
+                } label: {
+                    Label(String(localized: "Share", comment: "Share file note"), systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.horizontal)
+        }
+        .background {
+            EnclosingScrollViewportHeightReader { height in
+                if abs(height - viewportHeight) > 0.5 {
+                    viewportHeight = height
+                }
+            }
+        }
+    }
+
+    /// One page tall at the available width, capped so the whole page stays on screen.
+    private func pdfHeight(for document: PDFDocument) -> CGFloat {
+        let width = pdfWidth > 1 ? pdfWidth : 360
+        let pageHeight = width / Self.firstPageAspectRatio(document)
+        let cap = viewportHeight > 1 ? viewportHeight * 0.8 : 600
+        return min(max(pageHeight, 240), cap)
+    }
+
     private var legacyHeader: some View {
         VStack(spacing: 16) {
             Image(systemName: "doc.fill")
@@ -136,7 +209,53 @@ struct FileNoteView: View {
             Text(note.mime)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            if hasFileBytes {
+                HStack(spacing: 12) {
+                    Button {
+                        previewItem = viewModel.prepareFileNoteBodyPreviewItem()
+                    } label: {
+                        Label(String(localized: "Quick Look", comment: "Open file note in Quick Look"), systemImage: "eye")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Button {
+                        shareFileNote()
+                    } label: {
+                        Label(String(localized: "Share", comment: "Share file note"), systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else if !viewModel.isOnline {
+                Text(String(localized: "This file isn’t saved on this device. Connect to your server to open it.", comment: "File note body not cached while offline"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
         }
+        .padding(.horizontal)
+    }
+
+    /// PDF bodies (by MIME type or `%PDF-` header, for files uploaded as `application/octet-stream`)
+    /// that PDFKit can page through. Locked PDFs fall back to Quick Look, which can ask for the password.
+    static func inlinePDFDocument(mime: String, data: Data?) -> PDFDocument? {
+        guard let data, !data.isEmpty else { return nil }
+        let isPDF = OfficeMimeTypes.normalizedMIME(mime) == "application/pdf"
+            || data.starts(with: Data("%PDF-".utf8))
+        guard isPDF, let document = PDFDocument(data: data), !document.isLocked, document.pageCount > 0 else {
+            return nil
+        }
+        return document
+    }
+
+    /// Width ÷ height of the first page as displayed (crop box, after the page's rotation).
+    static func firstPageAspectRatio(_ document: PDFDocument) -> CGFloat {
+        let a4 = 1 / 2.squareRoot()
+        guard let page = document.page(at: 0) else { return a4 }
+        let box = page.bounds(for: .cropBox)
+        guard box.width > 1, box.height > 1 else { return a4 }
+        return abs(page.rotation) % 180 == 90 ? box.height / box.width : box.width / box.height
     }
 
     private func shareFileNote() {
@@ -145,6 +264,86 @@ struct FileNoteView: View {
               let url = try? AttachmentPreviewFileStore.write(data: data, filename: filename) else { return }
         shareURL = url
         showShareSheet = true
+    }
+}
+
+/// Inline PDF for file notes: one page at a time, swiped sideways, so it never fights the note's
+/// vertical `ScrollView`. Continuous reading is the Full Screen viewer (`AttachmentPreviewView`).
+private struct PDFPagedView: UIViewRepresentable {
+    let document: PDFDocument
+    @Binding var pageIndex: Int
+
+    func makeUIView(context: Context) -> FitToPagePDFView {
+        let view = FitToPagePDFView()
+        view.displayMode = .singlePage
+        view.displayDirection = .horizontal
+        view.usePageViewController(true, withViewOptions: nil)
+        view.backgroundColor = .secondarySystemGroupedBackground
+        view.document = document
+        view.autoScales = true
+        context.coordinator.observe(view)
+        return view
+    }
+
+    func updateUIView(_ view: FitToPagePDFView, context: Context) {
+        context.coordinator.pageIndex = $pageIndex
+        if view.document !== document {
+            view.document = document
+            view.fitPageToBounds()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(pageIndex: $pageIndex)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var pageIndex: Binding<Int>
+
+        init(pageIndex: Binding<Int>) {
+            self.pageIndex = pageIndex
+        }
+
+        func observe(_ view: PDFView) {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(pageChanged(_:)),
+                name: .PDFViewPageChanged,
+                object: view
+            )
+        }
+
+        @objc private func pageChanged(_ notification: Notification) {
+            guard let view = notification.object as? PDFView,
+                  let page = view.currentPage,
+                  let index = view.document?.index(for: page) else { return }
+            // PDFKit posts this during layout; defer so SwiftUI state isn't changed mid-update.
+            Task { @MainActor in
+                self.pageIndex.wrappedValue = index
+            }
+        }
+    }
+}
+
+/// PDFKit's page view controller ignores `autoScales`, leaving pages small; clamping the minimum zoom
+/// to the fitted scale on every size change makes each page fill the view. Pinch-zoom still works above it.
+private final class FitToPagePDFView: PDFView {
+    private var fittedSize: CGSize = .zero
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.size != fittedSize, bounds.width > 1, bounds.height > 1 else { return }
+        fittedSize = bounds.size
+        fitPageToBounds()
+    }
+
+    func fitPageToBounds() {
+        guard document != nil else { return }
+        let fit = scaleFactorForSizeToFit
+        guard fit > 0 else { return }
+        maxScaleFactor = fit * 4
+        minScaleFactor = fit
     }
 }
 

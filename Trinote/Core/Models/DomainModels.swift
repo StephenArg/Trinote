@@ -379,6 +379,8 @@ struct AttachmentItem: Identifiable, Hashable, Sendable {
 
     var id: String { attachmentId }
     var isImage: Bool { mime.hasPrefix("image/") }
+    /// Trilium's PDF viewer keeps the reader's page and zoom in this attachment on the PDF file note.
+    var isPDFViewerState: Bool { title == "pdfHistory.json" && mime == "application/json" }
     var humanReadableSize: String { ByteCountFormatter.string(fromByteCount: Int64(contentLength), countStyle: .file) }
 }
 

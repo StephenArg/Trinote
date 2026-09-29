@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// Office / EPUB MIME types Trilium v0.105+ can convert via `/office-preview`.
 /// Mirrors `OFFICE_MIME_TYPES` in Trilium `packages/commons/src/lib/office.ts`.
@@ -52,7 +53,7 @@ enum OfficeMimeTypes {
     static func filename(fromTitle title: String, mime: String?) -> String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let ext = preferredExtension(for: mime) else {
-            return trimmed.isEmpty ? "document" : trimmed
+            return systemFilename(fromTitle: trimmed.isEmpty ? "document" : trimmed, mime: mime)
         }
         if trimmed.isEmpty {
             return "document.\(ext)"
@@ -63,6 +64,20 @@ enum OfficeMimeTypes {
         }
         let basename = split.basename.isEmpty ? "document" : split.basename
         return AttachmentFilename.join(basename: basename, ext: ext)
+    }
+
+    /// Non-Office types (PDF, text, archives…): keeps a title whose extension already fits `mime`
+    /// (`photo.jpg` for `image/jpeg`), otherwise appends the system extension so Quick Look and
+    /// Share can tell what the file is. Unknown types keep the bare title.
+    private static func systemFilename(fromTitle title: String, mime: String?) -> String {
+        guard let normalized = normalizedMIME(mime),
+              let type = UTType(mimeType: normalized),
+              let ext = type.preferredFilenameExtension else { return title }
+        let titleExt = AttachmentFilename.split(title).ext
+        if !titleExt.isEmpty, let titleType = UTType(filenameExtension: titleExt), titleType.conforms(to: type) {
+            return title
+        }
+        return "\(title).\(ext)"
     }
 
     static func exceedsPreviewSize(_ byteCount: Int?) -> Bool {

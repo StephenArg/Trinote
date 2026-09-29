@@ -61,6 +61,18 @@ final class OfficeMimeTypesTests: XCTestCase {
         )
     }
 
+    func testFilenameAddsSystemExtensionForOtherTypes() {
+        XCTAssertEqual(
+            OfficeMimeTypes.filename(fromTitle: "Homework Booklet Year 8", mime: "application/pdf"),
+            "Homework Booklet Year 8.pdf"
+        )
+        XCTAssertEqual(OfficeMimeTypes.filename(fromTitle: "Scan.PDF", mime: "application/pdf"), "Scan.PDF")
+        XCTAssertEqual(OfficeMimeTypes.filename(fromTitle: "photo.jpg", mime: "image/jpeg"), "photo.jpg")
+        XCTAssertEqual(OfficeMimeTypes.filename(fromTitle: "v1.2 notes", mime: "application/pdf"), "v1.2 notes.pdf")
+        XCTAssertEqual(OfficeMimeTypes.filename(fromTitle: "  ", mime: "text/plain"), "document.txt")
+        XCTAssertEqual(OfficeMimeTypes.filename(fromTitle: "blob", mime: "application/octet-stream"), "blob")
+    }
+
     func testExceedsPreviewSize() {
         XCTAssertFalse(OfficeMimeTypes.exceedsPreviewSize(nil))
         XCTAssertFalse(OfficeMimeTypes.exceedsPreviewSize(OfficeMimeTypes.maxPreviewBytes))

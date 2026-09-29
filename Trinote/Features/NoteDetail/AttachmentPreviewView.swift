@@ -183,7 +183,8 @@ struct AttachmentPreviewItem: Identifiable {
         if isTextMime(lowered), let text = decodeText(from: data) {
             return .text(text)
         }
-        if lowered == "application/pdf" {
+        // Locked or unreadable PDFs go to Quick Look, which can ask for the password.
+        if lowered == "application/pdf", PDFDocument(data: data)?.isLocked == false {
             return .pdf
         }
         return .quickLook
