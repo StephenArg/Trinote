@@ -470,6 +470,7 @@ final class ShareViewController: UIViewController {
         case "gif": return "image/gif"
         case "webp": return "image/webp"
         case "heic": return "image/heic"
+        case "avif": return "image/avif"
         case "txt": return "text/plain"
         case "md", "markdown", "mdown": return "text/markdown"
         default: return "application/octet-stream"
@@ -490,6 +491,7 @@ final class ShareViewController: UIViewController {
         case "image/gif": return "gif"
         case "image/webp": return "webp"
         case "image/heic": return "heic"
+        case "image/avif": return "avif"
         default: return "jpg"
         }
     }

@@ -15,6 +15,7 @@ enum EditorPasteboardImage {
         "public.png",
         "public.jpeg",
         "public.heic",
+        "public.avif",
         "org.webmproject.webp",
         "com.compuserve.gif",
         "public.gif",

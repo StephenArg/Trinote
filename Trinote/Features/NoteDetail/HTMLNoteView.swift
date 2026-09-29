@@ -110,7 +110,7 @@ struct HTMLNoteView: View {
 /// the binding for `.fullScreenCover(item:)`, which gives us a fresh sheet per tap.
 struct FullScreenImagePayload: Identifiable {
     let id = UUID()
-    let image: UIImage
+    let image: OriginalImage
     let title: String?
 }
 
@@ -1158,8 +1158,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         // Tap any regular <img> in the note (not a linked image-note, not inside an include card,
         // not wrapped in an anchor) to open it full-screen. Images we serve ourselves are handed to
-        // native by reference so it can load the original bytes; anything else (a `data:` URI, a
-        // same-origin or remote URL) is captured from the rendered element via `canvas.toDataURL`.
+        // native by reference so it can load the original bytes, and a base64 `data:` URI already is
+        // the original bytes; anything else (a same-origin or remote URL) is captured from the rendered
+        // element via `canvas.toDataURL`, which yields a PNG of the current frame.
         function trinoteImageIsPreviewable(img) {
             if (!img) return false;
             if (img.hasAttribute('data-trinote-image-note-id')) return false;
@@ -1173,6 +1174,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 if (rawSrc.lastIndexOf('\(TriliumImageScheme.scheme)://', 0) === 0) {
                     window.webkit.messageHandlers.imagePreview.postMessage({
                         ref: rawSrc,
+                        alt: img.getAttribute('alt') || ''
+                    });
+                    return true;
+                }
+                var dataComma = rawSrc.indexOf(',');
+                if (rawSrc.lastIndexOf('data:image/', 0) === 0 && rawSrc.lastIndexOf(';base64', dataComma) > 0) {
+                    window.webkit.messageHandlers.imagePreview.postMessage({
+                        dataURL: rawSrc,
                         alt: img.getAttribute('alt') || ''
                     });
                     return true;
@@ -2196,7 +2205,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     guard let imageBytes else { return }
                     Task { [weak self] in
                         guard let data = await imageBytes(reference.routeType, reference.entityId),
-                              let image = UIImage(data: data)
+                              let image = OriginalImage(data: data)
                         else { return }
                         self?.onImagePreview?(FullScreenImagePayload(image: image, title: title))
                     }
@@ -2308,13 +2317,13 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
 
         /// Decodes a `data:image/...;base64,...` URI delivered from the read-only HTML.
-        private static func imageFromDataURL(_ dataURL: String) -> UIImage? {
+        private static func imageFromDataURL(_ dataURL: String) -> OriginalImage? {
             guard dataURL.hasPrefix("data:") else { return nil }
             guard let comma = dataURL.firstIndex(of: ","),
                   dataURL[..<comma].contains(";base64") else { return nil }
             let base64 = String(dataURL[dataURL.index(after: comma)...])
             guard let data = Data(base64Encoded: base64, options: [.ignoreUnknownCharacters]) else { return nil }
-            return UIImage(data: data)
+            return OriginalImage(data: data)
         }
 
         /// WKWebView often delivers `postMessage` numbers as `NSNumber` / `Double`, so `as? Int` fails silently.

@@ -139,7 +139,7 @@ enum AttachmentPreviewFileStore {
 
 struct AttachmentPreviewItem: Identifiable {
     enum Kind {
-        case image(UIImage)
+        case image(OriginalImage)
         case text(String)
         case pdf
         case quickLook
@@ -177,7 +177,7 @@ struct AttachmentPreviewItem: Identifiable {
 
     private static func previewKind(mime: String, data: Data) -> Kind {
         let lowered = mime.lowercased()
-        if lowered.hasPrefix("image/"), let image = UIImage(data: data) {
+        if lowered.hasPrefix("image/"), let image = OriginalImage(data: data) {
             return .image(image)
         }
         if isTextMime(lowered), let text = decodeText(from: data) {

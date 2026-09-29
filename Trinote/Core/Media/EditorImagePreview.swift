@@ -11,10 +11,10 @@ enum EditorImagePreview {
     static let maxPixelDimension: CGFloat = 1200
     private static let jpegQuality: CGFloat = 0.6
 
-    /// Nil when the payload must not be re-encoded (SVG is already tiny, GIF would lose its
-    /// animation) or when the image is small enough to leave alone.
+    /// Nil when the payload must not be re-encoded (SVG is already tiny, GIF and animated AVIF would
+    /// lose their animation) or when the image is small enough to leave alone.
     static func downscaledJPEG(from data: Data, mime: String) async -> Data? {
-        guard isDownscalableRaster(mime: mime) else { return nil }
+        guard isDownscalableRaster(mime: mime), !data.isAVIFSequence else { return nil }
         return await Task.detached(priority: .userInitiated) {
             guard let image = UIImage(data: data) else { return nil }
             let longest = max(image.size.width * image.scale, image.size.height * image.scale)
@@ -25,7 +25,7 @@ enum EditorImagePreview {
 
     private static func isDownscalableRaster(mime: String) -> Bool {
         switch mime.lowercased() {
-        case "image/jpeg", "image/png", "image/heic", "image/heif", "image/tiff", "image/bmp":
+        case "image/jpeg", "image/png", "image/heic", "image/heif", "image/avif", "image/tiff", "image/bmp":
             return true
         default:
             return false

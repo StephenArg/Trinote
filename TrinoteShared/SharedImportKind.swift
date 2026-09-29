@@ -68,11 +68,11 @@ enum SharedImportClassifier {
     }
 
     private static func isImage(extension ext: String, mime: String, uti: String) -> Bool {
-        let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff"]
+        let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff"]
         if imageExts.contains(ext) { return true }
         if mime.hasPrefix("image/") { return true }
         if uti.hasPrefix("public.image") || uti.hasPrefix("public.jpeg") || uti.hasPrefix("public.png")
-            || uti.contains("public.heic") || uti.contains("public.heif") {
+            || uti.contains("public.heic") || uti.contains("public.heif") || uti.contains("public.avif") {
             return true
         }
         return false

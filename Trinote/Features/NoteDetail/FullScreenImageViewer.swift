@@ -7,13 +7,13 @@ import UIKit
 /// same time (SwiftUI’s `MagnificationGesture` + `DragGesture` cannot share that touch stream).
 /// Swipe-down-to-dismiss still applies only while the image is at fit scale.
 struct FullScreenImageViewer: View {
-    let image: UIImage
+    let image: OriginalImage
     let title: String?
     let onDismiss: () -> Void
 
     @State private var isZoomed = false
     @State private var dismissDrag: CGFloat = 0
-    @State private var showShareSheet = false
+    @State private var shareItem: ShareSheetItem?
 
     var body: some View {
         GeometryReader { proxy in
@@ -56,8 +56,8 @@ struct FullScreenImageViewer: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showShareSheet) {
-            ShareSheet(items: [image])
+        .sheet(item: $shareItem) { item in
+            ShareSheet(items: item.items, onComplete: item.onComplete)
         }
         .accessibilityAction(named: Text(String(localized: "Close", comment: "Close full-screen image"))) {
             dismiss()
@@ -78,7 +78,7 @@ struct FullScreenImageViewer: View {
 
                 Spacer()
 
-                Button { showShareSheet = true } label: {
+                Button { shareItem = image.shareSheetItem(title: title) } label: {
                     Image(systemName: "square.and.arrow.up")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
@@ -119,7 +119,7 @@ private final class ZoomableScrollView: UIScrollView {
 
 /// UIKit zoom host: pinch and pan share one recognizer graph, so two fingers can drag while zooming.
 private struct ZoomableImageScrollView: UIViewRepresentable {
-    let image: UIImage
+    let image: OriginalImage
     /// Maximum zoom as a multiple of the fit-to-screen scale (Photos-style).
     let maxRelativeScale: CGFloat
     let doubleTapRelativeScale: CGFloat
@@ -157,7 +157,7 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         scroll.contentInsetAdjustmentBehavior = .never
         scroll.decelerationRate = .fast
 
-        let imageView = UIImageView(image: image)
+        let imageView = UIImageView(image: image.still)
         imageView.contentMode = .scaleAspectFit
         imageView.isUserInteractionEnabled = true
         imageView.backgroundColor = .clear
@@ -165,6 +165,10 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
 
         context.coordinator.scrollView = scroll
         context.coordinator.imageView = imageView
+        context.coordinator.displayedStill = image.still
+        // Frames replace `imageView.image` in place; every frame is the full canvas size, so the
+        // zoom and layout computed from the still hold for all of them.
+        context.coordinator.animator.start(image, in: imageView)
         context.coordinator.maxRelativeScale = maxRelativeScale
         context.coordinator.doubleTapRelativeScale = doubleTapRelativeScale
 
@@ -198,8 +202,11 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         coordinator.maxRelativeScale = maxRelativeScale
         coordinator.doubleTapRelativeScale = doubleTapRelativeScale
 
-        if coordinator.imageView?.image !== image {
-            coordinator.imageView?.image = image
+        // Compare against the still we installed, not `imageView.image`, which animation frames replace.
+        if coordinator.displayedStill !== image.still, let imageView = coordinator.imageView {
+            coordinator.displayedStill = image.still
+            imageView.image = image.still
+            coordinator.animator.start(image, in: imageView)
             coordinator.needsLayoutPass = true
         }
 
@@ -211,9 +218,15 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         }
     }
 
+    static func dismantleUIView(_ scroll: UIScrollView, coordinator: Coordinator) {
+        coordinator.animator.stop()
+    }
+
     final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         weak var scrollView: UIScrollView?
         weak var imageView: UIImageView?
+        var displayedStill: UIImage?
+        let animator = ImageFrameAnimator()
         weak var dismissPan: UIPanGestureRecognizer?
         var maxRelativeScale: CGFloat = 6
         var doubleTapRelativeScale: CGFloat = 2.5

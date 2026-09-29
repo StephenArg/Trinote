@@ -1130,6 +1130,9 @@ actor TriliumClient: TriliumClientProtocol {
         case "image/jpeg", "image/jpg": return "jpg"
         case "image/gif": return "gif"
         case "image/webp": return "webp"
+        case "image/avif": return "avif"
+        case "image/heic": return "heic"
+        case "image/heif": return "heif"
         case "application/pdf": return "pdf"
         default: return "bin"
         }

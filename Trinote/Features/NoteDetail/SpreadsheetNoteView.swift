@@ -61,9 +61,9 @@ struct SpreadsheetNoteView: View {
                         SpreadsheetPreviewImageTile(
                             reference: image.reference,
                             imageBytes: imageBytes,
-                            onTap: { uiImage in
+                            onTap: { image in
                                 fullScreenImage = FullScreenImagePayload(
-                                    image: uiImage,
+                                    image: image,
                                     title: String(localized: "Floating image", comment: "Full-screen title for spreadsheet float image")
                                 )
                             }
@@ -286,15 +286,15 @@ private struct SpreadsheetGridPreview: View {
 private struct SpreadsheetPreviewImageTile: View {
     let reference: SpreadsheetWorkbookImageURLs.ImageReference
     var imageBytes: TriliumImageSchemeHandler.ByteProvider?
-    var onTap: ((UIImage) -> Void)?
+    var onTap: ((OriginalImage) -> Void)?
 
-    @State private var uiImage: UIImage?
+    @State private var image: OriginalImage?
 
     var body: some View {
         Group {
-            if let onTap, let uiImage {
+            if let onTap, let image {
                 Button {
-                    onTap(uiImage)
+                    onTap(image)
                 } label: {
                     tileContent
                 }
@@ -306,19 +306,19 @@ private struct SpreadsheetPreviewImageTile: View {
             }
         }
         .task(id: reference) {
-            guard uiImage == nil, let imageBytes else { return }
+            guard image == nil, let imageBytes else { return }
             guard let data = await imageBytes(reference.routeType, reference.entityId),
                   data.isPlausibleInlineImagePayload,
-                  let image = UIImage(data: data) else { return }
-            uiImage = image
+                  let loaded = OriginalImage(data: data) else { return }
+            image = loaded
         }
     }
 
     @ViewBuilder
     private var tileContent: some View {
         ZStack {
-            if let uiImage {
-                Image(uiImage: uiImage)
+            if let image {
+                Image(uiImage: image.still)
                     .resizable()
                     .scaledToFill()
                     .clipped()

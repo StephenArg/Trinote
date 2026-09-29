@@ -253,7 +253,26 @@ extension View {
 extension Data {
     /// Sniff the image MIME type from the first few bytes; falls back to `image/png`.
     func detectImageMIME() -> String {
-        guard count >= 2 else { return "image/png" }
+        if let mime = sniffedRasterImageMIME { return mime }
+        if isSVG { return "image/svg+xml" }
+        return "image/png"
+    }
+
+    /// Use before emitting `<img src="data:…">`. `detectImageMIME()` falls back to `image/png`, which would
+    /// produce a broken image for JSON, plain text, or other non-image note bodies (e.g. mis-typed notes).
+    var isPlausibleInlineImagePayload: Bool {
+        if isEmpty { return false }
+        return isSVG || sniffedRasterImageMIME != nil
+    }
+
+    /// An AVIF image sequence (animated AVIF). Re-encoding one as a still would drop the animation.
+    var isAVIFSequence: Bool {
+        isoBMFFBrands?.contains("avis") ?? false
+    }
+
+    /// MIME for a raster format recognized by its magic bytes; nil for anything else (SVG and text included).
+    private var sniffedRasterImageMIME: String? {
+        guard count >= 2 else { return nil }
         var header = [UInt8](repeating: 0, count: Swift.min(12, count))
         copyBytes(to: &header, count: header.count)
 
@@ -262,30 +281,26 @@ extension Data {
         if header.count >= 4 && header[0...3] == [0x47, 0x49, 0x46, 0x38] { return "image/gif" }
         if header.count >= 12 && header[0...3] == [0x52, 0x49, 0x46, 0x46] && header[8...11] == [0x57, 0x45, 0x42, 0x50] { return "image/webp" }
 
-        if isSVG { return "image/svg+xml" }
-
-        return "image/png"
+        guard let brands = isoBMFFBrands else { return nil }
+        if brands.contains("avif") || brands.contains("avis") { return "image/avif" }
+        if brands.contains("heic") || brands.contains("heix") { return "image/heic" }
+        if brands.contains("mif1") { return "image/heif" }
+        return nil
     }
 
-    /// Use before emitting `<img src="data:…">`. `detectImageMIME()` falls back to `image/png`, which would
-    /// produce a broken image for JSON, plain text, or other non-image note bodies (e.g. mis-typed notes).
-    var isPlausibleInlineImagePayload: Bool {
-        if isEmpty { return false }
-        if isSVG { return true }
-        guard count >= 2 else { return false }
-        var header = [UInt8](repeating: 0, count: Swift.min(12, count))
-        copyBytes(to: &header, count: header.count)
-        if header[0] == 0xFF && header[1] == 0xD8 { return true }
-        if header.count >= 8 && header[0...3] == [0x89, 0x50, 0x4E, 0x47] { return true }
-        if header.count >= 4 && header[0...3] == [0x47, 0x49, 0x46, 0x38] { return true }
-        if header.count >= 12 && header[0...3] == [0x52, 0x49, 0x46, 0x46] && header[8...11] == [0x57, 0x45, 0x42, 0x50] { return true }
-        // Obvious non-binary payloads (canvas JSON, mermaid text, HTML)
-        if let prefix = String(data: prefix(Swift.min(64, count)), encoding: .utf8) {
-            let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") { return false }
-            if trimmed.hasPrefix("<!DOCTYPE") || trimmed.hasPrefix("<html") { return false }
-        }
-        return false
+    /// AVIF and HEIC/HEIF open with an ISO base media `ftyp` box whose major and compatible brands name
+    /// the image codec. MP4 and MOV open with the same box, so callers only act on image brands.
+    private var isoBMFFBrands: [String]? {
+        let bytes = [UInt8](prefix(64))
+        guard bytes.count >= 16, bytes[4...7] == [0x66, 0x74, 0x79, 0x70] else { return nil }  // "ftyp"
+        let boxSize = bytes[0...3].reduce(0) { $0 << 8 | Int($1) }
+        // A size of 0 means the box runs to the end of the file.
+        let end = boxSize == 0 ? bytes.count : Swift.min(boxSize, bytes.count)
+        guard end >= 16 else { return nil }
+        // Brands start at 8 (major) and 16 onward (compatible); 12..<16 is the minor version.
+        return stride(from: 8, to: end - 3, by: 4)
+            .filter { $0 != 12 }
+            .map { String(decoding: bytes[$0..<$0 + 4], as: UTF8.self) }
     }
 
     /// Checks whether the data looks like an SVG (text starting with `<svg` or `<?xml` containing `<svg`).

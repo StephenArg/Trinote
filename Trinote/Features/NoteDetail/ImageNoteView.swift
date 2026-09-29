@@ -4,15 +4,14 @@ struct ImageNoteView: View {
     let data: Data
     let title: String
 
-    @State private var showShareSheet = false
+    @State private var shareItem: ShareSheetItem?
     @State private var showFullScreen = false
 
     var body: some View {
-        if let uiImage = UIImage(data: data) {
+        if let image = OriginalImage(data: data) {
             VStack(spacing: 12) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+                AnimatedImageView(image: image)
+                    .aspectRatio(image.still.size, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .padding(.horizontal)
@@ -24,7 +23,7 @@ struct ImageNoteView: View {
 
                 HStack(spacing: 16) {
                     Button {
-                        showShareSheet = true
+                        shareItem = image.shareSheetItem(title: title)
                     } label: {
                         Label("Share", systemImage: "square.and.arrow.up")
                     }
@@ -32,7 +31,7 @@ struct ImageNoteView: View {
                     .controlSize(.small)
 
                     Button {
-                        UIPasteboard.general.image = uiImage
+                        image.copyToPasteboard()
                     } label: {
                         Label("Copy", systemImage: "doc.on.doc")
                     }
@@ -41,11 +40,11 @@ struct ImageNoteView: View {
                 }
             }
             .padding(.vertical)
-            .sheet(isPresented: $showShareSheet) {
-                ShareSheet(items: [uiImage])
+            .sheet(item: $shareItem) { item in
+                ShareSheet(items: item.items, onComplete: item.onComplete)
             }
             .fullScreenCover(isPresented: $showFullScreen) {
-                FullScreenImageViewer(image: uiImage, title: title) {
+                FullScreenImageViewer(image: image, title: title) {
                     showFullScreen = false
                 }
             }
@@ -59,12 +58,26 @@ struct ImageNoteView: View {
     }
 }
 
+/// What a share sheet hands over, built when Share is tapped. Presenting with `.sheet(item:)` delivers it
+/// to the sheet directly; `@State` read only inside a `.sheet(isPresented:)` closure is not tracked, so the
+/// sheet can open with the value from before the tap.
+struct ShareSheetItem: Identifiable {
+    let id = UUID()
+    let items: [Any]
+    /// Runs when the share finishes or is cancelled, e.g. to remove a temporary file.
+    var onComplete: (() -> Void)?
+}
+
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
+    var onComplete: (() -> Void)?
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let activity = UIActivityViewController(activityItems: items, applicationActivities: nil)
         activity.view.backgroundColor = .systemBackground
+        if let onComplete {
+            activity.completionWithItemsHandler = { _, _, _, _ in onComplete() }
+        }
         return activity
     }
 
