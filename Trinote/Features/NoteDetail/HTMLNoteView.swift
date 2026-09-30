@@ -32,8 +32,15 @@ struct HTMLNoteView: View {
     var allowCollapsibleReorder: Bool = true
     /// Colors that replace the reader's own (e.g. a presentation theme's), whatever the appearance setting.
     var themeOverride: HTMLThemeColors? = nil
+    /// Identifies the note (with its server profile) so its laid-out height is remembered and the body opens at
+    /// that height next time (see `NoteBodyLayoutCache`). Nil keeps the placeholder height until the page reports.
+    var layoutCacheKey: String? = nil
 
-    @State private var contentHeight: CGFloat = 200
+    /// Height the body starts at until the page reports its own, when no remembered height fits.
+    static let placeholderHeight: CGFloat = 200
+
+    /// Height the page last reported; nil until it does.
+    @State private var reportedHeight: CGFloat?
     @State private var fullScreenImage: FullScreenImagePayload?
     @State private var attachmentPreview: AttachmentPreviewItem?
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
@@ -89,10 +96,11 @@ struct HTMLNoteView: View {
             imageBytes: imageBytes,
             findControl: findControl,
             colorScheme: colorScheme,
-            onHeightChanged: { contentHeight = $0 },
+            reportedHeight: reportedHeight,
+            layoutCacheKey: layoutCacheKey,
+            onHeightChanged: { reportedHeight = $0 },
             onImagePreview: { payload in fullScreenImage = payload }
         )
-        .frame(height: contentHeight)
         .fullScreenCover(item: $fullScreenImage) { payload in
             FullScreenImageViewer(image: payload.image, title: payload.title) {
                 fullScreenImage = nil
@@ -143,6 +151,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     var imageBytes: TriliumImageSchemeHandler.ByteProvider?
     var findControl: FindOnPageControl?
     var colorScheme: ColorScheme
+    var reportedHeight: CGFloat?
+    var layoutCacheKey: String?
     var onHeightChanged: ((CGFloat) -> Void)?
     var onImagePreview: ((FullScreenImagePayload) -> Void)?
 
@@ -226,6 +236,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
             phase: "makeUIView"
         )
+        handler.beginPage(wrapped, layoutCacheKey: layoutCacheKey)
+        handler.lastSizedReportedHeight = reportedHeight
         handler.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
         handler.traceLoadStartedAt = handler.loadHTMLStartedAt
         NoteOpenTrace.log("web makeUIView bodyUtf16=\(html.utf16.count) wrappedUtf16=\(wrapped.utf16.count)")
@@ -253,6 +265,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.imageBytes = imageBytes
         coordinator.onHeightChanged = onHeightChanged
         coordinator.onImagePreview = onImagePreview
+        if coordinator.lastSizedReportedHeight != reportedHeight {
+            coordinator.lastSizedReportedHeight = reportedHeight
+            container.invalidateIntrinsicContentSize()
+        }
         findControl?.registerHTMLWebView(webView)
         webView.applyTrinoteAppearanceMode()
         let appearanceChanged = coordinator.lastAppliedColorScheme != colorScheme
@@ -294,6 +310,25 @@ private struct HTMLNoteWebView: UIViewRepresentable {
            taskStateCycleEnabled || Self.lengthChangeFitsCheckboxToggle(previous: previous, incoming: html) {
             coordinator.loadedHTML = html
             coordinator.checkboxOnlyRevision = checkboxOnlyRevision
+            if coordinator.layoutCacheKey != nil {
+                // The page now matches `html` without reloading; key its remembered height to that, off the toggle's path.
+                let theme = themeColors
+                let options = (checkboxReorderEnabled, listInteractionEnabled, taskStateCycleEnabled,
+                               collapsibleReorderEnabled, collapsibleTogglePersistEnabled)
+                DispatchQueue.main.async { [weak coordinator] in
+                    guard let coordinator, coordinator.loadedHTML == html else { return }
+                    let page = Self.wrapHTML(
+                        html,
+                        theme: theme,
+                        checkboxReorderEnabled: options.0,
+                        listInteractionEnabled: options.1,
+                        taskStateCycleEnabled: options.2,
+                        collapsibleReorderEnabled: options.3,
+                        collapsibleTogglePersistEnabled: options.4
+                    )
+                    coordinator.pageChangedInPlace(page)
+                }
+            }
             CheckboxPerf.log(
                 "updateUIView skipReload lastToggle=#\(CheckboxPerf.lastToggleID) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs()) compareMs=\(compareMs) revision=\(checkboxOnlyRevision) totalMs=\(CheckboxPerf.ms(t0))"
             )
@@ -320,6 +355,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
             phase: "updateUIView-reload"
         )
+        coordinator.beginPage(wrapped, layoutCacheKey: layoutCacheKey)
+        container.invalidateIntrinsicContentSize()
         coordinator.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
         coordinator.traceLoadStartedAt = coordinator.loadHTMLStartedAt
         NoteOpenTrace.log("web RELOAD htmlChanged=\(htmlChanged) themeChanged=\(themeChanged) bodyUtf16=\(html.utf16.count)")
@@ -327,6 +364,32 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             "loadHTMLString phase=updateUIView-reload lastToggle=#\(CheckboxPerf.lastToggleID) wrappedUtf16=\(wrapped.utf16.count) updateMs=\(CheckboxPerf.ms(t0))"
         )
         webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(body: html, canonicalBase: baseURL))
+    }
+
+    /// The body is as tall as its page: the height the page reported, else the height remembered for this exact
+    /// page at this width, else a placeholder until the page reports.
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ReadOnlyWebViewportContainer, context: Context) -> CGSize? {
+        let coordinator = context.coordinator
+        let width = proposal.width ?? uiView.bounds.width
+        // Only a real layout width says anything about this page (stacks also probe with zero and infinity).
+        let isLayoutWidth = proposal.width != nil && width.isFinite && width > 0
+        if let reportedHeight, coordinator.hasReportForCurrentPage || coordinator.layoutCacheKey == nil {
+            return CGSize(width: width, height: reportedHeight)
+        }
+        if isLayoutWidth, let key = coordinator.layoutCacheKey, let signature = coordinator.pageSignature,
+           let remembered = NoteBodyLayoutCache.height(forKey: key, width: width, signature: signature) {
+            if coordinator.heightFromCache != remembered {
+                NoteOpenTrace.log("web sized from remembered height \(remembered) at width \(width)")
+            }
+            coordinator.heightFromCache = remembered
+            uiView.hasKnownHeight = true
+            return CGSize(width: width, height: remembered)
+        }
+        if isLayoutWidth {
+            coordinator.heightFromCache = nil
+            uiView.hasKnownHeight = false
+        }
+        return CGSize(width: width, height: reportedHeight ?? HTMLNoteView.placeholderHeight)
     }
 
     static func dismantleUIView(_ container: ReadOnlyWebViewportContainer, coordinator: Coordinator) {
@@ -2103,6 +2166,49 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var onHeightChanged: ((CGFloat) -> Void)?
         var onImagePreview: ((FullScreenImagePayload) -> Void)?
 
+        // MARK: Remembered height (`NoteBodyLayoutCache`)
+
+        var layoutCacheKey: String?
+        /// `NoteBodyLayoutCache.signature(ofPage:…)` of the page showing; nil without a `layoutCacheKey`.
+        var pageSignature: UInt64?
+        /// The page's `load` has finished (images in), so the height it reports is the one worth remembering.
+        var pageLoaded = false
+        /// The remembered height the current page opened at, while it applies.
+        var heightFromCache: CGFloat?
+        /// The page showing has reported a height (heights from the previous page don't count).
+        var hasReportForCurrentPage = false
+        var lastReportedHeight: CGFloat?
+        var lastSizedReportedHeight: CGFloat?
+
+        func beginPage(_ page: String, layoutCacheKey: String?) {
+            self.layoutCacheKey = layoutCacheKey
+            pageSignature = layoutCacheKey == nil ? nil : Self.signature(ofPage: page)
+            pageLoaded = false
+            heightFromCache = nil
+            hasReportForCurrentPage = false
+            viewportContainer?.hasKnownHeight = false
+        }
+
+        /// A checkbox toggle patched the page in place: the same height now belongs to the updated page.
+        func pageChangedInPlace(_ page: String) {
+            guard layoutCacheKey != nil else { return }
+            pageSignature = Self.signature(ofPage: page)
+            if pageLoaded, let lastReportedHeight { rememberHeight(lastReportedHeight) }
+        }
+
+        private func rememberHeight(_ height: CGFloat) {
+            guard let key = layoutCacheKey, let pageSignature,
+                  let width = viewportContainer?.bounds.width, width > 0 else { return }
+            NoteBodyLayoutCache.store(height: height, forKey: key, width: width, signature: pageSignature)
+        }
+
+        private static func signature(ofPage page: String) -> UInt64 {
+            NoteBodyLayoutCache.signature(
+                ofPage: page,
+                contentSizeCategory: UIApplication.shared.preferredContentSizeCategory.rawValue
+            )
+        }
+
         private weak var enclosingScrollView: UIScrollView?
         private var enclosingScrollWasEnabled: Bool?
         private var dragScrollDisplayLink: CADisplayLink?
@@ -2152,9 +2258,16 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             switch message.name {
             case "heightUpdate":
                 if let height = message.body as? CGFloat, height > 0 {
-                    NoteOpenTrace.log("web heightUpdate \(height) (\(traceLoadStartedAt.map { CheckboxPerf.ms($0) } ?? "n/a") ms after load start)")
+                    NoteOpenTrace.log("web heightUpdate \(height) (\(traceLoadStartedAt.map { CheckboxPerf.ms($0) } ?? "n/a") ms after load start) loaded=\(pageLoaded) remembered=\(heightFromCache.map { "\($0)" } ?? "nil")")
+                    // Opened at the remembered height: an early layout from before the images are in would only
+                    // shrink the note for a moment. The height after `load` settles it (see `didFinish`).
+                    if !pageLoaded, let remembered = heightFromCache, height <= remembered + 0.5 { return }
+                    hasReportForCurrentPage = true
+                    lastReportedHeight = height
+                    viewportContainer?.hasKnownHeight = pageLoaded
                     viewportContainer?.resync()
                     onHeightChanged?(height)
+                    if pageLoaded { rememberHeight(height) }
                 }
             case "noteLink":
                 if let noteId = message.body as? String {
@@ -2405,6 +2518,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             NoteOpenTrace.log("web didFinish (\(traceLoadStartedAt.map { CheckboxPerf.ms($0) } ?? "n/a") ms after load start) frame=\(webView.frame)")
+            pageLoaded = true
+            // The page reported during `load`, before this flag flipped; report again so that height counts.
+            webView.evaluateJavaScript("typeof reportHeight === 'function' && reportHeight();")
             if let started = loadHTMLStartedAt {
                 CheckboxPerf.log(
                     "webView didFinish loadHTMLStringMs=\(CheckboxPerf.ms(started)) lastToggle=#\(CheckboxPerf.lastToggleID) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs())"

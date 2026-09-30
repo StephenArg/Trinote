@@ -43,11 +43,34 @@ enum LastActiveOpenTabStore {
     }
 }
 
+/// A read-only scroll position in points, with the scroll view width it was measured at (a different width lays
+/// the note out differently, so the points no longer mean the same place).
+struct ReadScrollOffset: Equatable {
+    var offsetY: CGFloat
+    var layoutWidth: CGFloat
+}
+
 /// Persists read-only scroll-fraction (0…1) per `OpenNoteTab` row, so tab switches restore the reading position.
 /// Keys are the tab’s unique `id` (not `noteId` — the same note may be open in multiple tabs).
 enum OpenTabSessionStore {
     private static let keyPrefix = "trinote.openTab.readScrollFraction."
+    private static let offsetKeyPrefix = "trinote.openTab.readScrollOffset."
     private static func key(_ openTabId: String) -> String { keyPrefix + openTabId }
+    private static func offsetKey(_ openTabId: String) -> String { offsetKeyPrefix + openTabId }
+
+    /// Saves the position in points alongside the fraction; `nil` removes it, so it never pairs with another fraction.
+    static func saveReadScrollOffset(_ offset: ReadScrollOffset?, for openTabId: String) {
+        if let offset {
+            UserDefaults.standard.set([Double(offset.offsetY), Double(offset.layoutWidth)], forKey: offsetKey(openTabId))
+        } else {
+            UserDefaults.standard.removeObject(forKey: offsetKey(openTabId))
+        }
+    }
+
+    static func readReadScrollOffset(for openTabId: String) -> ReadScrollOffset? {
+        guard let pair = UserDefaults.standard.array(forKey: offsetKey(openTabId)) as? [Double], pair.count == 2 else { return nil }
+        return ReadScrollOffset(offsetY: CGFloat(pair[0]), layoutWidth: CGFloat(pair[1]))
+    }
 
     static func saveReadScrollFraction(_ fraction: CGFloat, for openTabId: String) {
         let f = min(max(fraction, 0), 1)
@@ -61,6 +84,7 @@ enum OpenTabSessionStore {
 
     static func clearReadScrollState(for openTabId: String) {
         UserDefaults.standard.removeObject(forKey: key(openTabId))
+        UserDefaults.standard.removeObject(forKey: offsetKey(openTabId))
     }
 }
 

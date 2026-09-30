@@ -14,9 +14,20 @@ import WebKit
 struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
     /// Set to a saved fraction (0…1) to request a restore. `nil` cancels any in-flight restore.
     var fraction: CGFloat?
-    /// Called once the restore finishes or gives up, with the fraction the scroll view actually reached
-    /// (0 when there is nothing to scroll), or nil when no scroll view was found.
-    var onApplied: (_ reachedFraction: CGFloat?) -> Void
+    /// The same position in points, when known. Used as soon as the note body opens at its real height (a
+    /// remembered one, see `NoteBodyLayoutCache`), with no wait for the layout to settle.
+    var offset: ReadScrollOffset? = nil
+    /// Called once the restore finishes or gives up.
+    var onApplied: (Outcome) -> Void
+
+    struct Outcome {
+        /// The fraction the scroll view actually reached (0 when there is nothing to scroll), or nil when no scroll
+        /// view was found.
+        var reachedFraction: CGFloat?
+        var reachedOffset: ReadScrollOffset?
+        /// Applied on the first layout from `offset`; there was nothing to wait for, so nothing to fade in.
+        var immediate: Bool
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onApplied: onApplied)
@@ -32,7 +43,7 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.onApplied = onApplied
         if let f = fraction {
-            context.coordinator.scheduleApply(fraction: f, from: uiView)
+            context.coordinator.scheduleApply(fraction: f, offset: offset, from: uiView)
         } else {
             context.coordinator.cancel()
         }
@@ -43,9 +54,10 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
     }
 
     final class Coordinator {
-        var onApplied: (_ reachedFraction: CGFloat?) -> Void
+        var onApplied: (Outcome) -> Void
         private var applyToken: UUID?
         private var pendingFraction: CGFloat?
+        private var pendingOffset: ReadScrollOffset?
         private weak var attachedScrollView: UIScrollView?
         private var contentSizeObservation: NSKeyValueObservation?
         private var boundsObservation: NSKeyValueObservation?
@@ -63,13 +75,14 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
         private static let minOffsetReapplyDelta: CGFloat = 0.5
         private static let fractionEpsilon: CGFloat = 0.004
 
-        init(onApplied: @escaping (_ reachedFraction: CGFloat?) -> Void) {
+        init(onApplied: @escaping (Outcome) -> Void) {
             self.onApplied = onApplied
         }
 
         func cancel() {
             applyToken = nil
             pendingFraction = nil
+            pendingOffset = nil
             stabilityWorkItem?.cancel()
             stabilityWorkItem = nil
             giveUpWorkItem?.cancel()
@@ -77,17 +90,18 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
             detachObservations()
         }
 
-        func scheduleApply(fraction: CGFloat, from view: UIView) {
-            if let pending = pendingFraction, abs(pending - fraction) < 0.0005, applyToken != nil {
+        func scheduleApply(fraction: CGFloat, offset: ReadScrollOffset?, from view: UIView) {
+            if let pending = pendingFraction, abs(pending - fraction) < 0.0005, pendingOffset == offset, applyToken != nil {
                 return
             }
 
             pendingFraction = fraction
+            pendingOffset = offset
             let token = UUID()
             applyToken = token
             applyCount = 0
             scheduledAt = CFAbsoluteTimeGetCurrent()
-            NoteOpenTrace.log("restore scheduleApply fraction=\(fraction)")
+            NoteOpenTrace.log("restore scheduleApply fraction=\(fraction) offset=\(offset.map { "\($0.offsetY)@\($0.layoutWidth)" } ?? "nil")")
 
             stabilityWorkItem?.cancel()
             stabilityWorkItem = nil
@@ -142,6 +156,7 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
         private func applyAndRestartStability() {
             guard let sv = attachedScrollView, let fraction = pendingFraction, let token = applyToken else { return }
             sv.layoutIfNeeded()
+            if applyExactOffsetIfBodyHeightKnown(sv) { return }
             let maxOffset = max(sv.contentSize.height - sv.bounds.height, 0)
             applyCount += 1
             if applyCount <= 40 {
@@ -195,10 +210,37 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.stabilityWindow, execute: work)
         }
 
-        private func fireOnApplied() {
+        /// The note body already has its real height (remembered or reported after loading) and the position was saved
+        /// at this width: scroll straight to it and finish, rather than waiting for the layout to settle.
+        private func applyExactOffsetIfBodyHeightKnown(_ sv: UIScrollView) -> Bool {
+            guard let offset = pendingOffset, abs(sv.bounds.width - offset.layoutWidth) < 0.5 else { return false }
+            let bodies = Self.noteBodies(in: sv)
+            guard !bodies.isEmpty, bodies.allSatisfy({ $0.hasKnownHeight && $0.bounds.height > 0 }) else { return false }
+            let minY = -sv.adjustedContentInset.top
+            let maxY = max(minY, sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.bottom)
+            // Content below the body (child notes) may still be loading; wait for the normal path if it's needed.
+            guard offset.offsetY <= maxY + 0.5 else { return false }
+            let y = min(max(offset.offsetY, minY), maxY)
+            if abs(sv.contentOffset.y - y) > Self.minOffsetReapplyDelta {
+                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
+            }
+            NoteOpenTrace.log("restore applied exact offset \(y) at once (applies=\(applyCount))")
+            fireOnApplied(immediate: true)
+            return true
+        }
+
+        private static func noteBodies(in view: UIView) -> [ReadOnlyWebViewportContainer] {
+            if let body = view as? ReadOnlyWebViewportContainer { return [body] }
+            return view.subviews.flatMap(noteBodies)
+        }
+
+        private func fireOnApplied(immediate: Bool = false) {
             let reached: CGFloat? = attachedScrollView.map { sv in
                 let maxOffset = sv.contentSize.height - sv.bounds.height
                 return maxOffset > 0 ? min(max(sv.contentOffset.y / maxOffset, 0), 1) : 0
+            }
+            let reachedOffset = attachedScrollView.map { sv in
+                ReadScrollOffset(offsetY: sv.contentOffset.y, layoutWidth: sv.bounds.width)
             }
             stabilityWorkItem?.cancel()
             stabilityWorkItem = nil
@@ -206,8 +248,9 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
             giveUpWorkItem = nil
             applyToken = nil
             pendingFraction = nil
+            pendingOffset = nil
             detachObservations()
-            onApplied(reached)
+            onApplied(Outcome(reachedFraction: reached, reachedOffset: reachedOffset, immediate: immediate))
         }
 
         private func detachObservations() {

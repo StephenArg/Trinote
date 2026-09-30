@@ -110,8 +110,10 @@ struct NoteDetailView: View {
 
         // Seed scroll restoration before the first read-only render (avoids top-then-jump on launch / tab bar).
         if let id = openTabId, let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
-            _scrollTracking = State(initialValue: ReadOnlyScrollTracking(fraction: f))
+            let offset = OpenTabSessionStore.readReadScrollOffset(for: id)
+            _scrollTracking = State(initialValue: ReadOnlyScrollTracking(fraction: f, offset: offset))
             _readOnlyScrollFractionPendingRestore = State(initialValue: f)
+            _readOnlyScrollOffsetPendingRestore = State(initialValue: offset.map { PendingReadScrollOffset(fraction: f, offset: $0) })
             _isReadOnlyScrollRevealPending = State(initialValue: f > Self.readOnlyScrollRevealMaskThreshold)
             _lastAppliedReadScrollTabId = State(initialValue: id)
         } else {
@@ -203,12 +205,17 @@ struct NoteDetailView: View {
     /// Values the read-only scroll updates every frame. A plain reference so writing them doesn't
     /// invalidate this view while scrolling; nothing on screen reads them.
     @State private var scrollTracking = ReadOnlyScrollTracking()
+    /// Cached copy of the note for the bar title until its view model has loaded (see `barTitleNote`).
+    @State private var barTitlePlaceholder = NoteBarTitlePlaceholder()
     @State private var floatingEditScrollBaselineReady = false
     /// While true, ignore scroll-direction hide/show (layout + scroll restoration during note open).
     @State private var floatingEditIgnoreDirectionalScroll = true
     @State private var floatingEditSettlingEndWorkItem: DispatchWorkItem?
     /// After save leaves the rich-text editor, applied once to the read-only `ScrollView` (same fraction as the web editor).
     @State private var readOnlyScrollFractionPendingRestore: CGFloat?
+    /// The pending restore's position in points, tagged with the fraction it was saved with so a later fraction-only
+    /// restore (after leaving the editor) never picks it up.
+    @State private var readOnlyScrollOffsetPendingRestore: PendingReadScrollOffset?
     /// Hides read-only content until tab scroll restoration settles (avoids top-then-jump).
     @State private var isReadOnlyScrollRevealPending = false
     /// Dedupes `applyReadScrollStateFromStoreForOpenTabId` when the same tab is applied twice after load.
@@ -290,15 +297,22 @@ struct NoteDetailView: View {
     @State private var geoMapLastLoadNoteId: String?
     @State private var geoMapLastLoadAt = Date.distantPast
 
+    /// The note the bar title describes: the loaded one, else its cached copy while it loads (opening a note,
+    /// switching tabs). Without that the bar showed this view's first title, uncolored, for a moment.
+    private var barTitleNote: NoteItem? {
+        if let note = viewModel?.note { return note }
+        return barTitlePlaceholder.note(for: activeNoteId, serverProfileId: appState.activeProfile?.id)
+    }
+
     private var principalTitleText: String {
-        if let n = viewModel?.note {
+        if let n = barTitleNote {
             return n.uiTitle(forProtectedSessionActive: appState.protectedSessionActive)
         }
         return title
     }
 
     private var principalBarTitleForegroundColor: Color {
-        guard let note = viewModel?.note else { return .primary }
+        guard let note = barTitleNote else { return .primary }
         return noteDetailTitleForegroundColor(for: note)
     }
 
@@ -727,7 +741,9 @@ struct NoteDetailView: View {
     private func queueReadOnlyScrollRestoreAfterRichTextSave(fraction: CGFloat) {
         let f = min(max(fraction, 0), 1)
         scrollTracking.fraction = f
+        scrollTracking.offset = nil
         readOnlyScrollFractionPendingRestore = f
+        readOnlyScrollOffsetPendingRestore = nil
         isReadOnlyScrollRevealPending = f > Self.readOnlyScrollRevealMaskThreshold
     }
 
@@ -1341,7 +1357,8 @@ struct NoteDetailView: View {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 0) {
                     HStack(spacing: 6) {
-                        if viewModel?.serverVerified == false && viewModel?.note != nil {
+                        // Only once the server check is done: while it's still running the note isn't offline.
+                        if let vm = viewModel, !vm.serverVerified, vm.serverCheckFinished, vm.note != nil {
                             Image(systemName: "icloud.slash")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -1545,7 +1562,7 @@ struct NoteDetailView: View {
                 serverProfileId: p
             )
             // The tab still holds the pushed note's position; this view kept its own, so store that.
-            OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: t)
+            persistReadScrollPosition(for: t)
         } catch {}
     }
 
@@ -1594,14 +1611,19 @@ struct NoteDetailView: View {
         // Opened from a search match: the tab's saved position would scroll away from it.
         let skipsRestore = opensAtFindMatch && activeNoteId == noteId
         if !skipsRestore, let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
+            let offset = OpenTabSessionStore.readReadScrollOffset(for: id)
             scrollTracking.fraction = f
+            scrollTracking.offset = offset
             readOnlyScrollFractionPendingRestore = f
+            readOnlyScrollOffsetPendingRestore = offset.map { PendingReadScrollOffset(fraction: f, offset: $0) }
             isReadOnlyScrollRevealPending = f > Self.readOnlyScrollRevealMaskThreshold
             NoteOpenTrace.log("tab \(id) saved fraction=\(f) → coverPending=\(isReadOnlyScrollRevealPending)")
         } else {
             NoteOpenTrace.log("tab \(id) no saved fraction (skipsRestore=\(skipsRestore))")
             scrollTracking.fraction = 0
+            scrollTracking.offset = nil
             readOnlyScrollFractionPendingRestore = nil
+            readOnlyScrollOffsetPendingRestore = nil
             isReadOnlyScrollRevealPending = false
         }
         lastAppliedReadScrollTabId = id
@@ -1612,17 +1634,34 @@ struct NoteDetailView: View {
         readOnlyScrollFractionPendingRestore ?? scrollTracking.fraction
     }
 
+    /// The pending restore's position in points, when it has one.
+    private var pendingRestoreOffset: ReadScrollOffset? {
+        guard let pending = readOnlyScrollOffsetPendingRestore,
+              pending.fraction == readOnlyScrollFractionPendingRestore else { return nil }
+        return pending.offset
+    }
+
+    /// Position in points to persist alongside `readOnlyScrollFractionToPersist` (same rule).
+    private var readOnlyScrollOffsetToPersist: ReadScrollOffset? {
+        readOnlyScrollFractionPendingRestore != nil ? pendingRestoreOffset : scrollTracking.offset
+    }
+
+    private func persistReadScrollPosition(for tabId: String) {
+        OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: tabId)
+        OpenTabSessionStore.saveReadScrollOffset(readOnlyScrollOffsetToPersist, for: tabId)
+    }
+
     /// Writes the current read-only scroll fraction for the active open tab (same store as tab switches).
     private func persistReadScrollFractionForActiveOpenTab() {
         guard let tabId = activeOpenTabId ?? openTabId, openTab(tabId, shows: activeNoteId) else { return }
-        OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: tabId)
+        persistReadScrollPosition(for: tabId)
     }
 
     private func selectOpenNoteTab(_ tab: OpenNoteTab) {
         guard appState.activeProfile?.id == tab.serverProfileId else { return }
         if let prev = activeOpenTabId, prev != tab.id {
             if openTab(prev, shows: activeNoteId) {
-                OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: prev)
+                persistReadScrollPosition(for: prev)
             }
             lastAppliedReadScrollTabId = prev
         }
@@ -1829,9 +1868,10 @@ struct NoteDetailView: View {
                 }
                 .background(
                     ZStack {
-                        NoteDetailScrollOffsetReader { y, _, fraction in
+                        NoteDetailScrollOffsetReader { y, _, fraction, width in
                             if readOnlyScrollFractionPendingRestore == nil {
                                 scrollTracking.fraction = fraction
+                                scrollTracking.offset = ReadScrollOffset(offsetY: y, layoutWidth: width)
                             }
                             updateFloatingEditVisibility(
                                 contentOffsetY: y,
@@ -1839,17 +1879,27 @@ struct NoteDetailView: View {
                                 note: note
                             )
                         }
-                        NoteDetailReadOnlyScrollRestoration(fraction: readOnlyScrollFractionPendingRestore) { reached in
-                            NoteOpenTrace.log("restore onApplied pending=\(readOnlyScrollFractionPendingRestore.map { "\($0)" } ?? "nil") reached=\(reached.map { "\($0)" } ?? "nil") coverPending=\(isReadOnlyScrollRevealPending)")
+                        NoteDetailReadOnlyScrollRestoration(
+                            fraction: readOnlyScrollFractionPendingRestore,
+                            offset: pendingRestoreOffset
+                        ) { outcome in
+                            NoteOpenTrace.log("restore onApplied pending=\(readOnlyScrollFractionPendingRestore.map { "\($0)" } ?? "nil") reached=\(outcome.reachedFraction.map { "\($0)" } ?? "nil") immediate=\(outcome.immediate) coverPending=\(isReadOnlyScrollRevealPending)")
                             // Where the note actually is: a restore that gave up must not save its target back
                             // to the tab, or the next open waits under the cover again.
-                            if let position = reached ?? readOnlyScrollFractionPendingRestore {
+                            if let position = outcome.reachedFraction ?? readOnlyScrollFractionPendingRestore {
                                 scrollTracking.fraction = position
                             }
+                            scrollTracking.offset = outcome.reachedOffset ?? pendingRestoreOffset
                             readOnlyScrollFractionPendingRestore = nil
+                            readOnlyScrollOffsetPendingRestore = nil
                             if isReadOnlyScrollRevealPending {
-                                withAnimation(.easeOut(duration: 0.18)) {
+                                if outcome.immediate {
+                                    // Already at the saved position on the note's first layout: show it as is.
                                     isReadOnlyScrollRevealPending = false
+                                } else {
+                                    withAnimation(.easeOut(duration: 0.18)) {
+                                        isReadOnlyScrollRevealPending = false
+                                    }
                                 }
                             }
                             finishFloatingEditScrollSettling(vm: vm, note: note)
@@ -2537,7 +2587,8 @@ struct NoteDetailView: View {
                     imageBytes: { routeType, entityId in
                         await vm.loadImageBytes(routeType: routeType, entityId: entityId)
                     },
-                    findControl: findControl
+                    findControl: findControl,
+                    layoutCacheKey: vm.serverProfileId.map { "\($0)/\(note.noteId)" }
                 )
             }
         case .mermaid:
@@ -4230,7 +4281,7 @@ struct NoteDetailView: View {
                 }
             }
             .background(
-                NoteDetailScrollOffsetReader { y, verticallyScrollable, _ in
+                NoteDetailScrollOffsetReader { y, verticallyScrollable, _, _ in
                     updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
                 }
                 .frame(width: 0, height: 0)
@@ -5290,10 +5341,35 @@ private extension View {
 final class ReadOnlyScrollTracking {
     /// Scroll fraction (0–1) of the read-only ScrollView, used to restore position in the editor.
     var fraction: CGFloat
+    /// The same position in points, with the scroll view width it was read at.
+    var offset: ReadScrollOffset?
     /// Last `contentOffset.y` seen, for the floating Edit chip's scroll direction.
     var lastContentOffsetY: CGFloat = 0
 
-    init(fraction: CGFloat = 0) {
+    init(fraction: CGFloat = 0, offset: ReadScrollOffset? = nil) {
         self.fraction = fraction
+        self.offset = offset
     }
+}
+
+/// Looks up a note's cached copy once per note, for the bar title while the note loads. A plain reference so the
+/// lookup doesn't count as a view state change.
+@MainActor
+final class NoteBarTitlePlaceholder {
+    private var noteId: String?
+    private var note: NoteItem?
+
+    func note(for noteId: String, serverProfileId: String?) -> NoteItem? {
+        if noteId != self.noteId {
+            self.noteId = noteId
+            note = serverProfileId.flatMap { NoteDetailViewModel.cachedNoteItem(noteId: noteId, serverProfileId: $0) }
+        }
+        return note
+    }
+}
+
+/// A restore's position in points and the fraction it was saved with (see `readOnlyScrollOffsetPendingRestore`).
+struct PendingReadScrollOffset {
+    var fraction: CGFloat
+    var offset: ReadScrollOffset
 }

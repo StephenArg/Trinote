@@ -51,6 +51,9 @@ final class NoteDetailViewModel {
     /// Only false when the initial load couldn't reach the server
     /// and only cached data is showing. Never reset to false once true.
     var serverVerified = false
+    /// The first server check has run: it succeeded, failed, or was skipped (offline, a note not created on the
+    /// server yet). Until then an unverified note is only waiting, so the toolbar doesn't show it as offline.
+    var serverCheckFinished = false
 
     // Editing
     var isEditing = false
@@ -378,6 +381,7 @@ final class NoteDetailViewModel {
         // Pending local creates are not on the server yet — same stall as offline when interface is “up”.
         // Do not await getNote while offline — same long URLSession stall as bootstrap “Connecting…”.
         guard !nid.isOfflineLocalNoteId, appState.isOnline, client != nil else {
+            serverCheckFinished = true
             await loadNotesEditedOnDay()
             return
         }
@@ -385,6 +389,7 @@ final class NoteDetailViewModel {
         // Background server refresh. A journal day's edited notes load once, after it, when the note's labels and
         // the server's answer are both current.
         await startOrGetMetadataRefresh().value
+        serverCheckFinished = true
         await loadNotesEditedOnDay()
     }
 
@@ -4886,38 +4891,45 @@ final class NoteDetailViewModel {
         guard let profileId = self.serverProfileId else {
             return
         }
-        let nid = self.noteId
-        if let cached = try? self.persistence.fetchCachedNote(id: nid, serverProfileId: profileId) {
-            let cachedAttrs = (try? self.persistence.fetchCachedAttributes(noteId: nid, serverProfileId: profileId)) ?? []
-            let attrs = cachedAttrs.map { a in
-                AttributeItem(
-                    attributeId: a.attributeId,
-                    noteId: a.noteId,
-                    type: AttributeItem.AttributeKind(rawValue: a.type) ?? .label,
-                    name: a.name,
-                    value: a.value,
-                    position: a.position,
-                    isInheritable: a.isInheritable
-                )
-            }
-            note = NoteItem(
-                noteId: cached.noteId,
-                title: cached.title,
-                type: NoteType(rawValue: cached.noteType) ?? .text,
-                mime: cached.mime,
-                isProtected: cached.isProtected,
-                dateCreated: "",
-                dateModified: "",
-                parentNoteIds: cached.parentNoteIds,
-                childNoteIds: cached.childNoteIds,
-                parentBranchIds: cached.parentBranchIds,
-                childBranchIds: cached.childBranchIds,
-                attributes: attrs
-            )
-            if let n = note {
-                isSharedPublicly = TriliumSharing.isPublishedUnderShareRoot(note: n)
-            }
+        if let cachedNote = Self.cachedNoteItem(noteId: self.noteId, serverProfileId: profileId, persistence: persistence) {
+            note = cachedNote
+            isSharedPublicly = TriliumSharing.isPublishedUnderShareRoot(note: cachedNote)
         }
+    }
+
+    /// The note as last cached on this device, labels included (title color, icon), without its body.
+    static func cachedNoteItem(
+        noteId nid: String,
+        serverProfileId profileId: String,
+        persistence: PersistenceManager = .shared
+    ) -> NoteItem? {
+        guard let cached = try? persistence.fetchCachedNote(id: nid, serverProfileId: profileId) else { return nil }
+        let cachedAttrs = (try? persistence.fetchCachedAttributes(noteId: nid, serverProfileId: profileId)) ?? []
+        let attrs = cachedAttrs.map { a in
+            AttributeItem(
+                attributeId: a.attributeId,
+                noteId: a.noteId,
+                type: AttributeItem.AttributeKind(rawValue: a.type) ?? .label,
+                name: a.name,
+                value: a.value,
+                position: a.position,
+                isInheritable: a.isInheritable
+            )
+        }
+        return NoteItem(
+            noteId: cached.noteId,
+            title: cached.title,
+            type: NoteType(rawValue: cached.noteType) ?? .text,
+            mime: cached.mime,
+            isProtected: cached.isProtected,
+            dateCreated: "",
+            dateModified: "",
+            parentNoteIds: cached.parentNoteIds,
+            childNoteIds: cached.childNoteIds,
+            parentBranchIds: cached.parentBranchIds,
+            childBranchIds: cached.childBranchIds,
+            attributes: attrs
+        )
     }
 
     // MARK: - Sharing (Trilium /share)

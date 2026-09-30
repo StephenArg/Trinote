@@ -7,8 +7,8 @@ import UIKit
 /// so the floating edit chip never sees scroll deltas. KVO on `contentOffset` matches what the user actually scrolls.
 struct NoteDetailScrollOffsetReader: UIViewRepresentable {
     /// `offset` increases when scrolling **down**. `verticallyScrollable` is false when there is nothing to scroll.
-    /// `scrollFraction` is 0–1 representing how far down the user has scrolled.
-    var onOffsetChange: (CGFloat, Bool, CGFloat) -> Void
+    /// `scrollFraction` is 0–1 representing how far down the user has scrolled. `width` is the scroll view's.
+    var onOffsetChange: (_ offset: CGFloat, _ verticallyScrollable: Bool, _ scrollFraction: CGFloat, _ width: CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onOffsetChange: onOffsetChange)
@@ -31,13 +31,13 @@ struct NoteDetailScrollOffsetReader: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject {
-        var onOffsetChange: (CGFloat, Bool, CGFloat) -> Void
+        var onOffsetChange: (CGFloat, Bool, CGFloat, CGFloat) -> Void
         private weak var scrollView: UIScrollView?
         private var offsetObservation: NSKeyValueObservation?
         private var contentSizeObservation: NSKeyValueObservation?
         private var boundsObservation: NSKeyValueObservation?
 
-        init(onOffsetChange: @escaping (CGFloat, Bool, CGFloat) -> Void) {
+        init(onOffsetChange: @escaping (CGFloat, Bool, CGFloat, CGFloat) -> Void) {
             self.onOffsetChange = onOffsetChange
         }
 
@@ -85,7 +85,7 @@ struct NoteDetailScrollOffsetReader: UIViewRepresentable {
                 let verticallyScrollable = scrollView.contentSize.height > scrollView.bounds.height + 0.5
                 let maxOffset = scrollView.contentSize.height - scrollView.bounds.height
                 let fraction = verticallyScrollable && maxOffset > 0 ? min(max(y / maxOffset, 0), 1) : 0
-                self.onOffsetChange(y, verticallyScrollable, fraction)
+                self.onOffsetChange(y, verticallyScrollable, fraction, scrollView.bounds.width)
             }
         }
 

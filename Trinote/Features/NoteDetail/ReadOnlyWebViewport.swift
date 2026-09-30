@@ -41,6 +41,9 @@ enum ReadOnlyWebViewport {
 /// or the note fits on screen.
 final class ReadOnlyWebViewportContainer: UIView {
     let webView: WKWebView
+    /// The container is as tall as the page will be (a remembered height, or one the page reported after loading),
+    /// not a placeholder, so a scroll position can be applied now.
+    var hasKnownHeight = false
 
     private weak var outerScrollView: UIScrollView?
     private var outerOffsetObservation: NSKeyValueObservation?
