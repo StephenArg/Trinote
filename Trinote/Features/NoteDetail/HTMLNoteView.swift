@@ -89,7 +89,7 @@ struct HTMLNoteView: View {
             imageBytes: imageBytes,
             findControl: findControl,
             colorScheme: colorScheme,
-            onHeightChanged: { contentHeight = $0 },
+            onHeightChanged: { next in if abs(next - contentHeight) >= 1 { contentHeight = next } },
             onImagePreview: { payload in fullScreenImage = payload }
         )
         .frame(height: contentHeight)
@@ -996,13 +996,22 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             }
             return { search: search, clear: clear, next: next, prev: prev, matchCount: matchCount, active1Based: active1Based, activeRectInViewport: activeRectInViewport, goToMatch: goToMatch };
         })();
+        var __trinoteLastHeight = 0;
+        var __trinoteHeightQueued = false;
         function reportHeight() {
-            const h = Math.ceil(Math.max(
-                document.body.scrollHeight,
-                document.body.offsetHeight,
-                document.documentElement.scrollHeight
-            ));
-            window.webkit.messageHandlers.heightUpdate.postMessage(h);
+            if (__trinoteHeightQueued) return;
+            __trinoteHeightQueued = true;
+            requestAnimationFrame(function() {
+                __trinoteHeightQueued = false;
+                const h = Math.ceil(Math.max(
+                    document.body.scrollHeight,
+                    document.body.offsetHeight,
+                    document.documentElement.scrollHeight
+                ));
+                if (Math.abs(h - __trinoteLastHeight) < 1) return;
+                __trinoteLastHeight = h;
+                window.webkit.messageHandlers.heightUpdate.postMessage(h);
+            });
         }
         window.addEventListener('load', reportHeight);
         new ResizeObserver(reportHeight).observe(document.body);
@@ -2071,6 +2080,10 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var imageSchemeHandler: TriliumImageSchemeHandler?
         var onHeightChanged: ((CGFloat) -> Void)?
         var onImagePreview: ((FullScreenImagePayload) -> Void)?
+        /// Last height forwarded to SwiftUI. ResizeObserver fires for sub-pixel
+        /// changes (image decode, font settle); without this every tick resizes
+        /// the outer ScrollView under the finger and stalls scroll starts.
+        private var lastAppliedHeight: CGFloat = 0
 
         private weak var enclosingScrollView: UIScrollView?
         private var enclosingScrollWasEnabled: Bool?
@@ -2113,6 +2126,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             switch message.name {
             case "heightUpdate":
                 if let height = message.body as? CGFloat, height > 0 {
+                    if abs(height - lastAppliedHeight) < 1 { return }
+                    lastAppliedHeight = height
                     if let webView {
                         webView.scrollView.setContentOffset(.zero, animated: false)
                     }
