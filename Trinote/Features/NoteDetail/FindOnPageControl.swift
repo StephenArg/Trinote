@@ -417,7 +417,7 @@ final class FindOnPageControl {
     }
 
     /// Puts web-view point `y` just below the navigation bar in the note's outer scroll view.
-    private static func scrollOuterScrollView(for webView: WKWebView, toShowTopOf y: CGFloat) {
+    static func scrollOuterScrollView(for webView: WKWebView, toShowTopOf y: CGFloat) {
         guard let sv = outerScrollView(for: webView) else { return }
         let point = webView.convert(CGPoint(x: 0, y: y), to: sv)
         let inset = sv.adjustedContentInset

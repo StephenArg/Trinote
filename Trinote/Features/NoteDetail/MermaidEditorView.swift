@@ -5,6 +5,8 @@ struct MermaidEditorView: View {
     @Binding var editableContent: String
     var onSave: () -> Void
     var isSaving: Bool
+    /// Off with Settings → Autosave → Hide Save Button.
+    var showsSaveButton: Bool = true
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var renderSource: String = ""
@@ -51,9 +53,11 @@ struct MermaidEditorView: View {
                         MermaidSourceTextView(text: $editableContent, controller: sourceEditor)
                     }
 
-                    saveChip
-                        .padding(.trailing, 16)
-                        .padding(.bottom, 16)
+                    if showsSaveButton {
+                        saveChip
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 16)
+                    }
                 }
                 .frame(height: geo.size.height * 0.5)
             }

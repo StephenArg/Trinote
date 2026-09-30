@@ -161,7 +161,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         )
     }
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makeUIView(context: Context) -> ReadOnlyWebViewportContainer {
         let handler = context.coordinator
         let contentController = WKUserContentController()
         contentController.add(handler, name: "heightUpdate")
@@ -227,14 +227,19 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             phase: "makeUIView"
         )
         handler.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
+        handler.traceLoadStartedAt = handler.loadHTMLStartedAt
+        NoteOpenTrace.log("web makeUIView bodyUtf16=\(html.utf16.count) wrappedUtf16=\(wrapped.utf16.count)")
         CheckboxPerf.log("loadHTMLString phase=makeUIView wrappedUtf16=\(wrapped.utf16.count)")
         webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(body: html, canonicalBase: baseURL))
         handler.loadedHTML = html
 
-        return webView
+        let container = ReadOnlyWebViewportContainer(webView: webView)
+        handler.viewportContainer = container
+        return container
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
+    func updateUIView(_ container: ReadOnlyWebViewportContainer, context: Context) {
+        let webView = container.webView
         let t0 = CFAbsoluteTimeGetCurrent()
         let coordinator = context.coordinator
         coordinator.findControl = findControl
@@ -316,15 +321,17 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             phase: "updateUIView-reload"
         )
         coordinator.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
+        coordinator.traceLoadStartedAt = coordinator.loadHTMLStartedAt
+        NoteOpenTrace.log("web RELOAD htmlChanged=\(htmlChanged) themeChanged=\(themeChanged) bodyUtf16=\(html.utf16.count)")
         CheckboxPerf.log(
             "loadHTMLString phase=updateUIView-reload lastToggle=#\(CheckboxPerf.lastToggleID) wrappedUtf16=\(wrapped.utf16.count) updateMs=\(CheckboxPerf.ms(t0))"
         )
         webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(body: html, canonicalBase: baseURL))
     }
 
-    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+    static func dismantleUIView(_ container: ReadOnlyWebViewportContainer, coordinator: Coordinator) {
         coordinator.endCheckboxDrag()
-        let uc = webView.configuration.userContentController
+        let uc = container.webView.configuration.userContentController
         uc.removeScriptMessageHandler(forName: "heightUpdate")
         uc.removeScriptMessageHandler(forName: "noteLink")
         uc.removeScriptMessageHandler(forName: "attachmentLink")
@@ -965,12 +972,33 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     setActive(0);
                 }
             }
+            // Brings the match into view inside wide tables, code blocks and included-note boxes. The page
+            // itself isn't scrolled here: Swift centers the match in the note's scroll view.
+            function revealInNestedScrollers(el) {
+                var node = el.parentElement;
+                while (node && node !== document.body && node !== document.documentElement) {
+                    var canX = node.scrollWidth > node.clientWidth + 1;
+                    var canY = node.scrollHeight > node.clientHeight + 1;
+                    if (canX || canY) {
+                        var cs = window.getComputedStyle(node);
+                        var r = el.getBoundingClientRect();
+                        var nr = node.getBoundingClientRect();
+                        if (canX && /(auto|scroll|hidden)/.test(cs.overflowX) && (r.left < nr.left || r.right > nr.right)) {
+                            node.scrollLeft += (r.left + r.width / 2) - (nr.left + nr.width / 2);
+                        }
+                        if (canY && /(auto|scroll|hidden)/.test(cs.overflowY) && (r.top < nr.top || r.bottom > nr.bottom)) {
+                            node.scrollTop += (r.top + r.height / 2) - (nr.top + nr.height / 2);
+                        }
+                    }
+                    node = node.parentElement;
+                }
+            }
             function setActive(i) {
                 marks.forEach(function(m) { m.classList.remove(ACTIVE); });
                 if (i < 0 || i >= marks.length) return;
                 activeIdx = i;
                 marks[i].classList.add(ACTIVE);
-                try { marks[i].scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' }); } catch (e) {}
+                try { revealInNestedScrollers(marks[i]); } catch (e) {}
             }
             function next() {
                 if (marks.length === 0) return;
@@ -2049,8 +2077,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
+        weak var viewportContainer: ReadOnlyWebViewportContainer?
         var loadedHTML: String?
         var loadHTMLStartedAt: CFAbsoluteTime?
+        /// TEMP (`NoteOpenTrace`): when the current page load started; kept after `didFinish`.
+        var traceLoadStartedAt: CFAbsoluteTime?
         var themeColors: HTMLThemeColors?
         var checkboxReorderEnabled: Bool = false
         var collapsibleReorderEnabled: Bool = false
@@ -2109,13 +2140,20 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             self.onImagePreview = onImagePreview
         }
 
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            NoteOpenTrace.log("web didFail \(error.localizedDescription)")
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            NoteOpenTrace.log("web didFailProvisionalNavigation \(error.localizedDescription)")
+        }
+
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "heightUpdate":
                 if let height = message.body as? CGFloat, height > 0 {
-                    if let webView {
-                        webView.scrollView.setContentOffset(.zero, animated: false)
-                    }
+                    NoteOpenTrace.log("web heightUpdate \(height) (\(traceLoadStartedAt.map { CheckboxPerf.ms($0) } ?? "n/a") ms after load start)")
+                    viewportContainer?.resync()
                     onHeightChanged?(height)
                 }
             case "noteLink":
@@ -2366,6 +2404,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            NoteOpenTrace.log("web didFinish (\(traceLoadStartedAt.map { CheckboxPerf.ms($0) } ?? "n/a") ms after load start) frame=\(webView.frame)")
             if let started = loadHTMLStartedAt {
                 CheckboxPerf.log(
                     "webView didFinish loadHTMLStringMs=\(CheckboxPerf.ms(started)) lastToggle=#\(CheckboxPerf.lastToggleID) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs())"
@@ -2428,7 +2467,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             return .allow
         }
 
-        /// Scrolls a WKWebView to a named anchor (`<a id="…">` or `<a name="…">`).
+        /// Scrolls the note to a named anchor (`<a id="…">` or `<a name="…">`). The note's outer scroll view
+        /// does the scrolling: the page itself can't scroll (see `ReadOnlyWebViewport`).
         private func scrollToAnchor(_ fragment: String, in webView: WKWebView) {
             let escaped = fragment
                 .replacingOccurrences(of: "\\", with: "\\\\")
@@ -2439,16 +2479,16 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 var t = document.getElementById(f)
                      || document.querySelector('a[name="' + f + '"]')
                      || document.querySelector('[data-anchor-id="' + f + '"]');
-                if (t && typeof t.scrollIntoView === 'function') {
-                    try { t.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' }); } catch (e) {
-                        t.scrollIntoView();
-                    }
-                    return true;
-                }
-                return false;
+                if (!t) return null;
+                return t.getBoundingClientRect().top;
             })();
             """
-            webView.evaluateJavaScript(js, completionHandler: nil)
+            webView.evaluateJavaScript(js) { [weak webView] result, _ in
+                guard let webView, let top = Self.cgFloatFromScriptValue(result) else { return }
+                Task { @MainActor in
+                    FindOnPageControl.scrollOuterScrollView(for: webView, toShowTopOf: top)
+                }
+            }
         }
 
     }

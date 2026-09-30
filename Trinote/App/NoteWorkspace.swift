@@ -52,6 +52,9 @@ enum WorkspaceCommand: Equatable {
     case saveNote
     case findInNote
     case back
+    /// Sent by `NoteWorkspace.open(_:)` while a note is being edited: save it if Autosave or Back Button Saves
+    /// is on, then call `finishLeavingEditor()` (or `stayInEditor()` when saving failed).
+    case saveBeforeLeaving
     // The layout (`SplitWorkspaceView`).
     case jumpToNote
     case showSection(LauncherSection)
@@ -90,12 +93,53 @@ final class NoteWorkspace {
     var visibleNoteInstanceId: UUID?
     /// Latest keyboard / menu-bar command; handlers react to changes.
     private(set) var commandRequest: WorkspaceCommandRequest?
+    /// Where `open(_:)` goes once the note being edited has saved.
+    @ObservationIgnored private var routeAfterLeavingEditor: NoteRoute?
+    /// Goes there anyway if the note doesn't answer in time.
+    @ObservationIgnored private var leaveEditorFallback: Task<Void, Never>?
 
     func send(_ command: WorkspaceCommand) {
         commandRequest = WorkspaceCommandRequest(command: command)
     }
 
+    /// Shows `route` in the pane. Every pane switch (tree, Favorites, Recents, Search, ⌘J, new notes…) comes
+    /// through here, so while a note is being edited it first gets the chance to save; the pane is rebuilt
+    /// even for the same note, which would otherwise leave the edit as just a draft.
     func open(_ route: NoteRoute) {
+        guard isEditingNote else {
+            show(route)
+            return
+        }
+        let alreadyWaiting = routeAfterLeavingEditor != nil
+        // The latest pick wins if more arrive while the note saves.
+        routeAfterLeavingEditor = route
+        guard !alreadyWaiting else { return }
+        send(.saveBeforeLeaving)
+        // Don't strand the pick if the note never answers.
+        leaveEditorFallback = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.finishLeavingEditor()
+        }
+    }
+
+    /// The edited note saved (or had nothing to save): show what `open(_:)` asked for.
+    func finishLeavingEditor() {
+        leaveEditorFallback?.cancel()
+        leaveEditorFallback = nil
+        guard let route = routeAfterLeavingEditor else { return }
+        routeAfterLeavingEditor = nil
+        show(route)
+    }
+
+    /// Saving failed and the note shows the error; stay in the editor.
+    func stayInEditor() {
+        leaveEditorFallback?.cancel()
+        leaveEditorFallback = nil
+        routeAfterLeavingEditor = nil
+    }
+
+    private func show(_ route: NoteRoute) {
         self.route = route
         visibleNoteId = route.noteId
     }

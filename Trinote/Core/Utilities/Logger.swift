@@ -19,6 +19,25 @@ enum Log {
     static let popGesture = Logger(subsystem: subsystem, category: "PopGesture")
     /// TEMP: checkbox toggle lag on image-heavy notes. Filter Console: subsystem `com.trinote`, category `Checkbox`.
     static let checkbox = Logger(subsystem: subsystem, category: "Checkbox")
+    /// TEMP: notes showing black for 1–3 s when opened. Filter Console: subsystem `com.trinote`, category `NoteOpen`.
+    static let noteOpen = Logger(subsystem: subsystem, category: "NoteOpen")
+}
+
+/// TEMP: timeline for `Log.noteOpen`. Every line carries the ms since the current note started opening.
+enum NoteOpenTrace {
+    static var openedAt: CFAbsoluteTime = 0
+    static var noteId = "-"
+
+    static func begin(noteId: String, _ message: String) {
+        openedAt = CFAbsoluteTimeGetCurrent()
+        self.noteId = noteId
+        log("OPEN \(message)")
+    }
+
+    static func log(_ message: String) {
+        let ms = openedAt > 0 ? CheckboxPerf.ms(openedAt) : "n/a"
+        Log.noteOpen.notice("[+\(ms, privacy: .public) ms] [\(noteId, privacy: .public)] \(message, privacy: .public)")
+    }
 }
 
 /// Timing helpers for `Log.checkbox`. Filter Console by category `Checkbox`.

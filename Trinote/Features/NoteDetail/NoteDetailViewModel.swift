@@ -76,6 +76,24 @@ final class NoteDetailViewModel {
     /// Non-nil while picked photos are uploading as attachments; drives the editor status banner.
     var mediaUploadStatus: String?
 
+    // Autosave (issue #26): saves without leaving the editor. See `startEditSession(fromDraft:)`.
+    /// Shown under the title while editing with Autosave on.
+    private(set) var autosaveStatus: EditorAutosaveStatus = .idle
+    /// True once an autosave wrote the body in this edit session; Cancel then puts the original back.
+    @ObservationIgnored private(set) var hasAutosavedThisSession = false
+    /// The session began by restoring a draft, so its first autosave writes that draft.
+    @ObservationIgnored private(set) var editSessionStartedFromDraft = false
+    /// Stored body when editing began; what Cancel restores after an autosave.
+    @ObservationIgnored private var editSessionOriginalBody: String?
+    /// The server the edit began on. Nothing is autosaved after a switch, and drafts stay with that server.
+    @ObservationIgnored private var editSessionProfileId: String?
+    /// The body known to be saved: the last autosave, or for text the editor's own first serialization of the
+    /// note. `nil` when the session started from a draft. Autosave skips a body equal to it.
+    @ObservationIgnored private var autosaveBaseline: String?
+    /// The rich text editor's latest serialization (undecorated). Unlike `_pendingEditorHTML`, the draft loop
+    /// doesn't consume it.
+    @ObservationIgnored private var latestEditorBody: String?
+
     // Title edit
     var editingTitle = false
     var editedTitle = ""
@@ -1662,7 +1680,10 @@ final class NoteDetailViewModel {
         saveNoteBodyChange(html, toggleID: nil)
     }
 
-    private func saveNoteBodyChange(_ html: String, toggleID: UInt64?) {
+    /// - Parameter explicitMime: Overrides the note's MIME (the editors' saves fall back to JSON for canvas and spreadsheet).
+    /// - Returns: Whether the body was written locally and queued for upload.
+    @discardableResult
+    private func saveNoteBodyChange(_ html: String, toggleID: UInt64?, mime explicitMime: String? = nil) -> Bool {
         let tag = toggleID.map { "#\($0) " } ?? ""
         let nid = self.noteId
         let tUtf8 = CFAbsoluteTimeGetCurrent()
@@ -1670,12 +1691,13 @@ final class NoteDetailViewModel {
         CheckboxPerf.log(
             "save \(tag)utf8 ms=\(CheckboxPerf.ms(tUtf8)) bytes=\(data.count) [\(CheckboxPerf.bodyStats(html))]"
         )
-        let mime = note?.mime ?? "text/html"
+        let mime = explicitMime ?? note?.mime ?? "text/html"
         guard let profileId = serverProfileId else {
             CheckboxPerf.log("save \(tag)abort=no-profile")
-            return
+            return false
         }
 
+        var saved = false
         do {
             let tCache = CFAbsoluteTimeGetCurrent()
             cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
@@ -1693,17 +1715,22 @@ final class NoteDetailViewModel {
             )
             CheckboxPerf.log("save \(tag)upsertPendingUpload ms=\(CheckboxPerf.ms(tUpsert))")
             self.content = data
+            saved = true
         } catch {
             Log.api.error("Failed to save note body change locally: \(error)")
             CheckboxPerf.error("save \(tag)failed \(error.localizedDescription)")
         }
         CheckboxPerf.log("save \(tag)kickoff backgroundSyncPendingChanges")
         appState.backgroundSyncPendingChanges()
+        return saved
     }
 
     // MARK: - Drafts
 
     private func checkForDraft() {
+        // While editing, the editor holds the latest text; an older draft mustn't replace it (a load can
+        // finish mid-edit, e.g. when a note made offline gets its server id after an autosave's sync).
+        guard !isEditing else { return }
         guard let profileId = self.serverProfileId else { return }
         let nid = self.noteId
         let canonicalForDraft = self.rawContentString ?? self.contentString
@@ -1720,6 +1747,7 @@ final class NoteDetailViewModel {
 
     func restoreDraft() {
         isEditing = true
+        startEditSession(fromDraft: true)
         startDraftAutoSave()
         editorDisplayContent = nil
         Task { [weak self] in
@@ -1738,11 +1766,15 @@ final class NoteDetailViewModel {
     /// Updates a non-observable backing store to avoid SwiftUI re-evaluation.
     /// The editor emits decorated HTML (data URIs + `data-trinote-original-src` markers); we store the
     /// **undecorated** form so drafts and saves always reflect the canonical Trilium HTML.
-    func receiveEditorUpdate(_ html: String) {
-        if html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+    /// - Returns: Whether the body now differs from what was last saved (autosave should run).
+    @discardableResult
+    func receiveEditorUpdate(_ html: String) -> Bool {
+        if html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
         let undecorated = Self.undecorateLinkedImagesFromEditor(in: html)
-        if undecorated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+        if undecorated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
         _pendingEditorHTML = undecorated
+        latestEditorBody = undecorated
+        return noteEditedBody(undecorated)
     }
 
     /// Flushes any pending editor HTML into the observable `editableContent`.
@@ -1758,6 +1790,7 @@ final class NoteDetailViewModel {
         if !hasDraft {
             editableContent = richTextEditorSeedHTML
         }
+        startEditSession(fromDraft: hasDraft)
         // Reset the decorated copy so the editor view falls back to its loading state until
         // `prepareEditorDisplayContent` finishes. Without this, switching between notes could
         // briefly show another note's decorated HTML.
@@ -1800,11 +1833,39 @@ final class NoteDetailViewModel {
         if let profileId = self.serverProfileId {
             try? self.persistence.deleteDraft(noteId: self.noteId, serverProfileId: profileId)
         }
+        restoreBodyFromBeforeEditingIfAutosaved()
         hasDraft = false
         editableContent = richTextEditorSeedHTML
         isEditing = false
         editorDisplayContent = nil
         _editorPrepGeneration &+= 1
+        endEditSession()
+    }
+
+    /// Cancel would put back the note from before editing because an autosave already saved part of the
+    /// edit; the view asks first.
+    var cancelEditingNeedsConfirmation: Bool {
+        isEditing && hasAutosavedThisSession && editSessionOriginalBody != autosaveBaseline
+    }
+
+    /// Cancel after an autosave: saves the body the note had when editing began, queued like any edit.
+    private func restoreBodyFromBeforeEditingIfAutosaved() {
+        guard hasAutosavedThisSession,
+              let original = editSessionOriginalBody, original != autosaveBaseline,
+              let note, let profileId = serverProfileId, profileId == editSessionProfileId
+        else { return }
+        guard saveNoteBodyChange(original, toggleID: nil, mime: Self.editorBodyMime(for: note)) else { return }
+        rawContentString = original
+        // Autosave leaves `contentString` alone, but a cache reload during the edit (an offline note getting
+        // its server id) may have replaced it.
+        contentString = original
+        serverContentHash = original.hashValue
+        if note.type == .text {
+            Task { [weak self] in
+                await self?.refreshResolvedTextNoteDisplayAfterSave()
+            }
+        }
+        Log.api.info("Restored note body from before editing: \(self.noteId)")
     }
 
     private func startDraftAutoSave() {
@@ -1812,15 +1873,17 @@ final class NoteDetailViewModel {
         draftAutoSaveTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(milliseconds: 5000)
-                guard !Task.isCancelled else { return }
-                await self?.saveDraftLocally()
+                // Ends with the view model instead of ticking on forever.
+                guard !Task.isCancelled, let self else { return }
+                self.saveDraftLocally()
             }
         }
     }
 
     private func saveDraftLocally() {
         flushPendingEditorContent()
-        guard let profileId = self.serverProfileId else { return }
+        // A server switch mid-edit mustn't file the draft under the new server.
+        guard let profileId = editSessionProfileId ?? self.serverProfileId else { return }
         try? self.persistence.saveDraft(noteId: self.noteId, content: self.editableContent, serverProfileId: profileId)
     }
 
@@ -1828,6 +1891,148 @@ final class NoteDetailViewModel {
     func persistEditingDraftIfNeeded() {
         guard isEditing else { return }
         saveDraftLocally()
+    }
+
+    // MARK: - Autosave
+
+    /// Starts autosave's bookkeeping when editing begins.
+    private func startEditSession(fromDraft: Bool) {
+        let original = richTextEditorSeedHTML
+        editSessionOriginalBody = original
+        editSessionProfileId = serverProfileId
+        editSessionStartedFromDraft = fromDraft
+        autosaveBaseline = fromDraft ? nil : original
+        latestEditorBody = nil
+        hasAutosavedThisSession = false
+        autosaveStatus = fromDraft ? .edited : .idle
+    }
+
+    private func endEditSession() {
+        editSessionOriginalBody = nil
+        editSessionProfileId = nil
+        editSessionStartedFromDraft = false
+        autosaveBaseline = nil
+        latestEditorBody = nil
+        hasAutosavedThisSession = false
+        autosaveStatus = .idle
+    }
+
+    /// The rich text editor's first serialization of the note. TipTap tidies the stored HTML, and some
+    /// updates it makes by itself (include titles) fire change events without changing the body, so edits
+    /// are compared with this rather than the stored HTML; otherwise an untouched note would be re-saved.
+    func setAutosaveBaselineFromEditor(_ html: String) {
+        guard isEditing, !editSessionStartedFromDraft, !hasAutosavedThisSession else { return }
+        let undecorated = Self.undecorateLinkedImagesFromEditor(in: html)
+        guard !undecorated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        autosaveBaseline = undecorated
+    }
+
+    /// Marks the session edited when `body` differs from what was last saved.
+    /// - Returns: Whether it differs (autosave should run).
+    @discardableResult
+    func noteEditedBody(_ body: String) -> Bool {
+        guard isEditing, body != autosaveBaseline else { return false }
+        if autosaveStatus != .edited { autosaveStatus = .edited }
+        return true
+    }
+
+    /// For the canvas, mind map and spreadsheet editors, which only say that something changed.
+    func noteEditorChanged() {
+        guard isEditing, autosaveStatus != .edited else { return }
+        autosaveStatus = .edited
+    }
+
+    /// Saves the open editor's body the way Save does (device cache plus the upload queue) but keeps the
+    /// editor open. Leaves `contentString`, `editorDisplayContent` and `isEditing` alone so neither the editor
+    /// nor the hidden read-only view reloads; read mode picks the body up when the session ends.
+    /// - Returns: Whether anything was written. Nothing is while photos are still uploading, after a server
+    ///   switch, or when the body matches what was last saved.
+    @discardableResult
+    func autosaveEditedBody(_ body: String) -> Bool {
+        guard isEditing, let note, mediaUploadStatus == nil,
+              let profileId = serverProfileId, profileId == editSessionProfileId,
+              body != autosaveBaseline
+        else { return false }
+        guard saveNoteBodyChange(body, toggleID: nil, mime: Self.editorBodyMime(for: note)) else { return false }
+        rawContentString = body
+        serverContentHash = body.hashValue
+        editableContent = body
+        if _pendingEditorHTML == body { _pendingEditorHTML = nil }
+        autosaveBaseline = body
+        hasAutosavedThisSession = true
+        try? persistence.deleteDraft(noteId: noteId, serverProfileId: profileId)
+        hasDraft = false
+        autosaveStatus = .saved
+        Log.api.info("Autosaved note body (queued for sync): \(self.noteId)")
+        return true
+    }
+
+    /// Autosave with HTML just read from the rich text editor (`nil` when that failed).
+    @discardableResult
+    func autosaveRichText(freshHTML html: String?) -> Bool {
+        if let html {
+            let undecorated = Self.undecorateLinkedImagesFromEditor(in: html)
+            if !undecorated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Reading the editor cancelled its pending `contentChanged`, so this is the newest body.
+                _pendingEditorHTML = undecorated
+                latestEditorBody = undecorated
+            }
+        }
+        guard let body = latestEditorBody ?? (editSessionStartedFromDraft ? editableContent : nil) else { return false }
+        return autosaveEditedBody(body)
+    }
+
+    @discardableResult
+    func autosaveCanvas(json: String) -> Bool {
+        guard NoteEditorSaving.isUsableCanvasJSON(json) else { return false }
+        return autosaveEditedBody(json)
+    }
+
+    @discardableResult
+    func autosaveMindMap(json: String) -> Bool {
+        guard NoteEditorSaving.isUsableMindMapJSON(json) else { return false }
+        return autosaveEditedBody(json)
+    }
+
+    @discardableResult
+    func autosaveSpreadsheet(json: String) -> Bool {
+        guard NoteEditorSaving.isUsableSpreadsheetJSON(json) else { return false }
+        let body = SpreadsheetWorkbookImageURLs.undecorateFromEditor(json.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !body.isEmpty else { return false }
+        return autosaveEditedBody(body)
+    }
+
+    /// Synchronous autosave from what the view model already holds, for when the editor may be going away.
+    /// Text uses the editor's last `contentChanged`; code, Markdown and Mermaid edit `editableContent`
+    /// directly. Canvas, mind map and spreadsheet content lives only in their web views.
+    func autosaveLatestKnownContent() {
+        guard isEditing, let note else { return }
+        switch note.type {
+        case .text:
+            if let body = latestEditorBody ?? (editSessionStartedFromDraft ? editableContent : nil) {
+                autosaveEditedBody(body)
+            }
+        case .code, .markdown, .mermaid:
+            autosaveEditedBody(editableContent)
+        default:
+            break
+        }
+    }
+
+    /// Whether `body` is what's already saved (unchanged since editing began or since the last autosave), so a
+    /// closing Save, or Back with Back Button Saves, needn't queue it again.
+    private func isAlreadySaved(_ body: String) -> Bool {
+        body == autosaveBaseline
+    }
+
+    /// The MIME the editors' saves store a body with.
+    private static func editorBodyMime(for note: NoteItem) -> String {
+        switch note.type {
+        case .canvas, .spreadsheet:
+            return note.mime.isEmpty ? "application/json" : note.mime
+        default:
+            return note.mime
+        }
     }
 
     // MARK: - Saving
@@ -1853,14 +2058,16 @@ final class NoteDetailViewModel {
         showSaveError = false
         defer { isSaving = false }
         do {
-            cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
-            try persistence.upsertPendingNoteBodyUpload(
-                noteId: nid,
-                body: data,
-                mime: note.mime,
-                serverProfileId: profileId,
-                baseUtcDateModified: nil
-            )
+            if !isAlreadySaved(editableContent) {
+                cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
+                try persistence.upsertPendingNoteBodyUpload(
+                    noteId: nid,
+                    body: data,
+                    mime: note.mime,
+                    serverProfileId: profileId,
+                    baseUtcDateModified: nil
+                )
+            }
             content = data
             contentString = editableContent
             rawContentString = editableContent
@@ -1869,6 +2076,7 @@ final class NoteDetailViewModel {
             isEditing = false
             hasDraft = false
             draftAutoSaveTask?.cancel()
+            endEditSession()
             if note.type == .text {
                 Task { [weak self] in
                     await self?.refreshResolvedTextNoteDisplayAfterSave()
@@ -1889,6 +2097,8 @@ final class NoteDetailViewModel {
             showSaveError = true
             return
         }
+        // The bridge answers `{}` before the canvas has loaded; saving it would erase the drawing.
+        guard NoteEditorSaving.isUsableCanvasJSON(json) else { return }
         let nid = noteId
         let data = Data(json.utf8)
         guard let profileId = serverProfileId else { return }
@@ -1897,14 +2107,16 @@ final class NoteDetailViewModel {
         showSaveError = false
 
         do {
-            cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
-            try persistence.upsertPendingNoteBodyUpload(
-                noteId: nid,
-                body: data,
-                mime: note.mime.isEmpty ? "application/json" : note.mime,
-                serverProfileId: profileId,
-                baseUtcDateModified: nil
-            )
+            if !isAlreadySaved(json) {
+                cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
+                try persistence.upsertPendingNoteBodyUpload(
+                    noteId: nid,
+                    body: data,
+                    mime: note.mime.isEmpty ? "application/json" : note.mime,
+                    serverProfileId: profileId,
+                    baseUtcDateModified: nil
+                )
+            }
             content = data
             contentString = json
             rawContentString = json
@@ -1913,6 +2125,7 @@ final class NoteDetailViewModel {
             isEditing = false
             hasDraft = false
             draftAutoSaveTask?.cancel()
+            endEditSession()
             Log.api.info("Saved canvas body locally (queued for sync): \(nid)")
         } catch {
             saveError = error.localizedDescription
@@ -1944,7 +2157,7 @@ final class NoteDetailViewModel {
         let trimmed = SpreadsheetWorkbookImageURLs.undecorateFromEditor(
             json.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        guard !trimmed.isEmpty else {
+        guard !trimmed.isEmpty, NoteEditorSaving.isUsableSpreadsheetJSON(json) else {
             // Bridge returned nothing — likely Univer hadn't booted. Don't blow away the cached note.
             saveError = String(localized: "Spreadsheet editor wasn't ready. Try again.", comment: "Spreadsheet save with empty payload")
             showSaveError = true
@@ -1958,14 +2171,16 @@ final class NoteDetailViewModel {
         showSaveError = false
 
         do {
-            cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
-            try persistence.upsertPendingNoteBodyUpload(
-                noteId: nid,
-                body: data,
-                mime: note.mime.isEmpty ? "application/json" : note.mime,
-                serverProfileId: profileId,
-                baseUtcDateModified: nil
-            )
+            if !isAlreadySaved(trimmed) {
+                cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
+                try persistence.upsertPendingNoteBodyUpload(
+                    noteId: nid,
+                    body: data,
+                    mime: note.mime.isEmpty ? "application/json" : note.mime,
+                    serverProfileId: profileId,
+                    baseUtcDateModified: nil
+                )
+            }
             content = data
             contentString = trimmed
             rawContentString = trimmed
@@ -1974,6 +2189,7 @@ final class NoteDetailViewModel {
             isEditing = false
             hasDraft = false
             draftAutoSaveTask?.cancel()
+            endEditSession()
             Log.api.info("Saved spreadsheet body locally (queued for sync): \(nid)")
         } catch {
             saveError = error.localizedDescription
@@ -2596,6 +2812,7 @@ final class NoteDetailViewModel {
             do {
                 try await client.deleteNote(nid, eraseNotes: eraseNotes)
                 if let profileId = serverProfileId {
+                    endEditingForDeletedNote(profileId: profileId)
                     GhostNoteTracker.shared.add(nid, serverProfileId: profileId)
                     persistence.removeFavoritesForCachedSubtree(rootNoteId: nid, serverProfileId: profileId)
                     persistence.closeOpenNoteTabs(forDeletedNoteId: nid, serverProfileId: profileId)
@@ -2614,6 +2831,7 @@ final class NoteDetailViewModel {
         guard let profileId = serverProfileId else { return false }
         do {
             try persistence.enqueueOfflineNoteDeletion(noteId: nid, serverProfileId: profileId, eraseNotes: eraseNotes)
+            endEditingForDeletedNote(profileId: profileId)
             appState.backgroundSyncPendingChanges()
             NotificationCenter.default.post(name: .noteDeleted, object: nil)
             return true
@@ -2623,6 +2841,21 @@ final class NoteDetailViewModel {
             self.showSaveError = true
             return false
         }
+    }
+
+    /// Deleting the note drops the edit and any queued body upload, so leaving the screen can't queue a save
+    /// (or a draft) for a note that's gone. A body upload that fails stops the whole upload queue.
+    private func endEditingForDeletedNote(profileId: String) {
+        try? persistence.deletePendingNoteBodyUpload(noteId: noteId, serverProfileId: profileId)
+        guard isEditing else { return }
+        draftAutoSaveTask?.cancel()
+        _pendingEditorHTML = nil
+        try? persistence.deleteDraft(noteId: noteId, serverProfileId: profileId)
+        hasDraft = false
+        isEditing = false
+        editorDisplayContent = nil
+        _editorPrepGeneration &+= 1
+        endEditSession()
     }
 
     /// Permanently deletes a direct child (e.g. geo map location note). Same cache cleanup as `deleteNote()` but keeps this detail screen open.

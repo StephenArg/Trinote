@@ -70,13 +70,22 @@ struct NoteDetailScrollOffsetReader: UIViewRepresentable {
             scrollView = nil
         }
 
+        /// Offset, bounds and content-size changes all land here, often several per frame while scrolling;
+        /// they share one pending callback that reads the scroll view's latest state.
+        private var emitPending = false
+
         private func emit(from scrollView: UIScrollView) {
-            let y = scrollView.contentOffset.y
-            let verticallyScrollable = scrollView.contentSize.height > scrollView.bounds.height + 0.5
-            let maxOffset = scrollView.contentSize.height - scrollView.bounds.height
-            let fraction = verticallyScrollable && maxOffset > 0 ? min(max(y / maxOffset, 0), 1) : 0
-            DispatchQueue.main.async { [onOffsetChange] in
-                onOffsetChange(y, verticallyScrollable, fraction)
+            guard !emitPending else { return }
+            emitPending = true
+            DispatchQueue.main.async { [weak self, weak scrollView] in
+                guard let self else { return }
+                self.emitPending = false
+                guard let scrollView else { return }
+                let y = scrollView.contentOffset.y
+                let verticallyScrollable = scrollView.contentSize.height > scrollView.bounds.height + 0.5
+                let maxOffset = scrollView.contentSize.height - scrollView.bounds.height
+                let fraction = verticallyScrollable && maxOffset > 0 ? min(max(y / maxOffset, 0), 1) : 0
+                self.onOffsetChange(y, verticallyScrollable, fraction)
             }
         }
 

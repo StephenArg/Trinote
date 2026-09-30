@@ -110,7 +110,7 @@ struct NoteDetailView: View {
 
         // Seed scroll restoration before the first read-only render (avoids top-then-jump on launch / tab bar).
         if let id = openTabId, let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
-            _readOnlyScrollFraction = State(initialValue: f)
+            _scrollTracking = State(initialValue: ReadOnlyScrollTracking(fraction: f))
             _readOnlyScrollFractionPendingRestore = State(initialValue: f)
             _isReadOnlyScrollRevealPending = State(initialValue: f > Self.readOnlyScrollRevealMaskThreshold)
             _lastAppliedReadScrollTabId = State(initialValue: id)
@@ -200,13 +200,13 @@ struct NoteDetailView: View {
 
     /// Floating Edit chip: shown when opening an editable note; hides on scroll **up**, shows on scroll **down**.
     @State private var showFloatingEditButton = false
-    @State private var lastScrollContentOffsetY: CGFloat = 0
+    /// Values the read-only scroll updates every frame. A plain reference so writing them doesn't
+    /// invalidate this view while scrolling; nothing on screen reads them.
+    @State private var scrollTracking = ReadOnlyScrollTracking()
     @State private var floatingEditScrollBaselineReady = false
     /// While true, ignore scroll-direction hide/show (layout + scroll restoration during note open).
     @State private var floatingEditIgnoreDirectionalScroll = true
     @State private var floatingEditSettlingEndWorkItem: DispatchWorkItem?
-    /// Scroll fraction (0–1) of the read-only ScrollView, used to restore position in the editor.
-    @State private var readOnlyScrollFraction: CGFloat = 0
     /// After save leaves the rich-text editor, applied once to the read-only `ScrollView` (same fraction as the web editor).
     @State private var readOnlyScrollFractionPendingRestore: CGFloat?
     /// Hides read-only content until tab scroll restoration settles (avoids top-then-jump).
@@ -232,6 +232,22 @@ struct NoteDetailView: View {
     @State private var lastSaveChipEditorVerticallyScrollable: Bool = true
     /// Reference to the rich-text editor WKWebView so the save button can call JS `getContent()`.
     @State private var editorWebView: WKWebView?
+
+    // Autosave and Back saving (issue #26); see `NoteEditorSaving`.
+    @AppStorage(NoteEditorSaving.autosaveKey) private var noteEditorAutosave = false
+    @AppStorage(NoteEditorSaving.autosaveDelayKey) private var noteEditorAutosaveDelay = NoteEditorSaving.defaultAutosaveDelay
+    @AppStorage(NoteEditorSaving.hideSaveButtonKey) private var noteEditorHideSaveButton = false
+    @AppStorage(NoteEditorSaving.backButtonSavesKey) private var noteEditorBackButtonSaves = false
+    /// The pending autosave; every edit restarts it.
+    @State private var autosaveTask: Task<Void, Never>?
+    /// Back is saving before it leaves; blocks another tap.
+    @State private var isLeavingEditor = false
+    /// Back was tapped while photos were uploading; leave once they're in.
+    @State private var leaveEditorAfterMediaUpload = false
+    /// Cancel Editing would put back the note from before editing (an autosave already saved part of it).
+    @State private var showCancelEditingConfirm = false
+    /// The same question over the iPhone spreadsheet editor, which is a full-screen cover.
+    @State private var showSpreadsheetCancelEditingConfirm = false
     @State private var showIncludeNotePicker = false
     @State private var showInlineIconPicker = false
 
@@ -359,7 +375,7 @@ struct NoteDetailView: View {
         floatingEditSettlingEndWorkItem?.cancel()
         floatingEditSettlingEndWorkItem = nil
         floatingEditScrollBaselineReady = false
-        lastScrollContentOffsetY = 0
+        scrollTracking.lastContentOffsetY = 0
         floatingEditIgnoreDirectionalScroll = true
         guard floatingEditFABEligible(vm: vm, note: note) else {
             if showFloatingEditButton {
@@ -400,7 +416,7 @@ struct NoteDetailView: View {
         floatingEditSettlingEndWorkItem = nil
         floatingEditIgnoreDirectionalScroll = false
         floatingEditScrollBaselineReady = false
-        lastScrollContentOffsetY = 0
+        scrollTracking.lastContentOffsetY = 0
         guard floatingEditFABEligible(vm: vm, note: note) else {
             if showFloatingEditButton {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
@@ -424,7 +440,7 @@ struct NoteDetailView: View {
                     showFloatingEditButton = false
                 }
             }
-            lastScrollContentOffsetY = contentOffsetY
+            scrollTracking.lastContentOffsetY = contentOffsetY
             floatingEditScrollBaselineReady = false
             floatingEditIgnoreDirectionalScroll = true
             return
@@ -434,7 +450,7 @@ struct NoteDetailView: View {
             if !floatingEditScrollBaselineReady {
                 floatingEditScrollBaselineReady = true
             }
-            lastScrollContentOffsetY = contentOffsetY
+            scrollTracking.lastContentOffsetY = contentOffsetY
             if !showFloatingEditButton {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                     showFloatingEditButton = true
@@ -447,7 +463,7 @@ struct NoteDetailView: View {
             if !floatingEditScrollBaselineReady {
                 floatingEditScrollBaselineReady = true
             }
-            lastScrollContentOffsetY = contentOffsetY
+            scrollTracking.lastContentOffsetY = contentOffsetY
             if !showFloatingEditButton {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                     showFloatingEditButton = true
@@ -458,7 +474,7 @@ struct NoteDetailView: View {
 
         if !floatingEditScrollBaselineReady {
             floatingEditScrollBaselineReady = true
-            lastScrollContentOffsetY = contentOffsetY
+            scrollTracking.lastContentOffsetY = contentOffsetY
             if !showFloatingEditButton {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                     showFloatingEditButton = true
@@ -468,8 +484,8 @@ struct NoteDetailView: View {
         }
 
         let directionalThreshold: CGFloat = 10
-        let delta = contentOffsetY - lastScrollContentOffsetY
-        lastScrollContentOffsetY = contentOffsetY
+        let delta = contentOffsetY - scrollTracking.lastContentOffsetY
+        scrollTracking.lastContentOffsetY = contentOffsetY
 
         let nextVisible: Bool
         if delta < -directionalThreshold {
@@ -710,7 +726,7 @@ struct NoteDetailView: View {
 
     private func queueReadOnlyScrollRestoreAfterRichTextSave(fraction: CGFloat) {
         let f = min(max(fraction, 0), 1)
-        readOnlyScrollFraction = f
+        scrollTracking.fraction = f
         readOnlyScrollFractionPendingRestore = f
         isReadOnlyScrollRevealPending = f > Self.readOnlyScrollRevealMaskThreshold
     }
@@ -847,7 +863,7 @@ struct NoteDetailView: View {
         if let wv = editorWebView {
             wv.evaluateJavaScript(Self.richTextEditorScrollFractionScript) { result, _ in
                 DispatchQueue.main.async {
-                    let frac = Self.parseRichTextEditorScrollFraction(result) ?? readOnlyScrollFraction
+                    let frac = Self.parseRichTextEditorScrollFraction(result) ?? scrollTracking.fraction
                     queueReadOnlyScrollRestoreAfterRichTextSave(fraction: frac)
                     vm.cancelEditing()
                 }
@@ -857,7 +873,18 @@ struct NoteDetailView: View {
         }
     }
 
+    /// Cancel Editing. After an autosave this puts back the note from before editing, so it asks first.
     private func cancelNoteEditing(vm: NoteDetailViewModel, note: NoteItem) {
+        if vm.cancelEditingNeedsConfirmation {
+            showCancelEditingConfirm = true
+            return
+        }
+        discardNoteEditing(vm: vm, note: note)
+    }
+
+    private func discardNoteEditing(vm: NoteDetailViewModel, note: NoteItem) {
+        cancelScheduledAutosave()
+        if note.type == .spreadsheet { spreadsheetHasUnsavedChanges = false }
         if vm.isEditing && note.type == .text {
             cancelRichTextEditing(vm: vm)
         } else {
@@ -866,10 +893,12 @@ struct NoteDetailView: View {
     }
 
     /// Fetches the latest HTML from the rich-text editor (including non-ProseMirror state like
-    /// table captions) and then saves. Falls back to the debounce-cached content when the
-    /// WKWebView is unavailable (e.g. non-rich-text note types).
-    private func saveRichTextContent(vm: NoteDetailViewModel) {
-        if let wv = editorWebView {
+    /// table captions) and then saves. Code, Markdown and Mermaid notes (and a text editor that
+    /// isn't up yet) save `editableContent` directly.
+    /// - Parameter completion: Gets whether the editor closed, i.e. the save worked.
+    private func saveRichTextContent(vm: NoteDetailViewModel, completion: ((Bool) -> Void)? = nil) {
+        // Only a text note's editor is TipTap; `editorWebView` can outlive the editor it came from.
+        if vm.note?.type == .text, let wv = editorWebView {
             wv.evaluateJavaScript(Self.richTextEditorSavePayloadScript) { result, _ in
                 DispatchQueue.main.async {
                     let (html, frac) = Self.parseRichTextEditorSavePayload(result)
@@ -881,10 +910,12 @@ struct NoteDetailView: View {
                     } else {
                         vm.saveContent()
                     }
+                    completion?(!vm.isEditing)
                 }
             }
         } else {
             vm.saveContent()
+            completion?(!vm.isEditing)
         }
     }
 
@@ -914,6 +945,14 @@ struct NoteDetailView: View {
         .buttonStyle(.plain)
         .disabled(vm.isSaving)
         .accessibilityLabel(String(localized: "Save", comment: "Editor save chip"))
+    }
+
+    private var hidesEditorSaveButton: Bool {
+        NoteEditorSaving.hidesSaveButton(autosave: noteEditorAutosave, hideSaveButton: noteEditorHideSaveButton)
+    }
+
+    private var savesWhenLeavingEditor: Bool {
+        NoteEditorSaving.savesWhenLeaving(autosave: noteEditorAutosave, backButtonSaves: noteEditorBackButtonSaves)
     }
 
     /// Interactive back-swipe fights pan/zoom on full-bleed canvases (mind map, geo map) and edit surfaces.
@@ -997,6 +1036,28 @@ struct NoteDetailView: View {
             .toolbar(viewModel?.isEditing == true ? .hidden : .visible, for: .tabBar)
             .onChange(of: viewModel?.isEditing == true, initial: true) { _, editing in
                 noteWorkspace?.isEditingNote = editing
+                if editing {
+                    // A restored draft isn't saved yet, so autosave it like an edit.
+                    if let vm = viewModel, vm.editSessionStartedFromDraft { scheduleAutosave(vm: vm) }
+                } else {
+                    cancelScheduledAutosave()
+                    leaveEditorAfterMediaUpload = false
+                    // The editor is gone; a later save mustn't read its web view.
+                    editorWebView = nil
+                }
+            }
+            .onChange(of: noteEditorAutosave) { _, on in
+                if !on { cancelScheduledAutosave() }
+            }
+            .onChange(of: viewModel?.mediaUploadStatus == nil) { _, uploadsDone in
+                guard uploadsDone, let vm = viewModel, vm.isEditing else { return }
+                if leaveEditorAfterMediaUpload {
+                    leaveEditorAfterMediaUpload = false
+                    leaveEditor(vm: vm)
+                } else if vm.autosaveStatus == .edited {
+                    // Autosave waits while photos upload.
+                    scheduleAutosave(vm: vm)
+                }
             }
             .animation(.easeInOut(duration: 0.2), value: viewModel?.isEditing == true)
             .onChange(of: viewModel?.note?.noteId) { _, _ in refreshOpenNoteTabListNonEmpty() }
@@ -1027,11 +1088,13 @@ struct NoteDetailView: View {
             .onDisappear {
                 persistReadScrollFractionForActiveOpenTab()
                 viewModel?.persistEditingDraftIfNeeded()
+                if let vm = viewModel { autosaveNow(vm: vm) }
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background || phase == .inactive {
                     persistReadScrollFractionForActiveOpenTab()
                     viewModel?.persistEditingDraftIfNeeded()
+                    if let vm = viewModel { autosaveNow(vm: vm) }
                 }
             }
             .onChange(of: appState.activeProfile?.id) { _, _ in
@@ -1045,22 +1108,145 @@ struct NoteDetailView: View {
     }
 
     /// Saves whichever editor is open, fetching the latest state from its web view first.
-    private func saveEditedContent(vm: NoteDetailViewModel, note: NoteItem) {
+    /// - Parameter completion: `true` once the note is saved, or when there was nothing to save because the
+    ///   editor hadn't loaded, so it's fine to leave; `false` when saving failed and the editor stays open.
+    private func saveEditedContent(vm: NoteDetailViewModel, note: NoteItem, completion: ((Bool) -> Void)? = nil) {
         switch note.type {
         case .canvas:
-            saveCanvasContent(vm: vm)
+            saveCanvasContent(vm: vm, completion: completion)
         case .spreadsheet:
-            saveSpreadsheetContent(vm: vm)
+            saveSpreadsheetContent(vm: vm, completion: completion)
         case .mindMap:
-            saveMindMapContent(vm: vm)
+            saveMindMapContent(vm: vm, completion: completion)
         default:
-            saveRichTextContent(vm: vm)
+            saveRichTextContent(vm: vm, completion: completion)
+        }
+    }
+
+    // MARK: - Autosave and Back saving (issue #26)
+
+    /// Restarts the countdown after an edit: the note saves once editing pauses for the chosen delay.
+    private func scheduleAutosave(vm: NoteDetailViewModel) {
+        guard noteEditorAutosave, vm.isEditing else { return }
+        autosaveTask?.cancel()
+        let delay = NoteEditorSaving.autosaveDelay(forStored: noteEditorAutosaveDelay)
+        autosaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            autosaveEditedContent(vm: vm)
+        }
+    }
+
+    private func cancelScheduledAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+    }
+
+    /// Reads the open editor's latest content and saves it without leaving the editor.
+    private func autosaveEditedContent(vm: NoteDetailViewModel) {
+        guard vm.isEditing, let note = vm.note else { return }
+        switch note.type {
+        case .text:
+            guard let wv = editorWebView else {
+                vm.autosaveRichText(freshHTML: nil)
+                return
+            }
+            wv.evaluateJavaScript(Self.richTextEditorSavePayloadScript) { result, _ in
+                DispatchQueue.main.async {
+                    vm.autosaveRichText(freshHTML: Self.parseRichTextEditorSavePayload(result).html)
+                }
+            }
+        case .canvas:
+            // The SVG preview uploads when the editor closes, not on every autosave.
+            canvasEditorBridge.getSceneData { json, _ in
+                DispatchQueue.main.async { vm.autosaveCanvas(json: json) }
+            }
+        case .mindMap:
+            mindMapEditorBridge.getMapData { json in
+                DispatchQueue.main.async { vm.autosaveMindMap(json: json) }
+            }
+        case .spreadsheet:
+            spreadsheetEditorBridge.getWorkbook { json in
+                DispatchQueue.main.async { vm.autosaveSpreadsheet(json: json) }
+            }
+        default:
+            vm.autosaveEditedBody(vm.editableContent)
+        }
+    }
+
+    /// The editor may be going away (or the app leaving the foreground): save now instead of waiting.
+    private func autosaveNow(vm: NoteDetailViewModel) {
+        guard noteEditorAutosave, vm.isEditing else { return }
+        cancelScheduledAutosave()
+        vm.autosaveLatestKnownContent()
+        autosaveEditedContent(vm: vm)
+    }
+
+    /// Back (or ⌘[) while editing: saves first when Autosave or Back Button Saves is on, then leaves.
+    private func leaveEditor(vm: NoteDetailViewModel) {
+        guard savesWhenLeavingEditor, vm.isEditing, let note = vm.note else {
+            dismiss()
+            return
+        }
+        guard !isLeavingEditor else { return }
+        if vm.mediaUploadStatus != nil {
+            // Saving now would miss the photos still uploading.
+            leaveEditorAfterMediaUpload = true
+            return
+        }
+        cancelScheduledAutosave()
+        isLeavingEditor = true
+        saveEditedContent(vm: vm, note: note) { canLeave in
+            isLeavingEditor = false
+            if canLeave { dismiss() }
+        }
+    }
+
+    /// iPad: another note was picked in the sidebar while this one is being edited
+    /// (`WorkspaceCommand.saveBeforeLeaving`). Saves first when Autosave or Back Button Saves is on.
+    private func saveBeforeLeavingPane() {
+        guard let noteWorkspace else { return }
+        guard savesWhenLeavingEditor, let vm = viewModel, vm.isEditing, let note = vm.note,
+              vm.mediaUploadStatus == nil, !isLeavingEditor
+        else {
+            // Nothing to save here, or photos still uploading: leave as before, keeping a draft.
+            noteWorkspace.finishLeavingEditor()
+            return
+        }
+        cancelScheduledAutosave()
+        isLeavingEditor = true
+        saveEditedContent(vm: vm, note: note) { canLeave in
+            isLeavingEditor = false
+            if canLeave {
+                noteWorkspace.finishLeavingEditor()
+            } else {
+                noteWorkspace.stayInEditor()
+            }
+        }
+    }
+
+    /// Under the title while editing with Autosave on.
+    private func autosaveStatusText(_ vm: NoteDetailViewModel) -> String? {
+        guard noteEditorAutosave, vm.isEditing else { return nil }
+        switch vm.autosaveStatus {
+        case .idle:
+            return nil
+        case .edited:
+            return String(localized: "Edited", comment: "Editor status under the note title: changes not autosaved yet")
+        case .saved:
+            return vm.isOnline
+                ? String(localized: "Saved", comment: "Editor status under the note title: changes autosaved")
+                : String(localized: "Saved on this device", comment: "Editor status under the note title: autosaved while offline; uploads when back online")
         }
     }
 
     /// iPad keyboard / menu-bar commands for the note on screen (see `TrinoteCommands`). Commands that
     /// don't apply right now (Save while reading, Edit while editing…) do nothing.
     private func handleWorkspaceCommand(_ command: WorkspaceCommand) {
+        if command == .saveBeforeLeaving {
+            saveBeforeLeavingPane()
+            return
+        }
         guard let vm = viewModel, let note = vm.note else { return }
         switch command {
         case .newNote:
@@ -1077,9 +1263,14 @@ struct NoteDetailView: View {
             findControl.isPresented = true
         case .back:
             // Only a linked note pushed inside the pane has somewhere to go back to.
-            guard onClose == nil, !vm.isEditing else { return }
-            dismiss()
-        case .jumpToNote, .showSection, .focusSearch, .toggleSidebar, .nextTab, .previousTab, .closeTab:
+            guard onClose == nil else { return }
+            if !vm.isEditing {
+                dismiss()
+            } else if savesWhenLeavingEditor {
+                // Like the Back button, which saves first.
+                leaveEditor(vm: vm)
+            }
+        case .saveBeforeLeaving, .jumpToNote, .showSection, .focusSearch, .toggleSidebar, .nextTab, .previousTab, .closeTab:
             break
         }
     }
@@ -1129,25 +1320,43 @@ struct NoteDetailView: View {
             if viewModel?.isEditing == true, onClose == nil {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
-                        dismiss()
+                        if let vm = viewModel {
+                            leaveEditor(vm: vm)
+                        } else {
+                            dismiss()
+                        }
                     } label: {
-                        Label(String(localized: "Back", comment: "Back from note detail"), systemImage: "chevron.left")
-                            .labelStyle(.iconOnly)
+                        if isLeavingEditor || leaveEditorAfterMediaUpload {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label(String(localized: "Back", comment: "Back from note detail"), systemImage: "chevron.left")
+                                .labelStyle(.iconOnly)
+                        }
                     }
+                    .disabled(isLeavingEditor || leaveEditorAfterMediaUpload)
                     .accessibilityLabel(String(localized: "Back", comment: "Back button on note detail"))
                 }
             }
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) {
-                    if viewModel?.serverVerified == false && viewModel?.note != nil {
-                        Image(systemName: "icloud.slash")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                VStack(spacing: 0) {
+                    HStack(spacing: 6) {
+                        if viewModel?.serverVerified == false && viewModel?.note != nil {
+                            Image(systemName: "icloud.slash")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(principalTitleText)
+                            .font(.headline)
+                            .lineLimit(1)
+                            .foregroundStyle(principalBarTitleForegroundColor)
                     }
-                    Text(principalTitleText)
-                        .font(.headline)
-                        .lineLimit(1)
-                        .foregroundStyle(principalBarTitleForegroundColor)
+                    if let vm = viewModel, let status = autosaveStatusText(vm) {
+                        Text(status)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
         }
@@ -1160,9 +1369,14 @@ struct NoteDetailView: View {
 
     private func initialLoad() async {
         if viewModel == nil {
+            NoteOpenTrace.begin(
+                noteId: activeNoteId,
+                "initialLoad tabsBar=\(showNoteTabsBar) openTabId=\(openTabId ?? "nil") activeOpenTabId=\(activeOpenTabId ?? "nil") pendingRestore=\(readOnlyScrollFractionPendingRestore.map { "\($0)" } ?? "nil") coverPending=\(isReadOnlyScrollRevealPending)"
+            )
             // Mask before the first content paint whenever we already know a mid-note scroll
             // restore is coming — otherwise cached HTML flashes, then the spinner covers it.
             seedReadScrollRevealBeforeContentPaint(for: activeNoteId)
+            NoteOpenTrace.log("after seed pendingRestore=\(readOnlyScrollFractionPendingRestore.map { "\($0)" } ?? "nil") coverPending=\(isReadOnlyScrollRevealPending)")
             let vm = NoteDetailViewModel(noteId: activeNoteId, appState: appState, seedChildSummaries: seedChildSummaries)
             viewModel = vm
             if showNoteTabsBar, retargetActiveOpenTab { eagerRetargetActiveOpenTabFromCache() }
@@ -1171,6 +1385,7 @@ struct NoteDetailView: View {
             async let attachTask: () = vm.loadAttachments()
             async let childTask: () = vm.loadChildNotes()
             await loadTask
+            NoteOpenTrace.log("vm.load done type=\(vm.note?.type.rawValue ?? "nil") isLoadingContent=\(vm.isLoadingContent)")
             // Flip into edit mode as soon as `note` is available so SwiftUI never renders the read
             // layout for a frame before the editor takes over. Only the new-note flow sets
             // `startInEditMode` (TreeView.noteEditDestination), so `editableContent` being empty at
@@ -1179,6 +1394,7 @@ struct NoteDetailView: View {
                 vm.startEditing()
             }
             _ = await (contentTask, attachTask, childTask)
+            NoteOpenTrace.log("content/attachments/children loaded contentUtf16=\(vm.contentString?.utf16.count ?? -1) isLoadingContent=\(vm.isLoadingContent)")
             await vm.prefetchChildNotesForGeoMapBookIfNeeded()
         }
         if showNoteTabsBar { reconcileOpenTabsAfterLoad() }
@@ -1189,14 +1405,23 @@ struct NoteDetailView: View {
     private func seedReadScrollRevealBeforeContentPaint(for noteId: String) {
         guard showNoteTabsBar, let p = appState.activeProfile?.id else { return }
         let pm = PersistenceManager.shared
-        let tabId: String? = {
-            if let t = activeOpenTabId ?? openTabId,
-               (try? pm.fetchOpenNoteTab(id: t, serverProfileId: p)) != nil {
-                return t
+        // A tab's saved position belongs to the note it shows. The last active tab usually shows the
+        // previous note (it's retargeted to this one after load), so borrowing its position would mask
+        // this note until the restore gave up.
+        func tabShowingThisNote(_ id: String) -> String? {
+            guard let tab = try? pm.fetchOpenNoteTab(id: id, serverProfileId: p) else { return nil }
+            guard tab.noteId == noteId else {
+                NoteOpenTrace.log("tab \(id) shows \(tab.noteId), not this note; not restoring its position")
+                return nil
             }
-            if !persistedLastActiveOpenTabId.isEmpty,
-               (try? pm.fetchOpenNoteTab(id: persistedLastActiveOpenTabId, serverProfileId: p)) != nil {
-                return persistedLastActiveOpenTabId
+            return id
+        }
+        let tabId: String? = {
+            if let t = activeOpenTabId ?? openTabId, let id = tabShowingThisNote(t) {
+                return id
+            }
+            if !persistedLastActiveOpenTabId.isEmpty, let id = tabShowingThisNote(persistedLastActiveOpenTabId) {
+                return id
             }
             return try? pm.findPreferredOpenTabId(for: noteId, serverProfileId: p)
         }()
@@ -1243,6 +1468,9 @@ struct NoteDetailView: View {
                 noteType: resolvedType,
                 serverProfileId: p
             )
+            // The saved position was the previous note's; applied after load it would open this note partway down
+            // (or under the reveal cover until the restore gave up, when this note is shorter).
+            OpenTabSessionStore.clearReadScrollState(for: t)
         } catch {}
         if activeOpenTabId == nil { activeOpenTabId = t }
     }
@@ -1300,7 +1528,7 @@ struct NoteDetailView: View {
         if let t = activeOpenTabId { resolveRetargetToCurrentNote(pm: pm, p: p, n: n, tabId: t) }
     }
 
-    /// Re-runs after popping back from a pushed sub-note so the active tab points at *this* view's note again. Skips work if the tab already matches; only retargets, never alters scroll state.
+    /// Re-runs after popping back from a pushed sub-note so the active tab points at *this* view's note again. Skips work if the tab already matches; never moves this view's scroll position.
     private func restoreActiveOpenTabToCurrentNoteIfDrifted() {
         guard let p = appState.activeProfile?.id,
               let n = viewModel?.note,
@@ -1316,6 +1544,8 @@ struct NoteDetailView: View {
                 noteType: n.type.rawValue,
                 serverProfileId: p
             )
+            // The tab still holds the pushed note's position; this view kept its own, so store that.
+            OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: t)
         } catch {}
     }
 
@@ -1337,23 +1567,40 @@ struct NoteDetailView: View {
             )
         } catch {}
         OpenTabSessionStore.clearReadScrollState(for: tabId)
-        readOnlyScrollFraction = 0
+        scrollTracking.fraction = 0
         readOnlyScrollFractionPendingRestore = nil
         isReadOnlyScrollRevealPending = false
         lastAppliedReadScrollTabId = tabId
     }
 
-    private func applyReadScrollStateFromStoreForOpenTabId(_ id: String) {
+    /// A tab's saved position belongs to the note it shows. Opening a note from the tree keeps the last active
+    /// tab selected while it still shows the previous note, so its position must neither be applied to this
+    /// note nor overwritten by it.
+    private func openTab(_ id: String, shows noteId: String) -> Bool {
+        guard let p = appState.activeProfile?.id,
+              let tab = try? PersistenceManager.shared.fetchOpenNoteTab(id: id, serverProfileId: p)
+        else { return false }
+        return tab.noteId == noteId
+    }
+
+    /// - Parameter expectedNoteId: The note the tab should show; defaults to the note on screen.
+    private func applyReadScrollStateFromStoreForOpenTabId(_ id: String, showing expectedNoteId: String? = nil) {
         if lastAppliedReadScrollTabId == id { return }
+        guard openTab(id, shows: expectedNoteId ?? activeNoteId) else {
+            NoteOpenTrace.log("tab \(id) doesn't show \(expectedNoteId ?? activeNoteId); not applying its position")
+            return
+        }
 
         // Opened from a search match: the tab's saved position would scroll away from it.
         let skipsRestore = opensAtFindMatch && activeNoteId == noteId
         if !skipsRestore, let f = OpenTabSessionStore.readReadScrollFraction(for: id) {
-            readOnlyScrollFraction = f
+            scrollTracking.fraction = f
             readOnlyScrollFractionPendingRestore = f
             isReadOnlyScrollRevealPending = f > Self.readOnlyScrollRevealMaskThreshold
+            NoteOpenTrace.log("tab \(id) saved fraction=\(f) → coverPending=\(isReadOnlyScrollRevealPending)")
         } else {
-            readOnlyScrollFraction = 0
+            NoteOpenTrace.log("tab \(id) no saved fraction (skipsRestore=\(skipsRestore))")
+            scrollTracking.fraction = 0
             readOnlyScrollFractionPendingRestore = nil
             isReadOnlyScrollRevealPending = false
         }
@@ -1362,19 +1609,21 @@ struct NoteDetailView: View {
 
     /// Fraction to persist: target restore position while layout is settling, else live scroll.
     private var readOnlyScrollFractionToPersist: CGFloat {
-        readOnlyScrollFractionPendingRestore ?? readOnlyScrollFraction
+        readOnlyScrollFractionPendingRestore ?? scrollTracking.fraction
     }
 
     /// Writes the current read-only scroll fraction for the active open tab (same store as tab switches).
     private func persistReadScrollFractionForActiveOpenTab() {
-        guard let tabId = activeOpenTabId ?? openTabId else { return }
+        guard let tabId = activeOpenTabId ?? openTabId, openTab(tabId, shows: activeNoteId) else { return }
         OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: tabId)
     }
 
     private func selectOpenNoteTab(_ tab: OpenNoteTab) {
         guard appState.activeProfile?.id == tab.serverProfileId else { return }
         if let prev = activeOpenTabId, prev != tab.id {
-            OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: prev)
+            if openTab(prev, shows: activeNoteId) {
+                OpenTabSessionStore.saveReadScrollFraction(readOnlyScrollFractionToPersist, for: prev)
+            }
             lastAppliedReadScrollTabId = prev
         }
         if tab.noteId == activeNoteId {
@@ -1385,8 +1634,10 @@ struct NoteDetailView: View {
             return
         }
         activeOpenTabId = tab.id
-        applyReadScrollStateFromStoreForOpenTabId(tab.id)
+        applyReadScrollStateFromStoreForOpenTabId(tab.id, showing: tab.noteId)
         viewModel = nil
+        // The next note mustn't save through this one's editor.
+        editorWebView = nil
         activeNoteId = tab.noteId
     }
 
@@ -1580,7 +1831,7 @@ struct NoteDetailView: View {
                     ZStack {
                         NoteDetailScrollOffsetReader { y, _, fraction in
                             if readOnlyScrollFractionPendingRestore == nil {
-                                readOnlyScrollFraction = fraction
+                                scrollTracking.fraction = fraction
                             }
                             updateFloatingEditVisibility(
                                 contentOffsetY: y,
@@ -1588,9 +1839,12 @@ struct NoteDetailView: View {
                                 note: note
                             )
                         }
-                        NoteDetailReadOnlyScrollRestoration(fraction: readOnlyScrollFractionPendingRestore) {
-                            if let restored = readOnlyScrollFractionPendingRestore {
-                                readOnlyScrollFraction = restored
+                        NoteDetailReadOnlyScrollRestoration(fraction: readOnlyScrollFractionPendingRestore) { reached in
+                            NoteOpenTrace.log("restore onApplied pending=\(readOnlyScrollFractionPendingRestore.map { "\($0)" } ?? "nil") reached=\(reached.map { "\($0)" } ?? "nil") coverPending=\(isReadOnlyScrollRevealPending)")
+                            // Where the note actually is: a restore that gave up must not save its target back
+                            // to the tab, or the next open waits under the cover again.
+                            if let position = reached ?? readOnlyScrollFractionPendingRestore {
+                                scrollTracking.fraction = position
                             }
                             readOnlyScrollFractionPendingRestore = nil
                             if isReadOnlyScrollRevealPending {
@@ -1623,6 +1877,8 @@ struct NoteDetailView: View {
                 Color(uiColor: .systemBackground)
                     .transition(.opacity)
                     .allowsHitTesting(false)
+                    .onAppear { NoteOpenTrace.log("COVER shown (solid systemBackground over the note)") }
+                    .onDisappear { NoteOpenTrace.log("COVER hidden") }
             }
         }
         .onDrop(
@@ -1648,6 +1904,7 @@ struct NoteDetailView: View {
             }
         }
         .onAppear {
+            NoteOpenTrace.log("read surface appeared type=\(note.type.rawValue) isLoadingContent=\(vm.isLoadingContent) hasContent=\(vm.contentString != nil)")
             presentFloatingEditOnNoteOpen(vm: vm, note: note)
             scheduleFloatingEditScrollSettlingEndIfNeeded()
         }
@@ -1762,7 +2019,10 @@ struct NoteDetailView: View {
                 }
             }
             .toolbar { noteToolbar(vm, note: note) }
-            .inspector(isPresented: noteInspectorBinding) {
+            // Only the iPad split layout shows the panel. Anywhere else `.inspector` would still wrap the note,
+            // and its container keeps the open-note tabs bar's `safeAreaInset` from reaching it, which put the
+            // floating edit button behind that bar.
+            .notePanelInspector(enabled: noteWorkspace != nil, isPresented: noteInspectorBinding) {
                 noteInspector(vm, note: note)
                     .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
             }
@@ -1782,6 +2042,9 @@ struct NoteDetailView: View {
                 Button(String(localized: "OK", comment: "Alert dismiss")) { vm.showSaveError = false }
             } message: {
                 Text(vm.saveError ?? String(localized: "An unknown error occurred.", comment: "Generic error"))
+            }
+            .cancelEditingConfirmation(isPresented: $showCancelEditingConfirm) {
+                discardNoteEditing(vm: vm, note: note)
             }
             .alert(
                 String(localized: "Export Failed", comment: "Spreadsheet .xlsx export error title"),
@@ -2234,6 +2497,8 @@ struct NoteDetailView: View {
             ProgressView(String(localized: "Loading content…", comment: "Note body loading"))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 40)
+                .onAppear { NoteOpenTrace.log("body spinner shown") }
+                .onDisappear { NoteOpenTrace.log("body spinner hidden") }
         } else {
             readingView(vm, note: note, findControl: findControl)
         }
@@ -2581,7 +2846,9 @@ struct NoteDetailView: View {
         ZStack(alignment: .bottomTrailing) {
             RichTextEditorView(
                 initialHTML: displayHTML,
-                onContentChanged: { html in vm.receiveEditorUpdate(html) },
+                onContentChanged: { html in
+                    if vm.receiveEditorUpdate(html) { scheduleAutosave(vm: vm) }
+                },
                 onPickImage: { showEditorImageSourceDialog = true },
                 onEditorScroll: { y, verticallyScrollable in
                     updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
@@ -2644,15 +2911,17 @@ struct NoteDetailView: View {
                 imageToInsert: $imageToInsert,
                 attachmentToInsert: $attachmentToInsert,
                 webViewBinding: $editorWebView,
-                initialScrollFraction: readOnlyScrollFraction,
+                initialScrollFraction: scrollTracking.fraction,
                 insertToolsAtTop: noteEditorInsertToolsAtTop,
-                onInsertToolsAtTopChanged: { noteEditorInsertToolsAtTop = $0 }
+                onInsertToolsAtTopChanged: { noteEditorInsertToolsAtTop = $0 },
+                onContentLoaded: { vm.setAutosaveBaselineFromEditor($0) },
+                hidesSaveButton: hidesEditorSaveButton
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
             // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).
             .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
 
-            if showEditorSaveCancelChip && !editorTableToolsVisible {
+            if showEditorSaveCancelChip && !editorTableToolsVisible && !hidesEditorSaveButton {
                 editorSaveChip(vm: vm)
                     .padding(.trailing, 16)
                     .padding(.bottom, 62)
@@ -2746,8 +3015,12 @@ struct NoteDetailView: View {
             MermaidEditorView(
                 editableContent: $vm.editableContent,
                 onSave: { vm.saveContent() },
-                isSaving: vm.isSaving
+                isSaving: vm.isSaving,
+                showsSaveButton: !hidesEditorSaveButton
             )
+        }
+        .onChange(of: vm.editableContent) { _, body in
+            if vm.noteEditedBody(body) { scheduleAutosave(vm: vm) }
         }
     }
 
@@ -2759,17 +3032,23 @@ struct NoteDetailView: View {
             CanvasEditorView(
                 initialJSON: vm.editableContent,
                 bridge: canvasEditorBridge,
-                onSceneChanged: { canvasHasUnsavedChanges = true }
+                onSceneChanged: {
+                    canvasHasUnsavedChanges = true
+                    vm.noteEditorChanged()
+                    scheduleAutosave(vm: vm)
+                }
             )
             .onAppear {
                 canvasHasUnsavedChanges = false
             }
 
-            canvasSaveChip(vm: vm)
-                .padding(.trailing, 16)
-                .padding(.bottom, 72)
-                .transition(.scale(scale: 0.88).combined(with: .opacity))
-                .zIndex(2)
+            if !hidesEditorSaveButton {
+                canvasSaveChip(vm: vm)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 72)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                    .zIndex(2)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .trinoteCanvasBackground).ignoresSafeArea(edges: [.bottom, .horizontal]))
@@ -2802,11 +3081,17 @@ struct NoteDetailView: View {
         .accessibilityLabel(String(localized: "Save", comment: "Canvas save chip"))
     }
 
-    private func saveCanvasContent(vm: NoteDetailViewModel) {
+    private func saveCanvasContent(vm: NoteDetailViewModel, completion: ((Bool) -> Void)? = nil) {
         canvasEditorBridge.getSceneData { json, svg in
             DispatchQueue.main.async {
+                // `{}` means the canvas hasn't loaded: nothing to save (and saving it would erase the drawing).
+                guard NoteEditorSaving.isUsableCanvasJSON(json) else {
+                    completion?(true)
+                    return
+                }
                 vm.saveCanvasContent(json: json, svg: svg)
                 canvasHasUnsavedChanges = false
+                completion?(!vm.isEditing)
             }
         }
     }
@@ -2825,17 +3110,23 @@ struct NoteDetailView: View {
                 imageBytes: { routeType, entityId in
                     await vm.loadImageBytes(routeType: routeType, entityId: entityId)
                 },
-                onWorkbookChanged: { spreadsheetHasUnsavedChanges = true }
+                onWorkbookChanged: {
+                    spreadsheetHasUnsavedChanges = true
+                    vm.noteEditorChanged()
+                    scheduleAutosave(vm: vm)
+                }
             )
             .onAppear {
                 spreadsheetHasUnsavedChanges = false
             }
 
-            spreadsheetSaveChip(vm: vm)
-                .padding(.trailing, 16)
-                .padding(.bottom, 72)
-                .transition(.scale(scale: 0.88).combined(with: .opacity))
-                .zIndex(2)
+            if !hidesEditorSaveButton {
+                spreadsheetSaveChip(vm: vm)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 72)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                    .zIndex(2)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .trinoteSpreadsheetBackground).ignoresSafeArea(edges: [.bottom, .horizontal]))
@@ -2892,11 +3183,17 @@ struct NoteDetailView: View {
         }
     }
 
-    private func saveSpreadsheetContent(vm: NoteDetailViewModel) {
+    private func saveSpreadsheetContent(vm: NoteDetailViewModel, completion: ((Bool) -> Void)? = nil) {
         spreadsheetEditorBridge.getWorkbook { json in
             DispatchQueue.main.async {
+                // Leaving before the sheet loaded: nothing to save. (Save itself says the editor wasn't ready.)
+                if completion != nil, !NoteEditorSaving.isUsableSpreadsheetJSON(json) {
+                    completion?(true)
+                    return
+                }
                 vm.saveSpreadsheetContent(json: json)
                 spreadsheetHasUnsavedChanges = false
+                completion?(!vm.isEditing)
             }
         }
     }
@@ -2914,16 +3211,39 @@ struct NoteDetailView: View {
                 imageBytes: { routeType, entityId in
                     await vm.loadImageBytes(routeType: routeType, entityId: entityId)
                 },
-                onWorkbookChanged: { spreadsheetHasUnsavedChanges = true }
+                onWorkbookChanged: {
+                    spreadsheetHasUnsavedChanges = true
+                    vm.noteEditorChanged()
+                    scheduleAutosave(vm: vm)
+                }
             )
             .ignoresSafeArea(edges: .bottom)
             .navigationTitle(vm.note?.uiTitle(forProtectedSessionActive: appState.protectedSessionActive) ?? "")
             .navigationBarTitleDisplayMode(.inline)
+            .cancelEditingConfirmation(isPresented: $showSpreadsheetCancelEditingConfirm) {
+                if let note = vm.note { discardNoteEditing(vm: vm, note: note) }
+            }
             .toolbar {
+                if let status = autosaveStatusText(vm) {
+                    ToolbarItem(placement: .principal) {
+                        VStack(spacing: 0) {
+                            Text(vm.note?.uiTitle(forProtectedSessionActive: appState.protectedSessionActive) ?? "")
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text(status)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
-                        spreadsheetHasUnsavedChanges = false
-                        vm.cancelEditing()
+                        if vm.cancelEditingNeedsConfirmation {
+                            showSpreadsheetCancelEditingConfirm = true
+                        } else if let note = vm.note {
+                            discardNoteEditing(vm: vm, note: note)
+                        }
                     } label: {
                         Text(String(localized: "Cancel", comment: "Spreadsheet editor cancel button"))
                     }
@@ -3012,7 +3332,11 @@ struct NoteDetailView: View {
             MindMapEditorView(
                 initialJSON: vm.editableContent,
                 bridge: mindMapEditorBridge,
-                onMapChanged: { mindMapHasUnsavedChanges = true },
+                onMapChanged: {
+                    mindMapHasUnsavedChanges = true
+                    vm.noteEditorChanged()
+                    scheduleAutosave(vm: vm)
+                },
                 imageBytes: { routeType, entityId in
                     await vm.loadImageBytes(routeType: routeType, entityId: entityId)
                 }
@@ -3021,11 +3345,13 @@ struct NoteDetailView: View {
                 mindMapHasUnsavedChanges = false
             }
 
-            mindMapSaveChip(vm: vm)
-                .padding(.trailing, 16)
-                .padding(.bottom, 72)
-                .transition(.scale(scale: 0.88).combined(with: .opacity))
-                .zIndex(2)
+            if !hidesEditorSaveButton {
+                mindMapSaveChip(vm: vm)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 72)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                    .zIndex(2)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -3057,12 +3383,18 @@ struct NoteDetailView: View {
         .accessibilityLabel(String(localized: "Save", comment: "Mind map save chip"))
     }
 
-    private func saveMindMapContent(vm: NoteDetailViewModel) {
+    private func saveMindMapContent(vm: NoteDetailViewModel, completion: ((Bool) -> Void)? = nil) {
         mindMapEditorBridge.getMapData { json in
             DispatchQueue.main.async {
+                // `{}` means the map hasn't loaded: nothing to save (and saving it would erase the map).
+                guard NoteEditorSaving.isUsableMindMapJSON(json) else {
+                    completion?(true)
+                    return
+                }
                 vm.editableContent = json
                 vm.saveContent()
                 mindMapHasUnsavedChanges = false
+                completion?(!vm.isEditing)
             }
         }
     }
@@ -3904,7 +4236,7 @@ struct NoteDetailView: View {
                 .frame(width: 0, height: 0)
             )
 
-            if showEditorSaveCancelChip {
+            if showEditorSaveCancelChip && !hidesEditorSaveButton {
                 editorSaveChip(vm: vm)
                     .padding(.trailing, 16)
                     .padding(.bottom, 62)
@@ -3925,8 +4257,9 @@ struct NoteDetailView: View {
         .onDisappear {
             cancelEditorSaveChipIdleShowTask()
         }
-        .onChange(of: vm.editableContent) { _, _ in
+        .onChange(of: vm.editableContent) { _, body in
             handleEditorSaveChipTypingActivity()
+            if vm.noteEditedBody(body) { scheduleAutosave(vm: vm) }
         }
     }
 
@@ -4235,8 +4568,8 @@ struct NoteDetailView: View {
 
         if vm.isEditing {
             Button {
-                dismissNoteOverflow()
-                cancelNoteEditing(vm: vm, note: note)
+                // After the menu closes: Cancel may ask first (Autosave already saved part of the edit).
+                dismissNoteOverflowThen { cancelNoteEditing(vm: vm, note: note) }
             } label: {
                 noteOverflowLabel(
                     String(localized: "Cancel Editing", comment: "Leave note editor from overflow menu"),
@@ -4914,4 +5247,53 @@ extension String: @retroactive Identifiable {
 private struct GeoMapSearchRequest: Identifiable {
     let id = UUID()
     let viewport: [Double]?
+}
+
+private extension View {
+    /// `.inspector` only where the note panel can be shown; see the call site.
+    @ViewBuilder
+    func notePanelInspector<Panel: View>(
+        enabled: Bool,
+        isPresented: Binding<Bool>,
+        @ViewBuilder content: () -> Panel
+    ) -> some View {
+        if enabled {
+            inspector(isPresented: isPresented, content: content)
+        } else {
+            self
+        }
+    }
+
+    /// Cancel Editing after an autosave: confirms before putting back the note from before editing.
+    func cancelEditingConfirmation(isPresented: Binding<Bool>, onDiscard: @escaping () -> Void) -> some View {
+        alert(
+            String(localized: "Discard Changes?", comment: "Alert title: Cancel Editing after Autosave already saved some edits"),
+            isPresented: isPresented
+        ) {
+            Button(
+                String(localized: "Discard Changes", comment: "Alert button: put back the note from before editing"),
+                role: .destructive,
+                action: onDiscard
+            )
+            Button(String(localized: "Keep Editing", comment: "Alert button: stay in the note editor"), role: .cancel) {}
+        } message: {
+            Text(String(
+                localized: "Autosave has already saved some of your edits. Discarding puts the note back the way it was when you started editing.",
+                comment: "Alert message: Cancel Editing after Autosave already saved some edits"
+            ))
+        }
+    }
+}
+
+/// Read-only scroll position bookkeeping for `NoteDetailView`, kept out of SwiftUI state (see `scrollTracking`).
+@MainActor
+final class ReadOnlyScrollTracking {
+    /// Scroll fraction (0–1) of the read-only ScrollView, used to restore position in the editor.
+    var fraction: CGFloat
+    /// Last `contentOffset.y` seen, for the floating Edit chip's scroll direction.
+    var lastContentOffsetY: CGFloat = 0
+
+    init(fraction: CGFloat = 0) {
+        self.fraction = fraction
+    }
 }

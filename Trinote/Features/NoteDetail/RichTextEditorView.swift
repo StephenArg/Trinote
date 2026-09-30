@@ -64,6 +64,10 @@ struct RichTextEditorView: UIViewRepresentable {
     /// When `true`, Image–Code block tools live in the top toolbar below the nav header.
     var insertToolsAtTop: Bool = false
     var onInsertToolsAtTopChanged: ((Bool) -> Void)?
+    /// The editor's own serialization of the note once it has loaded and rendered (autosave's baseline).
+    var onContentLoaded: ((String) -> Void)?
+    /// Settings → Autosave → Hide Save Button: also hides the table toolbar's Save.
+    var hidesSaveButton: Bool = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -77,7 +81,9 @@ struct RichTextEditorView: UIViewRepresentable {
             onEditorBridgeRequest: onEditorBridgeRequest,
             onPasteFile: onPasteFile,
             initialScrollFraction: initialScrollFraction,
-            insertToolsAtTop: insertToolsAtTop
+            insertToolsAtTop: insertToolsAtTop,
+            onContentLoaded: onContentLoaded,
+            hidesSaveButton: hidesSaveButton
         )
     }
 
@@ -157,6 +163,8 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.onPasteFile = onPasteFile
         coordinator.onInsertToolsAtTopChanged = onInsertToolsAtTopChanged
         coordinator.syncInsertToolsAtTop(insertToolsAtTop)
+        coordinator.onContentLoaded = onContentLoaded
+        coordinator.syncSaveButtonHidden(hidesSaveButton)
         Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
@@ -249,6 +257,7 @@ struct RichTextEditorView: UIViewRepresentable {
         var onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)?
         var onPasteFile: ((Data, String, String) -> Void)?
         var onInsertToolsAtTopChanged: ((Bool) -> Void)?
+        var onContentLoaded: ((String) -> Void)?
         private let initialHTML: String
         private var editorReady = false
         private var pendingContent: String?
@@ -258,6 +267,8 @@ struct RichTextEditorView: UIViewRepresentable {
         private let initialScrollFraction: CGFloat
         private var insertToolsAtTop = false
         private var appliedInsertToolsAtTop: Bool?
+        private var hidesSaveButton = false
+        private var appliedHidesSaveButton: Bool?
 
         /// Visual gap between HTML formatting toolbar and keyboard (CSS px ≈ points in WKWebView).
         private static let keyboardToolbarGapPoints: CGFloat = 10
@@ -275,7 +286,9 @@ struct RichTextEditorView: UIViewRepresentable {
             onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)? = nil,
             onPasteFile: ((Data, String, String) -> Void)? = nil,
             initialScrollFraction: CGFloat = 0,
-            insertToolsAtTop: Bool = false
+            insertToolsAtTop: Bool = false,
+            onContentLoaded: ((String) -> Void)? = nil,
+            hidesSaveButton: Bool = false
         ) {
             self.initialHTML = initialHTML
             self.onContentChanged = onContentChanged
@@ -288,12 +301,20 @@ struct RichTextEditorView: UIViewRepresentable {
             self.onPasteFile = onPasteFile
             self.initialScrollFraction = initialScrollFraction
             self.insertToolsAtTop = insertToolsAtTop
+            self.onContentLoaded = onContentLoaded
+            self.hidesSaveButton = hidesSaveButton
         }
 
         func syncInsertToolsAtTop(_ atTop: Bool) {
             insertToolsAtTop = atTop
             guard appliedInsertToolsAtTop != atTop else { return }
             setInsertToolsAtTop(atTop)
+        }
+
+        func syncSaveButtonHidden(_ hidden: Bool) {
+            hidesSaveButton = hidden
+            guard appliedHidesSaveButton != hidden else { return }
+            setSaveButtonHidden(hidden)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -312,6 +333,11 @@ struct RichTextEditorView: UIViewRepresentable {
                     scrollToFraction(initialScrollFraction)
                 }
                 setInsertToolsAtTop(insertToolsAtTop)
+                setSaveButtonHidden(hidesSaveButton)
+                // A share-import attachment inserted on load is an edit, so it mustn't end up in the baseline.
+                if pendingAttachmentInsert == nil {
+                    reportLoadedContent()
+                }
                 if let pending = pendingAttachmentInsert {
                     pendingAttachmentInsert = nil
                     insertAttachmentLink(
@@ -675,6 +701,33 @@ struct RichTextEditorView: UIViewRepresentable {
             let js = atTop ? "true" : "false"
             webView.evaluateJavaScript("window.editorBridge.setInsertToolsAtTop(\(js))") { _, error in
                 if let error { Log.api.error("setInsertToolsAtTop failed: \(error)") }
+            }
+        }
+
+        private func setSaveButtonHidden(_ hidden: Bool) {
+            guard editorReady, let webView else { return }
+            appliedHidesSaveButton = hidden
+            webView.evaluateJavaScript("window.editorBridge.setSaveButtonHidden(\(hidden ? "true" : "false"))") { _, error in
+                if let error { Log.api.error("setSaveButtonHidden failed: \(error)") }
+            }
+        }
+
+        /// Hands the loaded note, as the editor serializes it, to `onContentLoaded`. Waits two frames because
+        /// table captions are put back a frame after `setContent`.
+        private func reportLoadedContent() {
+            guard onContentLoaded != nil, let webView else { return }
+            let js = """
+            return await new Promise(function (resolve) {
+              requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                  try { resolve(window.editorBridge.getContent()); } catch (e) { resolve(null); }
+                });
+              });
+            });
+            """
+            webView.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { [weak self] result in
+                guard case .success(let value) = result, let html = value as? String else { return }
+                self?.onContentLoaded?(html)
             }
         }
 

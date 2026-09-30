@@ -5114,6 +5114,10 @@ window.editorBridge = {
     const n = Math.max(0, Number(px) || 0);
     document.documentElement.style.setProperty('--editor-floating-chip-clearance', n + 'px');
   },
+  // Settings → Autosave → Hide Save Button also hides the table toolbar's Save.
+  setSaveButtonHidden(hidden) {
+    _ctxSaveBtn.style.display = hidden ? 'none' : '';
+  },
   // Inserts an inline icon at the caret frozen when the Icon button was pressed. `css` is that glyph's style: the
   // styles set on load cover only the icons the note already had.
   insertInlineIcon(iconClass, css) {

@@ -24,6 +24,10 @@ struct SettingsView: View {
     @AppStorage("noteCheckboxReorderEnabled") private var noteCheckboxReorderEnabled: Bool = true
     /// When true, Image–Code insert tools sit in a top bar below the nav header instead of the bottom formatting toolbar.
     @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
+    @AppStorage(NoteEditorSaving.autosaveKey) private var noteEditorAutosave = false
+    @AppStorage(NoteEditorSaving.autosaveDelayKey) private var noteEditorAutosaveDelay = NoteEditorSaving.defaultAutosaveDelay
+    @AppStorage(NoteEditorSaving.hideSaveButtonKey) private var noteEditorHideSaveButton = false
+    @AppStorage(NoteEditorSaving.backButtonSavesKey) private var noteEditorBackButtonSaves = false
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @AppStorage(NoteContentWidth.storageKey) private var noteMaxContentWidth: Int = 0
     /// The iPad split layout's own tab strip setting (see `NoteDetailView.showNoteTabsBar`).
@@ -378,6 +382,30 @@ struct SettingsView: View {
                 String(localized: "Split Editor Toolbar", comment: "Settings toggle: move insert tools to a top toolbar above the note"),
                 isOn: $noteEditorInsertToolsAtTop
             )
+            Toggle(
+                String(localized: "Autosave", comment: "Settings toggle: save the note a few seconds after you stop typing, without leaving the editor"),
+                isOn: $noteEditorAutosave
+            )
+            if noteEditorAutosave {
+                Picker(
+                    String(localized: "Autosave After", comment: "Settings picker: seconds without typing before the note autosaves"),
+                    selection: noteEditorAutosaveDelayBinding
+                ) {
+                    ForEach(NoteEditorSaving.autosaveDelayOptions, id: \.self) { seconds in
+                        Text(NoteEditorSaving.delayTitle(for: seconds)).tag(seconds)
+                    }
+                }
+                Toggle(
+                    String(localized: "Hide Save Button", comment: "Settings toggle: hide the editor's floating save button while Autosave is on"),
+                    isOn: $noteEditorHideSaveButton
+                )
+            }
+            Toggle(
+                String(localized: "Back Button Saves", comment: "Settings toggle: tapping Back while editing saves the note"),
+                isOn: noteEditorBackButtonSavesBinding
+            )
+            // Autosave always saves on Back, so the toggle shows on until Autosave is turned off.
+            .disabled(noteEditorAutosave)
         } header: {
             Text(String(localized: "Note Editor", comment: "Settings section header"))
         } footer: {
@@ -394,8 +422,38 @@ struct SettingsView: View {
                     localized: "Split Editor Toolbar moves insert tools (image, table, code, and similar) to a bar under the header—the same as the rightmost button on the formatting toolbar.",
                     comment: "Settings footer: Split Editor Toolbar"
                 ))
+                Text(String(
+                    localized: "Autosave saves your changes a few seconds after you stop typing, and when you leave the note, without closing the editor.",
+                    comment: "Settings footer: Autosave"
+                ))
+                if noteEditorAutosave {
+                    Text(String(
+                        localized: "Hide Save Button removes the floating save button. To close the editor, use Save in the ⋯ menu or tap Back.",
+                        comment: "Settings footer: Hide Save Button"
+                    ))
+                }
+                Text(String(
+                    localized: "Back Button Saves saves the note when you tap Back while editing, instead of keeping a draft. On iPad it also saves when you open another note from the sidebar. Autosave always does this.",
+                    comment: "Settings footer: Back Button Saves"
+                ))
             }
         }
+    }
+
+    /// Shows the default for a stored delay that isn't one of the options.
+    private var noteEditorAutosaveDelayBinding: Binding<Int> {
+        Binding(
+            get: { NoteEditorSaving.autosaveDelay(forStored: noteEditorAutosaveDelay) },
+            set: { noteEditorAutosaveDelay = $0 }
+        )
+    }
+
+    /// Reads as on while Autosave is on; writes only the user's own choice.
+    private var noteEditorBackButtonSavesBinding: Binding<Bool> {
+        Binding(
+            get: { NoteEditorSaving.savesWhenLeaving(autosave: noteEditorAutosave, backButtonSaves: noteEditorBackButtonSaves) },
+            set: { noteEditorBackButtonSaves = $0 }
+        )
     }
 
     private var securitySection: some View {

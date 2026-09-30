@@ -203,7 +203,7 @@ struct SplitWorkspaceView: View {
             selectAdjacentTab(offset: -1)
         case .closeTab:
             closeActiveTab()
-        case .newNote, .editNote, .saveNote, .findInNote, .back:
+        case .newNote, .editNote, .saveNote, .findInNote, .back, .saveBeforeLeaving:
             break
         }
     }
