@@ -66,7 +66,8 @@ struct RichTextEditorView: UIViewRepresentable {
     var onInsertToolsAtTopChanged: ((Bool) -> Void)?
     /// The editor's own serialization of the note once it has loaded and rendered (autosave's baseline).
     var onContentLoaded: ((String) -> Void)?
-    /// Settings → Autosave → Hide Save Button: also hides the table toolbar's Save.
+    /// Hides the table toolbar's Save, like the floating one: Settings → Autosave → Hide Save Button, or
+    /// Autosave has nothing left to save.
     var hidesSaveButton: Bool = false
 
     func makeCoordinator() -> Coordinator {

@@ -49,7 +49,7 @@ enum LocalNoteTransferCompatibility {
         }
 
         switch note.type {
-        case .launcher, .shortcut, .search, .book, .collection, .noteMap, .relationMap, .render, .webView, .contentWidget, .doc, .geoMap, .calendar, .kanban, .presentation:
+        case .launcher, .shortcut, .search, .book, .collection, .noteMap, .relationMap, .render, .webView, .contentWidget, .doc, .geoMap, .calendar, .kanban, .presentation, .llmChat:
             return Result(
                 allowed: false,
                 reason: String(

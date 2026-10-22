@@ -54,6 +54,13 @@ actor MockTriliumClient: TriliumClientProtocol {
     var getBranchCalls: [(String, String)] = []
     var createAttributeCalls: [CreateAttributeRequest] = []
     var deleteAttributeCalls: [(noteId: String, attributeId: String)] = []
+    var replaceOwnedAttributesCalls: [(noteId: String, attributes: [OwnedAttributeUpdate])] = []
+    var replaceOwnedAttributesError: Error?
+    var updateNoteAttributeCalls: [UpdateNoteAttributeRequest] = []
+    var updateNoteAttributeResult: Result<String?, Error> = .success("newAttr")
+    var attributeNamesResult: Result<[String], Error> = .success([])
+    var attributeNamesCalls: [(type: String, query: String)] = []
+    var attributeValuesResults: [String: [String]] = [:]
     var cloneToParentCalls: [(noteId: String, parentNoteId: String)] = []
     var deleteBranchWithTaskCalls: [String] = []
     var branchIdLookupCalls: [(parent: String, child: String)] = []
@@ -119,8 +126,88 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func exitProtectedSession() async throws {}
 
+    var setNoteProtectionResult: Result<Void, Error> = .success(())
+    var setNoteProtectionCalls: [(noteId: String, protect: Bool, includingSubtree: Bool)] = []
+
+    func setSetNoteProtectionResult(_ result: Result<Void, Error>) { setNoteProtectionResult = result }
+    func setEnterProtectedSessionResult(_ result: Result<Void, Error>) { enterProtectedSessionResult = result }
+
+    func setNoteProtection(noteId: String, protect: Bool, includingSubtree: Bool) async throws {
+        setNoteProtectionCalls.append((noteId, protect, includingSubtree))
+        try setNoteProtectionResult.get()
+    }
+
     func getAppInfo() async throws -> AppInfoResponse {
         try appInfoResult.get()
+    }
+
+    var optionsResult: Result<TriliumOptionsResponse, Error> = .success(
+        TriliumOptionsResponse(values: ["protectedSessionTimeout": "600", "protectedSessionTimeoutTimeScale": "60", "isPasswordSet": "true"])
+    )
+    var getOptionsCallCount = 0
+
+    func setOptionsResult(_ result: Result<TriliumOptionsResponse, Error>) {
+        optionsResult = result
+    }
+
+    func getOptions() async throws -> TriliumOptionsResponse {
+        getOptionsCallCount += 1
+        return try optionsResult.get()
+    }
+
+    var updateOptionsCalls: [[String: String]] = []
+    var updateOptionsError: Error?
+
+    func updateOptions(_ values: [String: String]) async throws {
+        updateOptionsCalls.append(values)
+        if let error = updateOptionsError { throw error }
+    }
+
+    // MARK: AI chat
+
+    var streamLlmChatResult: Result<[LlmStreamChunk], Error> = .success([.text("Hello"), .done])
+    var streamLlmChatCalls: [LlmChatStreamRequest] = []
+
+    func setStreamLlmChatResult(_ result: Result<[LlmStreamChunk], Error>) {
+        streamLlmChatResult = result
+    }
+
+    func streamLlmChat(messages: [LlmApiMessage], config: LlmChatRequestConfig) async -> AsyncThrowingStream<LlmStreamChunk, Error> {
+        streamLlmChatCalls.append(LlmChatStreamRequest(messages: messages, config: config))
+        let result = streamLlmChatResult
+        return AsyncThrowingStream { continuation in
+            switch result {
+            case .success(let chunks):
+                for chunk in chunks { continuation.yield(chunk) }
+                continuation.finish()
+            case .failure(let error):
+                continuation.finish(throwing: error)
+            }
+        }
+    }
+
+    var createLlmChatResult: Result<CreatedLlmChat, Error> = .success(CreatedLlmChat(noteId: "chat_new", title: "Chat: 2026-10-08 10:00:00"))
+    var createLlmChatCallCount = 0
+
+    func createLlmChat() async throws -> CreatedLlmChat {
+        createLlmChatCallCount += 1
+        return try createLlmChatResult.get()
+    }
+
+    var recentLlmChatsResult: Result<[RecentLlmChat], Error> = .success([])
+    var recentLlmChatsCalls: [Int] = []
+
+    func recentLlmChats(limit: Int) async throws -> [RecentLlmChat] {
+        recentLlmChatsCalls.append(limit)
+        return try recentLlmChatsResult.get()
+    }
+
+    var keepLlmChatResult: Result<KeepLlmChatResponse, Error> = .success(KeepLlmChatResponse(success: true, notePath: "root/kept"))
+    var keepLlmChatCalls: [String] = []
+
+    func keepLlmChat(noteId: String) async throws -> KeepLlmChatResponse {
+        keepLlmChatCalls.append(noteId)
+        return try keepLlmChatResult.get()
     }
 
     var syncCheckCallCount = 0
@@ -279,8 +366,15 @@ actor MockTriliumClient: TriliumClientProtocol {
         return TestFixtures.noteResponse(id: noteId, title: request.title ?? "Updated")
     }
 
+    var updateNoteContentError: Error?
+
+    func setUpdateNoteContentError(_ error: Error?) {
+        updateNoteContentError = error
+    }
+
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws {
         updateNoteContentCalls.append((noteId, content))
+        if let error = updateNoteContentError { throw error }
     }
 
     func deleteNote(_ noteId: String, eraseNotes: Bool) async throws {
@@ -503,6 +597,41 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func deleteAttribute(noteId: String, attributeId: String) async throws {
         deleteAttributeCalls.append((noteId: noteId, attributeId: attributeId))
+    }
+
+    func replaceOwnedAttributes(noteId: String, _ attributes: [OwnedAttributeUpdate]) async throws {
+        replaceOwnedAttributesCalls.append((noteId: noteId, attributes: attributes))
+        if let replaceOwnedAttributesError { throw replaceOwnedAttributesError }
+    }
+
+    func updateNoteAttribute(_ request: UpdateNoteAttributeRequest) async throws -> String? {
+        updateNoteAttributeCalls.append(request)
+        return try updateNoteAttributeResult.get()
+    }
+
+    func attributeNames(type: String, query: String) async throws -> [String] {
+        attributeNamesCalls.append((type: type, query: query))
+        return try attributeNamesResult.get()
+    }
+
+    func attributeValues(name: String) async throws -> [String] {
+        attributeValuesResults[name] ?? []
+    }
+
+    func setUpdateNoteResult(_ result: Result<NoteResponse, Error>?) {
+        updateNoteResult = result
+    }
+
+    func setUpdateNoteAttributeResult(_ result: Result<String?, Error>) {
+        updateNoteAttributeResult = result
+    }
+
+    func setAttributeNamesResult(_ result: Result<[String], Error>) {
+        attributeNamesResult = result
+    }
+
+    func setReplaceOwnedAttributesError(_ error: Error?) {
+        replaceOwnedAttributesError = error
     }
 
     /// Fixture for `SharedNotesSubtreeLoader` tests: `_share` → `n1` (explicit share) → `n2` (subnote; not a direct `_share` child).

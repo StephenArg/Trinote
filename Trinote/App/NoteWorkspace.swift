@@ -6,6 +6,8 @@ enum LauncherSection: String, CaseIterable, Identifiable {
     case favorites
     case search
     case recents
+    /// Trilium's AI chats (shown only while the server supports them and Trilium's AI switch is on).
+    case aiChat
 
     var id: String { rawValue }
 
@@ -15,6 +17,7 @@ enum LauncherSection: String, CaseIterable, Identifiable {
         case .favorites: String(localized: "Favorites", comment: "Main tab")
         case .search: String(localized: "Search", comment: "Main tab")
         case .recents: String(localized: "Recents", comment: "Main tab")
+        case .aiChat: String(localized: "AI Chat", comment: "Note type")
         }
     }
 
@@ -24,6 +27,7 @@ enum LauncherSection: String, CaseIterable, Identifiable {
         case .favorites: "star.fill"
         case .search: "magnifyingglass"
         case .recents: "clock.fill"
+        case .aiChat: "sparkles"
         }
     }
 }
@@ -51,6 +55,8 @@ enum WorkspaceCommand: Equatable {
     case editNote
     case saveNote
     case findInNote
+    case changeNoteType
+    case editAttributes
     case back
     /// Sent by `NoteWorkspace.open(_:)` while a note is being edited: save it if Autosave or Back Button Saves
     /// is on, then call `finishLeavingEditor()` (or `stayInEditor()` when saving failed).
@@ -99,6 +105,7 @@ final class NoteWorkspace {
     @ObservationIgnored private var leaveEditorFallback: Task<Void, Never>?
 
     func send(_ command: WorkspaceCommand) {
+        guard !AppLock.shared.isLocked else { return }
         commandRequest = WorkspaceCommandRequest(command: command)
     }
 

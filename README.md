@@ -14,6 +14,7 @@ A native iOS client for self-hosted [TriliumNext](https://github.com/TriliumNext
 - **Edit** note titles, content (HTML source or code), create/delete notes
 - **Attachments** — upload from Photos/Files, download, share
 - **Office & EPUB previews** — `.docx`, `.xlsx`, `.pptx`, ODF, RTF and EPUB open in-app (Trilium **v0.105+**; falls back to Quick Look on older servers)
+- **AI chat** — Trilium's AI chats (Trilium **v0.105+** with its AI switch on): read and continue chat notes with streaming replies, start a chat from the Notes tab, the iPad launcher rail or a note's ⋯ menu ("Ask AI About This Note"), and keep chats in your notes; Settings → AI switches AI and MCP on or off and picks the writing assistant's model (providers and API keys stay in Trilium)
 - **Offline cache** — tree structure and recently opened notes cached locally
 - **Multiple servers** — save and switch between server profiles
 - **Dark mode** and numerous color options

@@ -745,7 +745,7 @@ struct KanbanBoardView: View {
         keepCollapsed: Bool?,
         then apply: @escaping @MainActor (Bool) -> Void
     ) {
-        var patch: [String: KanbanBoardModels.JSONValue?] = [:]
+        var patch: [String: JSONValue?] = [:]
         if let collapsed { patch["collapsed"] = .bool(collapsed) }
         if let keepCollapsed { patch["keepCollapsed"] = .bool(keepCollapsed) }
         saveColumnFields(value, patch: patch, then: apply)
@@ -754,7 +754,7 @@ struct KanbanBoardView: View {
     /// Column saves run one after another (and other board edits wait for them), each reading `board.json` afresh.
     private func saveColumnFields(
         _ value: String,
-        patch: [String: KanbanBoardModels.JSONValue?],
+        patch: [String: JSONValue?],
         then apply: @escaping @MainActor (Bool) -> Void
     ) {
         let previous = collapseSaveTask
@@ -840,7 +840,7 @@ struct KanbanBoardView: View {
         to column: KanbanBoardModels.Column,
         orderBy: String?,
         descending: Bool,
-        patch: [String: KanbanBoardModels.JSONValue?]
+        patch: [String: JSONValue?]
     ) {
         guard viewModel.isOnline else {
             viewModel.saveError = String(localized: "Connect to the server to edit board columns.", comment: "Kanban offline column edit")
@@ -882,7 +882,7 @@ struct KanbanBoardView: View {
             viewModel.showSaveError = true
             return
         }
-        var patch: [String: KanbanBoardModels.JSONValue?] = [:]
+        var patch: [String: JSONValue?] = [:]
         // `updateValue` keeps a cleared field in the patch as `nil` (a subscript assignment of nil would drop the key).
         if let icon { patch.updateValue(icon.map { .string($0) }, forKey: "icon") }
         if let color { patch.updateValue(color.map { .string($0) }, forKey: "color") }

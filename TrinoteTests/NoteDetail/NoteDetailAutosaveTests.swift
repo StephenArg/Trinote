@@ -70,6 +70,34 @@ final class NoteDetailAutosaveTests: XCTestCase {
         XCTAssertFalse(vm.autosaveEditedBody("changed"))
     }
 
+    func testBodyBackToWhatsSavedLeavesNothingToSave() async throws {
+        let vm = try await makeViewModel(type: .code, body: "original")
+        vm.startEditing()
+        XCTAssertTrue(vm.noteEditedBody("changed"))
+
+        // Undone before autosave ran.
+        XCTAssertFalse(vm.autosaveEditedBody("original"))
+        XCTAssertEqual(vm.autosaveStatus, .idle)
+        XCTAssertNil(queuedBody())
+
+        XCTAssertTrue(vm.autosaveEditedBody("changed"))
+        XCTAssertTrue(vm.noteEditedBody("changed again"))
+        XCTAssertFalse(vm.autosaveEditedBody("changed"))
+        XCTAssertEqual(vm.autosaveStatus, .saved)
+    }
+
+    func testTextChangeBeforeTheEditorLoadedIsntAnEdit() async throws {
+        // Compared with the stored HTML, which the editor then tidies the same way.
+        let vm = try await makeViewModel(type: .text, body: "<p>Hello</p>\n")
+        vm.startEditing()
+        XCTAssertTrue(vm.receiveEditorUpdate("<p>Hello</p>"))
+        XCTAssertEqual(vm.autosaveStatus, .edited)
+
+        vm.setAutosaveBaselineFromEditor("<p>Hello</p>")
+
+        XCTAssertEqual(vm.autosaveStatus, .idle)
+    }
+
     func testNothingIsSavedOutsideTheEditor() async throws {
         let vm = try await makeViewModel(type: .code, body: "original")
 

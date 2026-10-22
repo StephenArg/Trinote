@@ -130,6 +130,8 @@ struct NoteDetailView: View {
     @State private var activeNoteId: String
     @State private var viewModel: NoteDetailViewModel?
     @State private var navigateToNoteId: String?
+    /// The AI chat sheet of a text or code note (toolbar sparkles, ⋯ → Chat with AI).
+    @State private var showNoteAIChat = false
     @State private var navigateToNoteForEdit: NoteEditTarget?
 
     // Inline image insertion state
@@ -150,6 +152,14 @@ struct NoteDetailView: View {
     @State private var noteDetailShareURLSheetItem: NoteDetailShareURLSheetItem?
     @State private var showMoveParentPicker = false
     @State private var showAppearancePicker = false
+    @State private var showNoteTypePicker = false
+    /// Protect (true) or Unprotect (false) Subtree waiting for confirmation in its alert.
+    @State private var pendingSubtreeProtection: Bool?
+    /// The document password typed in that alert while the protected session is closed.
+    @State private var subtreeProtectionPassword = ""
+    @State private var showAttributesSheet = false
+    /// The Attributes sheet opens straight onto a new attribute of this kind (iPad menu bar).
+    @State private var attributesStartAdding: AttributeFormKind?
     @State private var showShareLocally = false
     @State private var showCopyToInstance = false
     @State private var showNoteOverflowMenu = false
@@ -579,6 +589,8 @@ struct NoteDetailView: View {
     /// Delay after last typing activity before the save chip fades back in (shorter = snappier; too low flickers on brief pauses).
     private static let editorSaveChipIdleDelay: TimeInterval = 0.75
     private static let editorSaveChipIgnoreTypingAfterAppear: TimeInterval = 0.5
+    /// The save chip hiding once Autosave has saved, and coming back with the next edit.
+    private static let editorSaveButtonAnimation: Animation = .spring(response: 0.30, dampingFraction: 0.78)
 
     private func cancelEditorSaveChipIdleShowTask() {
         editorSaveChipIdleWorkItem?.cancel()
@@ -939,7 +951,7 @@ struct NoteDetailView: View {
     @ViewBuilder
     private func editorSaveChip(vm: NoteDetailViewModel) -> some View {
         Button {
-            saveRichTextContent(vm: vm)
+            saveFromSaveButton(vm: vm)
         } label: {
             ZStack {
                 if vm.isSaving {
@@ -963,8 +975,25 @@ struct NoteDetailView: View {
         .accessibilityLabel(String(localized: "Save", comment: "Editor save chip"))
     }
 
-    private var hidesEditorSaveButton: Bool {
-        NoteEditorSaving.hidesSaveButton(autosave: noteEditorAutosave, hideSaveButton: noteEditorHideSaveButton)
+    /// With Autosave on, only while there are unsaved changes (see `NoteEditorSaving.showsSaveButton`).
+    private func showsEditorSaveButton(_ vm: NoteDetailViewModel) -> Bool {
+        NoteEditorSaving.showsSaveButton(
+            autosave: noteEditorAutosave,
+            hideSaveButton: noteEditorHideSaveButton,
+            status: vm.autosaveStatus
+        )
+    }
+
+    /// The editor's save button. With Autosave on it saves right away and the editor stays open (Save in the
+    /// ⋯ menu, or Back, closes it); otherwise it saves and closes the editor.
+    private func saveFromSaveButton(vm: NoteDetailViewModel) {
+        guard let note = vm.note else { return }
+        if noteEditorAutosave {
+            cancelScheduledAutosave()
+            autosaveEditedContent(vm: vm)
+        } else {
+            saveEditedContent(vm: vm, note: note)
+        }
     }
 
     private var savesWhenLeavingEditor: Bool {
@@ -1277,6 +1306,13 @@ struct NoteDetailView: View {
         case .findInNote:
             guard !vm.isEditing, note.type.supportsReadOnlyOnPageFind else { return }
             findControl.isPresented = true
+        case .changeNoteType:
+            guard !vm.isEditing, vm.canChangeNoteType, canEditOnServer(vm) else { return }
+            showNoteTypePicker = true
+        case .editAttributes:
+            guard !vm.isEditing, !vm.needsProtectedSession else { return }
+            attributesStartAdding = nil
+            showAttributesSheet = true
         case .back:
             // Only a linked note pushed inside the pane has somewhere to go back to.
             guard onClose == nil else { return }
@@ -1746,9 +1782,16 @@ struct NoteDetailView: View {
                     consumeFindDeepLinkIfNeeded()
                 }
             }
-            .onChange(of: protectedActive) { _, _ in
+            .onChange(of: protectedActive) { _, active in
                 guard let vm = viewModel else { return }
-                Task { await vm.resyncNoteTitlesWithProtectedSession() }
+                Task {
+                    // Opened from another note, or reopened after a relaunch: this note's overlay goes too.
+                    if active, vm.needsProtectedSession {
+                        vm.needsProtectedSession = false
+                        await vm.loadContent()
+                    }
+                    await vm.resyncNoteTitlesWithProtectedSession()
+                }
             }
             .onChange(of: content) { _, _ in
                 consumeFindDeepLinkIfNeeded()
@@ -1847,6 +1890,8 @@ struct NoteDetailView: View {
                     draftBanner(vm)
                     breadcrumbsBar(vm)
                     titleSection(vm, note: note)
+                    // Trilium's promoted attributes sit under the title.
+                    PromotedAttributesSection(viewModel: vm)
                     Divider()
                     notesEditedOnDaySection(vm)
                     noteBody(vm, note: note, findControl: findControl)
@@ -1854,7 +1899,7 @@ struct NoteDetailView: View {
 
                     if vm.showDetails, !usesNoteInspector {
                         attachmentsSection(vm)
-                        metadataSection(note)
+                        metadataSection(note, vm: vm)
                     }
 
                     if note.type.isEditable, !vm.needsProtectedSession, !noteEditorLongPressToEdit {
@@ -2016,7 +2061,20 @@ struct NoteDetailView: View {
                     .buttonStyle(.bordered)
             }
         } else if let note = vm.note {
-            let _ = vm.geoMapDetectionTick
+            noteContentDialogs(vm, note: note)
+        }
+    }
+
+    // The loaded note screen is built in three type-erased layers: the body with its toolbar and first alerts, then
+    // the sheets, then the confirmation dialogs. As one modifier chain, Debug builds copied the whole chain's view
+    // value through every generic SwiftUI initializer on the way to the title, using about 1 MB of the iPhone's 1 MB
+    // main-thread stack at launch (measured 2026-10-22: ~1,005 KB at titleSection as one chain, ~490 KB split). The
+    // simulator's 8 MB stack never shows it. Add new modifiers to the layer they belong to, not to a longer chain.
+
+    private func noteContentBase(_ vm: NoteDetailViewModel, note: NoteItem) -> AnyView {
+        @Bindable var vm = vm
+        _ = vm.geoMapDetectionTick
+        return AnyView(
             VStack(spacing: 0) {
                 // Each branch is type-erased: without AnyView the runtime has to demangle
                 // every note mode's view type as one nested generic, which overflows the
@@ -2062,6 +2120,8 @@ struct NoteDetailView: View {
                     AnyView(canvasEditingView(vm))
                 } else if vm.isEditing && note.type == .spreadsheet && horizontalSizeClass == .regular {
                     AnyView(spreadsheetEditingView(vm))
+                } else if note.type == .llmChat {
+                    AnyView(chatDetailView(vm, note: note))
                 } else if note.type == .mindMap {
                     AnyView(mindMapReadOnlyView(vm, note: note))
                 } else {
@@ -2153,6 +2213,13 @@ struct NoteDetailView: View {
                     await confirmPendingAttachmentUpload(item, basename: basename, vm: vm)
                 }
             }
+        )
+    }
+
+    private func noteContentSheets(_ vm: NoteDetailViewModel, note: NoteItem) -> AnyView {
+        @Bindable var vm = vm
+        return AnyView(
+            noteContentBase(vm, note: note)
             .sheet(isPresented: $vm.showCreateChild) {
                 CreateChildNoteSheet(viewModel: vm) { noteId, title in
                     navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
@@ -2169,6 +2236,26 @@ struct NoteDetailView: View {
                         Task { await vm.setNoteColor(colorLabel) }
                     }
                 )
+            }
+            .sheet(isPresented: $showNoteTypePicker) {
+                NoteTypePickerSheet(viewModel: vm)
+                    .environment(appState)
+            }
+            .sheet(isPresented: $showNoteAIChat) {
+                if let note = vm.note {
+                    NoteAIChatSheet(viewModel: vm, note: note) { noteId in
+                        Task { @MainActor in
+                            // After the sheet has gone, so the push isn't swallowed by its dismissal.
+                            try? await Task.sleep(for: .milliseconds(350))
+                            if noteId != vm.noteId { navigateToNoteId = noteId }
+                        }
+                    }
+                    .environment(appState)
+                }
+            }
+            .sheet(isPresented: $showAttributesSheet) {
+                NoteAttributesSheet(viewModel: vm, startAdding: attributesStartAdding)
+                    .environment(appState)
             }
             .sheet(isPresented: $showCalendarJournalSettings) {
                 CalendarJournalSettingsSheet()
@@ -2228,6 +2315,13 @@ struct NoteDetailView: View {
             .sheet(isPresented: noteOverflowPresentationBinding(asPopover: false)) {
                 noteOverflowActionsSheet(vm: vm, note: note)
             }
+        )
+    }
+
+    private func noteContentDialogs(_ vm: NoteDetailViewModel, note: NoteItem) -> AnyView {
+        @Bindable var vm = vm
+        return AnyView(
+            noteContentSheets(vm, note: note)
             .alert(
                 String(localized: "Move Note", comment: "Move confirmation title"),
                 isPresented: Binding(
@@ -2258,6 +2352,42 @@ struct NoteDetailView: View {
                     )
                 }
             }
+            .alert(
+                pendingSubtreeProtection == false
+                    ? String(localized: "Unprotect This Note and Its Subtree?", comment: "Unprotect Subtree confirmation title")
+                    : String(localized: "Protect This Note and Its Subtree?", comment: "Protect Subtree confirmation title"),
+                isPresented: Binding(
+                    get: { pendingSubtreeProtection != nil },
+                    set: { if !$0 { pendingSubtreeProtection = nil } }
+                )
+            ) {
+                if !appState.protectedSessionActive {
+                    SecureField(String(localized: "Document password", comment: "Protected note placeholder"), text: $subtreeProtectionPassword)
+                        .textContentType(.password)
+                }
+                Button(String(localized: "Cancel", comment: "Dismiss Protect or Unprotect Subtree"), role: .cancel) {
+                    pendingSubtreeProtection = nil
+                    subtreeProtectionPassword = ""
+                }
+                Button(
+                    pendingSubtreeProtection == false
+                        ? String(localized: "Unprotect", comment: "Confirm Unprotect Subtree")
+                        : String(localized: "Protect", comment: "Confirm Protect Subtree")
+                ) {
+                    guard let protect = pendingSubtreeProtection else { return }
+                    let password = subtreeProtectionPassword
+                    pendingSubtreeProtection = nil
+                    subtreeProtectionPassword = ""
+                    Task { await vm.setSubtreeProtection(protect, documentPassword: password) }
+                }
+            } message: {
+                Text(subtreeProtectionMessage(protect: pendingSubtreeProtection != false))
+            }
+            .overlay {
+                if let protect = vm.subtreeProtectionInProgress {
+                    subtreeProtectionProgress(protect: protect)
+                }
+            }
             .noteDeleteConfirmationAlert(
                 isPresented: $vm.showDeleteConfirm,
                 title: String(localized: "Delete Note?", comment: "Delete confirm title"),
@@ -2279,7 +2409,45 @@ struct NoteDetailView: View {
             } message: {
                 Text(String(localized: "You have an unsaved draft for this note. Would you like to restore it?", comment: "Draft dialog message"))
             }
+        )
+    }
+
+    /// What Protect/Unprotect Subtree will do, and that the password is needed while the protected session is closed.
+    private func subtreeProtectionMessage(protect: Bool) -> String {
+        let effect = protect
+            ? String(
+                localized: "This note and every note under it will be encrypted on the server and need the document password to open, on every device.",
+                comment: "Protect Subtree confirmation message"
+            )
+            : String(
+                localized: "This note and every note under it will be decrypted on the server and open without the document password, on every device.",
+                comment: "Unprotect Subtree confirmation message"
+            )
+        guard !appState.protectedSessionActive else { return effect }
+        return effect + "\n\n" + String(
+            localized: "Enter the document password to continue.",
+            comment: "Protect or Unprotect Subtree confirmation: the protected session is closed"
+        )
+    }
+
+    /// Covers the note while the server (un)protects the subtree, which can take a while for a large one.
+    private func subtreeProtectionProgress(protect: Bool) -> some View {
+        ZStack {
+            Color.black.opacity(0.2).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView()
+                Text(
+                    protect
+                        ? String(localized: "Protecting…", comment: "Progress while the server protects a note and its subtree")
+                        : String(localized: "Unprotecting…", comment: "Progress while the server unprotects a note and its subtree")
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+            .padding(24)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -2431,6 +2599,11 @@ struct NoteDetailView: View {
         .accessibilityHidden(!canChange)
     }
 
+    /// Type, attribute and promoted-field changes go straight to the server (they aren't queued offline).
+    private func canEditOnServer(_ vm: NoteDetailViewModel) -> Bool {
+        vm.isOnline && vm.client != nil
+    }
+
     private func canChangeNoteAppearance(_ note: NoteItem) -> Bool {
         guard note.noteId != TriliumTreeConstants.rootNoteId else { return false }
         if note.isProtected, !appState.protectedSessionActive { return false }
@@ -2554,146 +2727,148 @@ struct NoteDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private func readingView(_ vm: NoteDetailViewModel, note: NoteItem, findControl: FindOnPageControl) -> some View {
+    /// The note's body for its type. Returns `AnyView` on purpose: a `@ViewBuilder` switch over this many cases
+    /// nests one `_ConditionalContent` per case, and instantiating that type's metadata recurses deeply in the Swift
+    /// runtime. With sixteen cases it overflowed the main thread's 1 MB stack on iPhone at launch (the simulator's
+    /// 8 MB stack hid it). Type-erasing each branch keeps the type flat; the same underlying view type still keeps its
+    /// state across updates.
+    private func readingView(_ vm: NoteDetailViewModel, note: NoteItem, findControl: FindOnPageControl) -> AnyView {
         switch note.type {
         case .text:
-            if let html = vm.contentString {
-                HTMLNoteView(
-                    html: html,
-                    baseURL: vm.serverBaseURL,
-                    checkboxOnlyRevision: vm.checkboxOnlyContentRevision,
-                    onNoteLinkTapped: { linkedNoteId in
-                        navigateToNoteId = linkedNoteId
-                    },
-                    onCheckboxToggled: { index, checked in
-                        vm.toggleCheckbox(index: index, checked: checked)
-                    },
-                    onCheckboxReordered: { fromIndex, beforeIndex in
-                        vm.reorderListItem(fromIndex: fromIndex, beforeIndex: beforeIndex)
-                    },
-                    onCollapsibleReordered: { fromIndex, beforeChildIndex in
-                        vm.reorderCollapsible(fromIndex: fromIndex, beforeChildIndex: beforeChildIndex)
-                    },
-                    onCollapsibleToggled: { index, open in
-                        vm.setCollapsibleOpen(index: index, open: open)
-                    },
-                    loadAttachmentPreview: { attachmentId in
-                        if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
-                            return await vm.prepareAttachmentPreview(for: attachment)
-                        }
-                        return await vm.prepareAttachmentPreview(attachmentId: attachmentId)
-                    },
-                    imageBytes: { routeType, entityId in
-                        await vm.loadImageBytes(routeType: routeType, entityId: entityId)
-                    },
-                    findControl: findControl,
-                    layoutCacheKey: vm.serverProfileId.map { "\($0)/\(note.noteId)" }
-                )
-            }
-        case .mermaid:
-            if let source = vm.contentString {
-                MermaidNoteView(source: source)
-            }
-        case .code, .markdown:
-            if let code = vm.contentString {
-                CodeNoteView(
-                    content: code,
-                    mime: note.mime,
-                    baseURL: vm.serverBaseURL,
-                    findControl: findControl,
-                    onNoteLinkTapped: { linkedNoteId in
-                        navigateToNoteId = linkedNoteId
-                    },
-                    loadAttachmentPreview: { attachmentId in
-                        if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
-                            return await vm.prepareAttachmentPreview(for: attachment)
-                        }
-                        return await vm.prepareAttachmentPreview(attachmentId: attachmentId)
-                    },
-                    onMimeSelected: { mime in
-                        Task { await vm.updateCodeNoteMime(mime) }
-                    },
-                    onTaskStateCycled: { index in
-                        vm.cycleMarkdownTaskState(index: index)
-                    },
-                    checkboxOnlyRevision: vm.checkboxOnlyContentRevision
-                )
-            }
-        case .image:
-            if let data = vm.content {
-                ImageNoteView(data: data, title: uiTitle(for: note))
-            }
-        case .file:
-            FileNoteView(note: note, attachments: vm.attachments, viewModel: vm) { noteId, _ in
-                navigateToNoteId = noteId
-            }
-        case .canvas:
-            CanvasNoteView(noteId: note.noteId, attachments: vm.attachments, client: vm.client, excalidrawJSON: vm.contentString)
-        case .mindMap:
-            if let json = vm.contentString {
-                MindMapNoteView(
-                    json: json,
-                    imageBytes: { routeType, entityId in
-                        await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+            guard let html = vm.contentString else { return AnyView(EmptyView()) }
+            return AnyView(HTMLNoteView(
+                html: html,
+                baseURL: vm.serverBaseURL,
+                checkboxOnlyRevision: vm.checkboxOnlyContentRevision,
+                onNoteLinkTapped: { linkedNoteId in
+                    navigateToNoteId = linkedNoteId
+                },
+                onCheckboxToggled: { index, checked in
+                    vm.toggleCheckbox(index: index, checked: checked)
+                },
+                onCheckboxReordered: { fromIndex, beforeIndex in
+                    vm.reorderListItem(fromIndex: fromIndex, beforeIndex: beforeIndex)
+                },
+                onCollapsibleReordered: { fromIndex, beforeChildIndex in
+                    vm.reorderCollapsible(fromIndex: fromIndex, beforeChildIndex: beforeChildIndex)
+                },
+                onCollapsibleToggled: { index, open in
+                    vm.setCollapsibleOpen(index: index, open: open)
+                },
+                loadAttachmentPreview: { attachmentId in
+                    if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
+                        return await vm.prepareAttachmentPreview(for: attachment)
                     }
-                )
-            }
+                    return await vm.prepareAttachmentPreview(attachmentId: attachmentId)
+                },
+                imageBytes: { routeType, entityId in
+                    await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+                },
+                findControl: findControl,
+                layoutCacheKey: vm.serverProfileId.map { "\($0)/\(note.noteId)" }
+            ))
+        case .mermaid:
+            guard let source = vm.contentString else { return AnyView(EmptyView()) }
+            return AnyView(MermaidNoteView(source: source))
+        case .code, .markdown:
+            guard let code = vm.contentString else { return AnyView(EmptyView()) }
+            return AnyView(CodeNoteView(
+                content: code,
+                mime: note.mime,
+                baseURL: vm.serverBaseURL,
+                findControl: findControl,
+                onNoteLinkTapped: { linkedNoteId in
+                    navigateToNoteId = linkedNoteId
+                },
+                loadAttachmentPreview: { attachmentId in
+                    if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
+                        return await vm.prepareAttachmentPreview(for: attachment)
+                    }
+                    return await vm.prepareAttachmentPreview(attachmentId: attachmentId)
+                },
+                onMimeSelected: { mime in
+                    Task { await vm.updateCodeNoteMime(mime) }
+                },
+                onTaskStateCycled: { index in
+                    vm.cycleMarkdownTaskState(index: index)
+                },
+                checkboxOnlyRevision: vm.checkboxOnlyContentRevision
+            ))
+        case .image:
+            guard let data = vm.content else { return AnyView(EmptyView()) }
+            return AnyView(ImageNoteView(data: data, title: uiTitle(for: note)))
+        case .file:
+            return AnyView(FileNoteView(note: note, attachments: vm.attachments, viewModel: vm) { noteId, _ in
+                navigateToNoteId = noteId
+            })
+        case .canvas:
+            return AnyView(CanvasNoteView(
+                noteId: note.noteId,
+                attachments: vm.attachments,
+                attachmentsLoaded: vm.attachmentsLoaded,
+                client: vm.client,
+                excalidrawJSON: vm.contentString
+            ))
+        case .mindMap:
+            guard let json = vm.contentString else { return AnyView(EmptyView()) }
+            return AnyView(MindMapNoteView(
+                json: json,
+                imageBytes: { routeType, entityId in
+                    await vm.loadImageBytes(routeType: routeType, entityId: entityId)
+                }
+            ))
         case .spreadsheet:
-            SpreadsheetNoteView(
+            return AnyView(SpreadsheetNoteView(
                 json: vm.contentString,
                 imageBytes: { routeType, entityId in
                     await vm.loadImageBytes(routeType: routeType, entityId: entityId)
                 }
-            )
+            ))
+        case .llmChat:
+            return AnyView(LlmChatNoteView(viewModel: vm, note: note, onOpenNote: { navigateToNoteId = $0 }))
         case .geoMap:
-            GeoMapNoteView(
-                viewportJSON: geoMapInitialViewportJSON.isEmpty
-                    ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
-                    : geoMapInitialViewportJSON,
-                markers: geoMapPins,
-                tracks: geoMapTracks,
-                shapes: geoMapShapes,
-                settingsJSON: geoMapCachedSettingsJSON,
-                onOpenPinNote: { navigateToNoteId = $0 }
-            )
-            .onAppear { loadGeoMapData(vm: vm, note: note) }
+            return AnyView(geoMapReadingView(vm, note: note))
         case .kanban:
-            KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
-                .frame(minHeight: 420)
+            return AnyView(KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                .frame(minHeight: 420))
         case .presentation:
-            PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
-                .frame(minHeight: 420)
+            return AnyView(PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                .frame(minHeight: 420))
         case .book, .collection:
             if isGeoMapNote(note, contentString: vm.contentString, vm: vm) {
-                GeoMapNoteView(
-                    viewportJSON: geoMapInitialViewportJSON.isEmpty
-                    ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
-                    : geoMapInitialViewportJSON,
-                    markers: geoMapPins,
-                    tracks: geoMapTracks,
-                    shapes: geoMapShapes,
-                    settingsJSON: geoMapCachedSettingsJSON,
-                    onOpenPinNote: { navigateToNoteId = $0 }
-                )
-                .onAppear { loadGeoMapData(vm: vm, note: note) }
+                return AnyView(geoMapReadingView(vm, note: note))
             } else if isPresentationNote(note) {
-                PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
-                    .frame(minHeight: 420)
+                return AnyView(PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                    .frame(minHeight: 420))
             } else if isKanbanNote(note) {
-                KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
-                    .frame(minHeight: 420)
+                return AnyView(KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                    .frame(minHeight: 420))
             } else if note.isTriliumCollectionNote || note.type == .collection {
-                CollectionNoteLimitedSupportBanner(
+                return AnyView(CollectionNoteLimitedSupportBanner(
                     noteId: note.noteId,
                     serverURL: appState.activeProfile?.normalizedBaseURL
-                )
+                ))
             } else {
-                BookNoteView(note: note)
+                return AnyView(BookNoteView(note: note))
             }
         default:
-            UnsupportedNoteView(note: note, serverURL: appState.activeProfile?.normalizedBaseURL)
+            return AnyView(UnsupportedNoteView(note: note, serverURL: appState.activeProfile?.normalizedBaseURL))
         }
+    }
+
+    /// A geo map note (or a collection shown as one), loading its pins when it appears.
+    private func geoMapReadingView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        GeoMapNoteView(
+            viewportJSON: geoMapInitialViewportJSON.isEmpty
+                ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
+                : geoMapInitialViewportJSON,
+            markers: geoMapPins,
+            tracks: geoMapTracks,
+            shapes: geoMapShapes,
+            settingsJSON: geoMapCachedSettingsJSON,
+            onOpenPinNote: { navigateToNoteId = $0 }
+        )
+        .onAppear { loadGeoMapData(vm: vm, note: note) }
     }
 
     @ViewBuilder
@@ -2918,6 +3093,12 @@ struct NoteDetailView: View {
                     }
                 },
                 onRequestSave: { html, scrollFraction in
+                    if noteEditorAutosave {
+                        // Like the floating save button: saves now and keeps the editor open.
+                        cancelScheduledAutosave()
+                        vm.autosaveRichText(freshHTML: html)
+                        return
+                    }
                     queueReadOnlyScrollRestoreAfterRichTextSave(fraction: scrollFraction)
                     if let html {
                         vm.saveContent(freshHTML: html)
@@ -2966,13 +3147,13 @@ struct NoteDetailView: View {
                 insertToolsAtTop: noteEditorInsertToolsAtTop,
                 onInsertToolsAtTopChanged: { noteEditorInsertToolsAtTop = $0 },
                 onContentLoaded: { vm.setAutosaveBaselineFromEditor($0) },
-                hidesSaveButton: hidesEditorSaveButton
+                hidesSaveButton: !showsEditorSaveButton(vm)
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
             // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).
             .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
 
-            if showEditorSaveCancelChip && !editorTableToolsVisible && !hidesEditorSaveButton {
+            if showEditorSaveCancelChip && !editorTableToolsVisible && showsEditorSaveButton(vm) {
                 editorSaveChip(vm: vm)
                     .padding(.trailing, 16)
                     .padding(.bottom, 62)
@@ -3015,6 +3196,7 @@ struct NoteDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(uiColor: .trinoteEditorCanvas).ignoresSafeArea(edges: [.bottom, .horizontal]))
         .animation(.easeInOut(duration: 0.15), value: editorTableToolsVisible)
+        .animation(Self.editorSaveButtonAnimation, value: showsEditorSaveButton(vm))
         .onAppear {
             editorSaveCancelScrollBaselineReady = false
             lastEditorScrollOffsetY = 0
@@ -3065,11 +3247,12 @@ struct NoteDetailView: View {
             editorStatusBanner(vm)
             MermaidEditorView(
                 editableContent: $vm.editableContent,
-                onSave: { vm.saveContent() },
+                onSave: { saveFromSaveButton(vm: vm) },
                 isSaving: vm.isSaving,
-                showsSaveButton: !hidesEditorSaveButton
+                showsSaveButton: showsEditorSaveButton(vm)
             )
         }
+        .animation(Self.editorSaveButtonAnimation, value: showsEditorSaveButton(vm))
         .onChange(of: vm.editableContent) { _, body in
             if vm.noteEditedBody(body) { scheduleAutosave(vm: vm) }
         }
@@ -3093,7 +3276,7 @@ struct NoteDetailView: View {
                 canvasHasUnsavedChanges = false
             }
 
-            if !hidesEditorSaveButton {
+            if showsEditorSaveButton(vm) {
                 canvasSaveChip(vm: vm)
                     .padding(.trailing, 16)
                     .padding(.bottom, 72)
@@ -3103,12 +3286,13 @@ struct NoteDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .trinoteCanvasBackground).ignoresSafeArea(edges: [.bottom, .horizontal]))
+        .animation(Self.editorSaveButtonAnimation, value: showsEditorSaveButton(vm))
     }
 
     @ViewBuilder
     private func canvasSaveChip(vm: NoteDetailViewModel) -> some View {
         Button {
-            saveCanvasContent(vm: vm)
+            saveFromSaveButton(vm: vm)
         } label: {
             ZStack {
                 if vm.isSaving {
@@ -3171,7 +3355,7 @@ struct NoteDetailView: View {
                 spreadsheetHasUnsavedChanges = false
             }
 
-            if !hidesEditorSaveButton {
+            if showsEditorSaveButton(vm) {
                 spreadsheetSaveChip(vm: vm)
                     .padding(.trailing, 16)
                     .padding(.bottom, 72)
@@ -3181,12 +3365,13 @@ struct NoteDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .trinoteSpreadsheetBackground).ignoresSafeArea(edges: [.bottom, .horizontal]))
+        .animation(Self.editorSaveButtonAnimation, value: showsEditorSaveButton(vm))
     }
 
     @ViewBuilder
     private func spreadsheetSaveChip(vm: NoteDetailViewModel) -> some View {
         Button {
-            saveSpreadsheetContent(vm: vm)
+            saveFromSaveButton(vm: vm)
         } label: {
             ZStack {
                 if vm.isSaving {
@@ -3332,7 +3517,7 @@ struct NoteDetailView: View {
                 titleSection(vm, note: note)
                 Divider()
 
-                if let json = vm.contentString {
+                if let json = vm.contentString, NoteEditorSaving.isUsableMindMapJSON(json) {
                     MindMapNoteView(
                         json: json,
                         imageBytes: { routeType, entityId in
@@ -3340,6 +3525,25 @@ struct NoteDetailView: View {
                         }
                     )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let json = vm.contentString {
+                    // Empty, or another type's content after a type change: editing starts a new map.
+                    let isEmpty = json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ContentUnavailableView {
+                        Label(
+                            isEmpty
+                                ? String(localized: "Empty Mind Map", comment: "Mind map note with no map yet")
+                                : String(localized: "Can't Show as a Mind Map", comment: "Mind map note whose content is another type's"),
+                            systemImage: "map"
+                        )
+                    } description: {
+                        Text(isEmpty
+                            ? String(localized: "Edit the note to start a mind map.", comment: "Mind map note with no map yet")
+                            : String(
+                                localized: "This note's content isn't a mind map. Edit the note to start one; saving it replaces the old content.",
+                                comment: "Mind map note whose content is another type's"
+                            ))
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     Spacer()
                 }
@@ -3396,7 +3600,7 @@ struct NoteDetailView: View {
                 mindMapHasUnsavedChanges = false
             }
 
-            if !hidesEditorSaveButton {
+            if showsEditorSaveButton(vm) {
                 mindMapSaveChip(vm: vm)
                     .padding(.trailing, 16)
                     .padding(.bottom, 72)
@@ -3405,12 +3609,13 @@ struct NoteDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(Self.editorSaveButtonAnimation, value: showsEditorSaveButton(vm))
     }
 
     @ViewBuilder
     private func mindMapSaveChip(vm: NoteDetailViewModel) -> some View {
         Button {
-            saveMindMapContent(vm: vm)
+            saveFromSaveButton(vm: vm)
         } label: {
             ZStack {
                 if vm.isSaving {
@@ -3473,6 +3678,26 @@ struct NoteDetailView: View {
     }
 
     @ViewBuilder
+    /// An AI chat fills the note area like it does in Trilium: the transcript scrolls by itself and the reply box
+    /// stays pinned at the bottom (and above the keyboard). Inside the read-only scroll view it sat below the fold.
+    private func chatDetailView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        VStack(spacing: 0) {
+            editorStatusBanner(vm)
+            breadcrumbsBar(vm)
+            titleSection(vm, note: note)
+            Divider()
+            if vm.isLoadingContent, vm.contentString == nil {
+                ProgressView(String(localized: "Loading content…", comment: "Note body loading"))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                LlmChatNoteView(viewModel: vm, note: note, onOpenNote: { navigateToNoteId = $0 })
+                    .frame(maxWidth: contentWidthLimit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func kanbanDetailView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
         VStack(spacing: 0) {
             editorStatusBanner(vm)
@@ -4188,14 +4413,17 @@ struct NoteDetailView: View {
         return false
     }
 
-    /// Detects geo map notes: semantic geo (`geoMap` or `book` + `#viewType=geoMap`), viewport JSON in the body, or `book` with a child that has `#geolocation` in cache.
+    /// Detects geo map notes: semantic geo (`geoMap` or `book` + `#viewType=geoMap`), or a `book` whose body is viewport
+    /// JSON or that has a child with `#geolocation` in cache. Only collections are read this way: a note changed from a
+    /// geo map to another type keeps the viewport JSON as its content and must show as that type.
     /// Calendar roots are excluded even if children have geolocation labels.
     private func isGeoMapNote(_ note: NoteItem?, contentString: String?, vm: NoteDetailViewModel?) -> Bool {
         guard let note else { return false }
         if note.isCalendarRoot { return false }
         if note.isSemanticGeoMap { return true }
+        guard note.type == .book || note.type == .collection else { return false }
         if geoMapViewportJSONMatches(contentString) { return true }
-        if (note.type == .book || note.type == .collection), let vm, vm.cachedAnyChildHasGeolocationLabel() { return true }
+        if let vm, vm.cachedAnyChildHasGeolocationLabel() { return true }
         return false
     }
 
@@ -4287,7 +4515,7 @@ struct NoteDetailView: View {
                 .frame(width: 0, height: 0)
             )
 
-            if showEditorSaveCancelChip && !hidesEditorSaveButton {
+            if showEditorSaveCancelChip && showsEditorSaveButton(vm) {
                 editorSaveChip(vm: vm)
                     .padding(.trailing, 16)
                     .padding(.bottom, 62)
@@ -4296,6 +4524,7 @@ struct NoteDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(Self.editorSaveButtonAnimation, value: showsEditorSaveButton(vm))
         .onAppear {
             editorSaveCancelScrollBaselineReady = false
             lastEditorScrollOffsetY = 0
@@ -4375,12 +4604,23 @@ struct NoteDetailView: View {
         }
     }
 
-    private func metadataSection(_ note: NoteItem) -> some View {
+    private func metadataSection(_ note: NoteItem, vm: NoteDetailViewModel) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
             Group {
                 LabeledContent(String(localized: "Note ID", comment: "Metadata field"), value: note.noteId)
-                LabeledContent(String(localized: "Type", comment: "Metadata field"), value: note.uiNoteTypeDisplayName)
+                LabeledContent(String(localized: "Type", comment: "Metadata field")) {
+                    HStack(spacing: 8) {
+                        Text(verbatim: metadataTypeName(note))
+                        if vm.canChangeNoteType, canEditOnServer(vm), !vm.isEditing {
+                            Button(String(localized: "Change…", comment: "Note details: change the note type")) {
+                                showNoteTypePicker = true
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(vm.isSaving)
+                        }
+                    }
+                }
                 LabeledContent(String(localized: "MIME", comment: "Metadata field"), value: note.mime)
                 if !note.dateCreated.isEmpty {
                     LabeledContent(String(localized: "Created", comment: "Metadata field"), value: note.dateCreated)
@@ -4391,24 +4631,59 @@ struct NoteDetailView: View {
             }
             .font(.caption)
 
-            if !note.attributes.isEmpty {
+            HStack {
                 Text(String(localized: "Attributes", comment: "Metadata section"))
                     .font(.caption.weight(.medium))
-                    .padding(.top, 4)
-                ForEach(note.attributes) { attr in
-                    HStack {
-                        Image(systemName: attr.type == .label ? "tag" : "arrow.right")
-                            .font(.caption2)
-                        Text(attr.name)
-                            .font(.caption.weight(.medium))
-                        Text(attr.value)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                Spacer()
+                if !vm.needsProtectedSession {
+                    Button(String(localized: "Edit", comment: "Note details: open the Attributes sheet")) {
+                        attributesStartAdding = nil
+                        showAttributesSheet = true
                     }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    .disabled(vm.isEditing)
+                }
+            }
+            .padding(.top, 4)
+            let shown = OwnedAttributeEdits.editable(note.attributes)
+            if shown.isEmpty {
+                Text(String(localized: "No attributes yet.", comment: "Attributes sheet: note has none of its own"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(shown) { attr in
+                HStack {
+                    Image(systemName: attr.type == .label ? "tag" : "arrow.right")
+                        .font(.caption2)
+                    Text(verbatim: attr.name)
+                        .font(.caption.weight(.medium))
+                    Text(verbatim: metadataAttributeValue(attr, vm: vm))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .padding()
+    }
+
+    /// A relation's target by title, a secret masked, anything else as it is.
+    private func metadataAttributeValue(_ attribute: AttributeItem, vm: NoteDetailViewModel) -> String {
+        if attribute.type == .relation {
+            return vm.cachedNoteTitle(attribute.value) ?? attribute.value
+        }
+        if AttributeSecrets.isSecret(type: attribute.type, name: attribute.name), !attribute.value.isEmpty {
+            return String(repeating: "•", count: 8)
+        }
+        return attribute.value
+    }
+
+    /// The type as shown elsewhere, or the server's own name for a type this app doesn't know (such as `llmChat`).
+    private func metadataTypeName(_ note: NoteItem) -> String {
+        if let raw = note.serverTypeName, NoteType(rawValue: raw) == nil {
+            return raw
+        }
+        return note.uiNoteTypeDisplayName
     }
 
     @ToolbarContentBuilder
@@ -4423,6 +4698,17 @@ struct NoteDetailView: View {
                 }
                 .disabled(isToolbarQuickActionDisabled(quick, vm: vm))
                 .accessibilityLabel(toolbarQuickActionAccessibilityLabel(quick, vm: vm, note: note))
+            }
+
+            // Not while editing: the AI could change the note under unsaved typing.
+            if showsNoteAIChat(vm, note: note), !vm.isEditing {
+                Button {
+                    showNoteAIChat = true
+                } label: {
+                    Image(systemName: "sparkles")
+                }
+                .disabled(!appState.aiAvailability.canSend)
+                .accessibilityLabel(String(localized: "Chat with AI…", comment: "Note overflow menu: open an AI chat about this note that can edit it"))
             }
 
             Button {
@@ -4513,7 +4799,7 @@ struct NoteDetailView: View {
             case .info:
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        metadataSection(note)
+                        metadataSection(note, vm: vm)
                         attachmentsSection(vm)
                     }
                 }
@@ -4579,8 +4865,8 @@ struct NoteDetailView: View {
         VStack(spacing: 0) {
             noteOverflowActionButtons(vm: vm, note: note)
         }
-        .padding(.top, 4)
-        .padding(.bottom, 28)
+        .padding(.top, 14)
+        .padding(.bottom, 8)
         .modifier(NoteOverflowSheetSizingModifier())
     }
 
@@ -4609,7 +4895,7 @@ struct NoteDetailView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, Self.noteOverflowRowVerticalPadding)
                     .contentShape(Rectangle())
                 }
             }
@@ -4687,6 +4973,121 @@ struct NoteDetailView: View {
             }
             .buttonStyle(.plain)
             .disabled(vm.isSaving)
+        }
+
+        if vm.canChangeNoteType {
+            if canEditOnServer(vm) {
+                Button {
+                    dismissNoteOverflowThen { showNoteTypePicker = true }
+                } label: {
+                    noteOverflowLabel(
+                        String(localized: "Change Note Type…", comment: "Note overflow menu: open the note type picker"),
+                        systemImage: "doc.badge.gearshape"
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.isEditing || vm.isSaving)
+            } else {
+                noteOverflowLabel(
+                    String(localized: "Changing the type needs a connection", comment: "Note overflow: change note type offline"),
+                    systemImage: "wifi.slash"
+                )
+                .foregroundStyle(.secondary)
+                .disabled(true)
+            }
+        }
+
+        if showsNoteAIChat(vm, note: note) {
+            Button {
+                dismissNoteOverflowThen { showNoteAIChat = true }
+            } label: {
+                noteOverflowLabel(
+                    String(localized: "Chat with AI…", comment: "Note overflow menu: open an AI chat about this note that can edit it"),
+                    systemImage: "sparkles"
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!appState.aiAvailability.canSend || vm.isEditing)
+        }
+
+        if note.type == .llmChat, !vm.needsProtectedSession {
+            if note.isInLlmChatFolder {
+                if canEditOnServer(vm) {
+                    Button {
+                        dismissNoteOverflowThen { Task { await vm.keepChat() } }
+                    } label: {
+                        noteOverflowLabel(
+                            String(localized: "Keep Chat", comment: "Note overflow menu: move an AI chat out of Trilium's hidden history folder into the notes"),
+                            systemImage: "tray.and.arrow.down"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(vm.isSaving || vm.chatSession?.isStreaming == true)
+                } else {
+                    noteOverflowLabel(
+                        String(localized: "Keeping the chat needs a connection", comment: "Note overflow: Keep Chat offline"),
+                        systemImage: "wifi.slash"
+                    )
+                    .foregroundStyle(.secondary)
+                    .disabled(true)
+                }
+            }
+            if let session = vm.chatSession, session.canRegenerate, canEditOnServer(vm), appState.aiAvailability.canSend {
+                Button {
+                    dismissNoteOverflowThen { session.regenerateLastReply() }
+                } label: {
+                    noteOverflowLabel(
+                        String(localized: "Regenerate Last Reply", comment: "Note overflow menu: ask the AI to answer the last message again"),
+                        systemImage: "arrow.clockwise"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+
+        if vm.canChangeSubtreeProtection {
+            if canEditOnServer(vm) {
+                Button {
+                    let protect = !note.isProtected
+                    dismissNoteOverflowThen {
+                        subtreeProtectionPassword = ""
+                        pendingSubtreeProtection = protect
+                    }
+                } label: {
+                    noteOverflowLabel(
+                        note.isProtected
+                            ? String(localized: "Unprotect Subtree…", comment: "Note overflow menu: remove protection from this note and every note under it, as in Trilium's tree menu")
+                            : String(localized: "Protect Subtree…", comment: "Note overflow menu: protect this note and every note under it, as in Trilium's tree menu"),
+                        systemImage: note.isProtected ? "lock.open" : "lock.shield"
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.isEditing || vm.isSaving || vm.isChangingProtection)
+            } else {
+                noteOverflowLabel(
+                    String(localized: "Protecting needs a connection", comment: "Note overflow: Protect or Unprotect Subtree offline"),
+                    systemImage: "wifi.slash"
+                )
+                .foregroundStyle(.secondary)
+                .disabled(true)
+            }
+        }
+
+        // Shown offline too: the sheet lists the attributes read-only until there's a connection.
+        if !vm.needsProtectedSession {
+            Button {
+                dismissNoteOverflowThen {
+                    attributesStartAdding = nil
+                    showAttributesSheet = true
+                }
+            } label: {
+                noteOverflowLabel(
+                    String(localized: "Attributes…", comment: "Note overflow menu: open the Attributes sheet"),
+                    systemImage: "tag"
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.isEditing)
         }
 
         Divider().padding(.leading, 20)
@@ -4793,7 +5194,7 @@ struct NoteDetailView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
-                .padding(.vertical, 12)
+                .padding(.vertical, Self.noteOverflowRowVerticalPadding)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -4879,11 +5280,20 @@ struct NoteDetailView: View {
         .buttonStyle(.plain)
     }
 
+    /// Chat with AI is offered on text and code notes (Markdown included) while Trilium's AI is on, as the
+    /// note tools can read and edit those.
+    private func showsNoteAIChat(_ vm: NoteDetailViewModel, note: NoteItem) -> Bool {
+        [.text, .code, .markdown].contains(note.type) && appState.showsAIEntryPoints && !vm.needsProtectedSession
+    }
+
+    /// Row height of the note ⋯ menu; with every item showing, the iPhone sheet still leaves the top of the screen clear.
+    private static let noteOverflowRowVerticalPadding: CGFloat = 10
+
     private func noteOverflowLabel(_ title: String, systemImage: String) -> some View {
         Label(title, systemImage: systemImage)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(.vertical, Self.noteOverflowRowVerticalPadding)
             .contentShape(Rectangle())
     }
 
@@ -5055,6 +5465,8 @@ struct NewNoteTypePicker: View {
     var supportsSpreadsheet: Bool
     var supportsKanban: Bool = true
     var supportsPresentation: Bool = true
+    /// Trilium 0.105+ with its AI switch on.
+    var supportsAIChat: Bool = false
     /// When `false`, the picker stays on Text and cannot be changed (share-import flow).
     var isEnabled: Bool = true
 
@@ -5077,6 +5489,9 @@ struct NewNoteTypePicker: View {
             if supportsPresentation {
                 Text(String(localized: "Presentation", comment: "Note type")).tag(NoteType.presentation)
             }
+            if supportsAIChat {
+                Text(String(localized: "AI Chat", comment: "Note type")).tag(NoteType.llmChat)
+            }
         }
         .disabled(!isEnabled)
         .onChange(of: supportsSpreadsheet) { _, supported in
@@ -5091,6 +5506,11 @@ struct NewNoteTypePicker: View {
         }
         .onChange(of: supportsPresentation) { _, supported in
             if !supported, selection == .presentation {
+                selection = .text
+            }
+        }
+        .onChange(of: supportsAIChat) { _, supported in
+            if !supported, selection == .llmChat {
                 selection = .text
             }
         }
@@ -5135,7 +5555,8 @@ struct CreateChildNoteSheet: View {
                         selection: $viewModel.newNoteType,
                         supportsSpreadsheet: supportsSpreadsheetNoteType,
                         supportsKanban: supportsKanbanNoteType,
-                        supportsPresentation: supportsPresentationNoteType
+                        supportsPresentation: supportsPresentationNoteType,
+                        supportsAIChat: appState.showsAIEntryPoints
                     )
                 }
 
@@ -5191,26 +5612,32 @@ private struct NoteOverflowSheetHeightKey: PreferenceKey {
 private struct NoteOverflowSheetSizingModifier: ViewModifier {
     @State private var contentHeight: CGFloat = 740
 
+    /// At most this share of the window, so the sheet never reaches up to the status bar; a longer menu scrolls.
+    private static let maxWindowFraction: CGFloat = 0.88
+
     func body(content: Content) -> some View {
-        let maxHeight = AppDelegate.foregroundWindowFrameInScreen.height * 0.92
+        let maxHeight = AppDelegate.foregroundWindowFrameInScreen.height * Self.maxWindowFraction
         let detentHeight = min(max(contentHeight, 280), maxHeight)
-        content
-            .frame(maxWidth: .infinity)
-            .fixedSize(horizontal: false, vertical: true)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(key: NoteOverflowSheetHeightKey.self, value: proxy.size.height)
+        ScrollView {
+            content
+                .frame(maxWidth: .infinity)
+                .fixedSize(horizontal: false, vertical: true)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: NoteOverflowSheetHeightKey.self, value: proxy.size.height)
+                    }
                 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .onPreferenceChange(NoteOverflowSheetHeightKey.self) { measured in
+            guard measured > 100 else { return }
+            let padded = measured + 20
+            if abs(contentHeight - padded) > 1 {
+                contentHeight = padded
             }
-            .onPreferenceChange(NoteOverflowSheetHeightKey.self) { measured in
-                guard measured > 100 else { return }
-                let padded = measured + 20
-                if abs(contentHeight - padded) > 1 {
-                    contentHeight = padded
-                }
-            }
-            .presentationDetents([.height(detentHeight)])
-            .presentationDragIndicator(.visible)
+        }
+        .presentationDetents([.height(detentHeight)])
+        .presentationDragIndicator(.visible)
     }
 }
 
@@ -5373,3 +5800,4 @@ struct PendingReadScrollOffset {
     var fraction: CGFloat
     var offset: ReadScrollOffset
 }
+

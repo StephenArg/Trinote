@@ -47,6 +47,8 @@ extension Notification.Name {
     /// `userInfo["reloadTreeFromServer"]` as `Bool` — reload the tree from the server (e.g. after re-including cached notebooks).
     static let trinoteTreeShouldRefresh = Notification.Name("TrinoteTreeShouldRefresh")
     static let trinoteTreeReloadFromServerUserInfoKey = "reloadTreeFromServer"
+    /// Posted after a sync wrote protected notes. `userInfo["noteIds"]` is `[String]`, `userInfo["profileId"]` the server.
+    static let trinoteProtectedNotesSynced = Notification.Name("TrinoteProtectedNotesSynced")
     /// Posted when an offline-created note receives a server id after sync. `userInfo["from"]` / `["to"]` are note ids.
     static let trinoteOfflineNoteIdReplaced = Notification.Name("TrinoteOfflineNoteIdReplaced")
     /// Posted when the open-note tab strip is updated (add/remove / prune) so visible bars can reload.

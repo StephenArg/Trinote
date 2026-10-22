@@ -128,7 +128,7 @@ private enum NoteIconPackFilter: String, CaseIterable, Identifiable {
     }
 }
 
-private struct NoteIconPickerContent: View {
+struct NoteIconPickerContent: View {
     private static let iconsPerRow = 5
     private static let iconCellSize: CGFloat = 58
     private static let gridSpacing: CGFloat = 10
@@ -208,7 +208,7 @@ private struct NoteIconPickerContent: View {
 
 // MARK: - Color tab
 
-private struct NoteColorPickerContent: View {
+struct NoteColorPickerContent: View {
     let currentColorLabel: String?
     let onSelect: (String?) -> Void
 

@@ -126,6 +126,21 @@ final class PersistenceManager {
         try cache.fetchCachedNotes(ids: ids, serverProfileId: serverProfileId)
     }
 
+    func cachedProtectedNoteIds(serverProfileId: String) throws -> [String] {
+        try cache.protectedNoteIds(serverProfileId: serverProfileId)
+    }
+
+    /// Writes these titles to the cached notes and saves. Returns how many changed.
+    @discardableResult
+    func updateCachedNoteTitles(_ titles: [String: String], serverProfileId: String) throws -> Int {
+        let changed = try cache.updateTitles(titles, serverProfileId: serverProfileId)
+        if changed > 0 {
+            try commitBatch()
+            invalidateDerivedCaches()
+        }
+        return changed
+    }
+
     func fetchCachedBranches(ids: some Collection<String>, serverProfileId: String) throws -> [String: CachedBranch] {
         try cache.fetchCachedBranches(ids: ids, serverProfileId: serverProfileId)
     }
@@ -558,6 +573,38 @@ final class PersistenceManager {
                 sortBy: [SortDescriptor(\.position)]
             )
         )
+    }
+
+    /// Deletes the note's cached attributes that aren't in `attributeIds` (what the server just returned).
+    /// Caching a note response only adds and updates rows, so without this an attribute removed in the app would
+    /// stay cached until a sync deleted it.
+    func pruneCachedAttributes(noteId: String, keeping attributeIds: Set<String>, serverProfileId: String) throws {
+        let stale = try fetchCachedAttributes(noteId: noteId, serverProfileId: serverProfileId)
+            .filter { !attributeIds.contains($0.attributeId) }
+        guard !stale.isEmpty else { return }
+        stale.forEach { context.delete($0) }
+        try context.save()
+    }
+
+    /// After a note's type changed: the copies of it that recents, favorites and open tabs keep for their icons.
+    func updateStoredNoteType(noteId: String, noteType: String, serverProfileId: String) throws {
+        let nid = noteId
+        let pid = serverProfileId
+        let recents = try context.fetch(FetchDescriptor<RecentNote>(
+            predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
+        ))
+        let favorites = try context.fetch(FetchDescriptor<FavoriteNote>(
+            predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
+        ))
+        let tabs = try context.fetch(FetchDescriptor<OpenNoteTab>(
+            predicate: #Predicate { $0.noteId == nid && $0.serverProfileId == pid }
+        ))
+        recents.forEach { $0.noteType = noteType }
+        favorites.forEach { $0.noteType = noteType }
+        tabs.forEach { $0.noteType = noteType }
+        if !recents.isEmpty || !favorites.isEmpty || !tabs.isEmpty {
+            try context.save()
+        }
     }
 
     // MARK: - Recent Notes

@@ -74,7 +74,7 @@ struct CameraPickerView: UIViewControllerRepresentable {
     }
 }
 
-private extension UIImage {
+extension UIImage {
     /// Bakes `imageOrientation` into pixels so the editor does not insert a sideways JPEG.
     func normalizedToUpOrientation() -> UIImage {
         guard imageOrientation != .up else { return self }

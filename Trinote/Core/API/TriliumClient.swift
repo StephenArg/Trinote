@@ -19,11 +19,18 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func touchProtectedSession() async throws
     /// Ends the protected session on the server (optional; main `logout` clears cookies too).
     func exitProtectedSession() async throws
+    /// Protects or unprotects a note and, with `includingSubtree`, every note under it. Needs the protected session.
+    func setNoteProtection(noteId: String, protect: Bool, includingSubtree: Bool) async throws
 
     /// Serialized cookie archive for Keychain persistence.
     func exportSessionCookieData() -> Data?
 
     func getAppInfo() async throws -> AppInfoResponse
+    /// `GET /api/options`: the server's options as strings (`protectedSessionTimeout`, `isPasswordSet`, …).
+    func getOptions() async throws -> TriliumOptionsResponse
+    /// `PUT /api/options`: sets several options at once. Only names Trilium allows go through; one refused name fails
+    /// the whole call.
+    func updateOptions(_ values: [String: String]) async throws
     func getNote(_ noteId: String) async throws -> NoteResponse
     /// Same HTTP as `getNote`, but also returns child `BranchResponse`s from the shared `tree/load` payload (avoids N extra `tree/load` calls per parent).
     func getNoteWithBranches(_ noteId: String) async throws -> (NoteResponse, [BranchResponse])
@@ -78,6 +85,16 @@ protocol TriliumClientProtocol: Actor, Sendable {
     /// `GET /api/special-notes/inbox-target` (Trilium 0.106+): where Trilium would put a captured note, without making
     /// anything (no day note, no journal).
     func getInboxTarget() async throws -> InboxTargetResponse
+    /// `POST /api/llm-chat/stream` (Trilium 0.105+): one assistant turn as it streams. The stream ends after `done`,
+    /// or after an `error` chunk (no `done` follows one). Stop iterating to stop the generation server-side.
+    func streamLlmChat(messages: [LlmApiMessage], config: LlmChatRequestConfig) async -> AsyncThrowingStream<LlmStreamChunk, Error>
+    /// `POST /api/special-notes/llm-chat`: a new chat note in Trilium's hidden AI Chat History folder.
+    func createLlmChat() async throws -> CreatedLlmChat
+    /// `GET /api/special-notes/recent-llm-chats?limit=`: the newest chats still in that folder.
+    func recentLlmChats(limit: Int) async throws -> [RecentLlmChat]
+    /// `POST /api/special-notes/save-llm-chat`: moves a chat out of the hidden folder into the notes (`#llmChatHome`,
+    /// the workspace, or today's day note).
+    func keepLlmChat(noteId: String) async throws -> KeepLlmChatResponse
 
     func getBranch(_ branchId: String, parentNoteId: String) async throws -> BranchResponse
     func placeBranchInSiblingOrder(_ branchId: String, orderedSiblingBranchIds: [String]) async throws
@@ -102,6 +119,15 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func getAttribute(_ attributeId: String) async throws -> AttributeResponse
     func createAttribute(_ request: CreateAttributeRequest) async throws
     func deleteAttribute(noteId: String, attributeId: String) async throws
+    /// `PUT /api/notes/:noteId/attributes`: replaces the note's own attributes with `attributes`, in that order
+    /// (desktop's attribute editor save). Auto-link attributes left out of the list are kept.
+    func replaceOwnedAttributes(noteId: String, _ attributes: [OwnedAttributeUpdate]) async throws
+    /// `PUT /api/notes/:noteId/attribute`: creates or updates one attribute, returning the id that now holds it.
+    func updateNoteAttribute(_ request: UpdateNoteAttributeRequest) async throws -> String?
+    /// `GET /api/attribute-names/?type=&query=`: names in use on the server (and Trilium's built-ins) containing `query`.
+    func attributeNames(type: String, query: String) async throws -> [String]
+    /// `GET /api/attribute-values/:name`: the values a label of this name holds anywhere on the server.
+    func attributeValues(name: String) async throws -> [String]
 
     func getNoteAttachments(_ noteId: String) async throws -> [AttachmentResponse]
     func getAttachment(_ attachmentId: String) async throws -> AttachmentResponse
@@ -269,12 +295,17 @@ actor TriliumClient: TriliumClientProtocol {
         // `.shared` is the only storage where `cookies(for:)` reliably returns what was set.
         // We clear stale cookies for this host on every new client to keep profiles isolated.
         let jar = HTTPCookieStorage.shared
+        let jarBefore = SessionCookieTrace.jarTag(for: baseURL)
         Self.clearCookies(in: jar, for: baseURL)
         self.httpCookieStorage = jar
 
         if let persistedCookieData {
             TriliumCookieArchive.load(into: jar, data: persistedCookieData, defaultURL: baseURL)
         }
+        SessionCookieTrace.log(
+            "client init \(baseURL.host ?? "?") cleared jar sid \(jarBefore), loaded \(SessionCookieTrace.tag(archive: persistedCookieData)) -> jar \(SessionCookieTrace.jarTag(for: baseURL))"
+        )
+        SessionCookieTrace.watchJar(for: baseURL)
 
         self.decoder = JSONDecoder()
         self.encoder = JSONEncoder()
@@ -306,6 +337,34 @@ actor TriliumClient: TriliumClientProtocol {
 
     func exportSessionCookieData() -> Data? {
         TriliumCookieArchive.export(from: httpCookieStorage, for: baseURL)
+    }
+
+    /// The `trilium.sid` the server last accepted as signed in (`/api/app-info` answered with it during login or
+    /// `restoreSession()`). The server only issues a different one at login, so a jar holding another (or none) was
+    /// changed by something else, such as an anonymous session from a request sent without the cookie.
+    private var verifiedSessionCookieValue: String?
+
+    /// The jar's cookies for this server, but only while they carry the signed-in session the server confirmed.
+    /// nil otherwise, so a caller saving them can't replace a good login with an anonymous or missing one.
+    func exportVerifiedSessionCookieData() -> Data? {
+        guard let verifiedSessionCookieValue, currentSessionCookieValue() == verifiedSessionCookieValue else { return nil }
+        return exportSessionCookieData()
+    }
+
+    /// Whether the jar holds a `trilium.sid` for this server. Without one every request is anonymous, and
+    /// `GET /bootstrap` would hand out (and the jar keep) a new anonymous session.
+    func hasSessionCookie() -> Bool {
+        currentSessionCookieValue() != nil
+    }
+
+    private func currentSessionCookieValue() -> String? {
+        (httpCookieStorage.cookies(for: baseURL) ?? []).first { $0.name == "trilium.sid" && !$0.value.isEmpty }?.value
+    }
+
+    /// Records the jar's session as the confirmed one after `/api/app-info` answered with it.
+    private func markSessionCookieVerified() {
+        verifiedSessionCookieValue = currentSessionCookieValue()
+        SessionCookieTrace.log("verified sid \(SessionCookieTrace.tag(cookieValue: verifiedSessionCookieValue)) for \(baseURL.host ?? "?")")
     }
 
     // MARK: - Auth
@@ -416,6 +475,7 @@ actor TriliumClient: TriliumClientProtocol {
             throw APIError.unauthorized
         }
 
+        markSessionCookieVerified()
         isSessionValid = true
     }
 
@@ -561,6 +621,7 @@ actor TriliumClient: TriliumClientProtocol {
             csrfToken = extractCsrfTokenFromCookie()
         }
         lastFetchedAppInfo = try await getAppInfo()
+        markSessionCookieVerified()
         if csrfToken == nil {
             if skipBootstrapWithoutOIDCSession {
                 try await refreshCsrfSkippingSSOBootstrapIfNeeded()
@@ -599,6 +660,7 @@ actor TriliumClient: TriliumClientProtocol {
 
     func enterProtectedSession(password: String) async throws {
         if csrfToken == nil {
+            guard hasSessionCookie() else { throw APIError.unauthorized }
             try await refreshCsrf()
         }
         struct Body: Encodable { let password: String }
@@ -611,12 +673,19 @@ actor TriliumClient: TriliumClientProtocol {
 
     func touchProtectedSession() async throws {
         if csrfToken == nil {
+            guard hasSessionCookie() else { throw APIError.unauthorized }
             try await refreshCsrf()
         }
         try await postWithoutBody(path: "/api/login/protected/touch", method: "POST", csrf: true)
     }
 
     func exitProtectedSession() async throws {
+        // Signed out, there is no protected session to end, and fetching a CSRF token would only open an
+        // anonymous session on the server and put its cookie in the jar.
+        guard hasSessionCookie() else {
+            SessionCookieTrace.log("exitProtectedSession skipped: no session cookie")
+            return
+        }
         if csrfToken == nil {
             try await refreshCsrf()
         }
@@ -624,11 +693,29 @@ actor TriliumClient: TriliumClientProtocol {
         try await postWithoutBody(path: "/api/logout/protected", method: "POST", csrf: true)
     }
 
+    /// The server re-encrypts every note of the subtree, with its attachments and revisions, inside one request.
+    private static let protectNotesTimeout: TimeInterval = 300
+
+    /// Desktop's tree menu "Protect subtree" / "Unprotect subtree": `PUT /api/notes/:id/protect/1|0?subtree=1|0`.
+    /// The server refuses (500) without an open protected session.
+    func setNoteProtection(noteId: String, protect: Bool, includingSubtree: Bool) async throws {
+        let request = try buildRequest(
+            path: "/api/notes/\(noteId)/protect/\(protect ? 1 : 0)",
+            method: "PUT",
+            queryParams: ["subtree": includingSubtree ? "1" : "0"],
+            csrf: true,
+            jsonBody: false
+        )
+        let (data, response) = try await dataForLongRunningRequest(request, timeout: Self.protectNotesTimeout)
+        try validateResponse(response, data: data)
+    }
+
     // MARK: - CSRF token acquisition
 
     /// v0.102+ serves CSRF via `GET /bootstrap` (JSON with `csrfToken` field).
     /// The response also sets the `_csrf` cookie needed for double-submit.
     private func fetchCsrfFromBootstrap() async -> Bool {
+        SessionCookieTrace.log("GET /bootstrap with jar sid \(SessionCookieTrace.jarTag(for: baseURL))")
         do {
             let url = try Self.makeURL(baseURL: baseURL, path: "/bootstrap", queryParams: nil)
             var req = URLRequest(url: url)
@@ -884,6 +971,14 @@ actor TriliumClient: TriliumClientProtocol {
         try await get("/api/app-info", csrf: false)
     }
 
+    func getOptions() async throws -> TriliumOptionsResponse {
+        try await get("/api/options", csrf: false)
+    }
+
+    func updateOptions(_ values: [String: String]) async throws {
+        try await putJSONVoid("/api/options", body: values, csrf: true)
+    }
+
     func syncCheck() async throws -> SyncCheckResponse {
         try await get("/api/sync/check", csrf: false)
     }
@@ -917,7 +1012,10 @@ actor TriliumClient: TriliumClientProtocol {
         let detail = try await detailRow
         let tree = try await treeResponse
         let index = TreeLoadIndex(tree)
-        let note = Self.buildNoteResponse(detail: detail, index: index, noteId: noteId)
+        var note = Self.buildNoteResponse(detail: detail, index: index, noteId: noteId)
+        // `tree/load` already carries every ancestor's and template's attributes; only this single-note path
+        // works out what the note inherits from them (batches and full sync skip it).
+        note.inheritedAttributes = index.inheritedAttributes(of: noteId)
         let branches = Self.liveChildBranchResponses(index: index, parentNoteId: noteId)
         return (note, branches)
     }
@@ -1642,7 +1740,58 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     func deleteAttribute(noteId: String, attributeId: String) async throws {
-        try await delete("/api/notes/\(noteId)/attributes/\(attributeId)", queryParams: nil, csrf: true)
+        try await delete(
+            "/api/notes/\(Self.checkedId(noteId))/attributes/\(Self.checkedId(attributeId))",
+            queryParams: nil,
+            csrf: true
+        )
+    }
+
+    func replaceOwnedAttributes(noteId: String, _ attributes: [OwnedAttributeUpdate]) async throws {
+        try await putJSONVoid("/api/notes/\(Self.checkedId(noteId))/attributes", body: attributes, csrf: true)
+    }
+
+    func updateNoteAttribute(_ request: UpdateNoteAttributeRequest) async throws -> String? {
+        if let attributeId = request.attributeId { _ = try Self.checkedId(attributeId) }
+        var urlRequest = try buildRequest(
+            path: "/api/notes/\(Self.checkedId(request.noteId))/attribute",
+            method: "PUT",
+            queryParams: nil,
+            csrf: true,
+            jsonBody: true
+        )
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try encoder.encode(request)
+        let (data, response) = try await session.data(for: urlRequest)
+        try validateResponse(response, data: data)
+        guard !data.isEmpty else { return nil }
+        return try? decoder.decode(UpdateNoteAttributeResponse.self, from: data).attributeId
+    }
+
+    func attributeNames(type: String, query: String) async throws -> [String] {
+        try await get("/api/attribute-names/", queryParams: ["type": type, "query": query], csrf: false)
+    }
+
+    func attributeValues(name: String) async throws -> [String] {
+        // A name with no route-safe meaning would ask for `attribute-values/` itself, which matches nothing.
+        guard AttributeNames.isValid(name) else { return [] }
+        return try await get(
+            "/api/attribute-values/\(Self.percentEncodePathSegment(name))",
+            csrf: false,
+            pathIsPercentEncoded: true
+        )
+    }
+
+    /// Ids taken from server data go into a request path only when they look like Trilium ids, so a crafted value
+    /// can't reach another route (see `TriliumEntityId`).
+    private static func checkedId(_ id: String) throws -> String {
+        guard TriliumEntityId.isValid(id) else {
+            throw APIError.rejected(String(
+                localized: "Trinote didn't send this change because the note or attribute has an unexpected ID.",
+                comment: "Error when a server-provided id fails validation before a request"
+            ))
+        }
+        return id
     }
 
     // MARK: - Attachments
@@ -1919,11 +2068,123 @@ actor TriliumClient: TriliumClientProtocol {
     private var longRunningSessionStorage: URLSession?
 
     private static let longestRequestTimeout = max(
-        ocrRequestTimeout, bulkDeleteTimeout, officePreviewTimeout, spreadsheetXlsxExportTimeout
+        ocrRequestTimeout, bulkDeleteTimeout, officePreviewTimeout, spreadsheetXlsxExportTimeout, protectNotesTimeout
     )
+
+    // MARK: - AI chat (Trilium 0.105+)
+
+    /// Idle limit of the chat stream. The server writes a heartbeat after 30 s of silence, so a longer gap means the
+    /// connection is dead.
+    private static let llmStreamIdleTimeout: TimeInterval = 90
+    /// How long one assistant turn may take in all; an agent turn with tools can run for minutes.
+    private static let llmStreamTotalTimeout: TimeInterval = 3600
+
+    func streamLlmChat(messages: [LlmApiMessage], config: LlmChatRequestConfig) async -> AsyncThrowingStream<LlmStreamChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { [weak self] in
+                guard let self else {
+                    continuation.finish()
+                    return
+                }
+                do {
+                    try await self.runLlmChatStream(messages: messages, config: config, continuation: continuation)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: APIError.from(error))
+                }
+            }
+            // The consumer stopped (Stop, or the view went away): close the socket, which stops the generation.
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func runLlmChatStream(
+        messages: [LlmApiMessage],
+        config: LlmChatRequestConfig,
+        continuation: AsyncThrowingStream<LlmStreamChunk, Error>.Continuation
+    ) async throws {
+        var request = try buildRequest(path: "/api/llm-chat/stream", method: "POST", queryParams: nil, csrf: true, jsonBody: true)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.httpBody = try encoder.encode(LlmChatStreamRequest(messages: messages, config: config))
+        request.timeoutInterval = Self.llmStreamIdleTimeout
+        let (bytes, response) = try await streamingSession.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            // A refused request is answered with a JSON body (`{"error": …}`), not a stream.
+            var body = Data()
+            for try await byte in bytes {
+                body.append(byte)
+                if body.count > 64_000 { break }
+            }
+            try validateResponse(response, data: body)
+            throw APIError.invalidResponse
+        }
+        captureCsrfFromResponse(http)
+        var parser = SSEFrameParser()
+        var undecodable = 0
+        func deliver(_ frame: String) {
+            if let chunk = try? decoder.decode(LlmStreamChunk.self, from: Data(frame.utf8)) {
+                continuation.yield(chunk)
+            } else {
+                undecodable += 1
+            }
+        }
+        do {
+            // Byte by byte rather than `bytes.lines`: that sequence drops empty lines, and an empty line is what
+            // ends a frame.
+            for try await byte in bytes {
+                if let frame = parser.feed(byte: byte) { deliver(frame) }
+            }
+            if let frame = parser.finish() { deliver(frame) }
+        } catch {
+            // Stopped, or the connection dropped: make sure the socket closes so the server stops generating.
+            bytes.task.cancel()
+            throw error
+        }
+        if undecodable > 0 {
+            Log.api.warning("Skipped \(undecodable) chat stream frame(s) that could not be decoded")
+        }
+    }
+
+    func createLlmChat() async throws -> CreatedLlmChat {
+        struct EmptyBody: Encodable {}
+        return try await postJSON("/api/special-notes/llm-chat", body: EmptyBody(), csrf: true)
+    }
+
+    func recentLlmChats(limit: Int) async throws -> [RecentLlmChat] {
+        try await get("/api/special-notes/recent-llm-chats", queryParams: ["limit": String(max(1, limit))], csrf: false)
+    }
+
+    func keepLlmChat(noteId: String) async throws -> KeepLlmChatResponse {
+        struct Body: Encodable { let llmChatNoteId: String }
+        return try await postJSON("/api/special-notes/save-llm-chat", body: Body(llmChatNoteId: noteId), csrf: true)
+    }
+
+    /// A session for the chat stream, which stays open while the model answers. Its idle limit outlives the
+    /// server's 30 s heartbeat and its total allows a long agent turn; the default session would cut it at 120 s.
+    private var streamingSession: URLSession {
+        if let streamingSessionStorage { return streamingSessionStorage }
+        let cfg = URLSessionConfiguration.default
+        cfg.httpCookieStorage = httpCookieStorage
+        cfg.httpShouldSetCookies = true
+        cfg.httpCookieAcceptPolicy = .always
+        cfg.timeoutIntervalForRequest = Self.llmStreamIdleTimeout
+        cfg.timeoutIntervalForResource = Self.llmStreamTotalTimeout
+        cfg.waitsForConnectivity = injectedProtocolClasses == nil
+        if let injectedProtocolClasses {
+            cfg.protocolClasses = injectedProtocolClasses
+        }
+        let session = URLSession(configuration: cfg)
+        streamingSessionStorage = session
+        return session
+    }
+
+    private var streamingSessionStorage: URLSession?
 
     deinit {
         longRunningSessionStorage?.finishTasksAndInvalidate()
+        streamingSessionStorage?.finishTasksAndInvalidate()
     }
 
     // MARK: - Request helpers
@@ -2108,6 +2369,7 @@ actor TriliumClient: TriliumClientProtocol {
             return
         case 401:
             isSessionValid = false
+            SessionCookieTrace.log("401 \(http.url?.path ?? "?") jar sid \(SessionCookieTrace.jarTag(for: baseURL))")
             throw APIError.unauthorized
         case 404:
             let message = extractErrorMessage(from: data) ?? http.url?.path ?? "resource"
@@ -2136,9 +2398,12 @@ actor TriliumClient: TriliumClientProtocol {
         struct ErrorBody: Decodable {
             let message: String?
             let code: String?
+            /// `POST /api/llm-chat/stream` refuses a request with `{ error }`.
+            let error: String?
         }
         guard let body = try? decoder.decode(ErrorBody.self, from: data) else { return nil }
         if let message = body.message { return message }
+        if let error = body.error { return error }
         return body.code
     }
 
@@ -2210,6 +2475,7 @@ actor TriliumClient: TriliumClientProtocol {
             attributes: attrResponses
         )
         response.hasShareAncestor = index.hasAncestor(TriliumSharing.shareRootNoteId, of: noteId)
+        response.isInLlmChatFolder = index.hasAncestor(TriliumAIChat.historyRootNoteId, of: noteId)
         return response
     }
 }
@@ -2251,6 +2517,41 @@ private struct TreeLoadIndex {
 
     func attributes(of noteId: String) -> [TreeLoadAttributeRow] {
         (attributesByNoteId[noteId] ?? []).sorted { $0.position < $1.position }
+    }
+
+    /// What `noteId` inherits from its ancestors and templates (`TriliumAttributeInheritance`), from the rows this
+    /// response carries.
+    func inheritedAttributes(of noteId: String) -> [AttributeResponse] {
+        let resolver = TriliumAttributeInheritance(
+            ownedAttributes: { id in
+                attributes(of: id).map {
+                    AttributeItem(
+                        attributeId: $0.attributeId,
+                        noteId: $0.noteId,
+                        type: AttributeItem.AttributeKind(rawValue: $0.type) ?? .label,
+                        name: $0.name,
+                        value: $0.value,
+                        position: $0.position,
+                        isInheritable: $0.isInheritable
+                    )
+                }
+            },
+            parentNoteIds: { id in
+                parentBranches(of: id).filter { $0.isDeleted != true }.map(\.parentNoteId)
+            }
+        )
+        return resolver.inheritedAttributes(of: noteId).map {
+            AttributeResponse(
+                attributeId: $0.attributeId,
+                noteId: $0.noteId,
+                type: $0.type.rawValue,
+                name: $0.name,
+                value: $0.value,
+                position: $0.position,
+                isInheritable: $0.isInheritable,
+                utcDateModified: nil
+            )
+        }
     }
 
     /// Whether `ancestorId` is above `noteId` on any path (clones included). `tree/load` returns every ancestor's

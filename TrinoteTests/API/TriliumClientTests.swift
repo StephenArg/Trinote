@@ -283,6 +283,35 @@ final class TriliumClientTests: XCTestCase {
         }
     }
 
+    func testGetOptionsReadsTheProtectedSessionTimeout() async throws {
+        nonisolated(unsafe) var optionsPath: String?
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url!.path
+            if path.contains("bootstrap") {
+                let json = #"{"csrfToken":"boot_csrf_42","device":"mobile","triliumVersion":"0.106.0"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.contains("api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            if path.hasSuffix("/api/options") {
+                optionsPath = path
+                XCTAssertEqual(request.httpMethod, "GET")
+                let json = #"{"protectedSessionTimeout":"900","protectedSessionTimeoutTimeScale":"60","isPasswordSet":"true","theme":"next"}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            XCTFail("Unexpected path: \(path)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        let options = try await client.getOptions()
+        XCTAssertEqual(optionsPath, "/api/options")
+        XCTAssertEqual(options.protectedSessionTimeoutSeconds, 900)
+        XCTAssertEqual(options["isPasswordSet"], "true")
+    }
+
     // MARK: - Note decode
 
     func testGetNoteMergesTreeLoad() async throws {
@@ -318,6 +347,51 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(note.parentNoteIds, ["root"])
         XCTAssertTrue(note.childBranchIds.isEmpty)
         XCTAssertGreaterThanOrEqual(call, 2)
+    }
+
+    /// `tree/load` returns the parents' and templates' attribute rows; `getNote` keeps only the note's own as
+    /// `attributes` and works out what it inherits from the rest.
+    func testGetNoteWorksOutInheritedAttributesFromTreeLoad() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"csrf_test","device":"desktop"}"#) }
+            if path.contains("api/app-info") { return ok(appInfoJSON) }
+            if path.hasSuffix("/api/notes/abc") {
+                return ok(#"{"noteId":"abc","title":"Card","isProtected":false,"type":"text","mime":"text/html","blobId":"b1"}"#)
+            }
+            if path.hasSuffix("/api/tree/load") {
+                return ok("""
+                {"notes":[
+                  {"noteId":"abc","title":"Card","isProtected":false,"type":"text","mime":"text/html","blobId":"b1"},
+                  {"noteId":"p1","title":"Board","isProtected":false,"type":"book","mime":"","blobId":"b2"},
+                  {"noteId":"tpl","title":"Template","isProtected":false,"type":"text","mime":"text/html","blobId":"b3"}],
+                 "branches":[
+                  {"branchId":"p1_abc","noteId":"abc","parentNoteId":"p1","prefix":null,"notePosition":0,"isExpanded":false},
+                  {"branchId":"root_p1","noteId":"p1","parentNoteId":"root","prefix":null,"notePosition":0,"isExpanded":true}],
+                 "attributes":[
+                  {"attributeId":"a1","noteId":"abc","type":"relation","name":"template","value":"tpl","position":10,"isInheritable":false},
+                  {"attributeId":"a2","noteId":"p1","type":"label","name":"label:status","value":"promoted,single,text","position":10,"isInheritable":true},
+                  {"attributeId":"a3","noteId":"p1","type":"label","name":"private","value":"","position":20,"isInheritable":false},
+                  {"attributeId":"a4","noteId":"tpl","type":"label","name":"template","value":"","position":10,"isInheritable":false},
+                  {"attributeId":"a5","noteId":"tpl","type":"label","name":"status","value":"todo","position":20,"isInheritable":false}]}
+                """)
+            }
+            XCTFail("Unexpected path: \(path)")
+            return ok("{}")
+        }
+
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        let note = try await client.getNote("abc")
+        XCTAssertEqual(note.attributes.map(\.attributeId), ["a1"])
+        XCTAssertEqual(note.inheritedAttributes.map(\.attributeId), ["a2", "a5"])
+
+        let item = NoteItem(from: note)
+        XCTAssertEqual(item.inheritedAttributes.map(\.name), ["label:status", "status"])
+        XCTAssertEqual(item.serverTypeName, "text")
     }
 
     func testDeleteNoteSendsEraseNotesQueryFlag() async throws {
@@ -643,6 +717,56 @@ final class TriliumClientTests: XCTestCase {
 
     // MARK: - Bulk delete (v0.106 POST /api/delete-notes)
 
+    // MARK: - Protect subtree
+
+    func testProtectSubtreeUsesDesktopsRoute() async throws {
+        final class Seen: @unchecked Sendable { var requests: [(method: String?, path: String, query: String?, csrf: String?)] = [] }
+        let seen = Seen()
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            func ok(_ body: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(appInfoJSON) }
+            seen.requests.append((request.httpMethod, path, request.url?.query, request.value(forHTTPHeaderField: "x-csrf-token")))
+            return ok("")
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        try await client.setNoteProtection(noteId: "n1", protect: true, includingSubtree: true)
+        try await client.setNoteProtection(noteId: "n1", protect: false, includingSubtree: true)
+
+        XCTAssertEqual(seen.requests.map(\.method), ["PUT", "PUT"])
+        XCTAssertEqual(seen.requests.map(\.path), ["/api/notes/n1/protect/1", "/api/notes/n1/protect/0"])
+        XCTAssertEqual(seen.requests.map(\.query), ["subtree=1", "subtree=1"])
+        XCTAssertEqual(seen.requests.map(\.csrf), ["x", "x"])
+    }
+
+    func testProtectSubtreeReportsTheServersRefusal() async throws {
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/bootstrap") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"csrfToken":"x"}"#.utf8))
+            }
+            if path.contains("/api/app-info") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(appInfoJSON.utf8))
+            }
+            let body = #"{"message":"Cannot (un)protect note 'n1' with protect flag 'true' without active protected session"}"#
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        do {
+            try await client.setNoteProtection(noteId: "n1", protect: true, includingSubtree: true)
+            XCTFail("expected the server's error")
+        } catch APIError.serverError(let status, let message) {
+            XCTAssertEqual(status, 500)
+            XCTAssertEqual(message?.contains("without active protected session"), true)
+        }
+    }
+
     func testBulkDeleteSendsTheSelectionInOneRequestAfterAPreview() async throws {
         final class Bodies: @unchecked Sendable { var byPath: [String: [String: Any]] = [:] }
         let bodies = Bodies()
@@ -685,6 +809,123 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(delete["eraseNotes"] as? Bool, false)
         XCTAssertEqual(delete["totalCount"] as? Int, 3)
         XCTAssertEqual(delete["taskId"] as? String, "task123456")
+    }
+
+    func testAttributeEndpointsMatchDesktop() async throws {
+        final class Seen: @unchecked Sendable {
+            var requests: [(method: String, path: String, query: String?, csrf: String?, body: Any?)] = []
+        }
+        let seen = Seen()
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(#"{"appVersion":"0.106.0","dbVersion":240}"#) }
+            let body = request.httpBody ?? request.httpBodyStream.map { stream in
+                stream.open(); defer { stream.close() }
+                var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
+                return data
+            } ?? Data()
+            // `URL.path` drops a trailing slash; the percent-encoded path is what was sent.
+            let sentPath = request.url?.path(percentEncoded: true) ?? path
+            seen.requests.append((
+                request.httpMethod ?? "",
+                sentPath,
+                request.url?.query,
+                request.value(forHTTPHeaderField: "x-csrf-token"),
+                body.isEmpty ? nil : try? JSONSerialization.jsonObject(with: body)
+            ))
+            switch sentPath {
+            case "/api/notes/n1/attributes": return ok("")
+            case "/api/notes/n1/attribute": return ok(#"{"attributeId":"a9"}"#)
+            case "/api/attribute-names/": return ok(#"["status","sorted"]"#)
+            default:
+                if sentPath.hasPrefix("/api/attribute-values/") { return ok(#"["todo","done"]"#) }
+                XCTFail("Unexpected path: \(sentPath)")
+                return ok("{}")
+            }
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        try await client.replaceOwnedAttributes(noteId: "n1", [
+            OwnedAttributeUpdate(type: "label", name: "status", value: "todo", isInheritable: false),
+            OwnedAttributeUpdate(type: "relation", name: "template", value: "tpl", isInheritable: true),
+        ])
+        let id = try await client.updateNoteAttribute(UpdateNoteAttributeRequest(
+            noteId: "n1", attributeId: nil, type: "label", name: "status", value: "done"
+        ))
+        let names = try await client.attributeNames(type: "label", query: "s t")
+        let values = try await client.attributeValues(name: "board:groupBy")
+
+        XCTAssertEqual(id, "a9")
+        XCTAssertEqual(names, ["status", "sorted"])
+        XCTAssertEqual(values, ["todo", "done"])
+        XCTAssertEqual(seen.requests.count, 4)
+
+        let replace = seen.requests[0]
+        XCTAssertEqual(replace.method, "PUT")
+        XCTAssertEqual(replace.csrf, "x")
+        let list = try XCTUnwrap(replace.body as? [[String: Any]])
+        XCTAssertEqual(list.map { $0["name"] as? String }, ["status", "template"])
+        XCTAssertEqual(list[1]["isInheritable"] as? Bool, true)
+        XCTAssertEqual(list[1]["type"] as? String, "relation")
+
+        let single = seen.requests[1]
+        XCTAssertEqual(single.method, "PUT")
+        XCTAssertEqual(single.csrf, "x")
+        let singleBody = try XCTUnwrap(single.body as? [String: Any])
+        XCTAssertNil(singleBody["attributeId"])
+        XCTAssertNil(singleBody["noteId"])
+        XCTAssertEqual(singleBody["value"] as? String, "done")
+
+        XCTAssertEqual(seen.requests[2].method, "GET")
+        let query = URLComponents(string: "https://x/?\(seen.requests[2].query ?? "")")?.queryItems ?? []
+        XCTAssertEqual(Set(query.map { "\($0.name)=\($0.value ?? "")" }), ["type=label", "query=s t"])
+        XCTAssertEqual(seen.requests[3].path, "/api/attribute-values/board:groupBy")
+    }
+
+    func testAttributeRequestsRefuseIdsThatCouldChangeTheRoute() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(#"{"appVersion":"0.106.0","dbVersion":240}"#) }
+            XCTFail("No request should be sent, got \(request.httpMethod ?? "") \(path)")
+            return ok("{}")
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        for (noteId, attributeId) in [("n1", ".."), ("..", "a1"), ("n1", "a1/../.."), ("n1", "")] {
+            do {
+                try await client.deleteAttribute(noteId: noteId, attributeId: attributeId)
+                XCTFail("Expected the id \(noteId)/\(attributeId) to be refused")
+            } catch let error as APIError {
+                guard case .rejected = error else { return XCTFail("Unexpected error \(error)") }
+            }
+        }
+        do {
+            _ = try await client.updateNoteAttribute(UpdateNoteAttributeRequest(
+                noteId: "n1", attributeId: "../x", type: "label", name: "a", value: ""
+            ))
+            XCTFail("Expected the attribute id to be refused")
+        } catch let error as APIError {
+            guard case .rejected = error else { return XCTFail("Unexpected error \(error)") }
+        }
+        do {
+            try await client.replaceOwnedAttributes(noteId: "a?b", [])
+            XCTFail("Expected the note id to be refused")
+        } catch let error as APIError {
+            guard case .rejected = error else { return XCTFail("Unexpected error \(error)") }
+        }
+        let none = try await client.attributeValues(name: "../x")
+        XCTAssertEqual(none, [])
     }
 
     func testBulkDeletionNeedsTrilium0106() {
@@ -1669,5 +1910,145 @@ final class TriliumClientTests: XCTestCase {
         } catch {
             XCTFail("Expected totpRequired, got \(error)")
         }
+    }
+
+    // MARK: - AI chat (v0.105+)
+
+    private func requestBody(_ request: URLRequest) -> Data {
+        request.httpBody ?? request.httpBodyStream.map { stream in
+            stream.open(); defer { stream.close() }
+            var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
+            return data
+        } ?? Data()
+    }
+
+    func testStreamLlmChatPostsAndYieldsEachChunk() async throws {
+        final class Captured: @unchecked Sendable { var request: URLRequest?; var body = Data() }
+        let captured = Captured()
+        MockURLProtocol.requestHandler = { [self] request in
+            let path = request.url?.path ?? ""
+            func ok(_ text: String, type: String = "application/json") -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": type])!, Data(text.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(#"{"appVersion":"0.106.0","dbVersion":240}"#) }
+            if path == "/api/llm-chat/stream" {
+                captured.request = request
+                captured.body = requestBody(request)
+                let sse = "data: {\"type\":\"status\",\"status\":\"starting_agent\"}\n\n"
+                    + ":\n\n"
+                    + "data: {\"type\":\"text\",\"content\":\"Hel\"}\n\n"
+                    + "data: {\"type\":\"text\",\"content\":\"lo\"}\r\n\r\n"
+                    + "data: {\"type\":\"mystery\"}\n\n"
+                    + "data: not json\n\n"
+                    + "data: {\"type\":\"usage\",\"usage\":{\"totalTokens\":3}}\n\n"
+                    + "data: {\"type\":\"done\"}\n\n"
+                return ok(sse, type: "text/event-stream")
+            }
+            XCTFail("Unexpected path: \(path)")
+            return ok("{}")
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let stream = await client.streamLlmChat(
+            messages: [LlmApiMessage(role: .user, text: "Hi")],
+            config: LlmChatRequestConfig(provider: "anthropic", providerId: "p1", model: "m", enableWebSearch: true, enableNoteTools: false, chatNoteId: "chat1")
+        )
+        var chunks: [LlmStreamChunk] = []
+        for try await chunk in stream { chunks.append(chunk) }
+        XCTAssertEqual(chunks, [.status("starting_agent"), .text("Hel"), .text("lo"), .unknown(type: "mystery"), .usage(LlmUsage(totalTokens: 3)), .done])
+
+        let request = try XCTUnwrap(captured.request)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-csrf-token"), "x")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: captured.body) as? [String: Any])
+        XCTAssertEqual(body["messages"] as? [[String: String]], [["role": "user", "content": "Hi"]])
+        XCTAssertEqual(
+            body["config"] as? NSDictionary,
+            ["provider": "anthropic", "providerId": "p1", "model": "m", "enableWebSearch": true, "enableNoteTools": false, "chatNoteId": "chat1"]
+        )
+    }
+
+    func testStreamLlmChatSurfacesTheServersRefusal() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            func respond(_ text: String, status: Int = 200) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, Data(text.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return respond(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return respond(#"{"appVersion":"0.106.0","dbVersion":240}"#) }
+            if path == "/api/llm-chat/stream" { return respond(#"{"error":"messages array is required"}"#, status: 400) }
+            XCTFail("Unexpected path: \(path)")
+            return respond("{}")
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let stream = await client.streamLlmChat(messages: [], config: LlmChatRequestConfig())
+        do {
+            for try await _ in stream { XCTFail("no chunks expected") }
+            XCTFail("expected the refusal")
+        } catch APIError.serverError(let statusCode, let message) {
+            XCTAssertEqual(statusCode, 400)
+            XCTAssertEqual(message, "messages array is required")
+        }
+    }
+
+    func testLlmChatSpecialNotesAndOptionWrites() async throws {
+        struct Seen { var path: String; var method: String; var csrf: String?; var body: [String: Any] }
+        final class SeenRequests: @unchecked Sendable { var all: [Seen] = [] }
+        let seen = SeenRequests()
+        MockURLProtocol.requestHandler = { [self] request in
+            let path = request.url?.path ?? ""
+            func ok(_ text: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(text.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(#"{"appVersion":"0.106.0","dbVersion":240}"#) }
+            let body = (try? JSONSerialization.jsonObject(with: requestBody(request)) as? [String: Any]) ?? [:]
+            seen.all.append(Seen(
+                path: path + (request.url?.query.map { "?" + $0 } ?? ""),
+                method: request.httpMethod ?? "",
+                csrf: request.value(forHTTPHeaderField: "x-csrf-token"),
+                body: body
+            ))
+            switch path {
+            case "/api/special-notes/llm-chat":
+                return ok(#"{"noteId":"c1","title":"Chat: 2026-10-08 10:00:00","type":"llmChat","mime":"application/json","isProtected":false,"blobId":"b1"}"#)
+            case "/api/special-notes/recent-llm-chats":
+                return ok(#"[{"noteId":"c1","title":"Chat: 2026-10-08 10:00:00","dateModified":"2026-10-08 10:00:00.000Z"}]"#)
+            case "/api/special-notes/save-llm-chat":
+                return ok(#"{"success":true,"branchId":"b2","notePath":"root/home/c1"}"#)
+            case "/api/options":
+                return ok("")
+            default:
+                XCTFail("Unexpected path: \(path)")
+                return ok("{}")
+            }
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let created = try await client.createLlmChat()
+        XCTAssertEqual(created, CreatedLlmChat(noteId: "c1", title: "Chat: 2026-10-08 10:00:00"))
+        let recent = try await client.recentLlmChats(limit: 10)
+        XCTAssertEqual(recent.map(\.noteId), ["c1"])
+        let kept = try await client.keepLlmChat(noteId: "c1")
+        XCTAssertTrue(kept.success)
+        XCTAssertEqual(kept.keptNoteId, "c1")
+        try await client.updateOptions(["aiEnabled": "true", "aiAssistantModel": ""])
+
+        XCTAssertEqual(seen.all.map(\.path), [
+            "/api/special-notes/llm-chat", "/api/special-notes/recent-llm-chats?limit=10", "/api/special-notes/save-llm-chat", "/api/options"
+        ])
+        XCTAssertEqual(seen.all.map(\.method), ["POST", "GET", "POST", "PUT"])
+        XCTAssertEqual(seen.all.map(\.csrf), ["x", nil, "x", "x"])
+        XCTAssertEqual(seen.all[0].body as? [String: String], [:])
+        XCTAssertEqual(seen.all[2].body as? [String: String], ["llmChatNoteId": "c1"])
+        XCTAssertEqual(seen.all[3].body as? [String: String], ["aiEnabled": "true", "aiAssistantModel": ""])
     }
 }

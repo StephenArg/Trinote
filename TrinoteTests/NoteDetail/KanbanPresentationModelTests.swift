@@ -526,7 +526,7 @@ final class KanbanPresentationModelTests: XCTestCase {
             label("label:secret", "promoted,single,text", inheritable: true),
             label("label:local", "promoted", inheritable: false),
         ]
-        let settings: Models.JSONValue = .array([
+        let settings: JSONValue = .array([
             .object(["name": .string("owner")]),
             .object(["name": .string("secret"), "hidden": .bool(true)]),
         ])
@@ -547,7 +547,7 @@ final class KanbanPresentationModelTests: XCTestCase {
     }
 
     func testCardTemplateReadsTypeAndTemplateIds() {
-        func config(_ fields: [String: Models.JSONValue]) -> Models.BoardConfig { Models.BoardConfig(fields: fields) }
+        func config(_ fields: [String: JSONValue]) -> Models.BoardConfig { Models.BoardConfig(fields: fields) }
         XCTAssertEqual(Models.CardTemplate(config: config(["template": .string("template:tpl123")])), .template(noteId: "tpl123"))
         XCTAssertEqual(Models.CardTemplate(config: config(["template": .string("type:code:text/x-markdown")])), .noteType(type: "code", mime: "text/x-markdown"))
         XCTAssertEqual(Models.CardTemplate(config: config(["templates": .array([.string("type:canvas")])])), .noteType(type: "canvas", mime: nil))

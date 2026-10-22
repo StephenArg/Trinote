@@ -59,6 +59,14 @@ final class KeychainManagerTests: XCTestCase {
         XCTAssertNil(cleared)
     }
 
+    /// A second save updates the stored cookies in place (no delete-then-add window without a login cookie).
+    func testSavingSessionCookiesAgainReplacesThem() async throws {
+        try await KeychainManager.shared.saveSessionCookies(Data("first".utf8), forServer: testServerId)
+        try await KeychainManager.shared.saveSessionCookies(Data("second".utf8), forServer: testServerId)
+        let loaded = try await KeychainManager.shared.loadSessionCookies(forServer: testServerId)
+        XCTAssertEqual(loaded, Data("second".utf8))
+    }
+
     func testSaveLoadTriliumInstanceId() async throws {
         let id = "instance-\(UUID().uuidString)"
         try await KeychainManager.shared.saveTriliumInstanceId(id, forServer: testServerId)

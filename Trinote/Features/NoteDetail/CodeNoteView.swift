@@ -209,6 +209,28 @@ private struct CodeNoteLanguagePickerSheet: View {
     var onSelect: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            CodeNoteLanguageList(currentMime: currentMime, onSelect: onSelect)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(String(localized: "Cancel", comment: "Dismiss language picker")) {
+                            dismiss()
+                        }
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+/// Trilium's code languages, searchable, with the note's current one ticked. Used by the language pill on code
+/// notes and by Change Note Type.
+struct CodeNoteLanguageList: View {
+    let currentMime: String
+    var onSelect: (String) -> Void
+
     @State private var query = ""
 
     private var filtered: [CodeNoteLanguage] {
@@ -220,44 +242,35 @@ private struct CodeNoteLanguagePickerSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                if !CodeNoteLanguage.defaults.contains(where: { $0.mime.caseInsensitiveCompare(currentMime) == .orderedSame }) {
-                    Section {
-                        languageRow(
-                            title: CodeNoteLanguage.displayTitle(for: currentMime),
-                            mime: currentMime,
-                            isCurrent: true
-                        )
-                    } header: {
-                        Text(String(localized: "Current", comment: "Code language picker: current MIME not in defaults"))
-                    }
-                }
+        List {
+            if !currentMime.isEmpty,
+               !CodeNoteLanguage.defaults.contains(where: { $0.mime.caseInsensitiveCompare(currentMime) == .orderedSame }) {
                 Section {
-                    ForEach(filtered) { lang in
-                        languageRow(
-                            title: lang.title,
-                            mime: lang.mime,
-                            isCurrent: lang.mime.caseInsensitiveCompare(currentMime) == .orderedSame
-                        )
-                    }
+                    languageRow(
+                        title: CodeNoteLanguage.displayTitle(for: currentMime),
+                        mime: currentMime,
+                        isCurrent: true
+                    )
+                } header: {
+                    Text(String(localized: "Current", comment: "Code language picker: current MIME not in defaults"))
                 }
             }
-            .searchable(
-                text: $query,
-                prompt: String(localized: "Search languages", comment: "Code language picker search prompt")
-            )
-            .navigationTitle(String(localized: "Language", comment: "Code note language picker title"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(String(localized: "Cancel", comment: "Dismiss language picker")) {
-                        dismiss()
-                    }
+            Section {
+                ForEach(filtered) { lang in
+                    languageRow(
+                        title: lang.title,
+                        mime: lang.mime,
+                        isCurrent: lang.mime.caseInsensitiveCompare(currentMime) == .orderedSame
+                    )
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .searchable(
+            text: $query,
+            prompt: String(localized: "Search languages", comment: "Code language picker search prompt")
+        )
+        .navigationTitle(String(localized: "Language", comment: "Code note language picker title"))
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func languageRow(title: String, mime: String, isCurrent: Bool) -> some View {

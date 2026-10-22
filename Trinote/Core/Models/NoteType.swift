@@ -45,6 +45,9 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
     /// Trilium v0.103+ Univer Sheets-backed spreadsheet note. Content is Univer workbook JSON (`application/json`).
     /// Trinote renders this read-only; editing requires the Univer bundle which is not shipped on iOS.
     case spreadsheet
+    /// Trilium v0.103+ AI chat note: the transcript as JSON (`{"version":1,"messages":[…]}`, `application/json`).
+    /// Trinote draws it with its own chat view (no rich-text editor); chatting needs Trilium v0.105+ (`supportsLlmChat`).
+    case llmChat = "llmChat"
     /// Client-only: creates a Trilium `book` with `#calendarRoot` (journal / calendar widget root).
     case calendar
     /// Client-only: creates a Trilium `book` Collection with `#viewType=board` (Kanban).
@@ -75,6 +78,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .geoMap: return "Geo Map"
         case .mindMap: return "Mind Map"
         case .spreadsheet: return "Spreadsheet"
+        case .llmChat: return "AI Chat"
         case .calendar: return "Calendar"
         case .kanban: return "Kanban Board"
         case .presentation: return "Presentation"
@@ -102,6 +106,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .mermaid: return "chart.bar"
         case .geoMap: return "map"
         case .spreadsheet: return "tablecells"
+        case .llmChat: return "bubble.left.and.text.bubble.right"
         case .calendar: return "calendar"
         case .kanban: return "rectangle.split.3x1"
         case .presentation: return "rectangle.on.rectangle"
@@ -117,7 +122,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
 
     var isRenderable: Bool {
         switch self {
-        case .text, .code, .markdown, .image, .file, .book, .collection, .render, .mermaid, .mindMap, .geoMap, .spreadsheet, .calendar, .kanban, .presentation:
+        case .text, .code, .markdown, .image, .file, .book, .collection, .render, .mermaid, .mindMap, .geoMap, .spreadsheet, .llmChat, .calendar, .kanban, .presentation:
             return true
         default: return false
         }
@@ -125,7 +130,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
 
     var isAdvanced: Bool {
         switch self {
-        case .canvas, .collection, .noteMap, .relationMap, .webView, .contentWidget, .launcher, .mindMap, .geoMap, .spreadsheet, .calendar, .kanban, .presentation:
+        case .canvas, .collection, .noteMap, .relationMap, .webView, .contentWidget, .launcher, .mindMap, .geoMap, .spreadsheet, .llmChat, .calendar, .kanban, .presentation:
             return true
         default:
             return false
@@ -160,11 +165,14 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .code: return "text/plain"
         case .markdown: return "text/x-markdown"
         case .file: return "application/octet-stream"
-        case .canvas, .mindMap, .spreadsheet: return "application/json"
+        case .canvas, .mindMap, .spreadsheet, .llmChat: return "application/json"
         case .geoMap, .kanban, .presentation: return ""
         default: return "text/html"
         }
     }
+
+    /// An AI chat with no messages yet, as Trilium's `createLlmChat` writes it.
+    static let emptyLlmChatJSON = "{\"version\":1,\"messages\":[]}"
 
     /// Minimal Leaflet/Trilium viewport JSON for an empty geo map note (matches desktop `GeoMapTypeWidget` serialization).
     static let emptyGeoMapJSON = "{\"view\":{\"center\":{\"lat\":0,\"lng\":0},\"zoom\":2}}"
@@ -176,6 +184,7 @@ enum NoteType: String, Codable, CaseIterable, Sendable {
         case .mindMap: return Self.emptyMindMapJSON
         case .geoMap: return Self.emptyGeoMapJSON
         case .spreadsheet: return Self.emptySpreadsheetJSON
+        case .llmChat: return Self.emptyLlmChatJSON
         default: return ""
         }
     }

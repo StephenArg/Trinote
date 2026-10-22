@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<!-- Model output is untrusted: no inline script may run (only this page's nonce'd script and the bundled vendor
+     files), nothing may be fetched, and images come in as data URLs the app hands over. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' file:; img-src data: blob:; font-src file:; script-src 'nonce-trinote-chat' file:">
+<style>
+    :root {
+        color-scheme: light dark;
+        --text: #1c1c1e; --muted: #8e8e93; --link: #007aff; --accent: #007aff;
+        --bubble: rgba(0, 122, 255, 0.12); --card: rgba(128, 128, 128, 0.10); --card-strong: rgba(128, 128, 128, 0.16);
+        --border: rgba(0, 0, 0, 0.12); --code-bg: rgba(0, 0, 0, 0.05); --danger: #f85149;
+    }
+    @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+            --text: #e5e5e7; --link: #0a84ff; --accent: #0a84ff; --bubble: rgba(10, 132, 255, 0.22);
+            --border: rgba(255, 255, 255, 0.15); --code-bg: rgba(255, 255, 255, 0.07);
+        }
+    }
+    :root[data-theme="dark"] {
+        --text: #e5e5e7; --link: #0a84ff; --accent: #0a84ff; --bubble: rgba(10, 132, 255, 0.22);
+        --border: rgba(255, 255, 255, 0.15); --code-bg: rgba(255, 255, 255, 0.07);
+    }
+    * { -webkit-text-size-adjust: 100%; box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: transparent; }
+    body {
+        font: -apple-system-body; font-size: 17px; line-height: 1.5; color: var(--text);
+        padding: 8px 16px 28px; word-wrap: break-word; overflow-wrap: break-word;
+    }
+    a { color: var(--link); }
+    #empty { color: var(--muted); text-align: center; padding: 48px 16px; font-size: 16px; display: none; }
+
+    .msg { margin: 12px 0; }
+    .msg-user { display: flex; justify-content: flex-end; }
+    .msg-user > div { max-width: 88%; }
+    .msg-user .bubble { background: var(--bubble); border-radius: 18px 18px 4px 18px; padding: 8px 14px; }
+    .msg-system .bubble { background: var(--card); border-radius: 12px; padding: 8px 14px; color: var(--muted); font-size: 15px; }
+    .footer { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+    .msg-user .footer { justify-content: flex-end; }
+
+    .md > :first-child { margin-top: 0; }
+    .md > :last-child { margin-bottom: 0; }
+    .md p { margin: 0.6em 0; }
+    .md h1, .md h2, .md h3, .md h4 { margin: 0.9em 0 0.4em; line-height: 1.25; }
+    .md h1 { font-size: 1.35em; } .md h2 { font-size: 1.2em; } .md h3 { font-size: 1.08em; } .md h4 { font-size: 1em; }
+    .md ul, .md ol { padding-left: 1.4em; margin: 0.5em 0; }
+    .md li { margin: 0.2em 0; }
+    .md img { max-width: 100%; height: auto; border-radius: 8px; }
+    .md hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
+    pre { background: var(--code-bg); padding: 12px; border-radius: 10px; font-size: 14px; white-space: pre; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 14px; font-family: ui-monospace, Menlo, monospace; }
+    pre code { background: none; padding: 0; }
+    .table-scroll-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 8px 0; }
+    table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 15px; }
+    th, td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 7px 9px; text-align: left; min-width: 30px; vertical-align: top; }
+    tr:first-child > th, tr:first-child > td { border-top: 1px solid var(--border); }
+    th:first-child, td:first-child { border-left: 1px solid var(--border); }
+    th { background: var(--code-bg); font-weight: 600; }
+    blockquote { border-left: 4px solid var(--border); margin: 8px 0; padding: 4px 16px; opacity: 0.85; }
+    aside.admonition, div[data-callout-type] { margin: 10px 0; border-radius: 10px; padding: 10px 12px 10px 14px; border: 1px solid var(--border); background: var(--card); }
+    aside.admonition.note { border-color: #4a9eff; } aside.admonition.tip { border-color: #3fb950; }
+    aside.admonition.important { border-color: #a371f7; } aside.admonition.caution { border-color: #f85149; } aside.admonition.warning { border-color: #d29922; }
+    ul.todo-list { list-style: none; padding-left: 0.2em; }
+    ul.todo-list li label { display: flex; gap: 8px; align-items: baseline; }
+    ul.todo-list input[type="checkbox"] { pointer-events: none; }
+    .mermaid { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 8px 0; }
+    .mermaid svg { width: auto; max-width: none; height: auto; display: block; }
+    .katex { color: inherit; font-size: 1.05em; }
+    .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+
+    details.card { background: var(--card); border-radius: 10px; margin: 8px 0; overflow: hidden; }
+    details.card > summary { padding: 8px 12px; cursor: pointer; font-size: 14px; font-weight: 500; list-style: none; display: flex; align-items: center; gap: 8px; -webkit-user-select: none; user-select: none; }
+    details.card > summary::-webkit-details-marker { display: none; }
+    details.card > summary::before { content: ""; flex: none; width: 6px; height: 6px; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(-45deg); margin: 0 6px 0 2px; opacity: 0.7; transition: transform 0.15s ease; }
+    details.card[open] > summary::before { transform: rotate(45deg); }
+    details.card > .body { padding: 0 12px 10px; font-size: 14px; }
+    details.thinking > .body { white-space: pre-wrap; opacity: 0.85; }
+    details.tool .tool-name { font-family: ui-monospace, Menlo, monospace; font-weight: 600; }
+    details.tool.error > summary { color: var(--danger); }
+    .tool-label { font-size: 12px; color: var(--muted); margin: 6px 0 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .tool-io { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; background: var(--code-bg); border-radius: 8px; padding: 8px; max-height: 260px; overflow: auto; margin: 0; }
+    .status { color: var(--muted); font-size: 14px; font-style: italic; }
+    .status-wait { color: var(--muted); font-size: 14px; font-style: italic; margin: 6px 0; }
+    .mermaid-failed { margin: 8px 0; }
+    .mermaid-failed .note { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+    .citations table { font-size: 13px; width: 100%; }
+    .citations td { border: none; padding: 4px 6px; }
+    .citations td.site { color: var(--muted); white-space: nowrap; text-align: right; }
+
+    .error-card { border: 1px solid var(--danger); border-radius: 10px; padding: 10px 12px; margin: 8px 0; background: rgba(248, 81, 73, 0.08); }
+    .error-card .title { font-weight: 700; color: var(--danger); font-size: 14px; margin-bottom: 4px; }
+    .error-card .text { white-space: pre-wrap; font-size: 15px; }
+    .error-card pre.body { white-space: pre-wrap; word-break: break-word; font-size: 12px; margin: 0; padding: 0 12px 10px; background: none; }
+    .btn { display: inline-block; margin-top: 10px; padding: 7px 14px; border-radius: 9px; background: var(--card-strong); color: var(--link); font-weight: 600; font-size: 15px; border: none; font-family: inherit; }
+    .cursor { display: inline-block; width: 8px; height: 1em; background: var(--accent); vertical-align: -2px; margin-left: 2px; border-radius: 2px; animation: blink 1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    figure.att-image { margin: 6px 0; }
+    figure.att-image img { max-width: 100%; max-height: 320px; border-radius: 10px; display: block; }
+    figure.att-image img:not([src]) { width: 160px; height: 120px; background: var(--card); }
+    .chip { display: inline-flex; align-items: center; gap: 6px; background: var(--card-strong); border-radius: 999px; padding: 4px 11px; font-size: 14px; margin: 4px 6px 2px 0; max-width: 100%; }
+    .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="empty"></div>
+<div id="transcript"></div>
+<div id="streaming"></div>
+<script nonce="trinote-chat">
+(function () {
+    'use strict';
+    var NONCE = 'trinote-chat';
+    var state = {
+        transcript: null,
+        streaming: null,
+        imageCache: {},
+        atBottom: true,
+        // Follow the reply down while the reader is at the bottom; scrolling up or opening a card pauses it until
+        // they scroll back to the bottom.
+        follow: true,
+        // Cards the reader opened, by key, so redraws (each streamed chunk) don't close them.
+        openKeys: {}
+    };
+    var programmaticScrollUntil = 0;
+    var root = document.getElementById('transcript');
+    var streamingEl = document.getElementById('streaming');
+    var emptyEl = document.getElementById('empty');
+
+    function post(type, extra) {
+        var message = Object.assign({ type: type }, extra || {});
+        try { window.webkit.messageHandlers.chatEvent.postMessage(message); } catch (e) {}
+    }
+    function esc(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function label(key) {
+        var labels = state.transcript && state.transcript.labels;
+        return (labels && labels[key]) || key;
+    }
+    function openAttr(key) {
+        return state.openKeys[key] ? ' open' : '';
+    }
+    function card(key, classes, summaryHTML, bodyHTML) {
+        return '<details class="card ' + classes + '" data-key="' + esc(key) + '"' + openAttr(key) + '><summary>' + summaryHTML
+            + '</summary><div class="body">' + bodyHTML + '</div></details>';
+    }
+
+    function blockHTML(block, streaming, isLast, key) {
+        switch (block.type) {
+        case 'html':
+            return '<div class="md">' + (block.html || '') + (streaming && isLast ? '<span class="cursor"></span>' : '') + '</div>';
+        case 'thinking':
+            return card(key, 'thinking', esc(label('thoughtProcess')), esc(block.text || '') + (streaming ? '<span class="cursor"></span>' : ''));
+        case 'tool':
+            var toolKey = block.toolCallId ? 'tool:' + block.toolCallId : key;
+            return card(toolKey, 'tool' + (block.toolError ? ' error' : ''),
+                '<span class="tool-name">' + esc(block.toolName) + '</span>' + (block.running ? '<span class="status">' + esc(label('running')) + '</span>' : ''),
+                (block.toolInput ? '<div class="tool-label">' + esc(label('input')) + '</div><pre class="tool-io">' + esc(block.toolInput) + '</pre>' : '')
+                + (block.toolResult ? '<div class="tool-label">' + esc(label('result')) + '</div><pre class="tool-io">' + esc(block.toolResult) + '</pre>' : ''));
+        case 'image':
+            return '<figure class="att-image"><img data-attachment-id="' + esc(block.attachmentId) + '" data-mime="' + esc(block.mime || '') + '" alt="' + esc(block.title || '') + '"></figure>';
+        case 'file':
+            return '<span class="chip">&#128206; <span>' + esc(block.title || label('attachment')) + '</span></span>';
+        default:
+            return '';
+        }
+    }
+
+    function messageHTML(m) {
+        var id = esc(m.id);
+        if (m.kind === 'thinking') {
+            return '<div class="msg msg-assistant" data-id="' + id + '">' + blockHTML({ type: 'thinking', text: m.text }, false, false, 'thinking:' + m.id) + '</div>';
+        }
+        if (m.kind === 'error') {
+            return '<div class="msg msg-assistant" data-id="' + id + '"><div class="error-card"><div class="title">' + esc(m.errorTitle) + '</div>'
+                + '<div class="text">' + esc(m.text) + '</div>'
+                + (m.errorDetails ? '<details class="card" data-key="err:' + id + '"' + openAttr('err:' + m.id) + '><summary>' + esc(label('showDetails')) + '</summary><pre class="body">' + esc(m.errorDetails) + '</pre></details>' : '')
+                + (m.canRetry ? '<button class="btn" data-action="retry">' + esc(label('retry')) + '</button>' : '')
+                + '</div></div>';
+        }
+        var blocks = m.blocks || [];
+        var inner = blocks.map(function (b, i) { return blockHTML(b, false, false, 'block:' + m.id + ':' + i); }).join('');
+        var footer = '<div class="footer"><span title="' + esc(m.fullTime) + '">' + esc(m.time) + '</span>'
+            + (m.model ? '<span>' + esc(m.model) + '</span>' : '')
+            + (m.tokens ? '<span>' + esc(m.tokens) + '</span>' : '')
+            + (m.cost ? '<span>' + esc(m.cost) + '</span>' : '') + '</div>';
+        var citations = (m.citations && m.citations.length)
+            ? card('cite:' + m.id, 'citations', esc(m.citationsLabel), '<table>'
+                + m.citations.map(function (c) {
+                    return '<tr><td>' + (c.url ? '<a href="' + esc(c.url) + '">' + esc(c.title) + '</a>' : esc(c.title)) + '</td><td class="site">' + esc(c.site || '') + '</td></tr>';
+                }).join('') + '</table>')
+            : '';
+        if (m.role === 'user' || m.role === 'system') {
+            return '<div class="msg msg-' + esc(m.role) + '" data-id="' + id + '"><div><div class="bubble">' + inner + '</div>' + footer + '</div></div>';
+        }
+        return '<div class="msg msg-assistant" data-id="' + id + '"><div class="content">' + inner + '</div>' + citations + footer + '</div>';
+    }
+
+    function renderTranscript() {
+        var t = state.transcript;
+        if (!t) { return; }
+        root.innerHTML = (t.messages || []).map(messageHTML).join('');
+        emptyEl.textContent = t.emptyText || '';
+        emptyEl.style.display = ((t.messages || []).length || state.streaming) ? 'none' : 'block';
+        applyImages(root);
+        enhance(root);
+    }
+
+    function renderStreaming() {
+        var s = state.streaming;
+        if (!s) { streamingEl.innerHTML = ''; return; }
+        var html = '';
+        if (s.thinking) { html += blockHTML({ type: 'thinking', text: s.thinking }, true, false, 'thinking:stream'); }
+        var blocks = s.blocks || [];
+        html += '<div class="content">' + blocks.map(function (b, i) { return blockHTML(b, true, i === blocks.length - 1, 'stream:' + i); }).join('') + '</div>';
+        if (s.status) { html += '<div class="status-wait">' + esc(s.status) + '</div>'; }
+        if (!blocks.length && !s.thinking && !s.status) { html += '<div class="content"><span class="cursor"></span></div>'; }
+        streamingEl.innerHTML = '<div class="msg msg-assistant">' + html + '</div>';
+        emptyEl.style.display = 'none';
+        applyImages(streamingEl);
+    }
+
+    // MARK: Scrolling
+
+    function isAtBottom() {
+        return (window.innerHeight + window.scrollY) >= (document.documentElement.scrollHeight - 60);
+    }
+    function scrollToEnd() {
+        programmaticScrollUntil = Date.now() + 250;
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        reportBottom();
+    }
+    function followIfNeeded() {
+        if (state.follow) { scrollToEnd(); } else { reportBottom(); }
+    }
+    function reportBottom() {
+        var atBottom = isAtBottom();
+        if (atBottom !== state.atBottom) {
+            state.atBottom = atBottom;
+            post('atBottom', { atBottom: atBottom });
+        }
+    }
+    window.addEventListener('scroll', function () {
+        // The reader's own scrolling decides whether to keep following: at the bottom, yes; anywhere else, no.
+        if (Date.now() > programmaticScrollUntil) { state.follow = isAtBottom(); }
+        reportBottom();
+    }, { passive: true });
+    window.addEventListener('resize', followIfNeeded);
+
+    // Opening a card pauses following until the reader is back at the bottom; closing forgets it.
+    document.addEventListener('toggle', function (event) {
+        var details = event.target;
+        if (!details || !details.getAttribute) { return; }
+        var key = details.getAttribute('data-key');
+        if (!key) { return; }
+        if (details.open) {
+            if (!state.openKeys[key]) {
+                state.openKeys[key] = true;
+                state.follow = false;
+            }
+        } else {
+            delete state.openKeys[key];
+        }
+        reportBottom();
+    }, true);
+
+    // MARK: Rich content
+
+    function enhance(container) {
+        container.querySelectorAll('table').forEach(function (tbl) {
+            if (tbl.closest('.citations')) { return; }
+            if (tbl.parentElement && tbl.parentElement.classList.contains('table-scroll-wrapper')) { return; }
+            var wrapper = document.createElement('div');
+            wrapper.className = 'table-scroll-wrapper';
+            tbl.parentNode.insertBefore(wrapper, tbl);
+            wrapper.appendChild(tbl);
+        });
+        renderMath(container);
+        renderMermaid(container);
+    }
+
+    function applyImages(container) {
+        container.querySelectorAll('img[data-attachment-id]').forEach(function (img) {
+            var id = img.getAttribute('data-attachment-id');
+            if (!id) { return; }
+            if (state.imageCache[id]) {
+                img.src = state.imageCache[id];
+            } else {
+                post('imageRequest', { attachmentId: id, mime: img.getAttribute('data-mime') || '' });
+            }
+        });
+    }
+
+    function loadScript(src, onLoad) {
+        var script = document.createElement('script');
+        script.src = src;
+        script.nonce = NONCE;
+        script.setAttribute('nonce', NONCE);
+        script.onload = onLoad;
+        script.onerror = function () { post('log', { message: 'could not load ' + src }); };
+        document.head.appendChild(script);
+    }
+    function loadStyle(href) {
+        var link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = href;
+        document.head.appendChild(link);
+    }
+    function isDark() {
+        var theme = document.documentElement.getAttribute('data-theme');
+        if (theme === 'dark') { return true; }
+        if (theme === 'light') { return false; }
+        return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+
+// Repairs the Mermaid mistakes language models make most: unquoted labels holding characters Mermaid reserves
+// (parentheses, brackets, braces, pipes, quotes…) in flowcharts, and participant names Mermaid can't lex
+// (C=C, H+, X−) in sequence diagrams. Returns the source unchanged when it knows no repair.
+function trinoteRepairMermaid(source) {
+    var lines = String(source).split('\n');
+    var header = '';
+    for (var i = 0; i < lines.length; i++) {
+        var t = lines[i].trim();
+        if (t && t.indexOf('%%') !== 0 && t !== '---') { header = t.toLowerCase(); break; }
+    }
+    if (/^(graph|flowchart)\b/.test(header)) { return repairFlowchart(lines); }
+    if (/^sequencediagram\b/.test(header)) { return repairSequence(lines); }
+    return source;
+
+    function quote(text) {
+        return '"' + text.trim().replace(/"/g, '#quot;') + '"';
+    }
+    function needsQuotes(text) {
+        return /[()\[\]{}<>|"#;:,]/.test(text) && !/^\s*".*"\s*$/.test(text);
+    }
+
+    function repairFlowchart(src) {
+        var id = '([\\p{L}\\p{N}_][\\p{L}\\p{N}_.-]*)';
+        return src.map(function (line) {
+            var out = line;
+            // Edge labels: A -- text --> B, A == text ==> B, A -. text .-> B  →  A -->|"text"| B
+            out = out.replace(/--\s+(?![->|"])([^\n]*?)\s+-->/g, function (m, text) { return needsQuotes(text) ? '-->|' + quote(text) + '|' : m; });
+            out = out.replace(/==\s+(?![=>|"])([^\n]*?)\s+==>/g, function (m, text) { return needsQuotes(text) ? '==>|' + quote(text) + '|' : m; });
+            out = out.replace(/-\.\s+(?![.\->|"])([^\n]*?)\s+\.->/g, function (m, text) { return needsQuotes(text) ? '-.->|' + quote(text) + '|' : m; });
+            // Pipe labels: -->|text|  →  -->|"text"|
+            out = out.replace(/(-->|---|==>|===|-\.->|-\.-|--[xo]|<-->)\|(?!")([^|\n]*)\|/g, function (m, arrow, text) { return needsQuotes(text) ? arrow + '|' + quote(text) + '|' : m; });
+            // Node shapes, longest delimiters first: [[ ]], [( )], ([ ]), (( )), {{ }}, [ ], { }, ( )
+            var shapes = [
+                ['\\[\\[', '\\]\\]', '[[', ']]'], ['\\[\\(', '\\)\\]', '[(', ')]'], ['\\(\\[', '\\]\\)', '([', '])'],
+                ['\\(\\(', '\\)\\)', '((', '))'], ['\\{\\{', '\\}\\}', '{{', '}}'],
+                ['\\[', '\\]', '[', ']'], ['\\{', '\\}', '{', '}']
+            ];
+            shapes.forEach(function (s) {
+                var re = new RegExp(id + s[0] + '(?!")([^\\n]*?)' + s[1] + '(?=\\s*($|-|=|\\.|&|;|:::|\\|))', 'gu');
+                out = out.replace(re, function (m, nodeId, text) {
+                    return needsQuotes(text) ? nodeId + s[2] + quote(text) + s[3] : m;
+                });
+            });
+            // Round nodes last, matching to the last ")" before an edge or the line's end: A(text (x))
+            out = out.replace(new RegExp(id + '\\((?![("\\[])(.*)\\)(?=\\s*($|-->|---|==>|===|-\\.|&|;|:::))', 'gu'), function (m, nodeId, text) {
+                return needsQuotes(text) ? nodeId + '(' + quote(text) + ')' : m;
+            });
+            return out;
+        }).join('\n');
+    }
+
+    function repairSequence(src) {
+        var arrow = '(-->>|->>|-->|->|--x|-x|--\\)|-\\))';
+        var message = new RegExp('^(\\s*)(.+?)\\s*' + arrow + '\\s*([+-]?)\\s*(.+?)\\s*:(.*)$');
+        var declaration = /^(\s*)(participant|actor)\s+(.+?)(\s+as\s+(.+))?\s*$/;
+        var safe = /^[\p{L}\p{N}_ ]+$/u;
+        var ids = {};
+        var count = 0;
+        var added = [];
+        function idFor(name, alias) {
+            name = name.trim();
+            if (safe.test(name)) { return name; }
+            if (!ids[name]) {
+                count += 1;
+                ids[name] = 'P' + count;
+                if (!alias) { added.push('    participant ' + ids[name] + ' as ' + name); }
+            }
+            return ids[name];
+        }
+        var out = src.map(function (line) {
+            var d = line.match(declaration);
+            if (d) {
+                var name = d[3].trim();
+                if (safe.test(name)) { return line; }
+                var alias = d[5] ? d[5].trim() : name;
+                var pid = idFor(name, true);
+                return d[1] + d[2] + ' ' + pid + ' as ' + alias;
+            }
+            var m = line.match(message);
+            if (m && !/^\s*(note|loop|alt|else|opt|par|and|end|rect|critical|break|activate|deactivate|autonumber|title)\b/i.test(line)) {
+                return m[1] + idFor(m[2]) + m[3] + m[4] + idFor(m[5]) + ':' + m[6];
+            }
+            return line;
+        });
+        if (added.length) {
+            var headerIndex = out.findIndex(function (l) { return /^\s*sequenceDiagram\b/i.test(l); });
+            out.splice(headerIndex + 1, 0, added.join('\n'));
+        }
+        return out.join('\n');
+    }
+}
+
+    // Diagrams render one by one through mermaid.render, as regular notes do. Models often write Mermaid with
+    // unquoted special characters; such a diagram is repaired and tried again, and one that still fails shows its
+    // code with a short note instead of Mermaid's error graphic.
+    var mermaidState = 0; // 0 not loaded, 1 loading, 2 ready
+    var mermaidCounter = 0;
+    function renderMermaid(container) {
+        if (!container.querySelector('.mermaid:not([data-trinote-done])')) { return; }
+        if (mermaidState === 2) { drawDiagrams(container); return; }
+        if (mermaidState === 1) { return; }
+        mermaidState = 1;
+        loadScript('vendor/mermaid.min.js', function () {
+            mermaidState = 2;
+            try {
+                window.mermaid.initialize({
+                    startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,
+                    theme: isDark() ? 'dark' : 'default', layout: 'dagre', look: 'classic',
+                    fontFamily: '-apple-system, system-ui, sans-serif'
+                });
+            } catch (e) {}
+            drawDiagrams(document);
+        });
+    }
+    function parses(source) {
+        try {
+            return Promise.resolve(window.mermaid.parse(source, { suppressErrors: true }))
+                .then(function (result) { return result !== false; }, function () { return false; });
+        } catch (e) {
+            return Promise.resolve(false);
+        }
+    }
+    function drawDiagrams(container) {
+        container.querySelectorAll('.mermaid:not([data-trinote-done])').forEach(function (node) {
+            node.setAttribute('data-trinote-done', '1');
+            var source = (node.textContent || '').trim();
+            var repaired = trinoteRepairMermaid(source);
+            parses(source).then(function (ok) {
+                if (ok) { return source; }
+                if (repaired === source) { return null; }
+                return parses(repaired).then(function (fixed) { return fixed ? repaired : null; });
+            }).then(function (usable) {
+                if (usable === null) { showDiagramSource(node, source); return; }
+                var id = 'trinote-chat-mmd-' + (++mermaidCounter);
+                return Promise.resolve(window.mermaid.render(id, usable)).then(function (result) {
+                    node.innerHTML = (result && result.svg) ? result.svg : String(result);
+                    followIfNeeded();
+                });
+            }).catch(function () {
+                showDiagramSource(node, source);
+            });
+        });
+    }
+    function showDiagramSource(node, source) {
+        var wrapper = document.createElement('div');
+        wrapper.className = 'mermaid-failed';
+        wrapper.innerHTML = '<div class="note">' + esc(label('diagramError')) + '</div><pre><code>' + esc(source) + '</code></pre>';
+        if (node.parentNode) { node.parentNode.replaceChild(wrapper, node); }
+        followIfNeeded();
+    }
+
+    // `$$…$$` and `$…$` in prose, as the web client renders them; code is left alone.
+    var katexState = 0;
+    var mathPattern = /\$\$([\s\S]+?)\$\$|\$([^\s$](?:[^$\n]*?[^\s$])?)\$/g;
+    function hasMath(container) { mathPattern.lastIndex = 0; return mathPattern.test(container.textContent || ''); }
+    function renderMath(container) {
+        if (!hasMath(container)) { return; }
+        function walk() {
+            if (!window.katex) { return; }
+            var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+                acceptNode: function (node) {
+                    var p = node.parentElement;
+                    if (!p || p.closest('pre, code, script, style, .katex, .tool-io, .mermaid, .mermaid-failed')) { return NodeFilter.FILTER_REJECT; }
+                    return /\$/.test(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+                }
+            });
+            var nodes = [];
+            while (walker.nextNode()) { nodes.push(walker.currentNode); }
+            nodes.forEach(function (node) {
+                var text = node.nodeValue;
+                var frag = document.createDocumentFragment();
+                var last = 0, m;
+                mathPattern.lastIndex = 0;
+                while ((m = mathPattern.exec(text)) !== null) {
+                    frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+                    var display = m[1] != null;
+                    var tex = display ? m[1] : m[2];
+                    var span = document.createElement('span');
+                    try {
+                        span.innerHTML = window.katex.renderToString(tex, { displayMode: display, throwOnError: false });
+                    } catch (e) {
+                        span.textContent = m[0];
+                    }
+                    frag.appendChild(span);
+                    last = m.index + m[0].length;
+                }
+                if (last === 0) { return; }
+                frag.appendChild(document.createTextNode(text.slice(last)));
+                node.parentNode.replaceChild(frag, node);
+            });
+            followIfNeeded();
+        }
+        if (katexState === 2) { walk(); return; }
+        if (katexState === 1) { return; }
+        katexState = 1;
+        loadStyle('vendor/katex/katex.min.css');
+        loadScript('vendor/katex/katex.min.js', function () { katexState = 2; walk(); });
+    }
+
+    document.addEventListener('click', function (event) {
+        var button = event.target.closest('[data-action]');
+        if (button) {
+            event.preventDefault();
+            post(button.getAttribute('data-action'));
+            return;
+        }
+        var anchor = event.target.closest('a[href]');
+        if (!anchor) { return; }
+        event.preventDefault();
+        var href = anchor.getAttribute('href') || '';
+        if (href.charAt(0) === '#') {
+            post('noteLink', { href: href });
+        } else {
+            post('externalLink', { href: href });
+        }
+    }, true);
+
+    window.trinoteChat = {
+        setTranscript: function (json) {
+            var transcript = JSON.parse(json);
+            // A thinking card opened while it streamed stays open once the turn is stored as messages.
+            if (state.openKeys['thinking:stream']) {
+                delete state.openKeys['thinking:stream'];
+                var messages = transcript.messages || [];
+                for (var i = messages.length - 1; i >= 0; i--) {
+                    if (messages[i].kind === 'thinking') { state.openKeys['thinking:' + messages[i].id] = true; break; }
+                }
+            }
+            state.transcript = transcript;
+            renderTranscript();
+            followIfNeeded();
+        },
+        setStreaming: function (json) {
+            state.streaming = JSON.parse(json);
+            renderStreaming();
+            followIfNeeded();
+        },
+        endStreaming: function () {
+            state.streaming = null;
+            renderStreaming();
+            if (state.transcript && !(state.transcript.messages || []).length) { emptyEl.style.display = 'block'; }
+            reportBottom();
+        },
+        setImage: function (id, dataURL) {
+            state.imageCache[id] = dataURL;
+            document.querySelectorAll('img[data-attachment-id]').forEach(function (img) {
+                if (img.getAttribute('data-attachment-id') === id) {
+                    img.onload = followIfNeeded;
+                    img.src = dataURL;
+                }
+            });
+        },
+        // Sending, Jump to Latest, or a new chat: back to the end, following again.
+        scrollToBottom: function () {
+            state.follow = true;
+            scrollToEnd();
+        },
+        setTheme: function (json) {
+            var theme = JSON.parse(json);
+            var rootEl = document.documentElement;
+            if (theme.scheme) { rootEl.setAttribute('data-theme', theme.scheme); }
+            ['text', 'link', 'accent'].forEach(function (key) {
+                if (theme[key]) { rootEl.style.setProperty('--' + key, theme[key]); }
+            });
+        }
+    };
+    post('ready');
+})();
+</script>
+</body>
+</html>

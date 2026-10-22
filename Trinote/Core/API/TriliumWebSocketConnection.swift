@@ -139,11 +139,27 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
             }
         case "protectedSessionLogout":
             onProtectedSessionLogout?()
+        case "reload-frontend":
+            // The server's own protected session expiry (its 30 s `checkProtectedSessionExpiration`) arrives this
+            // way, not as `protectedSessionLogout`.
+            if Self.isProtectedSessionEnd(reloadFrontendMessage: obj) {
+                onProtectedSessionLogout?()
+            }
         case "ping":
             sendPingAck()
         default:
             break
         }
+    }
+
+    /// `{ type: "reload-frontend", reason: "leaving protected session" }`: Trilium's scheduler ending the protected
+    /// session after `protectedSessionTimeout` passed without a touch. Other reload reasons (erased notes, a layout
+    /// change) leave the session alone.
+    nonisolated static func isProtectedSessionEnd(reloadFrontendMessage message: [String: Any]) -> Bool {
+        guard message["type"] as? String == "reload-frontend",
+              let reason = message["reason"] as? String
+        else { return false }
+        return reason.range(of: "protected session", options: .caseInsensitive) != nil
     }
 
     /// Trilium v0.106+ `progress: { pulled, total }` on `sync-pull-in-progress`.

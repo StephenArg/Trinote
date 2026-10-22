@@ -49,6 +49,7 @@ struct SettingsView: View {
     @State private var showSyncDetails = false
     @AppStorage("appPinEnabled") private var appPinEnabled = false
     @AppStorage("appBiometricEnabled") private var appBiometricEnabled = false
+    @AppStorage(ProtectedSessionLockPolicy.storageKey) private var protectedSessionLockPolicyRaw = ProtectedSessionLockPolicy.default.rawValue
     @State private var showPinSetup = false
     @State private var deviceBiometryKind: BiometricKind = .none
     @State private var serverProfiles: [ServerProfile] = []
@@ -73,6 +74,7 @@ struct SettingsView: View {
                 instancesSection
                 ssoSection
                 connectionSection
+                AISettingsSection()
             case .data:
                 offlineCacheSection
                 cacheSection
@@ -81,6 +83,8 @@ struct SettingsView: View {
         }
         .listStyle(.insetGrouped)
         .contentMargins(.top, 0, for: .scrollContent)
+        // Room under the last section's footer, so its text isn't cut off by the tab bar or home indicator.
+        .contentMargins(.bottom, 32, for: .scrollContent)
         .navigationTitle(String(localized: "Settings", comment: "Settings screen title"))
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -119,6 +123,7 @@ struct SettingsView: View {
             loadOfflineCacheSettings()
             reloadServerProfiles()
             Task { await refreshCloudflareAccessVisibility() }
+            refreshServerProtectedSessionTimeoutIfShown()
         }
         .onChange(of: appState.activeProfile?.id) { _, _ in
             loadOfflineCacheSettings()
@@ -127,6 +132,7 @@ struct SettingsView: View {
                 await loadDiagnostics()
                 await refreshCloudflareAccessVisibility()
             }
+            refreshServerProtectedSessionTimeoutIfShown()
         }
         .onChange(of: showAddInstance) { _, isPresented in
             if !isPresented { reloadServerProfiles() }
@@ -476,22 +482,83 @@ struct SettingsView: View {
                 Toggle(deviceBiometryKind.localizedUnlockToggleTitle, isOn: biometricUnlockBinding)
                     .disabled(!appPinEnabled)
             }
+
+            Toggle(
+                String(
+                    localized: "Lock Protected Notes on Exit",
+                    comment: "Settings toggle: on, protected notes lock as soon as Trinote goes to the background; off, they stay unlocked until the Trilium server's protected session timeout passes"
+                ),
+                isOn: locksProtectedNotesOnExitBinding
+            )
         } header: {
             Text(String(localized: "Security", comment: "Settings section"))
         } footer: {
-            if deviceBiometryKind != .none, !appPinEnabled {
-                Text(
-                    String(
-                        format: String(
-                            localized: "Enable App PIN to use %@.",
-                            comment: "Settings footer: %@ is Face ID, Touch ID, or Optic ID"
-                        ),
-                        locale: .current,
-                        deviceBiometryKind.localizedShortName
+            VStack(alignment: .leading, spacing: 8) {
+                if deviceBiometryKind != .none, !appPinEnabled {
+                    Text(
+                        String(
+                            format: String(
+                                localized: "Enable App PIN to use %@.",
+                                comment: "Settings footer: %@ is Face ID, Touch ID, or Optic ID"
+                            ),
+                            locale: .current,
+                            deviceBiometryKind.localizedShortName
+                        )
                     )
-                )
+                }
+                Text(protectedNotesLockFooter)
             }
         }
+    }
+
+    private var protectedSessionLockPolicy: ProtectedSessionLockPolicy {
+        ProtectedSessionLockPolicy(rawValue: protectedSessionLockPolicyRaw) ?? .default
+    }
+
+    /// On means When Leaving the App (the default); off means After Server Timeout.
+    private var locksProtectedNotesOnExitBinding: Binding<Bool> {
+        Binding(
+            get: { protectedSessionLockPolicy == .whenLeavingApp },
+            set: { locksOnExit in
+                let policy: ProtectedSessionLockPolicy = locksOnExit ? .whenLeavingApp : .serverTimeout
+                guard policy != protectedSessionLockPolicy else { return }
+                protectedSessionLockPolicyRaw = policy.rawValue
+                appState.protectedSessionLockPolicyDidChange()
+                refreshServerProtectedSessionTimeoutIfShown()
+            }
+        )
+    }
+
+    /// What Lock Protected Notes on Exit does in its current state, with the server's timeout once it has been read.
+    private var protectedNotesLockFooter: String {
+        switch protectedSessionLockPolicy {
+        case .whenLeavingApp:
+            return String(
+                localized: "Protected notes lock as soon as you leave Trinote. Turn this off to keep them unlocked until the server's timeout passes, as on Trilium desktop.",
+                comment: "Settings footer for Lock Protected Notes on Exit while it is on"
+            )
+        case .serverTimeout:
+            if let seconds = appState.serverProtectedSessionTimeout {
+                return String(
+                    format: String(
+                        localized: "Protected notes lock %@ after you last open or save one, the timeout set in Trilium under Options → Password, even if you leave or close Trinote.",
+                        comment: "Settings footer for Lock Protected Notes on Exit while it is off; %@ is the server's timeout, such as 10 minutes"
+                    ),
+                    locale: .current,
+                    ProtectedSessionTimeout.localizedDuration(seconds)
+                )
+            }
+            return String(
+                localized: "Protected notes lock after the timeout set in Trilium under Options → Password, even if you leave or close Trinote.",
+                comment: "Settings footer for Lock Protected Notes on Exit while it is off, before the server's timeout has been read"
+            )
+        }
+    }
+
+    /// Reads the server's timeout for the footer while After Server Timeout is chosen.
+    private func refreshServerProtectedSessionTimeoutIfShown() {
+        guard protectedSessionLockPolicy == .serverTimeout else { return }
+        Task { await appState.refreshServerProtectedSessionTimeout() }
     }
 
     private var biometricUnlockBinding: Binding<Bool> {

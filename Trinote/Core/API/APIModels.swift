@@ -13,6 +13,47 @@ struct AppInfoResponse: Decodable {
     let utcDateTime: String?
 }
 
+/// `GET /api/options`: the server's options as the strings Trilium stores them in (`"protectedSessionTimeout": "600"`),
+/// plus the flags the route adds (`isPasswordSet`). A value that isn't a string (none today) is kept as its text.
+struct TriliumOptionsResponse: Decodable, Equatable {
+    let values: [String: String]
+
+    init(values: [String: String]) {
+        self.values = values
+    }
+
+    private struct Key: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Key.self)
+        var values: [String: String] = [:]
+        for key in container.allKeys {
+            if let text = try? container.decode(String.self, forKey: key) {
+                values[key.stringValue] = text
+            } else if let whole = try? container.decode(Int.self, forKey: key) {
+                values[key.stringValue] = String(whole)
+            } else if let number = try? container.decode(Double.self, forKey: key) {
+                values[key.stringValue] = String(number)
+            } else if let flag = try? container.decode(Bool.self, forKey: key) {
+                values[key.stringValue] = flag ? "true" : "false"
+            }
+        }
+        self.values = values
+    }
+
+    subscript(name: String) -> String? { values[name] }
+
+    /// `protectedSessionTimeout` in seconds; nil when the server sends no usable value.
+    var protectedSessionTimeoutSeconds: TimeInterval? {
+        ProtectedSessionTimeout.seconds(fromOptionValue: values["protectedSessionTimeout"])
+    }
+}
+
 /// Server compatibility envelope for the native `/api/*` surface Trinote consumes.
 ///
 /// Pinned to the latest Trilium release the iOS client has been **regression-tested** against.
@@ -133,6 +174,15 @@ enum TriliumServerCompatibility {
         return isAppVersion(info.appVersion, atLeast: darkModeMapStylesMinAppVersion)
     }
 
+    /// Trilium release that added the Dashboard collection view (`#viewType=dashboard`).
+    static let dashboardViewMinAppVersion = "0.106.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.106.0 or newer (collections can show as a dashboard).
+    static func supportsDashboardView(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: dashboardViewMinAppVersion)
+    }
+
     /// Trilium release that added `GET /api/spreadsheet/:noteId/xlsx` (a spreadsheet note as an Excel workbook).
     static let spreadsheetXlsxExportMinAppVersion = "0.106.0"
 
@@ -149,6 +199,17 @@ enum TriliumServerCompatibility {
     static func supportsBulkNoteDeletion(_ info: AppInfoResponse?) -> Bool {
         guard let info else { return false }
         return isAppVersion(info.appVersion, atLeast: bulkNoteDeletionMinAppVersion)
+    }
+
+    /// Trilium release of the AI chat this app uses: `llmChat` notes with `POST /api/llm-chat/stream` (SSE), the
+    /// `special-notes/*llm-chat*` routes, `aiAssistantModel`, and `llmProviders` entries that carry their
+    /// `selectedModels` (the chat's model picker needs no live listing). v0.103/v0.104 chats only show read-only.
+    static let llmChatMinAppVersion = "0.105.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.105.0 or newer (AI chat).
+    static func supportsLlmChat(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: llmChatMinAppVersion)
     }
 
     /// Semantic compare for Trilium `appVersion` strings (`0.103.0`, `v0.102.1`, `0.103.0-beta.1`).
@@ -236,6 +297,11 @@ struct NoteResponse: Decodable {
     /// Whether the note sits anywhere under `_share` (publicly shared), when the response carried its ancestors
     /// (`tree/load` does); `nil` when unknown.
     var hasShareAncestor: Bool?
+    /// Whether the note sits under Trilium's hidden AI Chat History folder (`_llmChat`), when the response carried
+    /// its ancestors; `nil` when unknown. A chat there can be kept (moved into the notes).
+    var isInLlmChatFolder: Bool?
+    /// What the note inherits from ancestors and templates, worked out from `tree/load` by `getNote` only.
+    var inheritedAttributes: [AttributeResponse] = []
 
     enum CodingKeys: String, CodingKey {
         case noteId, isProtected, title, type, mime, blobId, isDeleted
@@ -296,7 +362,7 @@ extension NoteResponse {
             noteId: item.noteId,
             isProtected: item.isProtected,
             title: item.title,
-            type: item.type.rawValue,
+            type: item.serverTypeName ?? item.type.rawValue,
             mime: item.mime,
             blobId: nil,
             isDeleted: false,
@@ -417,6 +483,36 @@ struct CreateAttributeRequest: Encodable {
     let value: String
     let isInheritable: Bool?
     let position: Int?
+}
+
+/// One owned attribute in `PUT /api/notes/:noteId/attributes`, which replaces the note's whole list the way
+/// desktop's attribute editor saves: matching rows keep their ids, positions follow the order (10, 20, …),
+/// rows left out are deleted except the ones Trilium keeps in step with the content (`internalLink`, …).
+struct OwnedAttributeUpdate: Encodable, Equatable, Sendable {
+    let type: String
+    let name: String
+    let value: String
+    let isInheritable: Bool
+}
+
+/// `PUT /api/notes/:noteId/attribute`: one attribute created (no `attributeId`) or updated, as desktop's
+/// promoted fields save.
+struct UpdateNoteAttributeRequest: Encodable, Equatable, Sendable {
+    let noteId: String
+    let attributeId: String?
+    let type: String
+    let name: String
+    let value: String
+
+    enum CodingKeys: String, CodingKey {
+        case attributeId, type, name, value
+    }
+}
+
+/// The attribute that now holds the value (a new id when the change re-created it); `nil` when nothing was kept,
+/// such as a relation set to no note.
+struct UpdateNoteAttributeResponse: Decodable {
+    let attributeId: String?
 }
 
 // MARK: - Attachment

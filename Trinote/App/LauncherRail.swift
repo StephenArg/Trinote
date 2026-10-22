@@ -4,6 +4,8 @@ import SwiftUI
 /// Picks what the sidebar shows; tapping the current section again hides or shows the sidebar.
 struct LauncherRail: View {
     let selection: LauncherSection
+    /// The sections on offer, in order (AI Chat only while available).
+    var sections: [LauncherSection] = LauncherSection.allCases
     let isSidebarVisible: Bool
     let onSelect: (LauncherSection) -> Void
     let onToggleSidebar: () -> Void
@@ -23,7 +25,7 @@ struct LauncherRail: View {
             )
             .padding(.bottom, 6)
 
-            ForEach(LauncherSection.allCases) { section in
+            ForEach(sections) { section in
                 railButton(
                     systemImage: section.icon,
                     label: section.title,

@@ -37,6 +37,8 @@ final class NoteDetailViewModel {
     private(set) var checkboxOnlyContentRevision = 0
     private var rawContentString: String?
     var attachments: [AttachmentItem] = []
+    /// Set once `loadAttachments` has finished (or can't run), so an empty `attachments` means there are none.
+    private(set) var attachmentsLoaded = false
     /// Server HTML preview for Office / EPUB file notes (`GET /api/notes/:id/office-preview`).
     private(set) var fileNoteOfficePreview: FileNoteOfficePreviewState = .idle
     @ObservationIgnored private var officePreviewCacheKey = ""
@@ -381,6 +383,7 @@ final class NoteDetailViewModel {
         // Pending local creates are not on the server yet — same stall as offline when interface is “up”.
         // Do not await getNote while offline — same long URLSession stall as bootstrap “Connecting…”.
         guard !nid.isOfflineLocalNoteId, appState.isOnline, client != nil else {
+            fillInheritedAttributesFromCache()
             serverCheckFinished = true
             await loadNotesEditedOnDay()
             return
@@ -452,6 +455,7 @@ final class NoteDetailViewModel {
             if !hadCachedNote {
                 self.error = apiError.localizedDescription
             }
+            fillInheritedAttributesFromCache()
         }
     }
 
@@ -546,6 +550,7 @@ final class NoteDetailViewModel {
             if note.isProtected {
                 self.needsProtectedSession = false
                 if appState.protectedSessionActive {
+                    appState.recordProtectedNoteActivity()
                     await resyncNoteTitlesWithProtectedSession()
                 }
             }
@@ -577,6 +582,7 @@ final class NoteDetailViewModel {
 
             if note.isProtected {
                 self.appState.protectedSessionActive = true
+                self.appState.recordProtectedNoteActivity()
                 self.needsProtectedSession = false
                 self.protectedUnlockError = nil
             }
@@ -1480,7 +1486,10 @@ final class NoteDetailViewModel {
 
     func loadAttachments() async {
         let nid = self.noteId
-        guard let client else { return }
+        guard let client else {
+            attachmentsLoaded = true
+            return
+        }
         do {
             let responses = try await client.getNoteAttachments(nid)
             self.attachments = responses.map(AttachmentItem.init)
@@ -1489,6 +1498,7 @@ final class NoteDetailViewModel {
             if case .cancelled = apiError { return }
             Log.api.error("Failed to load attachments")
         }
+        attachmentsLoaded = true
     }
 
     func loadBreadcrumbs(treeVM: TreeViewModel?) async {
@@ -1721,6 +1731,9 @@ final class NoteDetailViewModel {
             CheckboxPerf.log("save \(tag)upsertPendingUpload ms=\(CheckboxPerf.ms(tUpsert))")
             self.content = data
             saved = true
+            if note?.isProtected == true {
+                appState.recordProtectedNoteActivity()
+            }
         } catch {
             Log.api.error("Failed to save note body change locally: \(error)")
             CheckboxPerf.error("save \(tag)failed \(error.localizedDescription)")
@@ -1794,6 +1807,9 @@ final class NoteDetailViewModel {
         _pendingEditorHTML = nil
         if !hasDraft {
             editableContent = richTextEditorSeedHTML
+            if let empty = emptyBodyForUnreadableContent(editableContent) {
+                editableContent = empty
+            }
         }
         startEditSession(fromDraft: hasDraft)
         // Reset the decorated copy so the editor view falls back to its loading state until
@@ -1817,6 +1833,25 @@ final class NoteDetailViewModel {
         let decorated = await decorateLinkedImagesForEditor(in: source)
         guard isEditing, generation == _editorPrepGeneration else { return }
         editorDisplayContent = decorated
+    }
+
+    /// A canvas, mind map or spreadsheet can hold content its editor can't open: none yet, or another type's
+    /// after a type change. Editing then starts from an empty one. An untouched save is still skipped, so the old
+    /// content is only replaced once something is drawn or typed (the type change warned about that).
+    func emptyBodyForUnreadableContent(_ body: String) -> String? {
+        switch note?.type {
+        case .canvas:
+            return NoteEditorSaving.isUsableCanvasJSON(body) ? nil : NoteType.emptyCanvasNoteJSON
+        case .mindMap:
+            return NoteEditorSaving.isUsableMindMapJSON(body) ? nil : NoteType.emptyMindMapJSON
+        case .spreadsheet:
+            // The spreadsheet editor opens any JSON object (a workbook, enveloped or not); only other text fails.
+            let isObject = body.data(using: .utf8)
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) } is [String: Any]
+            return isObject ? nil : NoteType.emptySpreadsheetJSON
+        default:
+            return nil
+        }
     }
 
     /// Canonical stored HTML for TipTap (placeholders), not the read-only `.trinote-include` expansion.
@@ -1930,6 +1965,8 @@ final class NoteDetailViewModel {
         let undecorated = Self.undecorateLinkedImagesFromEditor(in: html)
         guard !undecorated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         autosaveBaseline = undecorated
+        // A change event before this was compared with the stored HTML, which the editor tidies.
+        if latestEditorBody == undecorated { markEditsSaved() }
     }
 
     /// Marks the session edited when `body` differs from what was last saved.
@@ -1947,6 +1984,13 @@ final class NoteDetailViewModel {
         autosaveStatus = .edited
     }
 
+    /// The body matches what's saved again (an edit undone, or a change event that changed nothing), so
+    /// there's nothing left to save.
+    private func markEditsSaved() {
+        guard autosaveStatus == .edited else { return }
+        autosaveStatus = hasAutosavedThisSession ? .saved : .idle
+    }
+
     /// Saves the open editor's body the way Save does (device cache plus the upload queue) but keeps the
     /// editor open. Leaves `contentString`, `editorDisplayContent` and `isEditing` alone so neither the editor
     /// nor the hidden read-only view reloads; read mode picks the body up when the session ends.
@@ -1955,9 +1999,12 @@ final class NoteDetailViewModel {
     @discardableResult
     func autosaveEditedBody(_ body: String) -> Bool {
         guard isEditing, let note, mediaUploadStatus == nil,
-              let profileId = serverProfileId, profileId == editSessionProfileId,
-              body != autosaveBaseline
+              let profileId = serverProfileId, profileId == editSessionProfileId
         else { return false }
+        guard body != autosaveBaseline else {
+            markEditsSaved()
+            return false
+        }
         guard saveNoteBodyChange(body, toggleID: nil, mime: Self.editorBodyMime(for: note)) else { return false }
         rawContentString = body
         serverContentHash = body.hashValue
@@ -2372,6 +2419,9 @@ final class NoteDetailViewModel {
                 let updated = try await client.updateNote(nid, request: UpdateNoteRequest(title: trimmed, type: nil, mime: nil))
                 self.note = NoteItem(from: updated)
                 self.editingTitle = false
+                if updated.isProtected {
+                    appState.recordProtectedNoteActivity()
+                }
                 if let profileId = serverProfileId {
                     persistNoteResponse(updated, profileId: profileId)
                     try? persistence.commitBatch()
@@ -2610,6 +2660,437 @@ final class NoteDetailViewModel {
             serverProfileId: profileId
         )
         appState.backgroundSyncPendingChanges()
+    }
+
+    // MARK: - Type and attribute changes (online)
+
+    /// After the server changed this note's type or attributes: shows and caches what the note has now, drops
+    /// cached attributes it no longer has, and tells the tree. The body is read again when the type or mime changed
+    /// or a template was added (Trilium gives an empty note its template's type and content), so the new view gets
+    /// the body in its own format.
+    func applyServerNoteUpdate(_ response: NoteResponse, profileId: String) async {
+        guard response.noteId == noteId else { return }
+        let previous = note
+        let updated = NoteItem(from: response)
+        note = updated
+        persistNoteResponse(response, profileId: profileId)
+        try? persistence.pruneCachedAttributes(
+            noteId: response.noteId,
+            keeping: Set(response.attributes.map(\.attributeId)),
+            serverProfileId: profileId
+        )
+        let typeChanged = previous.map {
+            $0.type != updated.type || $0.serverTypeName != updated.serverTypeName || $0.mime != updated.mime
+        } ?? true
+        if typeChanged {
+            try? persistence.updateStoredNoteType(noteId: response.noteId, noteType: response.type, serverProfileId: profileId)
+        }
+        try? persistence.commitBatch()
+
+        func signature(_ attribute: AttributeItem) -> String {
+            "\(attribute.type.rawValue)|\(attribute.name)|\(attribute.value)|\(attribute.isInheritable)"
+        }
+        let before = Set((previous?.attributes ?? []).map(signature))
+        let changed = updated.attributes.filter { !before.contains(signature($0)) }
+            + (previous?.attributes ?? []).filter { attribute in !updated.attributes.contains { signature($0) == signature(attribute) } }
+        let templateChanged = changed.contains { $0.type == .relation && ($0.name == "template" || $0.name == "inherit") }
+        NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil, userInfo: ["noteId": response.noteId])
+        // Children show what they inherit (icons, colours, sorting), and a template can add children.
+        if templateChanged || changed.contains(where: \.isInheritable) || previous?.childNoteIds != updated.childNoteIds {
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        }
+        if typeChanged || templateChanged {
+            await refresh(force: true)
+        }
+    }
+
+    // MARK: AI chat (online)
+
+    /// The chat of a `llmChat` note, made when its body first shows and kept while the screen rebuilds its body.
+    private(set) var chatSession: LlmChatSession?
+
+    /// The note's chat session, made from `content` the first time; later a body changed elsewhere is handed to the
+    /// session, which takes it while nothing streams.
+    func chatSession(for content: LlmChatContent, defaultEnableNoteTools: Bool) -> LlmChatSession {
+        if let chatSession {
+            chatSession.reload(content: content)
+            return chatSession
+        }
+        let session = LlmChatSession(
+            noteId: noteId,
+            content: content,
+            defaultEnableNoteTools: defaultEnableNoteTools,
+            client: { [weak self] in self?.client },
+            aiConfig: { [weak self] in self?.appState.aiConfig },
+            onContentSaved: { [weak self] json in self?.applyChatContentSaved(json) },
+            onFirstTurnCompleted: { [weak self] in await self?.refreshNoteAfterChatTurn() }
+        )
+        chatSession = session
+        return session
+    }
+
+    /// The chat about this note in the AI chat sheet (text and code notes). Kept while the note is open, so closing
+    /// and reopening the sheet carries on the same conversation.
+    @ObservationIgnored private var noteAIChatStorage: LlmChatSession?
+    /// The sheet's chat was kept (moved out of Trilium's hidden history folder).
+    var noteAIChatIsKept = false
+
+    /// Trilium's note tools that change notes (`mutates: true` in `packages/trilium-core/src/services/llm/tools`).
+    static let noteChangingAITools: Set<String> = [
+        "set_note_content", "append_to_note", "edit_note_content", "create_note", "rename_note", "delete_note",
+        "set_attribute", "delete_attribute", "move_note", "clone_note"
+    ]
+
+    /// The sheet's chat: about this note (`contextNoteId`), note tools on so the model can edit it, the chat note
+    /// made on the first message. After a turn in which the model changed a note, this note is read again.
+    func noteAIChat() -> LlmChatSession {
+        if let noteAIChatStorage { return noteAIChatStorage }
+        let session = LlmChatSession(
+            noteId: nil,
+            content: LlmChatContent(),
+            defaultEnableNoteTools: true,
+            client: { [weak self] in self?.client },
+            aiConfig: { [weak self] in self?.appState.aiConfig },
+            onContentSaved: { _ in },
+            onFirstTurnCompleted: {},
+            createChatNote: { [weak self] in
+                guard let client = self?.client else { throw APIError.noToken }
+                return try await client.createLlmChat().noteId
+            },
+            onTurnFinished: { [weak self] toolCalls in
+                await self?.noteAIChatTurnFinished(toolCalls)
+            }
+        )
+        session.contextNoteId = noteId
+        noteAIChatStorage = session
+        return session
+    }
+
+    /// "New Chat" in the sheet: the next message starts a new chat note.
+    func startNewNoteAIChat() {
+        guard noteAIChatStorage?.isStreaming != true else { return }
+        noteAIChatStorage = nil
+        noteAIChatIsKept = false
+    }
+
+    private func noteAIChatTurnFinished(_ toolCalls: [ToolCall]) async {
+        let changed = toolCalls.contains { Self.noteChangingAITools.contains($0.toolName) && $0.isError != true }
+        guard changed else { return }
+        NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        await refresh(force: true)
+    }
+
+    /// After the first answered turn the server may have named the chat (`chat_title.ts`): show the new title.
+    private func refreshNoteAfterChatTurn() async {
+        guard let client, let profileId = serverProfileId, let response = try? await client.getNote(noteId) else { return }
+        await applyServerNoteUpdate(response, profileId: profileId)
+    }
+
+    /// "Keep Chat": moves a chat out of Trilium's hidden history folder into the notes (`#llmChatHome`, the
+    /// workspace, or today's day note), as desktop's sidebar does. The note keeps its id.
+    @discardableResult
+    func keepChat() async -> Bool {
+        guard let client, isOnline else { return false }
+        do {
+            let result = try await client.keepLlmChat(noteId: noteId)
+            guard result.success else {
+                saveError = result.message ?? String(localized: "Trilium didn't keep the chat.", comment: "Keep Chat: the server refused without a reason")
+                showSaveError = true
+                return false
+            }
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+            if let profileId = serverProfileId, let response = try? await client.getNote(noteId) {
+                await applyServerNoteUpdate(response, profileId: profileId)
+            }
+            return true
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return false
+        }
+    }
+
+    /// After the chat session wrote its transcript to the server: show and cache the JSON it wrote, so the note
+    /// reads the same offline and nothing re-uploads it.
+    func applyChatContentSaved(_ json: String) {
+        let data = Data(json.utf8)
+        content = data
+        contentString = json
+        rawContentString = json
+        serverContentHash = json.hashValue
+        if let profileId = serverProfileId {
+            cacheNoteContentIfAllowed(noteId, content: data, profileId: profileId)
+        }
+    }
+
+    // MARK: Promoted fields (online)
+
+    /// Saves one promoted field, as desktop does (`PUT /api/notes/:id/attribute`): the note's own attribute holding
+    /// the value is updated, or one is created when the field was empty.
+    @discardableResult
+    func savePromotedValue(_ cell: PromotedAttributeCell, value: String) async -> Bool {
+        guard value != cell.value else { return true }
+        let nid = noteId
+        return await writePromotedAttributes { client in
+            _ = try await client.updateNoteAttribute(UpdateNoteAttributeRequest(
+                noteId: nid,
+                attributeId: cell.valueAttribute?.attributeId,
+                type: cell.type.rawValue,
+                name: cell.name,
+                value: value
+            ))
+        }
+    }
+
+    /// Saves a field holding several values: each in place, then the spare attributes deleted (desktop's
+    /// `setAttributeValues`).
+    @discardableResult
+    func savePromotedValues(_ cell: PromotedAttributeCell, values: [String]) async -> Bool {
+        guard let note else { return false }
+        let writes = PromotedAttributeCells.valueWrites(type: cell.type, name: cell.name, values: values, existing: note.attributes)
+        guard !writes.updates.isEmpty || !writes.deletions.isEmpty else { return true }
+        let nid = noteId
+        return await writePromotedAttributes { client in
+            for update in writes.updates {
+                _ = try await client.updateNoteAttribute(UpdateNoteAttributeRequest(
+                    noteId: nid,
+                    attributeId: update.attributeId,
+                    type: cell.type.rawValue,
+                    name: cell.name,
+                    value: update.value
+                ))
+            }
+            for attributeId in writes.deletions {
+                try await client.deleteAttribute(noteId: nid, attributeId: attributeId)
+            }
+        }
+    }
+
+    /// Adds a choice to a select field's definition, on whichever note owns it (often a parent or template), so
+    /// every note sharing the field offers it from now on (desktop's `addSelectOption`).
+    @discardableResult
+    func addPromotedOption(_ cell: PromotedAttributeCell, option: String) async -> Bool {
+        var definition = cell.definition
+        let options = definition.selectOptions ?? []
+        guard !options.contains(option) else { return true }
+        definition.selectOptions = options + [option]
+        let owner = cell.definitionAttribute
+        return await writePromotedAttributes { client in
+            _ = try await client.updateNoteAttribute(UpdateNoteAttributeRequest(
+                noteId: owner.noteId,
+                attributeId: owner.attributeId,
+                type: AttributeItem.AttributeKind.label.rawValue,
+                name: owner.name,
+                value: definition.serialized(for: .label)
+            ))
+        }
+    }
+
+    /// Runs promoted-field writes on the server, then shows what the note has now.
+    private func writePromotedAttributes(_ write: (any TriliumClientProtocol) async throws -> Void) async -> Bool {
+        guard let client, isOnline, let profileId = serverProfileId, !needsProtectedSession else {
+            saveError = String(localized: "Connect to your server to change attributes.", comment: "Attributes sheet offline")
+            showSaveError = true
+            return false
+        }
+        do {
+            try await write(client)
+            let updated = try await client.getNote(noteId)
+            // Signed in to another server meanwhile: its cache isn't this note's.
+            guard serverProfileId == profileId else { return false }
+            await applyServerNoteUpdate(updated, profileId: profileId)
+            return true
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return false
+        }
+    }
+
+    /// A note's title for a relation field: cached, else the server's (protected titles hidden while locked).
+    func noteTitle(_ noteId: String) async -> String? {
+        if let cached = cachedNoteTitle(noteId) { return cached }
+        guard let client, isOnline, TriliumEntityId.isValid(noteId),
+              let response = try? await client.getNote(noteId) else { return nil }
+        return response.isProtected && !appState.protectedSessionActive ? NoteItem.protectedTitlePlaceholder : response.title
+    }
+
+    /// The values a label holds elsewhere, offered for a promoted text field. Never for secrets.
+    func promotedValueSuggestions(_ name: String) async -> [String] {
+        guard !AttributeSecrets.isSecret(type: .label, name: name), let client, isOnline else { return [] }
+        return (try? await client.attributeValues(name: name)) ?? []
+    }
+
+    /// The title of a cached note (a relation's target), hidden for a protected note while the session is locked.
+    func cachedNoteTitle(_ noteId: String) -> String? {
+        guard let profileId = serverProfileId,
+              let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId) else { return nil }
+        return cached.isProtected && !appState.protectedSessionActive ? NoteItem.protectedTitlePlaceholder : cached.title
+    }
+
+    /// The note's type as the server knows it (`book` for collections, `code` for Markdown).
+    var serverNoteType: String? {
+        note.map { $0.serverTypeName ?? $0.type.triliumStorageType }
+    }
+
+    /// Whether the note's type can be changed here at all: not for types Trilium makes itself (file, image,
+    /// launcher, …) or whose content is their definition (saved search, note map), and not while a protected note
+    /// is locked (its content can't be checked).
+    var canChangeNoteType: Bool {
+        guard let serverNoteType, !needsProtectedSession else { return false }
+        return NoteTypeChange.canChange(serverType: serverNoteType)
+    }
+
+    /// The question to ask before changing to `target`, or `nil` to change straight away (desktop asks when the
+    /// note has content; publicly shared notes always ask).
+    func typeChangeConfirmation(to target: NoteTypeChange.Target, targetTitle: String) async -> NoteTypeChange.Confirmation? {
+        guard let serverNoteType, serverNoteType != target.serverType else { return nil }
+        let body = await bodyForTypeChange()
+        return NoteTypeChange.confirmation(
+            fromServerType: serverNoteType,
+            to: target,
+            targetTitle: targetTitle,
+            content: body,
+            isShared: isSharedPublicly
+        )
+    }
+
+    /// The stored body, for deciding about a type change: what's loaded, or else the server's. `nil` when it
+    /// couldn't be read.
+    private func bodyForTypeChange() async -> String? {
+        if let raw = rawContentString { return raw }
+        guard let client, isOnline else { return contentString }
+        guard let data = try? await client.getNoteContent(noteId) else { return contentString }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Changes the note's type and mime on the server, as desktop's Note type menu does. Online only, and never
+    /// while editing: every editor saves through the note's type, so it mustn't change underneath one.
+    @discardableResult
+    func changeNoteType(to target: NoteTypeChange.Target) async -> Bool {
+        guard let note, let currentType = serverNoteType, !isEditing, !isSaving, canChangeNoteType else { return false }
+        guard currentType != target.serverType || note.mime != target.mime else { return true }
+        guard let client, isOnline, let profileId = serverProfileId else {
+            saveError = String(localized: "Connect to your server to change the note type.", comment: "Change note type offline")
+            showSaveError = true
+            return false
+        }
+        // Another language for a code note: the existing path, which also queues offline.
+        if currentType == "code", target.serverType == "code" {
+            await updateCodeNoteMime(target.mime)
+            return !showSaveError
+        }
+        // A queued body or title change would reach the server after this one, and a queued title/language change
+        // always says `code`, which would undo it.
+        let hasQueuedPatch = ((try? persistence.fetchPendingNotePatches(serverProfileId: profileId)) ?? [])
+            .contains { $0.noteId == noteId }
+        if hasQueuedPatch || persistence.hasPendingNoteBodyUpload(noteId: noteId, serverProfileId: profileId) {
+            appState.backgroundSyncPendingChanges()
+            saveError = String(
+                localized: "This note still has changes waiting to upload. Try again in a moment.",
+                comment: "Change note type while queued changes are pending"
+            )
+            showSaveError = true
+            return false
+        }
+
+        isSaving = true
+        let response: NoteResponse
+        do {
+            response = try await client.updateNote(
+                noteId,
+                request: UpdateNoteRequest(title: nil, type: target.serverType, mime: target.mime)
+            )
+        } catch {
+            isSaving = false
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return false
+        }
+        isSaving = false
+        // Signed in to another server meanwhile: its cache isn't this note's.
+        guard serverProfileId == profileId else { return false }
+        // A draft holds the old type's format; the new editor couldn't use it.
+        if hasDraft {
+            discardDraft()
+        }
+        await applyServerNoteUpdate(response, profileId: profileId)
+        return true
+    }
+
+    // MARK: Protect / unprotect subtree (online)
+
+    /// While the server (un)protects this note and its subtree: true for Protect, false for Unprotect.
+    private(set) var subtreeProtectionInProgress: Bool?
+    var isChangingProtection: Bool { subtreeProtectionInProgress != nil }
+
+    /// Whether the note ⋯ menu offers Protect/Unprotect Subtree. Not for the root (it would protect the whole tree,
+    /// Trilium's hidden system notes included) or for those system notes themselves (ids starting with `_`).
+    var canChangeSubtreeProtection: Bool {
+        guard let note else { return false }
+        return note.noteId != TriliumTreeConstants.rootNoteId && !note.noteId.hasPrefix("_")
+    }
+
+    /// Desktop's tree menu "Protect subtree" / "Unprotect subtree": the server (un)protects this note and every note
+    /// under it in one request, re-encrypting bodies, attachments and revisions. That needs the protected session, so
+    /// `documentPassword` opens it first while it's closed. Then the note and the cached subtree are refreshed.
+    @discardableResult
+    func setSubtreeProtection(_ protect: Bool, documentPassword: String?) async -> Bool {
+        guard note != nil, canChangeSubtreeProtection, !isEditing, !isSaving, !isChangingProtection else { return false }
+        guard let client, isOnline, let profileId = serverProfileId else {
+            saveError = String(
+                localized: "Connect to your server to protect or unprotect notes.",
+                comment: "Protect or unprotect subtree while offline"
+            )
+            showSaveError = true
+            return false
+        }
+        subtreeProtectionInProgress = protect
+        defer { subtreeProtectionInProgress = nil }
+        do {
+            if !appState.protectedSessionActive {
+                let password = (documentPassword ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !password.isEmpty else {
+                    saveError = String(
+                        localized: "Enter the document password used for protected notes in Trilium.",
+                        comment: "Protect or unprotect subtree without the document password"
+                    )
+                    showSaveError = true
+                    return false
+                }
+                try await client.enterProtectedSession(password: password)
+                appState.protectedSessionActive = true
+            }
+            try await client.setNoteProtection(noteId: noteId, protect: protect, includingSubtree: true)
+        } catch {
+            saveError = APIError.from(error).localizedDescription
+            showSaveError = true
+            return false
+        }
+        appState.recordProtectedNoteActivity()
+        needsProtectedSession = false
+        // Signed in to another server meanwhile: its cache isn't this note's.
+        guard serverProfileId == profileId else { return true }
+        if let response = try? await client.getNote(noteId) {
+            await applyServerNoteUpdate(response, profileId: profileId)
+        }
+        // The rest of the subtree: sync brings each note's new protected flag (keeping the readable titles the cache
+        // has), then titles still showing as protected are fetched while the session is open.
+        await appState.runIncrementalSync(maxWaitSeconds: 30)
+        await appState.refreshProtectedNoteTitles()
+        NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        return true
+    }
+
+    /// Makes the note a collection if it isn't one, showing `view`: desktop's type menu, then its view switcher
+    /// (which sets `#viewType`).
+    @discardableResult
+    func setCollectionView(_ view: NoteTypeChange.CollectionView) async -> Bool {
+        guard serverNoteType != nil else { return false }
+        if serverNoteType != NoteTypeChange.Entry.collection.serverType {
+            guard await changeNoteType(to: NoteTypeChange.Entry.collection.target) else { return false }
+        }
+        return await setNoteLabel(noteId: noteId, name: "viewType", value: view.rawValue)
     }
 
     /// Duplicate this note as a sibling under the same parent (first parent if cloned). Opens via navigation from the view.
@@ -4204,7 +4685,7 @@ final class NoteDetailViewModel {
     @discardableResult
     func saveKanbanColumnFields(
         value: String,
-        patch: [String: KanbanBoardModels.JSONValue?],
+        patch: [String: JSONValue?],
         for note: NoteItem,
         groupBy rawGroupBy: String,
         shownOrder: [String]
@@ -4823,7 +5304,14 @@ final class NoteDetailViewModel {
                 try await client.deleteAttribute(noteId: targetNoteId, attributeId: existing.attributeId)
             }
             if let profileId = serverProfileId {
-                persistNoteResponse(try await client.getNote(targetNoteId), profileId: profileId)
+                let fresh = try await client.getNote(targetNoteId)
+                persistNoteResponse(fresh, profileId: profileId)
+                // The label just deleted would otherwise stay cached until the next sync.
+                try? persistence.pruneCachedAttributes(
+                    noteId: targetNoteId,
+                    keeping: Set(fresh.attributes.map(\.attributeId)),
+                    serverProfileId: profileId
+                )
                 try? persistence.commitBatch()
             }
             if targetNoteId == noteId {
@@ -4858,7 +5346,14 @@ final class NoteDetailViewModel {
                 value: value, isInheritable: nil, position: nil
             ))
             if let profileId = serverProfileId {
-                persistNoteResponse(try await client.getNote(targetNoteId), profileId: profileId)
+                let fresh = try await client.getNote(targetNoteId)
+                persistNoteResponse(fresh, profileId: profileId)
+                // The label just deleted would otherwise stay cached until the next sync.
+                try? persistence.pruneCachedAttributes(
+                    noteId: targetNoteId,
+                    keeping: Set(fresh.attributes.map(\.attributeId)),
+                    serverProfileId: profileId
+                )
                 try? persistence.commitBatch()
             }
             if targetNoteId == noteId {
@@ -4928,8 +5423,25 @@ final class NoteDetailViewModel {
             childNoteIds: cached.childNoteIds,
             parentBranchIds: cached.parentBranchIds,
             childBranchIds: cached.childBranchIds,
-            attributes: attrs
+            attributes: attrs,
+            serverTypeName: cached.noteType
         )
+    }
+
+    /// Without a server answer (offline, or `getNote` failed) there's no `tree/load` to read inherited attributes
+    /// from, so they come from cached ancestors and templates. Kept off the note-opening path: online, the server
+    /// refresh brings them.
+    private func fillInheritedAttributesFromCache() {
+        guard let note, note.inheritedAttributes.isEmpty, let profileId = serverProfileId else { return }
+        let inherited = TriliumAttributeInheritance.cachedInheritedAttributes(
+            of: note.noteId,
+            serverProfileId: profileId,
+            persistence: persistence
+        )
+        guard !inherited.isEmpty else { return }
+        var updated = note
+        updated.inheritedAttributes = inherited
+        self.note = updated
     }
 
     // MARK: - Sharing (Trilium /share)

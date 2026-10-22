@@ -32,8 +32,8 @@ settings:
     VERSIONING_SYSTEM: apple-generic
     # Source of truth for XcodeGen. Identity Version/Build is applied on the next
     # build (Scripts/sync_project_yml_version.sh writes the values back here).
-    MARKETING_VERSION: "1.21.0"
-    CURRENT_PROJECT_VERSION: "21"
+    MARKETING_VERSION: "1.21.1"
+    CURRENT_PROJECT_VERSION: "22"
 
 packages:
   Highlightr:

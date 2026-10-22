@@ -366,4 +366,31 @@ final class FullSyncTests: XCTestCase {
         XCTAssertEqual(capped, ["img", "img"])
         XCTAssertEqual(try persistence.fetchCachedNote(id: "img", serverProfileId: profileId)?.contentBlobId, "blob-img-2")
     }
+
+    func testAPulledProtectedNoteKeepsItsReadableTitleAndIsReported() async throws {
+        await client.setServerHistory(maxEntityChangeId: 42)
+        await client.addPulledNoteChange(id: 42, note: noteRow("b", title: "B"))
+        try await runFullSync()
+        // `b` is protected, and its title was read in a protected session.
+        let cached = try XCTUnwrap(persistence.fetchCachedNote(id: "b", serverProfileId: profileId))
+        cached.isProtected = true
+        cached.title = "Secret plans"
+        try persistence.commitBatch()
+
+        var reported: [String] = []
+        let observer = NotificationCenter.default.addObserver(forName: .trinoteProtectedNotesSynced, object: nil, queue: nil) { note in
+            reported += note.userInfo?["noteIds"] as? [String] ?? []
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        // Sync rows carry a protected note's title encrypted.
+        var row = noteRow("b", title: "U2FsdGVkX1+encrypted==")
+        row["isProtected"] = true
+        await client.setServerHistory(maxEntityChangeId: 43)
+        await client.addPulledNoteChange(id: 43, note: row)
+        try await runIncrementalSync()
+
+        XCTAssertEqual(try persistence.fetchCachedNote(id: "b", serverProfileId: profileId)?.title, "Secret plans")
+        XCTAssertEqual(reported, ["b"])
+    }
 }

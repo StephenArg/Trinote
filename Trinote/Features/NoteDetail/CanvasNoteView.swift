@@ -4,6 +4,8 @@ import WebKit
 struct CanvasNoteView: View {
     let noteId: String
     let attachments: [AttachmentItem]
+    /// Whether `attachments` is the full list, so "none" means none rather than "not loaded yet".
+    var attachmentsLoaded = false
     let client: (any TriliumClientProtocol)?
     let excalidrawJSON: String?
 
@@ -11,6 +13,10 @@ struct CanvasNoteView: View {
     @State private var isLoading = true
     @State private var useFallback = false
     @State private var errorMessage: String?
+    /// No drawing and no exported preview: a new canvas, or a note just changed to Canvas.
+    @State private var isEmpty = false
+    /// The body isn't an Excalidraw scene, as after changing another type of note to Canvas.
+    @State private var isUnreadable = false
     /// Intrinsic height of the fit-to-width canvas render (from the web view).
     @State private var contentHeight: CGFloat = 300
     /// Visible height of the enclosing note `ScrollView` — used as the body min height so pinch-zoom has room.
@@ -46,6 +52,21 @@ struct CanvasNoteView: View {
                 } description: {
                     Text(errorMessage)
                 }
+            } else if isUnreadable {
+                ContentUnavailableView {
+                    Label(String(localized: "Can't Show as a Canvas", comment: "Canvas note whose content is another type's"), systemImage: "paintpalette")
+                } description: {
+                    Text(String(
+                        localized: "This note's content isn't a drawing. Edit the note to start one; saving it replaces the old content.",
+                        comment: "Canvas note whose content is another type's"
+                    ))
+                }
+            } else if isEmpty {
+                ContentUnavailableView {
+                    Label(String(localized: "Empty Canvas", comment: "Canvas note with nothing drawn"), systemImage: "paintpalette")
+                } description: {
+                    Text(String(localized: "Edit the note to start drawing.", comment: "Canvas note with nothing drawn"))
+                }
             } else {
                 ContentUnavailableView {
                     Label("No Preview Available", systemImage: "paintpalette")
@@ -61,7 +82,7 @@ struct CanvasNoteView: View {
                 }
             }
         }
-        .task(id: attachments.count) { await loadCanvas() }
+        .task(id: "\(attachments.count)-\(attachmentsLoaded)") { await loadCanvas() }
     }
 
     private func loadCanvas() async {
@@ -77,10 +98,16 @@ struct CanvasNoteView: View {
             }
         }
 
-        if excalidrawJSON != nil, !excalidrawJSON!.isEmpty {
-            useFallback = true
+        if let json = excalidrawJSON, !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if NoteEditorSaving.isUsableCanvasJSON(json) {
+                useFallback = true
+            } else {
+                isUnreadable = true
+            }
         } else if attachments.isEmpty {
-            return
+            // Attachments may still be on their way; once they're in, there's simply nothing to show.
+            guard attachmentsLoaded else { return }
+            isEmpty = true
         } else {
             errorMessage = "No canvas data available."
         }

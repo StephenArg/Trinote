@@ -41,6 +41,7 @@ struct SplitWorkspaceView: View {
             HStack(spacing: 0) {
                 LauncherRail(
                     selection: workspace.section,
+                    sections: LauncherSection.allCases.filter { $0 != .aiChat || appState.showsAIEntryPoints },
                     isSidebarVisible: isSidebarVisible,
                     onSelect: selectSection,
                     onToggleSidebar: toggleSidebar,
@@ -112,6 +113,10 @@ struct SplitWorkspaceView: View {
             if workspace.section == .recents {
                 NavigationStack { RecentsView() }
                     .id("\(navigationStackInstanceId)-recents")
+            }
+            if workspace.section == .aiChat {
+                NavigationStack { AIChatsView() }
+                    .id("\(navigationStackInstanceId)-aiChat")
             }
         }
     }
@@ -203,7 +208,7 @@ struct SplitWorkspaceView: View {
             selectAdjacentTab(offset: -1)
         case .closeTab:
             closeActiveTab()
-        case .newNote, .editNote, .saveNote, .findInNote, .back, .saveBeforeLeaving:
+        case .newNote, .editNote, .saveNote, .findInNote, .changeNoteType, .editAttributes, .back, .saveBeforeLeaving:
             break
         }
     }

@@ -77,13 +77,25 @@ actor KeychainManager: KeychainManaging {
         }
     }
 
+    /// Replaces the stored cookies in place (nil or empty data deletes them). An update rather than delete-then-add,
+    /// so a process killed or suspended mid-save never leaves the profile without its login cookie.
     func saveSessionCookies(_ data: Data?, forServer serverID: String) throws {
-        try deleteSessionCookies(forServer: serverID)
-        guard let data, !data.isEmpty else { return }
-        var query = cookiesBaseQuery(for: serverID)
-        query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        let status = SecItemAdd(query as CFDictionary, nil)
+        guard let data, !data.isEmpty else {
+            try deleteSessionCookies(forServer: serverID)
+            return
+        }
+        let query = cookiesBaseQuery(for: serverID)
+        let update: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+        let updateStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else { throw KeychainError.saveFailed(updateStatus) }
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(add as CFDictionary, nil)
         guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
     }
 

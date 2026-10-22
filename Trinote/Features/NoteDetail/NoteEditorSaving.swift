@@ -10,7 +10,7 @@ enum NoteEditorSaving {
     static let hideSaveButtonKey = "noteEditorHideSaveButton"
     static let backButtonSavesKey = "noteEditorBackButtonSaves"
 
-    static let autosaveDelayOptions: [Int] = [3, 5, 7, 10, 12]
+    static let autosaveDelayOptions: [Int] = [1, 2, 3, 5, 7, 10, 12]
     static let defaultAutosaveDelay = 5
 
     /// The stored delay, or the default when it isn't one of the options.
@@ -23,9 +23,12 @@ enum NoteEditorSaving {
         Duration.seconds(seconds).formatted(.units(allowed: [.seconds], width: .wide))
     }
 
-    /// The Save button can only be hidden while Autosave is on.
-    static func hidesSaveButton(autosave: Bool, hideSaveButton: Bool) -> Bool {
-        autosave && hideSaveButton
+    /// Whether the editor shows its save button. Without Autosave it always does. With Autosave it shows only
+    /// while there are changes it hasn't saved yet, so it hides once they're saved and comes back with the next
+    /// edit; Hide Save Button keeps it hidden.
+    static func showsSaveButton(autosave: Bool, hideSaveButton: Bool, status: EditorAutosaveStatus) -> Bool {
+        guard autosave else { return true }
+        return !hideSaveButton && status == .edited
     }
 
     /// Autosave always saves when you leave the note; without it, Back Button Saves decides.

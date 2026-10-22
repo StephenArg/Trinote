@@ -494,24 +494,3 @@ extension Array where Element == GeoMapTrack {
         return s
     }
 }
-
-// MARK: - NoteItem helper
-
-private extension NoteItem {
-    func withAttributes(_ attributes: [AttributeItem]) -> NoteItem {
-        NoteItem(
-            noteId: noteId,
-            title: title,
-            type: type,
-            mime: mime,
-            isProtected: isProtected,
-            dateCreated: dateCreated,
-            dateModified: dateModified,
-            parentNoteIds: parentNoteIds,
-            childNoteIds: childNoteIds,
-            parentBranchIds: parentBranchIds,
-            childBranchIds: childBranchIds,
-            attributes: attributes
-        )
-    }
-}

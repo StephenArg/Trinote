@@ -16,6 +16,15 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     let parentBranchIds: [String]
     let childBranchIds: [String]
     let attributes: [AttributeItem]
+    /// What the note inherits from ancestors and templates (Trilium's effective attributes minus its own).
+    /// Filled for the note on screen; kept in memory only, never cached.
+    var inheritedAttributes: [AttributeItem] = []
+    /// The `type` exactly as the server sent it. `type` turns types this app doesn't know (such as `llmChat`)
+    /// into `.text`; this keeps them apart when the type is shown or changed.
+    var serverTypeName: String? = nil
+    /// Whether the note sits under Trilium's hidden AI Chat History folder (`_llmChat`): a chat kept nowhere yet,
+    /// which "Keep Chat" moves into the notes. Known for the note on screen only; never cached.
+    var isInLlmChatFolder: Bool = false
 
     var id: String { noteId }
     /// Branch placements are canonical; `childNoteIds` alone can be stale after a server delete until reconcile runs.
@@ -126,13 +135,18 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     /// True when this note should use geo map UI:
     /// - native `geoMap` type, OR
     /// - `book` + `#viewType=geoMap`, OR
-    /// - any non-calendar note with `~template=_template_geo_map`
+    /// - a non-calendar `book` (or `file`: the server has stored a templated map as one) with
+    ///   `~template=_template_geo_map`
+    ///
+    /// A note changed from a geo map to a type with its own view (text, code, canvas, …) keeps the template relation
+    /// but shows as that type, as on desktop.
     var isSemanticGeoMap: Bool {
         if type == .geoMap { return true }
         if isCalendarRoot { return false }
         if (type == .book || type == .collection), let v = viewTypeLabelValue, v.caseInsensitiveCompare("geoMap") == .orderedSame {
             return true
         }
+        guard type == .book || type == .collection || type == .file else { return false }
         return hasGeoMapTemplateRelation
     }
 
@@ -222,6 +236,30 @@ extension NoteItem {
         self.parentBranchIds = response.parentBranchIds
         self.childBranchIds = response.childBranchIds
         self.attributes = response.attributes.map(AttributeItem.init)
+        self.inheritedAttributes = response.inheritedAttributes.map(AttributeItem.init)
+        self.serverTypeName = response.type
+        self.isInLlmChatFolder = response.isInLlmChatFolder ?? false
+    }
+
+    /// A copy with these own attributes and everything else (inherited attributes included) unchanged.
+    func withAttributes(_ attributes: [AttributeItem]) -> NoteItem {
+        NoteItem(
+            noteId: noteId,
+            title: title,
+            type: type,
+            mime: mime,
+            isProtected: isProtected,
+            dateCreated: dateCreated,
+            dateModified: dateModified,
+            parentNoteIds: parentNoteIds,
+            childNoteIds: childNoteIds,
+            parentBranchIds: parentBranchIds,
+            childBranchIds: childBranchIds,
+            attributes: attributes,
+            inheritedAttributes: inheritedAttributes,
+            serverTypeName: serverTypeName,
+            isInLlmChatFolder: isInLlmChatFolder
+        )
     }
 
     /// Shown in lists when the document-password session is locked but SwiftData still has a decrypted title from a prior session.
@@ -261,7 +299,10 @@ extension NoteItem {
             childNoteIds: childNoteIds,
             parentBranchIds: parentBranchIds,
             childBranchIds: childBranchIds,
-            attributes: nextAttributes
+            attributes: nextAttributes,
+            inheritedAttributes: inheritedAttributes,
+            serverTypeName: serverTypeName,
+            isInLlmChatFolder: isInLlmChatFolder
         )
     }
 
@@ -301,7 +342,10 @@ extension NoteItem {
             childNoteIds: childNoteIds,
             parentBranchIds: parentBranchIds,
             childBranchIds: childBranchIds,
-            attributes: nextAttributes
+            attributes: nextAttributes,
+            inheritedAttributes: inheritedAttributes,
+            serverTypeName: serverTypeName,
+            isInLlmChatFolder: isInLlmChatFolder
         )
     }
 

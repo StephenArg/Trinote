@@ -13,6 +13,7 @@ final class AppState {
             // server switches (sync keeps it current after that).
             if isAuthenticated, let profileId = activeProfile?.id {
                 OfflineSearchIndex.shared.scheduleRefresh(profileId: profileId, minimumInterval: 60)
+                Task { await self.refreshAIConfig() }
             }
         }
     }
@@ -21,8 +22,43 @@ final class AppState {
     var lastRefreshed: Date?
     /// Cached from the latest successful `restoreSession()` (`/api/app-info`). Used for server capability gates (e.g. spreadsheet note type).
     private(set) var serverAppInfo: AppInfoResponse?
-    /// In-memory: whether the user has unlocked protected notes this foreground session. Server session is cleared on background and after restoring the main login (see `endServerProtectedSessionAndPersistCookies()`).
-    var protectedSessionActive = false
+    /// Trilium's AI options for the active profile (`GET /api/options`), kept in memory only; see `TriliumAIConfig`.
+    private(set) var aiConfig: TriliumAIConfig?
+    /// In-memory: whether the user has unlocked protected notes. The session ends when Trinote leaves the foreground
+    /// or, with Lock Protected Notes set to After Server Timeout, once the server's timeout passes without a protected
+    /// note being opened or saved (`ProtectedSessionLockPolicy`). It also ends after restoring the main login (see
+    /// `endServerProtectedSessionAndPersistCookies()`) and when the server ends it.
+    var protectedSessionActive = false {
+        didSet {
+            guard protectedSessionActive != oldValue else { return }
+            if protectedSessionActive {
+                protectedSessionDidStart()
+            } else {
+                protectedSessionExpiryTask?.cancel()
+                protectedSessionExpiryTask = nil
+                lastProtectedSessionActivity = nil
+                // Ended on purpose (lock, timeout, sign-out, server switch): a relaunch must not reopen it.
+                if let profileId = protectedSessionProfileId ?? activeProfile?.id {
+                    ProtectedSessionTimeout.forgetLastActivity(profileId: profileId)
+                }
+                protectedSessionProfileId = nil
+            }
+        }
+    }
+
+    /// The server the protected session was opened on (it is per server).
+    @ObservationIgnored private var protectedSessionProfileId: String?
+    /// Set while a relaunch reopens a session, so it keeps its last activity instead of starting the clock again.
+    @ObservationIgnored private var resumedProtectedSessionLastActivity: Date?
+    @ObservationIgnored private var protectedNotesSyncedObserver: NSObjectProtocol?
+    /// The server's `protectedSessionTimeout` in seconds by server profile id, as read this run (`GET /api/options`).
+    private var serverProtectedSessionTimeouts: [String: TimeInterval] = [:]
+    /// When Trinote last unlocked, opened, or saved a protected note; nil while no session is active.
+    @ObservationIgnored private var lastProtectedSessionActivity: Date?
+    /// When this run last told the server about protected-note activity (`login/protected/touch`).
+    @ObservationIgnored private var lastServerProtectedSessionTouch: Date?
+    /// After Server Timeout: sleeps until protected notes are due to lock, then `enforceProtectedSessionTimeoutIfNeeded`.
+    @ObservationIgnored private var protectedSessionExpiryTask: Task<Void, Never>?
 
     /// Bumped **before** `activeProfile` changes to another instance so `MainTabView` can recreate `NavigationStack`s while the outgoing profile is still current (avoids stale `NoteDetailView` briefly adopting the new profile).
     private(set) var tabNavigationResetGeneration: Int = 0
@@ -86,21 +122,271 @@ final class AppState {
     /// Ends the Trilium protected-note session on the server and persists cookies. Call after restoring the main session and when the app goes to the background so the document password is required again.
     func endServerProtectedSessionAndPersistCookies() async {
         protectedSessionActive = false
-        guard let client, let profile = activeProfile else { return }
+        // Signed out (the login screen keeps the profile's client), there is no session to end or cookie to keep.
+        guard isAuthenticated, let client, activeProfile != nil else { return }
         try? await client.exitProtectedSession()
-        if let tc = client as? TriliumClient {
-            let data = await tc.exportSessionCookieData()
-            try? await keychain.saveSessionCookies(data, forServer: profile.id)
+        await persistSessionCookies(reason: "end protected session")
+    }
+
+    /// Saves the active profile's session cookies to the Keychain (what the next launch restores from).
+    private func persistSessionCookies(reason: String) async {
+        guard isAuthenticated, let tc = client as? TriliumClient, let profile = activeProfile else { return }
+        await saveSessionCookies(of: tc, profileId: profile.id, reason: reason)
+    }
+
+    /// Stores `client`'s cookies as the profile's login, but only while they carry the session the server confirmed
+    /// as signed in. Otherwise the stored login is left alone: replacing it with a jar that lost its `trilium.sid`, or
+    /// holds an anonymous one, is what sent a relaunch to the server login page.
+    private func saveSessionCookies(of client: TriliumClient, profileId: String, reason: String) async {
+        guard let data = await client.exportVerifiedSessionCookieData() else {
+            SessionCookieTrace.log(
+                "keychain save skipped (\(reason)): jar sid \(SessionCookieTrace.jarTag(for: client.baseURL)) isn't the confirmed session"
+            )
+            return
+        }
+        do {
+            try await keychain.saveSessionCookies(data, forServer: profileId)
+            SessionCookieTrace.log("keychain save (\(reason)) sid \(SessionCookieTrace.tag(archive: data))")
+        } catch {
+            SessionCookieTrace.log("keychain save FAILED (\(reason)): \(error)")
+            Log.auth.warning("Could not save the session cookies: \(error)")
         }
     }
 
     /// Called when the app enters background.
     /// Starts a short background execution window if a sync is running, and persists cookies.
     func onBackground() async {
+        SessionCookieTrace.log("background: authenticated=\(isAuthenticated) protected=\(protectedSessionActive) policy=\(ProtectedSessionLockPolicy.current.rawValue)")
         localTransfer.onBackground()
         syncManager.beginBackgroundTimeExtensionIfNeeded()
         imageCachePrefetcher.beginBackgroundTimeExtensionIfNeeded()
+        if protectedSessionActive, ProtectedSessionLockPolicy.current == .serverTimeout {
+            // After Server Timeout: the session runs on in the background; `onForegroundResume` catches up on a
+            // timeout that passed meanwhile.
+            await persistSessionCookies(reason: "background")
+        } else {
+            await endServerProtectedSessionAndPersistCookies()
+        }
+    }
+
+    // MARK: - Protected session timeout (Settings → Security → Lock Protected Notes)
+
+    /// The server is told about protected-note activity at most this often (desktop touches on every protected
+    /// note it shows; the server's own expiry check runs every 30 s).
+    static let serverProtectedSessionTouchInterval: TimeInterval = 30
+
+    /// The active server's protected session timeout: the value read this run, else the one remembered from an
+    /// earlier run, else nil (never read).
+    var serverProtectedSessionTimeout: TimeInterval? {
+        guard let profileId = activeProfile?.id else { return nil }
+        return serverProtectedSessionTimeouts[profileId] ?? ProtectedSessionTimeout.rememberedServerValue(profileId: profileId)
+    }
+
+    /// The timeout After Server Timeout locks with: the server's, or Trilium's default until it has been read.
+    private var effectiveProtectedSessionTimeout: TimeInterval {
+        serverProtectedSessionTimeout ?? ProtectedSessionTimeout.triliumDefaultSeconds
+    }
+
+    /// Reads `protectedSessionTimeout` from the server (`GET /api/options`) and remembers it for the profile.
+    @discardableResult
+    func refreshServerProtectedSessionTimeout() async -> TimeInterval? {
+        guard networkMonitor.isConnected, isAuthenticated, let client, let profile = activeProfile else {
+            return serverProtectedSessionTimeout
+        }
+        do {
+            let options = try await client.getOptions()
+            guard activeProfile?.id == profile.id else { return serverProtectedSessionTimeout }
+            if let seconds = options.protectedSessionTimeoutSeconds {
+                serverProtectedSessionTimeouts[profile.id] = seconds
+                ProtectedSessionTimeout.rememberServerValue(seconds, profileId: profile.id)
+            } else {
+                Log.api.warning("The server sent no usable protectedSessionTimeout option")
+            }
+        } catch {
+            Log.api.warning("Could not read the server's protected session timeout: \(error)")
+        }
+        return serverProtectedSessionTimeout
+    }
+
+    /// Settings calls this when Lock Protected Notes changes, so an active session follows the new choice at once.
+    func protectedSessionLockPolicyDidChange() {
+        guard protectedSessionActive else { return }
+        switch ProtectedSessionLockPolicy.current {
+        case .whenLeavingApp:
+            protectedSessionExpiryTask?.cancel()
+            protectedSessionExpiryTask = nil
+        case .serverTimeout:
+            if lastProtectedSessionActivity == nil { lastProtectedSessionActivity = .now }
+            scheduleProtectedSessionExpiry()
+            Task { @MainActor in
+                await refreshServerProtectedSessionTimeout()
+                scheduleProtectedSessionExpiry()
+            }
+        }
+    }
+
+    /// Trinote opened or saved a protected note: the countdown to locking starts over, and the server hears about
+    /// it (throttled) so its own timeout keeps pace, as it does for Trilium desktop.
+    func recordProtectedNoteActivity() {
+        guard protectedSessionActive else { return }
+        lastProtectedSessionActivity = .now
+        rememberProtectedSessionActivity()
+        if ProtectedSessionLockPolicy.current == .serverTimeout {
+            scheduleProtectedSessionExpiry()
+        }
+        if let last = lastServerProtectedSessionTouch,
+           Date.now.timeIntervalSince(last) < Self.serverProtectedSessionTouchInterval {
+            return
+        }
+        Task { @MainActor in await touchServerProtectedSession() }
+    }
+
+    /// Ends the protected session once the server's timeout has passed since the last protected-note activity
+    /// (After Server Timeout). Runs when the expiry task wakes and on return to the foreground, which catches up on
+    /// a sleep that ran out while Trinote was suspended.
+    func enforceProtectedSessionTimeoutIfNeeded() async {
+        guard protectedSessionActive, ProtectedSessionLockPolicy.current == .serverTimeout,
+              let lastActivity = lastProtectedSessionActivity
+        else { return }
+        if ProtectedSessionTimeout.hasExpired(lastActivity: lastActivity, timeout: effectiveProtectedSessionTimeout) {
+            Log.auth.info("Protected notes locked: the server's timeout passed without protected-note activity")
+            await endServerProtectedSessionAndPersistCookies()
+        } else {
+            scheduleProtectedSessionExpiry()
+        }
+    }
+
+    private func protectedSessionDidStart() {
+        let resumedActivity = resumedProtectedSessionLastActivity
+        resumedProtectedSessionLastActivity = nil
+        protectedSessionProfileId = activeProfile?.id
+        lastProtectedSessionActivity = resumedActivity ?? .now
+        lastServerProtectedSessionTouch = .now
+        rememberProtectedSessionActivity()
+        observeProtectedNotesSyncedIfNeeded()
+        Task { @MainActor in
+            // Like desktop's enableProtectedSession(): a touch right away, so a last-operation date the server kept
+            // from a session that expired long ago can't make its 30 s check end this one at once. A reopened session
+            // keeps the server's clock as it was, so it ends when the timeout counted from the last activity says.
+            if resumedActivity == nil {
+                await touchServerProtectedSession()
+            }
+            // The session is the server's, not one note's: every protected note becomes readable, so fetch all of
+            // their titles, not only those on the page the password was entered from.
+            await refreshProtectedNoteTitles()
+            guard ProtectedSessionLockPolicy.current == .serverTimeout else { return }
+            scheduleProtectedSessionExpiry()
+            await refreshServerProtectedSessionTimeout()
+            scheduleProtectedSessionExpiry()
+        }
+    }
+
+    private func scheduleProtectedSessionExpiry() {
+        protectedSessionExpiryTask?.cancel()
+        protectedSessionExpiryTask = nil
+        guard protectedSessionActive, ProtectedSessionLockPolicy.current == .serverTimeout,
+              let lastActivity = lastProtectedSessionActivity
+        else { return }
+        let lockDate = ProtectedSessionTimeout.lockDate(lastActivity: lastActivity, timeout: effectiveProtectedSessionTimeout)
+        protectedSessionExpiryTask = Task { @MainActor [weak self] in
+            let wait = max(0, lockDate.timeIntervalSinceNow)
+            try? await Task.sleep(for: .seconds(wait), clock: .continuous)
+            guard !Task.isCancelled else { return }
+            await self?.enforceProtectedSessionTimeoutIfNeeded()
+        }
+    }
+
+    /// Keeps the last protected-note activity on the device while the session is open, for a relaunch to reopen it.
+    private func rememberProtectedSessionActivity() {
+        guard protectedSessionActive, let profileId = protectedSessionProfileId ?? activeProfile?.id,
+              let lastActivity = lastProtectedSessionActivity else { return }
+        ProtectedSessionTimeout.rememberLastActivity(lastActivity, profileId: profileId)
+    }
+
+    /// After a cold launch: with After Server Timeout, a session that was open when Trinote closed reopens without
+    /// the password while its timeout hasn't passed and the server still has it (another device or the server's own
+    /// timeout may have ended it). Otherwise it ends, as it always did.
+    private func resumeOrEndProtectedSessionAfterLaunch(profileId: String) async {
+        let lastActivity = ProtectedSessionTimeout.rememberedLastActivity(profileId: profileId)
+        if lastActivity != nil, ProtectedSessionLockPolicy.current == .serverTimeout {
+            await refreshServerProtectedSessionTimeout()
+        }
+        if ProtectedSessionTimeout.canResume(
+            lastActivity: lastActivity,
+            timeout: effectiveProtectedSessionTimeout,
+            policy: ProtectedSessionLockPolicy.current
+        ), await serverHasProtectedSession() == true, activeProfile?.id == profileId {
+            resumedProtectedSessionLastActivity = lastActivity
+            protectedSessionActive = true
+            await persistSessionCookies(reason: "protected session resumed")
+            Log.auth.info("Protected notes stay unlocked after relaunch: the server's timeout hasn't passed")
+            return
+        }
         await endServerProtectedSessionAndPersistCookies()
+    }
+
+    /// Whether the server's protected session is open, read from a cached protected note's title: `tree/load` gives
+    /// it readable while the session is open and `[protected]` while it isn't. nil when nothing can tell.
+    private func serverHasProtectedSession() async -> Bool? {
+        guard let client, let profileId = activeProfile?.id,
+              let probeId = (try? persistence.cachedProtectedNoteIds(serverProfileId: profileId))?.first,
+              let tree = try? await client.batchTreeLoad(noteIds: [probeId]),
+              let row = tree.notes.first(where: { $0.noteId == probeId }), row.isProtected
+        else { return nil }
+        return row.title != Self.lockedProtectedTitle
+    }
+
+    /// What Trilium sends as a protected note's title while the protected session is closed (`getTitleOrProtected`).
+    static let lockedProtectedTitle = "[protected]"
+
+    /// Fetches readable titles of protected notes (all cached ones, or `noteIds`) while the session is open, in
+    /// batched `tree/load` requests, writes them to the cache and redraws the tree. Sync stores these titles
+    /// encrypted, and unlocking used to refresh only the notes around the one the password was entered for.
+    func refreshProtectedNoteTitles(noteIds: [String]? = nil) async {
+        guard protectedSessionActive, networkMonitor.isConnected, let client, let profileId = activeProfile?.id else { return }
+        let ids = noteIds ?? ((try? persistence.cachedProtectedNoteIds(serverProfileId: profileId)) ?? [])
+        guard !ids.isEmpty else { return }
+        var titles: [String: String] = [:]
+        for chunk in ids.chunked(into: 100) {
+            guard protectedSessionActive, activeProfile?.id == profileId else { return }
+            do {
+                let tree = try await client.batchTreeLoad(noteIds: chunk)
+                // `tree/load` also returns ancestors; their readable titles are as good.
+                for row in tree.notes where row.isProtected && row.title != Self.lockedProtectedTitle {
+                    titles[row.noteId] = row.title
+                }
+            } catch {
+                Log.api.warning("Protected titles: tree/load failed for \(chunk.count) notes: \(error)")
+            }
+        }
+        guard protectedSessionActive, activeProfile?.id == profileId else { return }
+        let changed = (try? persistence.updateCachedNoteTitles(titles, serverProfileId: profileId)) ?? 0
+        if changed > 0 {
+            Log.api.info("Protected titles: \(changed) of \(ids.count) updated")
+            NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+        }
+    }
+
+    /// While the session is open, notes a sync wrote get their readable titles (sync rows carry them encrypted).
+    private func observeProtectedNotesSyncedIfNeeded() {
+        guard protectedNotesSyncedObserver == nil else { return }
+        protectedNotesSyncedObserver = NotificationCenter.default.addObserver(
+            forName: .trinoteProtectedNotesSynced, object: nil, queue: .main
+        ) { [weak self] notification in
+            let ids = notification.userInfo?["noteIds"] as? [String] ?? []
+            let profileId = notification.userInfo?["profileId"] as? String
+            Task { @MainActor in
+                guard let self, self.protectedSessionActive, profileId == self.activeProfile?.id else { return }
+                await self.refreshProtectedNoteTitles(noteIds: ids)
+            }
+        }
+    }
+
+    /// `POST /api/login/protected/touch`: keeps the server's protected session timeout from running out.
+    private func touchServerProtectedSession() async {
+        guard protectedSessionActive, let client else { return }
+        lastServerProtectedSessionTouch = .now
+        try? await client.touchProtectedSession()
     }
 
     /// Runs entity-pull incremental sync (or full sync if none completed yet) when session + instance id exist.
@@ -146,8 +432,7 @@ final class AppState {
             connectionError = nil
             lastRefreshed = .now
             if let tc = client as? TriliumClient, let profile = activeProfile {
-                let data = await tc.exportSessionCookieData()
-                try? await keychain.saveSessionCookies(data, forServer: profile.id)
+                await saveSessionCookies(of: tc, profileId: profile.id, reason: "session refresh")
             }
             return true
         } catch {
@@ -260,9 +545,7 @@ final class AppState {
                 return
             }
         }
-        if protectedSessionActive {
-            try? await client.touchProtectedSession()
-        }
+        await touchServerProtectedSession()
         var idMap: [String: String] = [:]
         var didApplyAny = false
         // Re-fetch after each success so parent→child order and parent id rewrites from SwiftData are always current.
@@ -484,9 +767,7 @@ final class AppState {
                 return
             }
         }
-        if protectedSessionActive {
-            try? await client.touchProtectedSession()
-        }
+        await touchServerProtectedSession()
         var didAny = false
         for row in pending {
             do {
@@ -544,9 +825,7 @@ final class AppState {
                 return
             }
         }
-        if protectedSessionActive {
-            try? await client.touchProtectedSession()
-        }
+        await touchServerProtectedSession()
         var didAny = false
         for row in pending {
             do {
@@ -598,9 +877,7 @@ final class AppState {
                 return
             }
         }
-        if protectedSessionActive {
-            try? await client.touchProtectedSession()
-        }
+        await touchServerProtectedSession()
         var didAny = false
         for row in pending {
             do {
@@ -648,9 +925,7 @@ final class AppState {
                 return
             }
         }
-        if protectedSessionActive {
-            try? await client.touchProtectedSession()
-        }
+        await touchServerProtectedSession()
         for row in pending {
             let snapshotDate = row.queuedAt
             let tRow = CFAbsoluteTimeGetCurrent()
@@ -775,9 +1050,7 @@ final class AppState {
                 return
             }
         }
-        if protectedSessionActive {
-            try? await client.touchProtectedSession()
-        }
+        await touchServerProtectedSession()
         for row in pending {
             if row.noteId.isOfflineLocalNoteId {
                 let stillPending = (try? persistence.hasPendingNoteCreation(noteId: row.noteId, serverProfileId: profileId)) ?? true
@@ -863,8 +1136,7 @@ final class AppState {
         guard let cookieData, !cookieData.isEmpty else { throw APIError.noToken }
         let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: cookieData)
         try await restoreSessionWithTimeout(client: newClient, seconds: 12)
-        let exported = await newClient.exportSessionCookieData()
-        try? await keychain.saveSessionCookies(exported, forServer: profile.id)
+        await saveSessionCookies(of: newClient, profileId: profile.id, reason: "restored client")
         return newClient
     }
 
@@ -905,8 +1177,7 @@ final class AppState {
             try await restoreSessionWithTimeout(client: newClient, seconds: 12)
             connectionError = nil
             lastRefreshed = .now
-            let exported = await newClient.exportSessionCookieData()
-            try? await keychain.saveSessionCookies(exported, forServer: profile.id)
+            await saveSessionCookies(of: newClient, profileId: profile.id, reason: "client rebuilt")
         } catch {
             connectionError = APIError.from(error).localizedDescription
         }
@@ -954,7 +1225,10 @@ final class AppState {
             },
             onReconnected: { [weak self] in
                 // The server restarted (an upgrade does that), so its version may have changed.
-                Task { @MainActor in await self?.refreshServerAppInfo() }
+                Task { @MainActor in
+                    await self?.refreshServerAppInfo()
+                    await self?.refreshAIConfig()
+                }
             }
         )
         realtime?.start()
@@ -973,6 +1247,40 @@ final class AppState {
         } catch {
             Log.api.warning("Could not re-read the server version: \(error)")
         }
+    }
+
+    // MARK: - AI chat
+
+    /// Whether the AI chat can be used right now (see `AIFeatureAvailability`).
+    var aiAvailability: AIFeatureAvailability {
+        AIFeatureAvailability(serverInfo: serverAppInfo, isOnline: isOnline, config: aiConfig)
+    }
+
+    /// Whether to offer the AI screens: the server supports the chat and Trilium's AI switch was on at the last read.
+    var showsAIEntryPoints: Bool {
+        AIFeatureAvailability.showsEntryPoints(serverInfo: serverAppInfo, config: aiConfig)
+    }
+
+    /// Re-reads Trilium's AI options (`GET /api/options`): after sign-in, on reconnect, when an AI screen appears and
+    /// after every option write. A failed read keeps the last reading. API keys never leave the parse.
+    @discardableResult
+    func refreshAIConfig() async -> TriliumAIConfig? {
+        guard networkMonitor.isConnected, isAuthenticated, let client, let profile = activeProfile else { return aiConfig }
+        do {
+            let options = try await client.getOptions()
+            guard activeProfile?.id == profile.id else { return aiConfig }
+            aiConfig = TriliumAIConfig(options: options)
+        } catch {
+            Log.api.warning("Could not read the server's AI options: \(error)")
+        }
+        return aiConfig
+    }
+
+    /// Writes AI options (`PUT /api/options`), then re-reads them so the screens show what the server holds.
+    func updateAIOptions(_ values: [String: String]) async throws {
+        guard let client else { throw APIError.noToken }
+        try await client.updateOptions(values)
+        await refreshAIConfig()
     }
 
     /// Calls `onProgress` with each WebSocket progress message for `taskId` until `stopTrackingServerTask`.
@@ -1021,6 +1329,7 @@ final class AppState {
     private func quickActivateProfileForLaunch(_ profile: ServerProfile) async {
         guard let url = profile.url else { return }
         let cookieData = try? await keychain.loadSessionCookies(forServer: profile.id)
+        SessionCookieTrace.log("launch: keychain sid \(SessionCookieTrace.tag(archive: cookieData)) for \(profile.name)")
         let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: cookieData)
         let hadPersistedSessionCookies = cookieData.map { !$0.isEmpty } ?? false
 
@@ -1054,11 +1363,10 @@ final class AppState {
         guard let client = self.client as? TriliumClient else { return }
         do {
             try await restoreSessionWithTimeout(client: client, seconds: 12)
-            await endServerProtectedSessionAndPersistCookies()
+            await resumeOrEndProtectedSessionAfterLaunch(profileId: profile.id)
             self.connectionError = nil
             self.lastRefreshed = .now
-            let exported = await client.exportSessionCookieData()
-            try? await keychain.saveSessionCookies(exported, forServer: profile.id)
+            await saveSessionCookies(of: client, profileId: profile.id, reason: "launch")
             Log.auth.info("Connected to \(profile.name)")
             syncManager.restoreSyncState(profileId: profile.id)
             _ = try await triliumInstanceId(for: profile)
@@ -1084,6 +1392,7 @@ final class AppState {
             } else {
                 self.isAuthenticated = false
                 self.connectionError = apiError.localizedDescription
+                SessionCookieTrace.log("launch: session restore failed: \(error)")
                 Log.auth.warning("Session restore failed: \(error)")
             }
         }
@@ -1102,6 +1411,7 @@ final class AppState {
             NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
             tabNavigationResetGeneration += 1
             serverAppInfo = nil
+            aiConfig = nil
             await Task.yield()
         }
 
@@ -1136,8 +1446,7 @@ final class AppState {
             self.connectionError = nil
             self.lastRefreshed = .now
             try persistence.setActiveProfile(profile)
-            let exported = await newClient.exportSessionCookieData()
-            try? await keychain.saveSessionCookies(exported, forServer: profile.id)
+            await saveSessionCookies(of: newClient, profileId: profile.id, reason: "profile activated")
             syncManager.restoreSyncState(profileId: profile.id)
             _ = try await triliumInstanceId(for: profile)
             await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
@@ -1303,11 +1612,11 @@ final class AppState {
             NotificationCenter.default.post(name: .trinoteWillSwitchServerProfile, object: nil)
             tabNavigationResetGeneration += 1
             serverAppInfo = nil
+            aiConfig = nil
             await Task.yield()
         }
 
-        let exportedLogin = await newClient.exportSessionCookieData()
-        try? await keychain.saveSessionCookies(exportedLogin, forServer: profile.id)
+        await saveSessionCookies(of: newClient, profileId: profile.id, reason: "login")
         _ = try await triliumInstanceId(for: profile)
 
         profile.authMethod = authMethod
@@ -1347,6 +1656,7 @@ final class AppState {
 
     /// Tears down the in-app session and clears local auth artifacts. Optionally notifies the server (explicit logout only).
     private func clearLocalSessionState(notifyServer: Bool) async {
+        SessionCookieTrace.log("clear local session state (notifyServer: \(notifyServer))")
         syncManager.cancel()
         realtime?.stop()
         realtime = nil
@@ -1371,6 +1681,7 @@ final class AppState {
         connectionError = nil
         lastRefreshed = nil
         serverAppInfo = nil
+        aiConfig = nil
     }
 
     func signOutAndRemoveProfile(_ profile: ServerProfile) async {
@@ -1383,6 +1694,7 @@ final class AppState {
         }
         try? await keychain.deleteCloudflareAccessCredentials(forServer: profile.id)
         OfflineCacheSettings.remove(profileId: profile.id)
+        ProtectedSessionTimeout.forgetServerValue(profileId: profile.id)
         do {
             try persistence.clearCache(for: profile.id)
             try persistence.deleteProfile(profile)
@@ -1406,8 +1718,10 @@ final class AppState {
 
     /// Called when app returns to foreground
     func onForegroundResume() async {
+        SessionCookieTrace.log("foreground: authenticated=\(isAuthenticated) protected=\(protectedSessionActive)")
         syncManager.endBackgroundTimeExtension()
         shareImport.checkForPendingPayload()
+        await enforceProtectedSessionTimeoutIfNeeded()
         guard isAuthenticated, let client, let profile = activeProfile else { return }
         guard networkMonitor.isConnected else { return }
         do {
@@ -1419,8 +1733,7 @@ final class AppState {
             connectionError = nil
             lastRefreshed = .now
             if let tc = client as? TriliumClient {
-                let data = await tc.exportSessionCookieData()
-                try? await keychain.saveSessionCookies(data, forServer: profile.id)
+                await saveSessionCookies(of: tc, profileId: profile.id, reason: "foreground")
             }
             await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
             await runIncrementalSync(maxWaitSeconds: 15)

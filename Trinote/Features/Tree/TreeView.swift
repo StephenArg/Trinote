@@ -128,6 +128,8 @@ struct TreeView: View {
     @State private var favoriteNoteIds: Set<String> = []
     @State private var showSharedNotesManagement = false
     @State private var showSwitchUserSheet = false
+    /// The AI Chats screen (iPhone; the iPad rail has its own section).
+    @State private var showAIChats = false
     @State private var treeShareSheetPayload: TreeShareSheetPayload?
     @State private var shareLocallySheetContext: ShareLocallySheetContext?
     @State private var copyToInstanceSheetContext: CopyToInstanceSheetContext?
@@ -635,6 +637,7 @@ struct TreeView: View {
         .navigationDestination(item: $navigateToNote, destination: noteDetailDestination)
         .navigationDestination(item: $navigateToNoteForEdit, destination: noteEditDestination)
         .navigationDestination(item: $drillDownTarget, destination: subtreeDestination)
+        .navigationDestination(isPresented: $showAIChats) { AIChatsView() }
         .navigationDestination(item: $tabsBarNav) { item in
             NoteDetailView(noteId: item.noteId, title: item.title, openTabId: item.openTabId)
         }
@@ -726,6 +729,15 @@ struct TreeView: View {
                         ? String(localized: "Syncing…", comment: "Accessibility: tree sync in progress")
                         : String(localized: "Refresh tree", comment: "Toolbar sync tree")
                 )
+
+                if noteWorkspace == nil, appState.showsAIEntryPoints {
+                    Button {
+                        showAIChats = true
+                    } label: {
+                        Image(systemName: "sparkles")
+                    }
+                    .accessibilityLabel(String(localized: "AI Chat", comment: "Note type"))
+                }
 
                 Menu {
                     if onPickParent == nil, PersistenceManager.shared.hasMultipleServerProfiles() {
@@ -1877,7 +1889,8 @@ private struct CreateChildNoteFromTreeSheet: View {
                         selection: $newNoteType,
                         supportsSpreadsheet: supportsSpreadsheetNoteType,
                         supportsKanban: supportsKanbanNoteType,
-                        supportsPresentation: supportsPresentationNoteType
+                        supportsPresentation: supportsPresentationNoteType,
+                        supportsAIChat: appState.showsAIEntryPoints
                     )
                 }
 

@@ -24,6 +24,21 @@ final class TriliumWebSocketProgressTests: XCTestCase {
         XCTAssertEqual(SyncManager.ServerPullProgress(pulled: 1300, total: 1200).fraction, 1)
     }
 
+    func testServerSideProtectedSessionExpiryIsAReloadFrontendMessage() {
+        XCTAssertTrue(TriliumWebSocketConnection.isProtectedSessionEnd(
+            reloadFrontendMessage: message(#"{"type":"reload-frontend","reason":"leaving protected session"}"#)
+        ))
+        XCTAssertFalse(TriliumWebSocketConnection.isProtectedSessionEnd(
+            reloadFrontendMessage: message(#"{"type":"reload-frontend","reason":"becca reloaded"}"#)
+        ))
+        XCTAssertFalse(TriliumWebSocketConnection.isProtectedSessionEnd(
+            reloadFrontendMessage: message(#"{"type":"reload-frontend"}"#)
+        ))
+        XCTAssertFalse(TriliumWebSocketConnection.isProtectedSessionEnd(
+            reloadFrontendMessage: message(#"{"type":"protectedSessionLogout","reason":"leaving protected session"}"#)
+        ))
+    }
+
     func testReadsTaskProgressCounts() {
         let withTotal = TriliumWebSocketConnection.taskProgress(
             from: message(#"{"type":"taskProgressCount","taskId":"abc123","taskType":"deleteNotes","data":null,"progressCount":42,"totalCount":120}"#)

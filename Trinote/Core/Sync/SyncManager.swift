@@ -362,6 +362,17 @@ final class SyncManager {
         searchIndex?.scheduleRefresh(profileId: profileId)
     }
 
+    /// Tells `AppState` which protected notes a pull wrote, so it can fetch their readable titles while the
+    /// protected session is open.
+    private func announceProtectedNotesSynced(_ noteIds: Set<String>, profileId: String) {
+        guard !noteIds.isEmpty else { return }
+        NotificationCenter.default.post(
+            name: .trinoteProtectedNotesSynced,
+            object: nil,
+            userInfo: ["noteIds": Array(noteIds), "profileId": profileId]
+        )
+    }
+
     private func isStale(_ generation: UInt64) -> Bool {
         Task.isCancelled || self.syncGeneration != generation
     }
@@ -473,6 +484,7 @@ final class SyncManager {
                     generation: generation,
                     reportsProgress: false
                 ) else { return }
+                announceProtectedNotesSynced(pull.protectedNoteIds, profileId: profileId)
                 if pull.appliedCount > 0 || pull.deletionCount > 0 { changedLocalDatabase = true }
                 if pull.serverBehindCursor {
                     // The server's history restarted (restored or replaced); the walk just read everything, so
@@ -548,6 +560,7 @@ final class SyncManager {
                 generation: generation,
                 reportsProgress: true
             ) else { return }
+            announceProtectedNotesSynced(pull.protectedNoteIds, profileId: profileId)
             let totalApplied = pull.appliedCount
             var deletionCount = pull.deletionCount
             let notesToRefreshContent = pull.notesToRefreshContent
@@ -662,6 +675,8 @@ final class SyncManager {
         var notesToRefreshContent: [String: String] = [:]
         /// The loop stopped before the server said it was done (iteration cap, or empty batches that never advance).
         var gaveUp = false
+        /// Protected notes the pull wrote (their titles came encrypted and were left as they were).
+        var protectedNoteIds: Set<String> = []
         /// The server's newest change id is below the saved cursor: its database was restored or replaced.
         var serverBehindCursor = false
     }
@@ -737,6 +752,7 @@ final class SyncManager {
             )
             result.deletionCount += applied.deletionCount
             result.notesToRefreshContent = applied.notesToRefreshContent
+            result.protectedNoteIds.formUnion(applied.protectedNoteIds)
             for erasedNoteId in applied.erasedNoteIds {
                 try? cacheExclusion.removeExcludedRootNoteIfNeeded(noteId: erasedNoteId, serverProfileId: profileId)
             }

@@ -106,6 +106,27 @@ struct CacheStore {
         return byId
     }
 
+    /// Ids of the cached protected notes of a server.
+    func protectedNoteIds(serverProfileId: String) throws -> [String] {
+        let profileId = serverProfileId
+        var descriptor = FetchDescriptor<CachedNote>(predicate: #Predicate { $0.serverProfileId == profileId && $0.isProtected == true })
+        descriptor.propertiesToFetch = [\.noteId]
+        return try context.fetch(descriptor).map(\.noteId)
+    }
+
+    /// Sets the titles of cached notes (ids not cached are skipped). Returns how many changed; not saved.
+    func updateTitles(_ titles: [String: String], serverProfileId: String) throws -> Int {
+        guard !titles.isEmpty else { return 0 }
+        var changed = 0
+        for (noteId, row) in try fetchCachedNotes(ids: titles.keys, serverProfileId: serverProfileId) {
+            if let title = titles[noteId], row.title != title {
+                row.title = title
+                changed += 1
+            }
+        }
+        return changed
+    }
+
     /// Ids per `IN (…)` query, well under SQLite's bound-parameter limit.
     static let idQueryChunkSize = 500
 

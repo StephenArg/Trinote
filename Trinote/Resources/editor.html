@@ -5114,7 +5114,7 @@ window.editorBridge = {
     const n = Math.max(0, Number(px) || 0);
     document.documentElement.style.setProperty('--editor-floating-chip-clearance', n + 'px');
   },
-  // Settings → Autosave → Hide Save Button also hides the table toolbar's Save.
+  // Hides the table toolbar's Save: Settings → Autosave → Hide Save Button, or Autosave has nothing left to save.
   setSaveButtonHidden(hidden) {
     _ctxSaveBtn.style.display = hidden ? 'none' : '';
   },

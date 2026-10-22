@@ -245,6 +245,9 @@ actor SyncStore {
         var notesToRefreshContent: [String: String] = [:]
         /// Notes erased on the server, for the caller to drop from the cache-exclusion list.
         var erasedNoteIds: [String] = []
+        /// Protected notes this batch wrote. Sync rows carry their titles encrypted, so the cache kept the title it
+        /// had; while the protected session is open the caller fetches the readable ones.
+        var protectedNoteIds: Set<String> = []
     }
 
     /// Applies one pulled batch of entity changes (notes, branches, attributes, blobs, reorderings, erasures) and
@@ -276,7 +279,7 @@ actor SyncStore {
             switch ec.entityName {
             case "notes":
                 if let row = noteIndex[ec.entityId],
-                   try applyNoteRow(row, context: context, notesToRefreshUtc: &result.notesToRefreshContent) {
+                   try applyNoteRow(row, context: context, notesToRefreshUtc: &result.notesToRefreshContent, protectedNoteIds: &result.protectedNoteIds) {
                     result.deletionCount += 1
                 }
             case "branches":
@@ -376,7 +379,12 @@ actor SyncStore {
     }
 
     /// Returns whether the row deleted the note.
-    private func applyNoteRow(_ d: [String: Any], context: PullContext, notesToRefreshUtc: inout [String: String]) throws -> Bool {
+    private func applyNoteRow(
+        _ d: [String: Any],
+        context: PullContext,
+        notesToRefreshUtc: inout [String: String],
+        protectedNoteIds: inout Set<String>
+    ) throws -> Bool {
         guard let noteId = FlexJSON.string(d["noteId"]) else { return false }
         let profileId = context.profileId
 
@@ -402,10 +410,20 @@ actor SyncStore {
         }
 
         let utc = d["utcDateModified"] as? String ?? ""
+        let isProtected = FlexJSON.bool(d["isProtected"])
+        // A protected note's sync row carries its title encrypted: keep the title the cache has (readable once it
+        // was fetched in a protected session) rather than replace it with ciphertext.
+        var title = d["title"] as? String ?? ""
+        if isProtected {
+            protectedNoteIds.insert(noteId)
+            if let existing, existing.isProtected, !existing.title.isEmpty {
+                title = existing.title
+            }
+        }
         let response = NoteResponse(
             noteId: noteId,
-            isProtected: FlexJSON.bool(d["isProtected"]),
-            title: d["title"] as? String ?? "",
+            isProtected: isProtected,
+            title: title,
             type: d["type"] as? String ?? "text",
             mime: d["mime"] as? String ?? "text/html",
             blobId: d["blobId"] as? String,

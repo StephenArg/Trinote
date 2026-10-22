@@ -3,7 +3,7 @@ import XCTest
 
 final class NoteEditorSavingTests: XCTestCase {
     func testAutosaveDelayOptionsDefaultToFiveSeconds() {
-        XCTAssertEqual(NoteEditorSaving.autosaveDelayOptions, [3, 5, 7, 10, 12])
+        XCTAssertEqual(NoteEditorSaving.autosaveDelayOptions, [1, 2, 3, 5, 7, 10, 12])
         XCTAssertEqual(NoteEditorSaving.defaultAutosaveDelay, 5)
     }
 
@@ -20,10 +20,19 @@ final class NoteEditorSavingTests: XCTestCase {
         XCTAssertTrue(NoteEditorSaving.delayTitle(for: 7).contains("7"))
     }
 
-    func testSaveButtonCanOnlyBeHiddenWithAutosave() {
-        XCTAssertFalse(NoteEditorSaving.hidesSaveButton(autosave: false, hideSaveButton: true))
-        XCTAssertFalse(NoteEditorSaving.hidesSaveButton(autosave: true, hideSaveButton: false))
-        XCTAssertTrue(NoteEditorSaving.hidesSaveButton(autosave: true, hideSaveButton: true))
+    func testSaveButtonAlwaysShowsWithoutAutosave() {
+        for status in [EditorAutosaveStatus.idle, .edited, .saved] {
+            XCTAssertTrue(NoteEditorSaving.showsSaveButton(autosave: false, hideSaveButton: false, status: status))
+            // Hide Save Button only applies with Autosave.
+            XCTAssertTrue(NoteEditorSaving.showsSaveButton(autosave: false, hideSaveButton: true, status: status))
+        }
+    }
+
+    func testWithAutosaveSaveButtonShowsOnlyWhileChangesAreUnsaved() {
+        XCTAssertFalse(NoteEditorSaving.showsSaveButton(autosave: true, hideSaveButton: false, status: .idle))
+        XCTAssertTrue(NoteEditorSaving.showsSaveButton(autosave: true, hideSaveButton: false, status: .edited))
+        XCTAssertFalse(NoteEditorSaving.showsSaveButton(autosave: true, hideSaveButton: false, status: .saved))
+        XCTAssertFalse(NoteEditorSaving.showsSaveButton(autosave: true, hideSaveButton: true, status: .edited))
     }
 
     func testAutosaveAlwaysSavesWhenLeaving() {

@@ -20,6 +20,10 @@ struct TrinoteCommands: Commands {
             command(String(localized: "Find in Note…", comment: "iPad menu bar: find text in the open note"), .findInNote)
                 .keyboardShortcut("f")
             Divider()
+            // No shortcuts: desktop's Alt+A/L/R type characters (ą, ł) on some keyboards, Polish among them.
+            command(String(localized: "Change Note Type…", comment: "Note overflow menu: open the note type picker"), .changeNoteType)
+            command(String(localized: "Attributes…", comment: "Note overflow menu: open the Attributes sheet"), .editAttributes)
+            Divider()
             command(String(localized: "Back", comment: "iPad menu bar: go back from a linked note"), .back)
                 .keyboardShortcut("[")
         }
@@ -45,6 +49,7 @@ struct TrinoteCommands: Commands {
 
     private func command(_ title: String, _ command: WorkspaceCommand) -> some View {
         Button(title) { workspace?.send(command) }
-            .disabled(workspace == nil)
+            // Nothing reaches the app behind the lock screen, keyboard shortcuts included.
+            .disabled(workspace == nil || AppLock.shared.isLocked)
     }
 }
