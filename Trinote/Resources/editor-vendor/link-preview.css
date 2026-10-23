@@ -1,0 +1,266 @@
+/*
+ * Trilium link previews, as drawn by link-preview.js. Shared by the rich text editor (editor.html) and the
+ * read-only note view (inlined by `LinkPreviewHTML.swift`). The colour defaults use `:where(:root)` so a host page
+ * can set its own `--link-preview-*` values whatever the order. Ported from Trilium's share-theme
+ * `link_embed.css`, sized for a phone. Pictures are absolutely positioned inside fixed boxes, so a preview
+ * keeps its size whether or not its pictures have loaded (the read-only view remembers note heights).
+ */
+:where(:root) {
+  --link-preview-accent: #007aff;
+  --link-preview-chip-bg: rgba(0, 122, 255, 0.08);
+  --link-preview-chip-border: rgba(0, 122, 255, 0.20);
+  --link-preview-card-bg: rgba(0, 0, 0, 0.025);
+  --link-preview-card-border: rgba(0, 0, 0, 0.12);
+  --link-preview-image-bg: rgba(0, 0, 0, 0.05);
+  --link-preview-muted: #6e6e73;
+}
+@media (prefers-color-scheme: dark) {
+  :where(:root) {
+    --link-preview-accent: #0a84ff;
+    --link-preview-chip-bg: rgba(10, 132, 255, 0.14);
+    --link-preview-chip-border: rgba(10, 132, 255, 0.28);
+    --link-preview-card-bg: rgba(255, 255, 255, 0.04);
+    --link-preview-card-border: rgba(255, 255, 255, 0.15);
+    --link-preview-image-bg: rgba(255, 255, 255, 0.06);
+    --link-preview-muted: #98989d;
+  }
+}
+
+/* ---------- Inline mention (favicon + title) ---------- */
+
+span.link-mention { display: inline; }
+
+.link-mention a.link-embed-mention {
+  display: inline;
+  padding: 1px 6px 1px 4px;
+  border: 1px solid var(--link-preview-chip-border);
+  border-radius: 6px;
+  background: var(--link-preview-chip-bg);
+  color: var(--link-preview-accent);
+  text-decoration: none;
+  font-size: 0.92em;
+  font-weight: 500;
+  line-height: 1.5;
+  /* Inline (not inline-flex) so a long title wraps line by line; clone keeps each fragment's chip shape. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  -webkit-tap-highlight-color: rgba(0, 122, 255, 0.12);
+  touch-action: manipulation;
+}
+
+.link-mention img.link-embed-mention-favicon,
+.link-embed img.link-embed-mention-favicon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  max-width: none;
+  margin: 0;
+  border-radius: 2px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+/* An icon measured as fading into this page's background (link-preview.js) is turned round: the half-turn of hue
+   before inverting keeps its colours, so a navy mark comes back light blue rather than pale yellow. */
+@media (prefers-color-scheme: dark) {
+  img.link-embed-mention-favicon.link-embed-favicon-dark { filter: hue-rotate(180deg) invert(1); }
+}
+@media (prefers-color-scheme: light) {
+  img.link-embed-mention-favicon.link-embed-favicon-light { filter: hue-rotate(180deg) invert(1); }
+}
+
+.link-mention a.link-embed-mention > img.link-embed-mention-favicon {
+  vertical-align: -0.2em;
+  margin-right: 4px;
+}
+
+.link-mention .link-embed-mention-title {
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* ---------- Block wrapper ---------- */
+
+.link-embed {
+  display: block;
+  margin: 12px 0;
+  clear: both;
+}
+
+.link-embed img {
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: inherit;
+}
+.link-mention img {
+  pointer-events: none;
+  -webkit-user-drag: none;
+  cursor: inherit;
+}
+
+/* ---------- Video (thumbnail facade; opens the video outside the app) ---------- */
+
+.link-embed a.link-embed-video {
+  display: block;
+  max-width: 640px;
+  margin: 0 auto;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.link-embed .link-embed-video-facade {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  overflow: hidden;
+}
+
+.link-embed img.link-embed-video-thumbnail {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  margin: 0;
+  border-radius: 0;
+  object-fit: cover;
+  display: block;
+  filter: brightness(0.75);
+}
+
+.link-embed .link-embed-video-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 68px;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.link-embed .link-embed-video-play::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 10px 0 10px 17px;
+  border-color: transparent transparent transparent #fff;
+}
+
+.link-embed a.link-embed-video:active .link-embed-video-play { background: #f00; }
+
+/* ---------- Card ---------- */
+
+.link-embed a.link-embed-card {
+  display: flex;
+  width: 100%;
+  height: 104px;
+  border: 1px solid var(--link-preview-card-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--link-preview-card-bg);
+  color: inherit;
+  text-decoration: none;
+  font-weight: normal;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: rgba(0, 122, 255, 0.10);
+  touch-action: manipulation;
+}
+
+.link-embed .link-embed-card-image-wrapper {
+  position: relative;
+  width: 30%;
+  max-width: 160px;
+  min-width: 88px;
+  flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--link-preview-image-bg);
+}
+
+.link-embed img.link-embed-card-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  margin: 0;
+  border-radius: 0;
+  object-fit: cover;
+}
+
+.link-embed .link-embed-card-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 26px;
+  opacity: 0.5;
+}
+
+.link-embed .link-embed-card-content {
+  flex: 1;
+  padding: 10px 12px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  overflow: hidden;
+  text-align: left;
+}
+
+.link-embed .link-embed-card-title {
+  font-weight: 600;
+  font-size: 0.9em;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--link-preview-accent);
+}
+
+.link-embed .link-embed-card-description {
+  font-size: 0.78em;
+  line-height: 1.35;
+  color: var(--link-preview-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.link-embed .link-embed-card-url {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74em;
+  line-height: 1.3;
+  color: var(--link-preview-muted);
+  min-width: 0;
+  margin-top: auto;
+}
+
+.link-embed .link-embed-card-url > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-embed .link-embed-card-url img.link-embed-mention-favicon {
+  width: 14px;
+  height: 14px;
+}

@@ -222,6 +222,7 @@ private struct OfficeHTMLWebView: UIViewRepresentable {
         var fillsAvailableHeight: Bool
         var loadedHTML: String = ""
         var themeColors: HTMLThemeColors?
+        private let processRecovery = WebContentProcessRecovery(label: "Office preview")
         weak var webView: WKWebView?
 
         init(onHeightChanged: ((CGFloat) -> Void)?, fillsAvailableHeight: Bool) {
@@ -244,6 +245,15 @@ private struct OfficeHTMLWebView: UIViewRepresentable {
             guard let height, height > 0 else { return }
             webView?.scrollView.setContentOffset(.zero, animated: false)
             onHeightChanged?(height)
+        }
+
+        /// iOS ended the page's process (often while the app is in the background). WebKit's own reload brings a page
+        /// loaded from a string back blank, so load it again.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            processRecovery.pageProcessEnded { [weak self, weak webView] in
+                guard let self, let webView, let themeColors = self.themeColors else { return }
+                webView.loadHTMLString(OfficeHTMLPreviewView.wrapHTML(self.loadedHTML, theme: themeColors), baseURL: nil)
+            }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

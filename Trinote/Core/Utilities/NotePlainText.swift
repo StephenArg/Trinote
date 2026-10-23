@@ -59,6 +59,8 @@ enum NotePlainText {
         text = text.replacingOccurrences(of: "<script[^>]*>[\\s\\S]*?</script>", with: "", options: [.regularExpression, .caseInsensitive])
         // Remove HTML comments
         text = text.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: "", options: .regularExpression)
+        // Trilium link previews are empty elements: their text lives in data-* attributes.
+        text = LinkPreviewHTML.replacingPreviewsWithText(text)
 
         // Insert newlines for block-level boundaries
         let blockTags = "p|div|br|h[1-6]|li|tr|blockquote|pre|hr|section|article|header|footer|figcaption|ul|ol|table|thead|tbody|tfoot|dd|dt"

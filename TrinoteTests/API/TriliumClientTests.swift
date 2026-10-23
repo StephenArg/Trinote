@@ -708,7 +708,7 @@ final class TriliumClientTests: XCTestCase {
         try await client.restoreSession()
 
         let note = try await client.getOrCreateDayNote(onISODay: "2026-09-27")
-        XCTAssertEqual(note, NoteIdTitle(noteId: "dayNote1", title: "27 - Sunday", isProtected: false))
+        XCTAssertEqual(note, NoteIdTitle(noteId: "dayNote1", title: "27 - Sunday", isProtected: false, type: "text"))
         do {
             _ = try await client.getOrCreateDayNote(onISODay: "27/09/2026")
             XCTFail("a day that isn't yyyy-MM-dd never reaches the server")
@@ -926,6 +926,36 @@ final class TriliumClientTests: XCTestCase {
         }
         let none = try await client.attributeValues(name: "../x")
         XCTAssertEqual(none, [])
+    }
+
+    func testLinkPreviewCreationNeedsTrilium0104() {
+        func info(_ version: String) -> AppInfoResponse? {
+            try? JSONDecoder().decode(AppInfoResponse.self, from: Data(#"{"appVersion":"\#(version)","dbVersion":240}"#.utf8))
+        }
+        XCTAssertFalse(TriliumServerCompatibility.supportsLinkPreviewCreation(info("0.103.2")))
+        XCTAssertTrue(TriliumServerCompatibility.supportsLinkPreviewCreation(info("0.104.0")))
+        XCTAssertTrue(TriliumServerCompatibility.supportsLinkPreviewCreation(info("v0.106.0")))
+        XCTAssertFalse(TriliumServerCompatibility.supportsLinkPreviewCreation(nil))
+    }
+
+    func testAutoLinkPreviewsOptionIsOnUnlessTheServerSaysFalse() {
+        XCTAssertTrue(TriliumOptionsResponse(values: [:]).autoLinkPreviewsEnabled)
+        XCTAssertTrue(TriliumOptionsResponse(values: ["textNoteAutoLinkPreviewsEnabled": "true"]).autoLinkPreviewsEnabled)
+        XCTAssertFalse(TriliumOptionsResponse(values: ["textNoteAutoLinkPreviewsEnabled": "false"]).autoLinkPreviewsEnabled)
+    }
+
+    func testLinkPreviewMetadataDecodesTriliumsAnswer() throws {
+        let json = #"{"url":"https://github.com/","title":"GitHub","favicon":"api/attachments/a1/image/github.com.svg","siteName":"GitHub","embedType":"opengraph"}"#
+        let metadata = try JSONDecoder().decode(LinkPreviewMetadata.self, from: Data(json.utf8))
+        XCTAssertEqual(metadata.title, "GitHub")
+        XCTAssertEqual(metadata.embedType, "opengraph")
+        XCTAssertNil(metadata.image)
+        XCTAssertNil(metadata.unresolved)
+        let unresolved = try JSONDecoder().decode(
+            LinkPreviewMetadata.self,
+            from: Data(#"{"url":"https://x.test/","title":"x.test","embedType":"opengraph","unresolved":true}"#.utf8)
+        )
+        XCTAssertEqual(unresolved.unresolved, true)
     }
 
     func testBulkDeletionNeedsTrilium0106() {

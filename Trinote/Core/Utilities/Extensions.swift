@@ -46,6 +46,11 @@ extension Notification.Name {
     /// `userInfo["noteId"]` contains the note ID.
     /// `userInfo["reloadTreeFromServer"]` as `Bool` — reload the tree from the server (e.g. after re-including cached notebooks).
     static let trinoteTreeShouldRefresh = Notification.Name("TrinoteTreeShouldRefresh")
+    /// Posted after something other than the note's editor changed its content on the server (a Shortcut adding to
+    /// the journal). `userInfo["noteId"]` is the note id; an open editor that isn't editing reloads it.
+    static let trinoteNoteContentChangedOutside = Notification.Name("TrinoteNoteContentChangedOutside")
+    /// Posted after the journal captures kept on the device changed (one added, added to the journal, or deleted).
+    static let trinoteJournalCapturesChanged = Notification.Name("TrinoteJournalCapturesChanged")
     static let trinoteTreeReloadFromServerUserInfoKey = "reloadTreeFromServer"
     /// Posted after a sync wrote protected notes. `userInfo["noteIds"]` is `[String]`, `userInfo["profileId"]` the server.
     static let trinoteProtectedNotesSynced = Notification.Name("TrinoteProtectedNotesSynced")
@@ -282,6 +287,8 @@ extension Data {
         if header.count >= 8 && header[0...3] == [0x89, 0x50, 0x4E, 0x47] { return "image/png" }
         if header.count >= 4 && header[0...3] == [0x47, 0x49, 0x46, 0x38] { return "image/gif" }
         if header.count >= 12 && header[0...3] == [0x52, 0x49, 0x46, 0x46] && header[8...11] == [0x57, 0x45, 0x42, 0x50] { return "image/webp" }
+        // ICO: Trilium keeps a site's favicon as an `.ico` attachment for link previews.
+        if header.count >= 6 && header[0...3] == [0x00, 0x00, 0x01, 0x00] && header[4...5] != [0x00, 0x00] { return "image/x-icon" }
 
         guard let brands = isoBMFFBrands else { return nil }
         if brands.contains("avif") || brands.contains("avis") { return "image/avif" }
@@ -305,12 +312,14 @@ extension Data {
             .map { String(decoding: bytes[$0..<$0 + 4], as: UTF8.self) }
     }
 
-    /// Checks whether the data looks like an SVG (text starting with `<svg` or `<?xml` containing `<svg`).
+    /// Checks whether the data looks like an SVG: text starting with `<svg`, or with an XML declaration, comment or
+    /// `<!DOCTYPE svg` followed by `<svg` (common in site favicons).
     var isSVG: Bool {
-        guard let str = String(data: prefix(512), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
-            return false
-        }
-        return str.hasPrefix("<svg") || (str.hasPrefix("<?xml") && str.contains("<svg"))
+        guard let raw = String(data: prefix(512), encoding: .utf8) else { return false }
+        let str = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
+        if str.hasPrefix("<svg") { return true }
+        let preamble = str.hasPrefix("<?xml") || str.hasPrefix("<!--") || str.lowercased().hasPrefix("<!doctype svg")
+        return preamble && str.contains("<svg")
     }
 }
 

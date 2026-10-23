@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Settings → Note Editor saving options (issue #26): save a few seconds after you stop typing, hide the Save
 /// button, and save when tapping Back. Global like the other Note Editor settings, and all off by default.
@@ -60,6 +61,100 @@ enum NoteEditorSaving {
     private static func jsonObject(_ json: String) -> [String: Any]? {
         guard let data = json.data(using: .utf8) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+}
+
+/// What an editor does when iOS ends its web view's content process, which it often does while the app is in the
+/// background. Left to WebKit, the page reloads and the editor shows the note as it was when editing began; the next
+/// save then puts that back on the server over the edits (issue #26). So each editor reloads its page itself and
+/// seeds it with the newest content it has.
+struct EditorReloadRecovery {
+    /// Reloads allowed within `window`. A note that ends the process every time it loads would otherwise loop.
+    static let maxReloads = 3
+    static let window: TimeInterval = 60
+
+    private var reloadTimes: [Date] = []
+
+    /// Counts a reload at `now`. False once the page has already reloaded `maxReloads` times within `window`.
+    mutating func allowsReload(at now: Date = .now) -> Bool {
+        reloadTimes.removeAll { now.timeIntervalSince($0) >= Self.window }
+        guard reloadTimes.count < Self.maxReloads else { return false }
+        reloadTimes.append(now)
+        return true
+    }
+
+    /// What the reloaded page shows: content queued for it, else the newest the editor sent, else what it opened with.
+    static func content<Content>(pending: Content?, latest: Content?, initial: Content) -> Content {
+        pending ?? latest ?? initial
+    }
+
+    /// Whether the reloaded text editor reports its first serialization (autosave's baseline). Only when the first
+    /// page never did and nothing was edited: a baseline taken from restored edits would count them as saved, so
+    /// Back wouldn't save them.
+    static func reportsLoadedContentAfterReload(alreadyReported: Bool, receivedChanges: Bool) -> Bool {
+        !alreadyReported && !receivedChanges
+    }
+}
+
+/// One web view's handling of its content process ending: reloads within `EditorReloadRecovery`'s budget, and while
+/// the app is in the background waits until it returns. iOS would likely end a page started in the background too,
+/// using up the budget, and WebKit's own reload also waits until the page can be seen.
+///
+/// Not actor-isolated so the web view coordinators that keep one stay as they are; it's only used on the main thread
+/// (WebKit calls `webViewWebContentProcessDidTerminate` there, and the foreground observer runs on `.main`).
+final class WebContentProcessRecovery: @unchecked Sendable {
+    private let label: String
+    private var budget = EditorReloadRecovery()
+    private var pendingReload: (() -> Void)?
+    private var foregroundObserver: OneShotObserver?
+
+    init(label: String) {
+        self.label = label
+    }
+
+    /// Call from `webViewWebContentProcessDidTerminate`; `reload` loads the page again.
+    func pageProcessEnded(reload: @escaping () -> Void) {
+        let inBackground = MainActor.assumeIsolated { UIApplication.shared.applicationState == .background }
+        guard inBackground else {
+            reloadIfAllowed(reload)
+            return
+        }
+        pendingReload = reload
+        guard foregroundObserver == nil else { return }
+        Log.ui.info("\(self.label, privacy: .public) web content process ended in the background; reloading when the app returns")
+        let observer = OneShotObserver()
+        foregroundObserver = observer
+        observer.token = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            observer.remove()
+            guard let self else { return }
+            self.foregroundObserver = nil
+            guard let reload = self.pendingReload else { return }
+            self.pendingReload = nil
+            self.reloadIfAllowed(reload)
+        }
+    }
+
+    private func reloadIfAllowed(_ reload: () -> Void) {
+        guard budget.allowsReload() else {
+            Log.ui.error("\(self.label, privacy: .public) keeps ending its web content process; not reloading it again")
+            return
+        }
+        Log.ui.warning("\(self.label, privacy: .public) web content process ended; reloading the page")
+        reload()
+    }
+}
+
+/// Holds a block observer's token so the block can remove itself.
+private final class OneShotObserver: @unchecked Sendable {
+    var token: NSObjectProtocol?
+
+    func remove() {
+        if let token { NotificationCenter.default.removeObserver(token) }
+        token = nil
     }
 }
 

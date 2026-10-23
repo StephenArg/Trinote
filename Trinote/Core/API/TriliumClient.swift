@@ -150,6 +150,9 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func exportSpreadsheetXlsx(noteId: String) async throws -> Data
     /// `GET /api/attachments/:id/office-preview` — Trilium 0.105+. Server-rendered HTML for Office / EPUB.
     func getAttachmentOfficePreview(_ attachmentId: String) async throws -> OfficePreviewResponse
+    /// `POST /api/link-embed/metadata` (Trilium 0.105+): a web page's title, description, favicon and cover image for
+    /// a link preview in `noteId`, whose attachments the server stores the pictures as.
+    func fetchLinkPreviewMetadata(url: String, noteId: String) async throws -> LinkPreviewMetadata
 
     // MARK: Sync — documented protocol (POST /api/sync/*)
 
@@ -1514,9 +1517,10 @@ actor TriliumClient: TriliumClientProtocol {
             let noteId: String
             let title: String?
             let isProtected: Bool?
+            let type: String?
         }
         let note: DayNote = try await get("/api/special-notes/days/\(day)", csrf: true)
-        return NoteIdTitle(noteId: note.noteId, title: note.title ?? "", isProtected: note.isProtected ?? false)
+        return NoteIdTitle(noteId: note.noteId, title: note.title ?? "", isProtected: note.isProtected ?? false, type: note.type)
     }
 
     func getInboxTarget() async throws -> InboxTargetResponse {
@@ -2005,6 +2009,14 @@ actor TriliumClient: TriliumClientProtocol {
 
     func getNoteOfficePreview(_ noteId: String) async throws -> OfficePreviewResponse {
         try await getOfficePreview(path: "/api/notes/\(noteId)/office-preview")
+    }
+
+    func fetchLinkPreviewMetadata(url: String, noteId: String) async throws -> LinkPreviewMetadata {
+        try await postJSON(
+            "/api/link-embed/metadata",
+            body: LinkPreviewMetadataRequest(url: url, noteId: noteId),
+            csrf: true
+        )
     }
 
     func getAttachmentOfficePreview(_ attachmentId: String) async throws -> OfficePreviewResponse {

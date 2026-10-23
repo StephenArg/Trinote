@@ -135,4 +135,19 @@ final class ExtensionsTests: XCTestCase {
         XCTAssertFalse(Data("{\"type\":\"excalidraw\"}".utf8).isPlausibleInlineImagePayload)
         XCTAssertFalse(Data().isPlausibleInlineImagePayload)
     }
+
+    /// Trilium keeps link preview favicons as `.ico` and `.svg` attachments; the image scheme handler refuses
+    /// anything this sniffing doesn't recognise.
+    func testFaviconFormatsSniff() {
+        let ico = Data([0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10])
+        XCTAssertEqual(ico.detectImageMIME(), "image/x-icon")
+        XCTAssertTrue(ico.isPlausibleInlineImagePayload)
+        XCTAssertFalse(Data([0x00, 0x00, 0x01, 0x00, 0x00, 0x00]).isPlausibleInlineImagePayload)
+
+        let commented = Data("<!-- Generator: Sketch -->\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>".utf8)
+        XCTAssertEqual(commented.detectImageMIME(), "image/svg+xml")
+        let doctype = Data("\u{FEFF}<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"x\"><svg/>".utf8)
+        XCTAssertTrue(doctype.isSVG)
+        XCTAssertFalse(Data("<!-- just a comment -->".utf8).isSVG)
+    }
 }

@@ -490,6 +490,7 @@ private struct MermaidPreviewWebView: UIViewRepresentable {
             return
         }
         coordinator.lastAppliedColorScheme = colorScheme
+        coordinator.latestSource = source
         if coordinator.isReady {
             coordinator.render(source)
         } else {
@@ -506,15 +507,18 @@ private struct MermaidPreviewWebView: UIViewRepresentable {
         weak var webView: WKWebView?
         var isReady = false
         var pendingSource: String?
+        /// The newest source, which a fresh page (including one WebKit reloaded after iOS ended its process) draws.
+        var latestSource: String?
         var lastAppliedColorScheme: ColorScheme?
         private var lastRenderedSource: String?
 
         func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "mermaidEditorReady" else { return }
             isReady = true
-            if let pending = pendingSource {
+            lastRenderedSource = nil
+            if let source = pendingSource ?? latestSource {
                 pendingSource = nil
-                render(pending)
+                render(source)
             }
         }
 

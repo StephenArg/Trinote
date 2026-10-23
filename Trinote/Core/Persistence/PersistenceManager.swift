@@ -18,9 +18,30 @@ final class PersistenceManager {
     let container: ModelContainer
     private let isMemoryOnly: Bool
 
+    /// The start-up in progress, so a second caller (a Shortcut launching the app in the background while its window
+    /// also starts) waits for it instead of opening the store twice.
+    private static var initialization: Task<Void, Error>?
+
     /// Creates the ModelContainer on a background thread to avoid blocking the main thread
-    /// (which causes UI freezes on physical devices with slower storage).
+    /// (which causes UI freezes on physical devices with slower storage). Safe to call more than once: later calls
+    /// return once the store is ready.
     static func initializeShared() async throws {
+        if _shared != nil { return }
+        if let initialization {
+            try await initialization.value
+            return
+        }
+        let task = Task { @MainActor in try await createShared() }
+        initialization = task
+        do {
+            try await task.value
+        } catch {
+            initialization = nil
+            throw error
+        }
+    }
+
+    private static func createShared() async throws {
         let (container, isMemoryOnly) = try await Task.detached(priority: .userInitiated) {
             let schema = Schema([
                 ServerProfile.self,

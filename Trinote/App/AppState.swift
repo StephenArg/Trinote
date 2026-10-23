@@ -1,10 +1,15 @@
 import Foundation
 import SwiftUI
+import UIKit
 import Observation
 
 @Observable
 @MainActor
 final class AppState {
+    /// The app's state once its window has started, for Shortcuts that run in the same process (`ShortcutSession`):
+    /// they use its signed-in client instead of building a second one. Set by `TrinoteApp`; tests leave it nil.
+    static weak var current: AppState?
+
     var activeProfile: ServerProfile?
     var client: (any TriliumClientProtocol)?
     var isAuthenticated = false {
@@ -24,6 +29,9 @@ final class AppState {
     private(set) var serverAppInfo: AppInfoResponse?
     /// Trilium's AI options for the active profile (`GET /api/options`), kept in memory only; see `TriliumAIConfig`.
     private(set) var aiConfig: TriliumAIConfig?
+    /// Trilium's "auto link previews" option (`textNoteAutoLinkPreviewsEnabled`), read with the server's other options.
+    /// On until the server says otherwise; it only decides whether pasted or typed URLs become link previews.
+    private(set) var serverAutoLinkPreviewsEnabled = true
     /// In-memory: whether the user has unlocked protected notes. The session ends when Trinote leaves the foreground
     /// or, with Lock Protected Notes set to After Server Timeout, once the server's timeout passes without a protected
     /// note being opened or saved (`ProtectedSessionLockPolicy`). It also ends after restoring the main login (see
@@ -68,6 +76,8 @@ final class AppState {
     let imageCachePrefetcher = ImageCachePrefetcher()
     let localTransfer = LocalNoteTransferService()
     let shareImport = ShareImportCoordinator()
+    /// A note the Open Today's Journal Shortcut asked for, for the notes tree to open (`handleExternalOpenRequests`).
+    var pendingExternalOpen: ExternalOpenResult?
     private let persistence = PersistenceManager.shared
     private let cacheExclusion = CacheExclusionPolicy()
     private let keychain = KeychainManager.shared
@@ -84,6 +94,14 @@ final class AppState {
     /// Used to distinguish "server changed because we uploaded" from "another client changed the note"
     /// when the post-upload getNote call fails on a flaky connection.
     private var lastOwnUploadTimestamps: [String: String] = [:]
+
+    /// Background time for uploading local changes, above all notes Autosave saves as the app leaves the foreground.
+    /// Without it iOS can suspend the app mid-request (issue #26).
+    @ObservationIgnored private var uploadBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    @ObservationIgnored private var uploadBackgroundTaskUsers = 0
+    /// How long leaving the app waits for queued uploads before ending the protected session (which protected notes'
+    /// uploads need). Uploads still running then carry on in the background time left.
+    static let backgroundUploadWaitSeconds: Double = 10
 
     var isOnline: Bool { networkMonitor.isConnected }
 
@@ -138,19 +156,7 @@ final class AppState {
     /// as signed in. Otherwise the stored login is left alone: replacing it with a jar that lost its `trilium.sid`, or
     /// holds an anonymous one, is what sent a relaunch to the server login page.
     private func saveSessionCookies(of client: TriliumClient, profileId: String, reason: String) async {
-        guard let data = await client.exportVerifiedSessionCookieData() else {
-            SessionCookieTrace.log(
-                "keychain save skipped (\(reason)): jar sid \(SessionCookieTrace.jarTag(for: client.baseURL)) isn't the confirmed session"
-            )
-            return
-        }
-        do {
-            try await keychain.saveSessionCookies(data, forServer: profileId)
-            SessionCookieTrace.log("keychain save (\(reason)) sid \(SessionCookieTrace.tag(archive: data))")
-        } catch {
-            SessionCookieTrace.log("keychain save FAILED (\(reason)): \(error)")
-            Log.auth.warning("Could not save the session cookies: \(error)")
-        }
+        await TriliumSessionFactory.saveSessionCookies(of: client, profileId: profileId, reason: reason, keychain: keychain)
     }
 
     /// Called when the app enters background.
@@ -160,6 +166,12 @@ final class AppState {
         localTransfer.onBackground()
         syncManager.beginBackgroundTimeExtensionIfNeeded()
         imageCachePrefetcher.beginBackgroundTimeExtensionIfNeeded()
+        // Notes saved as the app left go up before the protected session ends: a protected note can't be saved without it.
+        if isAuthenticated, networkMonitor.isConnected, let pid = activeProfile?.id, hasPendingLocalChanges(serverProfileId: pid) {
+            beginUploadBackgroundTime()
+            await flushPendingLocalChanges(waitingAtMost: Self.backgroundUploadWaitSeconds)
+            endUploadBackgroundTime()
+        }
         if protectedSessionActive, ProtectedSessionLockPolicy.current == .serverTimeout {
             // After Server Timeout: the session runs on in the background; `onForegroundResume` catches up on a
             // timeout that passed meanwhile.
@@ -196,6 +208,7 @@ final class AppState {
         do {
             let options = try await client.getOptions()
             guard activeProfile?.id == profile.id else { return serverProtectedSessionTimeout }
+            serverAutoLinkPreviewsEnabled = options.autoLinkPreviewsEnabled
             if let seconds = options.protectedSessionTimeoutSeconds {
                 serverProtectedSessionTimeouts[profile.id] = seconds
                 ProtectedSessionTimeout.rememberServerValue(seconds, profileId: profile.id)
@@ -274,6 +287,8 @@ final class AppState {
             // The session is the server's, not one note's: every protected note becomes readable, so fetch all of
             // their titles, not only those on the page the password was entered from.
             await refreshProtectedNoteTitles()
+            // Captures that waited for a protected journal can go in now.
+            await flushShortcutJournalCaptures()
             guard ProtectedSessionLockPolicy.current == .serverTimeout else { return }
             scheduleProtectedSessionExpiry()
             await refreshServerProtectedSessionTimeout()
@@ -495,6 +510,10 @@ final class AppState {
         await flushPendingNotePatchesIfPossible(assumeSessionIsReady: true)
         await flushPendingNoteDeletionsIfPossible(assumeSessionIsReady: true)
         await flushPendingBranchMovesIfPossible(assumeSessionIsReady: true)
+        // Journal captures Shortcuts saved on the device go once the session is known to work.
+        if assumeSessionIsReady {
+            await flushShortcutJournalCaptures()
+        }
     }
 
     /// Fire-and-forget: tries to push all pending local changes to the server in the background.
@@ -507,21 +526,62 @@ final class AppState {
            CFAbsoluteTimeGetCurrent() - CheckboxPerf.lastToggleEndedAt < 10 {
             CheckboxPerf.log("backgroundSyncPendingChanges kickoff lastToggle=#\(CheckboxPerf.lastToggleID)")
         }
+        // Often called as the app leaves the foreground (Autosave saves then), so ask for time to finish.
+        beginUploadBackgroundTime()
         Task { [weak self] in
+            defer { self?.endUploadBackgroundTime() }
             guard let self else { return }
             await self.flushPendingLocalChangesIfPossible()
             // If new writes landed while we were flushing (conditional delete kept them),
             // run one more pass so the latest content reaches the server.
             guard let pid = self.activeProfile?.id else { return }
-            let hasCreations = (try? self.persistence.fetchPendingNoteCreations(serverProfileId: pid))?.isEmpty == false
-            let hasPatches = (try? self.persistence.fetchPendingNotePatches(serverProfileId: pid))?.isEmpty == false
-            let hasDeletions = (try? self.persistence.fetchPendingNoteDeletions(serverProfileId: pid))?.isEmpty == false
-            let hasUploads = (try? self.persistence.fetchPendingNoteBodyUploads(serverProfileId: pid))?.isEmpty == false
-            let hasAttachments = (try? self.persistence.fetchPendingAttachmentImports(serverProfileId: pid))?.isEmpty == false
-            if hasCreations || hasPatches || hasDeletions || hasUploads || hasAttachments {
+            if self.hasPendingLocalChanges(serverProfileId: pid) {
                 await self.flushPendingLocalChangesIfPossible()
             }
         }
+    }
+
+    /// Whether anything made on this device is still waiting to reach the server.
+    private func hasPendingLocalChanges(serverProfileId pid: String) -> Bool {
+        let hasCreations = (try? persistence.fetchPendingNoteCreations(serverProfileId: pid))?.isEmpty == false
+        let hasPatches = (try? persistence.fetchPendingNotePatches(serverProfileId: pid))?.isEmpty == false
+        let hasDeletions = (try? persistence.fetchPendingNoteDeletions(serverProfileId: pid))?.isEmpty == false
+        let hasUploads = (try? persistence.fetchPendingNoteBodyUploads(serverProfileId: pid))?.isEmpty == false
+        let hasAttachments = (try? persistence.fetchPendingAttachmentImports(serverProfileId: pid))?.isEmpty == false
+        return hasCreations || hasPatches || hasDeletions || hasUploads || hasAttachments
+    }
+
+    /// Flushes local changes but returns after `seconds` at most; a flush still running then carries on.
+    private func flushPendingLocalChanges(waitingAtMost seconds: Double) async {
+        let gate = FirstToFinish()
+        Task { [weak self] in
+            await self?.flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
+            gate.finish()
+        }
+        let timer = Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            gate.finish()
+        }
+        await gate.wait()
+        timer.cancel()
+    }
+
+    /// Counted, so overlapping uploads share one background task, ended when the last finishes.
+    private func beginUploadBackgroundTime() {
+        uploadBackgroundTaskUsers += 1
+        guard uploadBackgroundTask == .invalid else { return }
+        uploadBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "TrinoteNoteUpload") { [weak self] in
+            // Runs on the main thread, and the task has to end before this returns or iOS ends the app.
+            MainActor.assumeIsolated { self?.endUploadBackgroundTime(expired: true) }
+        }
+    }
+
+    private func endUploadBackgroundTime(expired: Bool = false) {
+        uploadBackgroundTaskUsers = expired ? 0 : max(0, uploadBackgroundTaskUsers - 1)
+        guard uploadBackgroundTaskUsers == 0, uploadBackgroundTask != .invalid else { return }
+        if expired { Log.sync.warning("Background time for uploads ran out; what's left uploads on the next launch or return") }
+        UIApplication.shared.endBackgroundTask(uploadBackgroundTask)
+        uploadBackgroundTask = .invalid
     }
 
     func flushPendingNoteCreationsIfPossible(assumeSessionIsReady: Bool = false) async {
@@ -933,8 +993,19 @@ final class AppState {
             // with "backing data was detached from a context without resolving attribute faults".
             let rowNoteId = row.noteId
             let rowBodyBytes = row.body.count
+            // A note made offline keeps its temporary id until its creation reaches the server, which renames this
+            // row; until then every request for it fails, so it waits without holding up the rows after it.
+            if rowNoteId.isOfflineLocalNoteId { continue }
+            /// Trilium says the note doesn't exist (not just that the request failed).
+            var noteMissingOnServer = false
             do {
-                let fresh = try? await client.getNote(row.noteId)
+                let fresh: NoteResponse?
+                do {
+                    fresh = try await client.getNote(row.noteId)
+                } catch {
+                    if case .notFound = APIError.from(error) { noteMissingOnServer = true }
+                    fresh = nil
+                }
                 let base = row.baseUtcDateModified.trimmingCharacters(in: .whitespacesAndNewlines)
                 var isRealConflict = false
                 if let fresh {
@@ -944,6 +1015,30 @@ final class AppState {
                         // Check whether the timestamp mismatch was caused by our own previous upload.
                         let ownUpload = lastOwnUploadTimestamps[row.noteId] ?? ""
                         isRealConflict = (ownUpload != serverMod)
+                    }
+                    if isRealConflict, !fresh.isProtected,
+                       let serverBody = try? await client.getNoteContent(row.noteId),
+                       PendingNoteBodyUpload.serverAlreadyHas(serverBody, queued: row.body) {
+                        // An earlier upload of this body landed, but the app was suspended or killed before it
+                        // heard back, so the row stayed (and the record of our own upload went with the app).
+                        // The server already has these edits: nothing to copy.
+                        lastOwnUploadTimestamps[rowNoteId] = serverMod
+                        let parentNoteIds = (try? persistence.fetchCachedNote(id: rowNoteId, serverProfileId: profileId))?.parentNoteIds ?? []
+                        try? persistence.cacheNoteContentIfAllowed(
+                            rowNoteId,
+                            content: serverBody,
+                            parentNoteIds: parentNoteIds,
+                            serverProfileId: profileId,
+                            utcDateModified: serverMod,
+                            policy: cacheExclusion
+                        )
+                        let deleted = (try? persistence.deletePendingNoteBodyUploadIfUnchanged(noteId: rowNoteId, serverProfileId: profileId, snapshotDate: snapshotDate)) ?? true
+                        if !deleted {
+                            // Edited again since: that body still goes up, measured against the server as it is now.
+                            try? persistence.updatePendingBodyUploadBase(noteId: rowNoteId, serverProfileId: profileId, newBase: serverMod)
+                        }
+                        Log.sync.info("Pending body for note \(rowNoteId) was already on the server (an upload cut off before its reply)")
+                        continue
                     }
                     if isRealConflict {
                         if fresh.isProtected {
@@ -1018,6 +1113,12 @@ final class AppState {
                     "flushBodies done note=\(rowNoteId) bytes=\(rowBodyBytes) ms=\(CheckboxPerf.ms(tRow)) lastToggle=#\(CheckboxPerf.lastToggleID)"
                 )
             } catch {
+                if noteMissingOnServer, case .notFound = APIError.from(error) {
+                    // Deleted on the server: the upload can never succeed, and it would hold up every row after it.
+                    try? persistence.deletePendingNoteBodyUpload(noteId: rowNoteId, serverProfileId: profileId)
+                    Log.sync.warning("Dropped pending body upload for \(rowNoteId): the note no longer exists on the server")
+                    continue
+                }
                 Log.sync.warning("Pending body upload failed for \(rowNoteId): \(error)")
                 CheckboxPerf.log(
                     "flushBodies failed note=\(rowNoteId) bytes=\(rowBodyBytes) ms=\(CheckboxPerf.ms(tRow)) lastToggle=#\(CheckboxPerf.lastToggleID)"
@@ -1089,6 +1190,8 @@ final class AppState {
             connectionError = error.localizedDescription
         }
         shareImport.checkForPendingPayload()
+        // After `isLoading` clears: a Shortcut that opened the app may be waiting for a note.
+        Task { @MainActor in await self.handleExternalOpenRequests() }
     }
 
     private func triliumInstanceId(for profile: ServerProfile) async throws -> String {
@@ -1107,12 +1210,6 @@ final class AppState {
         pendingCloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
         skipBootstrapWithoutOIDCSession: Bool? = nil
     ) async -> TriliumClient {
-        let cfCredentials: CloudflareAccessCredentials?
-        if let pendingCloudflareAccessCredentials {
-            cfCredentials = pendingCloudflareAccessCredentials
-        } else {
-            cfCredentials = try? await keychain.loadCloudflareAccessCredentials(forServer: profileId)
-        }
         let skipBootstrap: Bool
         if let skipBootstrapWithoutOIDCSession {
             skipBootstrap = skipBootstrapWithoutOIDCSession
@@ -1121,11 +1218,13 @@ final class AppState {
         } else {
             skipBootstrap = false
         }
-        return TriliumClient(
+        return await TriliumSessionFactory.makeClient(
             baseURL: baseURL,
+            profileId: profileId,
             persistedCookieData: persistedCookieData,
-            cloudflareAccessCredentials: cfCredentials,
-            skipBootstrapWithoutOIDCSession: skipBootstrap
+            pendingCloudflareAccessCredentials: pendingCloudflareAccessCredentials,
+            skipBootstrapWithoutOIDCSession: skipBootstrap,
+            keychain: keychain
         )
     }
 
@@ -1270,6 +1369,7 @@ final class AppState {
             let options = try await client.getOptions()
             guard activeProfile?.id == profile.id else { return aiConfig }
             aiConfig = TriliumAIConfig(options: options)
+            serverAutoLinkPreviewsEnabled = options.autoLinkPreviewsEnabled
         } catch {
             Log.api.warning("Could not read the server's AI options: \(error)")
         }
@@ -1294,18 +1394,7 @@ final class AppState {
 
     /// Bounded wait so offline / captive networks don’t leave bootstrap on “Connecting…” until URLSession’s default timeout.
     private func restoreSessionWithTimeout(client: TriliumClient, seconds: TimeInterval = 12) async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await client.restoreSession()
-            }
-            group.addTask {
-                let ns = UInt64(seconds * 1_000_000_000)
-                try await Task.sleep(nanoseconds: ns)
-                throw APIError.timeout
-            }
-            try await group.next()!
-            group.cancelAll()
-        }
+        try await TriliumSessionFactory.restoreSession(of: client, timeout: seconds)
         serverAppInfo = await client.lastFetchedAppInfo
     }
 
@@ -1974,5 +2063,24 @@ final class AppState {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "#template note.title = \"\(escaped)\""
+    }
+}
+
+/// Resumes one waiter when the first of several tasks finishes.
+@MainActor
+private final class FirstToFinish {
+    private var finished = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func finish() {
+        guard !finished else { return }
+        finished = true
+        waiter?.resume()
+        waiter = nil
+    }
+
+    func wait() async {
+        guard !finished else { return }
+        await withCheckedContinuation { waiter = $0 }
     }
 }

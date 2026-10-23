@@ -79,6 +79,8 @@ private struct MindMapWebView: UIViewRepresentable {
         func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "mindmapViewerReady" {
                 isReady = true
+                // A fresh page (including one WebKit reloaded after iOS ended its process) has drawn nothing yet.
+                lastRenderedJSON = nil
                 renderIfNeeded()
             }
         }

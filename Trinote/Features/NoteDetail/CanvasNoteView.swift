@@ -144,6 +144,7 @@ private struct CanvasSVGWebView: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = true
         webView.scrollView.bounces = false
         webView.scrollView.backgroundColor = .clear
+        webView.navigationDelegate = context.coordinator
         context.coordinator.onHeightChanged = onHeightChanged
         return webView
     }
@@ -178,6 +179,7 @@ private struct CanvasSVGWebView: UIViewRepresentable {
         </body>
         </html>
         """
+        context.coordinator.loadedPage = html
         webView.loadHTMLString(html, baseURL: nil)
     }
 
@@ -187,9 +189,20 @@ private struct CanvasSVGWebView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    class Coordinator: NSObject, WKScriptMessageHandler {
+    class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var loadedHash: Int?
         var onHeightChanged: ((CGFloat) -> Void)?
+        /// The page showing, for loading it again if iOS ends its process (WebKit's own reload brings a page loaded
+        /// from a string back blank).
+        var loadedPage: String?
+        private let processRecovery = WebContentProcessRecovery(label: "Canvas preview")
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            processRecovery.pageProcessEnded { [weak self, weak webView] in
+                guard let webView, let page = self?.loadedPage else { return }
+                webView.loadHTMLString(page, baseURL: nil)
+            }
+        }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "heightUpdate",
@@ -258,6 +271,8 @@ private struct ExcalidrawReadOnlyWebView: UIViewRepresentable {
             switch message.name {
             case "canvasReady":
                 isReady = true
+                // A fresh page (including one WebKit reloaded after iOS ended its process) has drawn nothing yet.
+                lastRenderedJSON = nil
                 renderIfNeeded()
             case "canvasRendered":
                 if let str = message.body as? String, let h = Double(str), h > 0 {

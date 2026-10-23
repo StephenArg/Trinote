@@ -13,6 +13,15 @@ enum TriliumInlineImageCaching {
         options: []
     )
 
+    /// Link preview pictures (Trilium v0.105+): `data-favicon` / `data-image` on `span.link-mention` and
+    /// `section.link-embed` name attachments as `api/attachments/{id}/image/{name}`. Collected for the offline image
+    /// cache only; the attributes are never rewritten, because `link-preview.js` maps them when it draws the preview
+    /// and Trilium erases an attachment once no attribute names it verbatim.
+    private static let linkPreviewImagePattern = try! NSRegularExpression(
+        pattern: #"(?i)\bdata-(?:favicon|image)=(["'])api/attachments/([a-zA-Z0-9_-]+)/[^"']*\1"#,
+        options: []
+    )
+
     /// Concurrent `getAttachmentContent` / `getNoteContent` fetches while inlining one note.
     private static let maxConcurrentImageFetches = 4
 
@@ -33,6 +42,12 @@ enum TriliumInlineImageCaching {
             let routeType = htmlNS.substring(with: match.range(at: 4))
             let entityId = htmlNS.substring(with: match.range(at: 5))
             refs.insert(Reference(routeType: routeType, entityId: entityId))
+        }
+        if html.containsASCII("link-mention") || html.containsASCII("link-embed") {
+            for match in linkPreviewImagePattern.matches(in: html, options: [], range: fullRange)
+            where match.numberOfRanges >= 3 {
+                refs.insert(Reference(routeType: "attachments", entityId: htmlNS.substring(with: match.range(at: 2))))
+            }
         }
         return refs
     }

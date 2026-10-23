@@ -154,6 +154,8 @@ final class NoteDetailViewModel {
     private var serverBlobId: String?
     /// Settings appearance (light/dark) so include-card mermaid SVGs can be re-baked without restarting.
     @ObservationIgnored nonisolated(unsafe) private var appearanceModeObserver: NSObjectProtocol?
+    /// A Shortcut added to this note on the server (`.trinoteNoteContentChangedOutside`).
+    @ObservationIgnored nonisolated(unsafe) private var outsideChangeObserver: NSObjectProtocol?
 
     init(noteId: String, appState: AppState, seedChildSummaries: [ChildNoteSummary]? = nil) {
         self.noteId = noteId
@@ -168,11 +170,26 @@ final class NoteDetailViewModel {
                 await self?.rerenderMermaidPreviewsForAppearanceChange()
             }
         }
+        outsideChangeObserver = NotificationCenter.default.addObserver(
+            forName: .trinoteNoteContentChangedOutside,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let changedNoteId = notification.userInfo?["noteId"] as? String else { return }
+            Task { @MainActor in
+                // While editing, the editor's own save meets the server's change through the usual conflict check.
+                guard let self, self.noteId == changedNoteId, !self.isEditing else { return }
+                await self.refresh(force: true)
+            }
+        }
     }
 
     deinit {
         if let appearanceModeObserver {
             NotificationCenter.default.removeObserver(appearanceModeObserver)
+        }
+        if let outsideChangeObserver {
+            NotificationCenter.default.removeObserver(outsideChangeObserver)
         }
     }
 
@@ -1307,6 +1324,77 @@ final class NoteDetailViewModel {
         await applyIncludeNoteResolutionIfNeeded()
     }
 
+    /// What the rich text editor may do with link previews in this note: turn a link into one from its menu when the
+    /// server understands them (Trilium v0.104+), and turn pasted or typed URLs into one by itself when Trilium's
+    /// auto link previews option is on too and the note is on the server (whose attachments hold the pictures).
+    var linkPreviewSupport: LinkPreviewSupport {
+        let available = TriliumServerCompatibility.supportsLinkPreviewCreation(appState.serverAppInfo)
+        return LinkPreviewSupport(
+            available: available,
+            auto: available && appState.serverAutoLinkPreviewsEnabled && !noteId.isOfflineLocalNoteId
+        )
+    }
+
+    /// The details of `url` for a link preview in this note (`POST /api/link-embed/metadata`), with the reason when
+    /// there are none. `explicit` is a conversion the user picked from a link's menu, which Trilium's auto link
+    /// previews option doesn't govern.
+    func linkPreviewAnswer(url: String, explicit: Bool) async -> LinkPreviewAnswer {
+        let support = linkPreviewSupport
+        let problem: LinkPreviewProblem?
+        if !support.available {
+            problem = .serverTooOld
+        } else if !explicit && !appState.serverAutoLinkPreviewsEnabled {
+            problem = .autoPreviewsOff
+        } else if noteId.isOfflineLocalNoteId {
+            problem = .noteNotOnServer
+        } else if !isOnline || client == nil {
+            problem = .offline
+        } else {
+            problem = nil
+        }
+        if let problem {
+            Log.api.info("Link preview (\(explicit ? "asked for" : "automatic")) not requested: \(String(describing: problem))")
+            return LinkPreviewAnswer(metadata: nil, problem: problem)
+        }
+        guard let client else { return LinkPreviewAnswer(metadata: nil, problem: .offline) }
+        do {
+            let metadata = try await client.fetchLinkPreviewMetadata(url: url, noteId: noteId)
+            if metadata.unresolved == true {
+                // A server that can't reach the page (no way out to the internet, or turned away by the site): the
+                // phone often can.
+                if let read = await linkPreviewReadOnDevice(url: url, client: client) {
+                    Log.api.info("Link preview: the server could not read the page, so it was read on this device")
+                    return LinkPreviewAnswer(metadata: read, problem: nil)
+                }
+                Log.api.info("Link preview: neither the server nor this device could read the page")
+                return LinkPreviewAnswer(metadata: metadata, problem: .pageUnreadable)
+            }
+            return LinkPreviewAnswer(metadata: metadata, problem: nil)
+        } catch {
+            Log.api.warning("Link preview metadata request failed: \(error)")
+            if let read = await linkPreviewReadOnDevice(url: url, client: client) {
+                return LinkPreviewAnswer(metadata: read, problem: nil)
+            }
+            return LinkPreviewAnswer(metadata: nil, problem: .requestFailed(error.localizedDescription))
+        }
+    }
+
+    /// Reads link preview pages on the phone when the server can't (`LinkPreviewOnDevice`); tests swap it.
+    var linkPreviewPageReader: any LinkPreviewPageReading = LinkPreviewPageReader.shared
+
+    private func linkPreviewReadOnDevice(url: String, client: any TriliumClientProtocol) async -> LinkPreviewMetadata? {
+        let usesAttachments = appState.serverAppInfo.map {
+            TriliumServerCompatibility.isAppVersion($0.appVersion, atLeast: "0.105.0")
+        } ?? true
+        return await LinkPreviewOnDevice.metadata(
+            for: url,
+            reader: linkPreviewPageReader,
+            client: client,
+            noteId: noteId,
+            usesAttachments: usesAttachments
+        )
+    }
+
     /// HTML for one `<section class="include-note">` placeholder (used by the rich-text editor NodeView preview).
     func resolvedIncludePreviewHTML(noteId: String, boxSize: String) async -> String {
         let includedId = noteId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2025,7 +2113,7 @@ final class NoteDetailViewModel {
         if let html {
             let undecorated = Self.undecorateLinkedImagesFromEditor(in: html)
             if !undecorated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                // Reading the editor cancelled its pending `contentChanged`, so this is the newest body.
+                // Reading the editor sent any pending `contentChanged` first, so this is the newest body.
                 _pendingEditorHTML = undecorated
                 latestEditorBody = undecorated
             }

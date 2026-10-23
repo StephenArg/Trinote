@@ -26,9 +26,13 @@ struct SpreadsheetEditorView: UIViewRepresentable {
     var colorScheme: ColorScheme
     var imageBytes: TriliumImageSchemeHandler.ByteProvider?
     var onWorkbookChanged: (() -> Void)?
+    /// The note's newest saved workbook (Autosave updates it), shown if the page reloads after its process ended.
+    var currentJSON: (() -> String)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(initialJSON: initialJSON, onWorkbookChanged: onWorkbookChanged)
+        let coordinator = Coordinator(initialJSON: initialJSON, onWorkbookChanged: onWorkbookChanged)
+        coordinator.currentJSON = currentJSON
+        return coordinator
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -113,6 +117,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onWorkbookChanged = onWorkbookChanged
+        context.coordinator.currentJSON = currentJSON
         context.coordinator.imageBytes = imageBytes
         context.coordinator.applyDarkModeIfChanged(colorScheme == .dark)
     }
@@ -132,9 +137,12 @@ struct SpreadsheetEditorView: UIViewRepresentable {
         var onWorkbookChanged: (() -> Void)?
         var imageBytes: TriliumImageSchemeHandler.ByteProvider?
         var lastAppliedDarkMode: Bool = false
+        var currentJSON: (() -> String)?
 
         private let initialJSON: String
         private var univerReady = false
+        private var isRecovering = false
+        private let processRecovery = WebContentProcessRecovery(label: "Spreadsheet editor")
 
         init(initialJSON: String, onWorkbookChanged: (() -> Void)?) {
             self.initialJSON = initialJSON
@@ -150,7 +158,13 @@ struct SpreadsheetEditorView: UIViewRepresentable {
             case "univerReady":
                 univerReady = true
                 Log.api.info("Univer editor ready")
-                loadWorkbook(initialJSON)
+                let recovering = isRecovering
+                isRecovering = false
+                loadWorkbook(EditorReloadRecovery.content(
+                    pending: nil,
+                    latest: recovering ? currentJSON?() : nil,
+                    initial: initialJSON
+                ))
                 applyDarkMode(lastAppliedDarkMode)
 
             case "workbookChanged":
@@ -231,6 +245,17 @@ struct SpreadsheetEditorView: UIViewRepresentable {
             guard let data = await imageBytes(reference.routeType, reference.entityId),
                   data.isPlausibleInlineImagePayload else { return nil }
             return "data:\(data.detectImageMIME());base64,\(data.base64EncodedString())"
+        }
+
+        /// iOS ended the page's process (see `EditorReloadRecovery`). Until the reloaded page is ready again the
+        /// bridge hands back a placeholder, which saving ignores.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            univerReady = false
+            isRecovering = true
+            processRecovery.pageProcessEnded { [weak webView] in
+                guard let webView, let fileURL = Bundle.main.url(forResource: "univer-editor", withExtension: "html") else { return }
+                webView.loadFileURL(fileURL, allowingReadAccessTo: Bundle.main.bundleURL)
+            }
         }
 
         func loadWorkbook(_ json: String) {

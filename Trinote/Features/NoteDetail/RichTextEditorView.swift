@@ -25,6 +25,12 @@ enum RichTextEditorBridgeRequest: Equatable {
     case includePreview(previewId: String, noteId: String, boxSize: String)
     /// Long-press on an attachment chip in the editor; `pos` is the ProseMirror document position.
     case renameAttachment(attachmentId: String, noteId: String, title: String, pos: Int)
+    /// A link may become a Trilium link preview: fetch its details and answer with `editorBridge.applyLinkPreviewJSON`
+    /// for `requestId`. `explicit` when the user picked the conversion from the link's menu; otherwise the URL was
+    /// pasted or autolinked.
+    case linkPreview(requestId: String, url: String, explicit: Bool)
+    /// "Open Link" in a link preview's menu. Only http(s) URLs are sent.
+    case openExternalURL(URL)
 }
 
 /// Pending toolbar-style attachment chip to insert once the TipTap bridge is ready.
@@ -69,6 +75,9 @@ struct RichTextEditorView: UIViewRepresentable {
     /// Hides the table toolbar's Save, like the floating one: Settings → Autosave → Hide Save Button, or
     /// Autosave has nothing left to save.
     var hidesSaveButton: Bool = false
+    /// What the editor may do with Trilium link previews; it sends `.linkPreview` requests through
+    /// `onEditorBridgeRequest`.
+    var linkPreviews: LinkPreviewSupport = .none
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -84,7 +93,8 @@ struct RichTextEditorView: UIViewRepresentable {
             initialScrollFraction: initialScrollFraction,
             insertToolsAtTop: insertToolsAtTop,
             onContentLoaded: onContentLoaded,
-            hidesSaveButton: hidesSaveButton
+            hidesSaveButton: hidesSaveButton,
+            linkPreviews: linkPreviews
         )
     }
 
@@ -166,6 +176,7 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.syncInsertToolsAtTop(insertToolsAtTop)
         coordinator.onContentLoaded = onContentLoaded
         coordinator.syncSaveButtonHidden(hidesSaveButton)
+        coordinator.syncLinkPreviews(linkPreviews)
         Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
@@ -263,6 +274,16 @@ struct RichTextEditorView: UIViewRepresentable {
         private var editorReady = false
         private var pendingContent: String?
         private var pendingAttachmentInsert: EditorAttachmentInsert?
+        /// Photos picked while the page wasn't ready (mostly while it reloads after its process ended).
+        private var pendingImageInserts: [String] = []
+        /// The newest body the page sent, as the page holds it (images still as `trinote-img://`), so a page
+        /// reloaded after its process ended can show the edits instead of the note as it opened.
+        private var latestHTML: String?
+        /// The page is reloading after its process ended; its next `editorReady` restores `latestHTML`.
+        private var isRecovering = false
+        /// `onContentLoaded` has had the first page's serialization (autosave's baseline).
+        private var hasReportedLoadedContent = false
+        private let processRecovery = WebContentProcessRecovery(label: "Text editor")
         private var keyboardToolbarGapObservers: [NSObjectProtocol] = []
         private var pendingKeyboardToolbarGapPoints: CGFloat?
         private let initialScrollFraction: CGFloat
@@ -270,6 +291,8 @@ struct RichTextEditorView: UIViewRepresentable {
         private var appliedInsertToolsAtTop: Bool?
         private var hidesSaveButton = false
         private var appliedHidesSaveButton: Bool?
+        private var linkPreviews = LinkPreviewSupport.none
+        private var appliedLinkPreviews: LinkPreviewSupport?
 
         /// Visual gap between HTML formatting toolbar and keyboard (CSS px ≈ points in WKWebView).
         private static let keyboardToolbarGapPoints: CGFloat = 10
@@ -289,7 +312,8 @@ struct RichTextEditorView: UIViewRepresentable {
             initialScrollFraction: CGFloat = 0,
             insertToolsAtTop: Bool = false,
             onContentLoaded: ((String) -> Void)? = nil,
-            hidesSaveButton: Bool = false
+            hidesSaveButton: Bool = false,
+            linkPreviews: LinkPreviewSupport = .none
         ) {
             self.initialHTML = initialHTML
             self.onContentChanged = onContentChanged
@@ -304,6 +328,7 @@ struct RichTextEditorView: UIViewRepresentable {
             self.insertToolsAtTop = insertToolsAtTop
             self.onContentLoaded = onContentLoaded
             self.hidesSaveButton = hidesSaveButton
+            self.linkPreviews = linkPreviews
         }
 
         func syncInsertToolsAtTop(_ atTop: Bool) {
@@ -318,13 +343,28 @@ struct RichTextEditorView: UIViewRepresentable {
             setSaveButtonHidden(hidden)
         }
 
+        func syncLinkPreviews(_ support: LinkPreviewSupport) {
+            linkPreviews = support
+            guard appliedLinkPreviews != support else { return }
+            setLinkPreviews(support)
+        }
+
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "editorReady":
-                let html = pendingContent ?? initialHTML
+                let recovering = isRecovering
+                isRecovering = false
+                let html = EditorReloadRecovery.content(
+                    pending: pendingContent,
+                    latest: recovering ? latestHTML : nil,
+                    initial: initialHTML
+                )
                 pendingContent = nil
                 editorReady = true
                 setContent(html)
+                if recovering {
+                    Log.ui.info("Editor page reloaded after its process ended; restored \(self.latestHTML == nil ? "the opened note" : "the latest edits")")
+                }
                 setKeyboardToolbarGap(pendingKeyboardToolbarGapPoints ?? 0)
                 pendingKeyboardToolbarGapPoints = nil
                 setFloatingChipScrollClearance(
@@ -335,8 +375,16 @@ struct RichTextEditorView: UIViewRepresentable {
                 }
                 setInsertToolsAtTop(insertToolsAtTop)
                 setSaveButtonHidden(hidesSaveButton)
-                // A share-import attachment inserted on load is an edit, so it mustn't end up in the baseline.
-                if pendingAttachmentInsert == nil {
+                setLinkPreviews(linkPreviews)
+                // A share-import attachment or photo inserted on load is an edit, so it mustn't end up in the
+                // baseline; nor may edits restored into a reloaded page.
+                let reportsBaseline = recovering
+                    ? EditorReloadRecovery.reportsLoadedContentAfterReload(
+                        alreadyReported: hasReportedLoadedContent,
+                        receivedChanges: latestHTML != nil
+                    )
+                    : true
+                if reportsBaseline, pendingAttachmentInsert == nil, pendingImageInserts.isEmpty {
                     reportLoadedContent()
                 }
                 if let pending = pendingAttachmentInsert {
@@ -347,9 +395,13 @@ struct RichTextEditorView: UIViewRepresentable {
                         title: pending.title
                     )
                 }
+                let images = pendingImageInserts
+                pendingImageInserts.removeAll()
+                images.forEach(insertImage)
 
             case "contentChanged":
                 if let html = message.body as? String {
+                    latestHTML = html
                     onContentChanged?(html)
                 }
 
@@ -498,6 +550,18 @@ struct RichTextEditorView: UIViewRepresentable {
                             callback?(.renameAttachment(attachmentId: aid, noteId: nid, title: title, pos: pos))
                         }
                     }
+                case "linkPreview":
+                    if let requestId = dict["requestId"] as? String, !requestId.isEmpty,
+                       let url = dict["url"] as? String, Self.isHTTPURLString(url) {
+                        let explicit = (dict["explicit"] as? Bool) ?? ((dict["explicit"] as? NSNumber)?.boolValue ?? false)
+                        DispatchQueue.main.async {
+                            callback?(.linkPreview(requestId: requestId, url: url, explicit: explicit))
+                        }
+                    }
+                case "openURL":
+                    if let raw = dict["url"] as? String, Self.isHTTPURLString(raw), let url = URL(string: raw) {
+                        DispatchQueue.main.async { callback?(.openExternalURL(url)) }
+                    }
                 default:
                     break
                 }
@@ -549,7 +613,11 @@ struct RichTextEditorView: UIViewRepresentable {
         }
 
         func insertImage(_ dataUri: String) {
-            guard editorReady, let webView else { return }
+            guard editorReady, let webView else {
+                // The binding is cleared once handed over, so dropping it here would lose the photo.
+                pendingImageInserts.append(dataUri)
+                return
+            }
             let escaped = dataUri
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "'", with: "\\'")
@@ -628,6 +696,16 @@ struct RichTextEditorView: UIViewRepresentable {
                 UIMenu(title: "", options: .displayInline, children: [action]),
                 atEndOfMenu: .standardEdit
             )
+        }
+
+        /// An absolute http(s) URL with a host: the only kind a link preview may point at or open.
+        static func isHTTPURLString(_ value: String) -> Bool {
+            guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https",
+                  let host = url.host, !host.isEmpty
+            else { return false }
+            return true
         }
 
         private static func jsJSONString(_ value: String) -> String {
@@ -713,6 +791,15 @@ struct RichTextEditorView: UIViewRepresentable {
             }
         }
 
+        private func setLinkPreviews(_ support: LinkPreviewSupport) {
+            guard editorReady, let webView else { return }
+            appliedLinkPreviews = support
+            let script = "window.editorBridge.setLinkPreviewSupport(\(support.available), \(support.auto))"
+            webView.evaluateJavaScript(script) { _, error in
+                if let error { Log.api.error("setLinkPreviewSupport failed: \(error)") }
+            }
+        }
+
         /// Hands the loaded note, as the editor serializes it, to `onContentLoaded`. Waits two frames because
         /// table captions are put back a frame after `setContent`.
         private func reportLoadedContent() {
@@ -728,7 +815,25 @@ struct RichTextEditorView: UIViewRepresentable {
             """
             webView.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { [weak self] result in
                 guard case .success(let value) = result, let html = value as? String else { return }
+                self?.hasReportedLoadedContent = true
                 self?.onContentLoaded?(html)
+            }
+        }
+
+        // MARK: Web content process ended
+
+        /// iOS ends a web view's content process to free memory, often while the app is in the background. Left to
+        /// WebKit, the page reloads and this editor shows the note as it was when editing began; the next save then
+        /// puts that back on the server over the edits (issue #26). Reload here instead and restore `latestHTML`.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            editorReady = false
+            // The table toolbar went with the page; while it was showing, the floating save button was hidden.
+            let tableTools = onTableToolsVisibilityChanged
+            DispatchQueue.main.async { tableTools?(false) }
+            isRecovering = true
+            processRecovery.pageProcessEnded { [weak webView] in
+                guard let webView, let fileURL = Bundle.main.url(forResource: "editor", withExtension: "html") else { return }
+                webView.loadFileURL(fileURL, allowingReadAccessTo: Bundle.main.bundleURL)
             }
         }
 

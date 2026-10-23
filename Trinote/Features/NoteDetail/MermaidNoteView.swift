@@ -103,6 +103,8 @@ private struct MermaidWebView: UIViewRepresentable {
             switch message.name {
             case "mermaidReady":
                 isReady = true
+                // A fresh page (including one WebKit reloaded after iOS ended its process) has drawn nothing yet.
+                lastRenderedSource = nil
                 renderIfNeeded()
             case "heightUpdate":
                 if let str = message.body as? String, let h = Double(str), h > 0 {

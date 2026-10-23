@@ -122,6 +122,12 @@ struct MainShellModifiers: ViewModifier {
                     onShareImportActivated()
                 }
             }
+            // The Open Today's Journal Shortcut: bring the notes tree forward to open it.
+            .onChange(of: appState.pendingExternalOpen) { _, request in
+                if request != nil {
+                    onShareImportActivated()
+                }
+            }
             .sheet(item: firstSyncRequest) { request in
                 FirstSyncChoiceSheet(request: request)
                     .environment(appState)

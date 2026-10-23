@@ -660,6 +660,22 @@ body { display: flex; flex-direction: column; }
 /* Inline icon menu: previews of the selected icon under each transform. */
 .inline-icon-popup .tn-icon { display: inline-block; width: 22px; text-align: center; font-size: 18px; flex-shrink: 0; }
 .tiptap span.tn-icon.ProseMirror-selectednode { outline: 2px solid var(--btn-active); outline-offset: 1px; border-radius: 3px; }
+/* Trilium link previews: base styles in link-preview.css. In the editor a tap selects the preview instead of following it. */
+.tiptap .tn-link-preview a { cursor: default; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.tiptap span.link-mention.ProseMirror-selectednode a.link-embed-mention,
+.tiptap span.link-mention.ProseMirror-selectednode .tn-link-preview-empty { outline: 2px solid var(--btn-active); outline-offset: 1px; }
+.tiptap div.link-embed.ProseMirror-selectednode { outline: 2px solid var(--btn-active); outline-offset: 2px; border-radius: 9px; }
+.tn-editor-toast {
+  position: fixed; left: 50%; top: calc(var(--editor-floating-chip-clearance, 0px) + 8px); transform: translateX(-50%);
+  max-width: calc(100% - 32px); padding: 8px 14px; border-radius: 12px; z-index: 10000;
+  background: rgba(44, 44, 46, 0.94); color: #fff; font-size: 14px; line-height: 1.35; text-align: center;
+  opacity: 0; transition: opacity 0.2s; pointer-events: none;
+}
+.tn-editor-toast.visible { opacity: 1; }
+.tiptap .tn-link-preview-empty {
+  display: inline-block; padding: 1px 8px; border: 1px dashed var(--border); border-radius: 6px;
+  color: var(--placeholder); font-size: 0.92em; line-height: 1.5;
+}
 .image-popup-size-btn.active { background: var(--btn-active-bg); color: var(--btn-active); border-color: var(--btn-active); }
 
 .tiptap hr { border: none; border-top: 2px solid var(--border); margin: 1em 0; clear: both; }
@@ -881,6 +897,7 @@ body { display: flex; flex-direction: column; }
 .tiptap .trinote-math-nodeview:hover { outline: 1px solid var(--btn-active); outline-offset: 2px; border-radius: 3px; }
 </style>
 <link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="link-preview.css">
 <script src="vendor/katex/katex.min.js"></script>
 </head>
 <body>
@@ -902,6 +919,7 @@ body { display: flex; flex-direction: column; }
 <script src="font-size-extension.js"></script>
 <script src="list-styles-extension.js"></script>
 <script src="indent-extension.js"></script>
+<script src="link-preview.js"></script>
 <script src="vendor/mermaid.min.js"></script>
 <script>
 if (typeof TipTap === 'undefined') {
@@ -970,6 +988,25 @@ const ORDERED_LIST_STYLE_OPTIONS = [
 ];
 
 let _contentTimer = null;
+/** False until native's `setContent` has run. After iOS ends the web content process the page reloads with an
+ *  empty document, and that must never be read (and saved) as the note. */
+let _hasLoadedContent = false;
+
+/** Sends the editor's body to native now, replacing any pending debounced send, and returns it (null before the
+ *  note has loaded). Every `contentChanged` goes through here, and `getContent()` calls it while a send is
+ *  pending, so a save that reads the editor never leaves native's copy behind: native restores a reloaded page
+ *  from that copy. */
+function _postContentChanged() {
+  if (_contentTimer !== null) {
+    clearTimeout(_contentTimer);
+    _contentTimer = null;
+  }
+  if (!_hasLoadedContent) return null;
+  const html = _serializeEditorContent();
+  try { window.webkit.messageHandlers.contentChanged.postMessage(html); } catch (e) {}
+  return html;
+}
+
 /** Tracks last serialized triliumMath count so undo (math reappearing) flushes `contentChanged` immediately — avoids stale `_pendingEditorHTML` on native for ~300ms after undo. */
 let _lastTriliumMathNodeCount = -1;
 let _toolbarScheduled = false;
@@ -1323,6 +1360,124 @@ const TriliumInlineIcon = Image.extend({
     };
   },
   // Image's `setImage` command and `![alt](src)` input rule would otherwise insert icons.
+  addCommands() { return {}; },
+  addInputRules() { return []; },
+});
+
+/* Trilium link previews (v0.104+). Trilium stores them as EMPTY elements carrying everything in data-* attributes:
+   `<span class="link-mention" data-url=…>` inline and `<section class="link-embed" data-url data-embed-type=…>` as a
+   card or video block. Trilium rebuilds each one from those attributes alone and erases a preview's favicon / cover
+   attachment once no `data-favicon` / `data-image` names it any more, so the nodes keep every attribute verbatim
+   and write them back in Trilium's order. link-preview.js draws the visible preview. */
+function linkPreviewAttributeSpecs() {
+  const specs = {};
+  trinoteLinkPreview.ATTRIBUTES.forEach(([key, name]) => {
+    specs[key] = {
+      default: null,
+      rendered: false,
+      parseHTML: (el) => el.getAttribute(name),
+    };
+  });
+  return specs;
+}
+
+/** The stored element's attributes in Trilium's order: `data-url` whenever the source had one, the rest when non-empty. */
+function linkPreviewStoredAttributes(className, attrs) {
+  const out = { class: className };
+  trinoteLinkPreview.ATTRIBUTES.forEach(([key, name]) => {
+    const value = attrs[key];
+    if (value == null) return;
+    if (value === '' && key !== 'url') return;
+    out[name] = String(value);
+  });
+  return out;
+}
+
+function isLinkPreviewNode(node) {
+  return !!node && (node.type.name === 'linkMention' || node.type.name === 'linkEmbed');
+}
+
+function drawLinkPreviewNodeView(dom, node, block) {
+  const data = Object.assign({}, node.attrs);
+  if (!data.url) {
+    dom.innerHTML = '<span class="tn-link-preview-empty">Link preview</span>';
+    return;
+  }
+  dom.innerHTML = block ? trinoteLinkPreview.embedHTML(data) : trinoteLinkPreview.mentionHTML(data);
+  trinoteLinkPreview.wireImages(dom);
+}
+
+function makeLinkPreviewNodeView(typeName, block) {
+  return ({ node }) => {
+    const dom = document.createElement(block ? 'div' : 'span');
+    dom.className = block ? 'link-embed tn-link-preview tn-link-preview--block' : 'link-mention tn-link-preview';
+    dom.contentEditable = 'false';
+    dom.setAttribute('data-trinote-link-preview', typeName);
+    drawLinkPreviewNodeView(dom, node, block);
+    // The drawn preview is a real <a>. In the editor a tap selects the preview and opens its menu (see
+    // `linkPreviewPopup`); following the link would reach the native navigation delegate, which opens Safari.
+    // Cancelling mousedown also keeps ProseMirror and WebKit from dropping a caret inside the preview.
+    dom.addEventListener('mousedown', (e) => { e.preventDefault(); });
+    dom.addEventListener('click', (e) => { e.preventDefault(); });
+    let drawnAttrs = JSON.stringify(node.attrs);
+    return {
+      dom,
+      update(updated) {
+        if (updated.type.name !== typeName) return false;
+        const next = JSON.stringify(updated.attrs);
+        if (next !== drawnAttrs) {
+          drawnAttrs = next;
+          drawLinkPreviewNodeView(dom, updated, block);
+        }
+        return true;
+      },
+      // A picture that fails to load removes itself; that is not an edit.
+      ignoreMutation() { return true; },
+    };
+  };
+}
+
+/** Inline link preview: `<span class="link-mention" …></span>`, drawn as the site's favicon and the page title. */
+const LinkMention = Image.extend({
+  name: 'linkMention',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  draggable: false,
+  selectable: true,
+  addAttributes() { return linkPreviewAttributeSpecs(); },
+  parseHTML() {
+    // Ahead of TextStyle's span rule. Also matches Trilium's editing markup (copied from the desktop app), whose
+    // drawn children an atom ignores.
+    return [{ tag: 'span.link-mention', priority: 100 }];
+  },
+  renderHTML({ node }) {
+    return ['span', linkPreviewStoredAttributes('link-mention', node.attrs)];
+  },
+  addNodeView() { return makeLinkPreviewNodeView('linkMention', false); },
+  // Image's `setImage` command and `![alt](src)` input rule would otherwise insert previews.
+  addCommands() { return {}; },
+  addInputRules() { return []; },
+});
+
+/** Block link preview: `<section class="link-embed" …></section>`, drawn as a card or a video thumbnail. */
+const LinkEmbed = Image.extend({
+  name: 'linkEmbed',
+  group: 'block',
+  inline: false,
+  atom: true,
+  draggable: false,
+  selectable: true,
+  isolating: true,
+  addAttributes() { return linkPreviewAttributeSpecs(); },
+  parseHTML() {
+    // Ahead of IncludeNote's bare `section` rule.
+    return [{ tag: 'section.link-embed', priority: 100 }];
+  },
+  renderHTML({ node }) {
+    return ['section', linkPreviewStoredAttributes('link-embed', node.attrs)];
+  },
+  addNodeView() { return makeLinkPreviewNodeView('linkEmbed', true); },
   addCommands() { return {}; },
   addInputRules() { return []; },
 });
@@ -1722,6 +1877,8 @@ const editorExtensions = [
   CustomTableCell,
   CustomTableHeader,
   AttachmentReference,
+  LinkMention,
+  LinkEmbed,
   CustomLink.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
   IncludeNote,
   TriliumAnchor,
@@ -1819,7 +1976,7 @@ function placeContentAtPendingOrSelection(content, usePending) {
 function insertContentAtPendingPos(content) {
   try {
     placeContentAtPendingOrSelection(content, true);
-    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+    try { _postContentChanged(); } catch (e) {}
     try { scheduleScrollCaretIntoViewAfterKeyboard(); } catch (e) {}
   } catch (e) {}
 }
@@ -1962,7 +2119,7 @@ function removePhotoSlots() {
 
 function endImageBatch() {
   removePhotoSlots();
-  try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+  try { _postContentChanged(); } catch (e) {}
 }
 
 /** Keeps unfilled slots out of everything the native side stores. */
@@ -2071,7 +2228,7 @@ const editor = new Editor({
     const delay = mathIncreased ? 0 : 300;
     _contentTimer = setTimeout(function () {
       _contentTimer = null;
-      try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+      try { _postContentChanged(); } catch (e) {}
     }, delay);
   },
   onSelectionUpdate() { scheduleToolbarUpdate(); },
@@ -3119,11 +3276,15 @@ function fillInlineIconPopup() {
 }
 
 function layoutInlineIconPopup(anchor) {
-  if (!inlineIconPopup.classList.contains('visible') || !anchor) return;
-  inlineIconPopup.style.visibility = 'hidden';
-  inlineIconPopup.style.left = '0px';
-  inlineIconPopup.style.top = '0px';
-  const pr = inlineIconPopup.getBoundingClientRect();
+  layoutPopupNearAnchor(inlineIconPopup, anchor);
+}
+
+function layoutPopupNearAnchor(popup, anchor) {
+  if (!popup.classList.contains('visible') || !anchor) return;
+  popup.style.visibility = 'hidden';
+  popup.style.left = '0px';
+  popup.style.top = '0px';
+  const pr = popup.getBoundingClientRect();
   const ar = anchor.getBoundingClientRect();
   const margin = 8;
   const vv = window.visualViewport;
@@ -3135,9 +3296,9 @@ function layoutInlineIconPopup(anchor) {
     top = ar.top - pr.height - 8;
     if (top < viewTop + margin) top = Math.max(viewTop + margin, viewBottom - pr.height - margin);
   }
-  inlineIconPopup.style.left = Math.round(left) + 'px';
-  inlineIconPopup.style.top = Math.round(top) + 'px';
-  inlineIconPopup.style.visibility = '';
+  popup.style.left = Math.round(left) + 'px';
+  popup.style.top = Math.round(top) + 'px';
+  popup.style.visibility = '';
 }
 
 function relayoutInlineIconPopup() {
@@ -3202,6 +3363,654 @@ editor.on('transaction', ({ transaction }) => {
   }
   if (inlineIconClassesAt(pos) == null) { hideInlineIconPopup(); return; }
   inlineIconPopup._targetPos = pos;
+});
+
+/* ---- Link previews: the menu of a selected preview, and turning new links into previews ---- */
+
+const LINK_PREVIEW_MENU_ICONS = {
+  open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  inline: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3"/><rect x="7" y="8.5" width="10" height="7" rx="2.5"/><path d="M19 12h3"/></svg>',
+  card: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M9 6v12"/><path d="M12 10h6"/><path d="M12 14h4"/></svg>',
+  video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z" fill="currentColor"/></svg>',
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>',
+  remove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12"/><path d="M9 7V4h6v3"/></svg>',
+};
+
+const linkPreviewPopup = document.createElement('div');
+linkPreviewPopup.className = 'image-popup link-preview-popup';
+linkPreviewPopup._targetPos = null;
+document.body.appendChild(linkPreviewPopup);
+
+/** URLs turned back into a plain link this session: never turned into a preview again automatically. */
+const linkPreviewDismissedUrls = new Set();
+
+function linkPreviewNodeAt(pos) {
+  const node = pos == null ? null : editor.state.doc.nodeAt(pos);
+  return isLinkPreviewNode(node) ? node : null;
+}
+
+function linkPreviewDisplayMode(node) {
+  if (node.type.name === 'linkMention') return 'inline';
+  return trinoteLinkPreview.isVideo(node.attrs) ? 'video' : 'card';
+}
+
+/** A mention becomes a block only where Trilium puts one: in a paragraph directly under the document. */
+function linkPreviewCanBeBlock(pos, node) {
+  if (node.type.name === 'linkEmbed') return true;
+  const $pos = editor.state.doc.resolve(pos);
+  return $pos.depth === 1 && $pos.parent.type.name === 'paragraph';
+}
+
+/** Edits made from the menu or by the conversion itself never start a new preview request. */
+function linkPreviewChain() {
+  return editor.chain().setMeta('trinoteNoLinkPreview', true);
+}
+
+function findLinkPreviewNear(pos, url) {
+  let best = null;
+  let bestDistance = Infinity;
+  editor.state.doc.descendants((node, p) => {
+    if (isLinkPreviewNode(node)) {
+      if (node.attrs.url === url && Math.abs(p - pos) < bestDistance) {
+        best = p;
+        bestDistance = Math.abs(p - pos);
+      }
+      return false;
+    }
+    return true;
+  });
+  return best;
+}
+
+function reopenLinkPreviewPopupNear(pos, url) {
+  hideLinkPreviewPopup();
+  requestAnimationFrame(() => {
+    const p = findLinkPreviewNear(pos, url);
+    if (p == null) return;
+    editor.commands.setNodeSelection(p);
+    const el = editor.view.nodeDOM(p);
+    if (el) showLinkPreviewPopup(el, p);
+  });
+}
+
+function setLinkPreviewDisplay(pos, mode) {
+  const node = linkPreviewNodeAt(pos);
+  if (!node || linkPreviewDisplayMode(node) === mode) return;
+  const attrs = Object.assign({}, node.attrs);
+  const url = attrs.url;
+  if (mode === 'inline') {
+    linkPreviewChain().insertContentAt(
+      { from: pos, to: pos + node.nodeSize },
+      { type: 'paragraph', content: [{ type: 'linkMention', attrs }] }
+    ).run();
+  } else {
+    attrs.embedType = mode === 'video' ? 'youtube' : 'opengraph';
+    if (node.type.name === 'linkEmbed') {
+      linkPreviewChain().command(({ tr }) => {
+        tr.setNodeMarkup(pos, undefined, attrs);
+        return true;
+      }).run();
+    } else {
+      // The mention alone in its paragraph takes the paragraph's place; otherwise the paragraph splits around it.
+      const $pos = editor.state.doc.resolve(pos);
+      const range = $pos.parent.childCount === 1
+        ? { from: $pos.before(), to: $pos.after() }
+        : { from: pos, to: pos + node.nodeSize };
+      linkPreviewChain().insertContentAt(range, { type: 'linkEmbed', attrs }).run();
+    }
+  }
+  reopenLinkPreviewPopupNear(pos, url);
+}
+
+/** Trilium's "Plain link": the preview becomes its URL, linked. */
+function linkPreviewToPlainLink(pos) {
+  const node = linkPreviewNodeAt(pos);
+  hideLinkPreviewPopup();
+  if (!node) return;
+  const url = String(node.attrs.url || '');
+  if (!url) return;
+  linkPreviewDismissedUrls.add(url);
+  const text = { type: 'text', text: url, marks: [{ type: 'link', attrs: { href: url } }] };
+  const content = node.type.name === 'linkMention' ? text : { type: 'paragraph', content: [text] };
+  linkPreviewChain().insertContentAt({ from: pos, to: pos + node.nodeSize }, content).unsetMark('link').run();
+}
+
+function removeLinkPreview(pos) {
+  const node = linkPreviewNodeAt(pos);
+  hideLinkPreviewPopup();
+  if (!node) return;
+  linkPreviewChain().deleteRange({ from: pos, to: pos + node.nodeSize }).run();
+}
+
+function openLinkPreviewUrl(pos) {
+  const node = linkPreviewNodeAt(pos);
+  hideLinkPreviewPopup();
+  const url = node ? node.attrs.url : null;
+  if (!trinoteLinkPreview.isHttpUrl(url)) return;
+  try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'openURL', url: String(url) }); } catch (e) {}
+}
+
+function fillLinkPreviewPopup() {
+  const node = linkPreviewNodeAt(linkPreviewPopup._targetPos);
+  if (!node) { hideLinkPreviewPopup(); return; }
+  const mode = linkPreviewDisplayMode(node);
+  const url = String(node.attrs.url || '');
+  const icons = LINK_PREVIEW_MENU_ICONS;
+  linkPreviewPopup.innerHTML = '';
+  const addLabel = (text) => {
+    const l = document.createElement('div');
+    l.className = 'image-popup-section-label';
+    l.textContent = text;
+    linkPreviewPopup.appendChild(l);
+  };
+  const addRow = (html, active, onPick) => {
+    const row = document.createElement('div');
+    row.className = 'image-popup-row' + (active ? ' active' : '');
+    row.innerHTML = html;
+    function pick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const pos = linkPreviewPopup._targetPos;
+      if (pos != null) onPick(pos);
+    }
+    row.addEventListener('pointerdown', pick, true);
+    row.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
+    row.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+    linkPreviewPopup.appendChild(row);
+  };
+  addLabel('Link Preview');
+  if (trinoteLinkPreview.isHttpUrl(url)) {
+    addRow(icons.open + '<span>Open Link</span>', false, openLinkPreviewUrl);
+  }
+  if (url) {
+    addLabel('Display');
+    addRow(icons.inline + '<span>Inline</span>', mode === 'inline', pos => setLinkPreviewDisplay(pos, 'inline'));
+    if (linkPreviewCanBeBlock(linkPreviewPopup._targetPos, node)) {
+      addRow(icons.card + '<span>Card</span>', mode === 'card', pos => setLinkPreviewDisplay(pos, 'card'));
+      if (trinoteLinkPreview.youTubeVideoId(url)) {
+        addRow(icons.video + '<span>Video</span>', mode === 'video', pos => setLinkPreviewDisplay(pos, 'video'));
+      }
+    }
+    addRow(icons.link + '<span>Plain Link</span>', false, linkPreviewToPlainLink);
+  }
+  addRow(icons.remove + '<span>Remove</span>', false, removeLinkPreview);
+}
+
+function showLinkPreviewPopup(el, pos) {
+  hideImagePopup();
+  hideInlineIconPopup();
+  document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
+  linkPreviewPopup._targetPos = pos;
+  linkPreviewPopup.classList.add('visible');
+  fillLinkPreviewPopup();
+  layoutPopupNearAnchor(linkPreviewPopup, el);
+}
+
+function hideLinkPreviewPopup() {
+  linkPreviewPopup.classList.remove('visible');
+  linkPreviewPopup._targetPos = null;
+}
+
+function findLinkPreviewPos(el) {
+  let found = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (found != null) return false;
+    if (isLinkPreviewNode(node) && editor.view.nodeDOM(pos) === el) { found = pos; return false; }
+    return true;
+  });
+  return found;
+}
+
+// Tapping a preview selects it and opens its menu; tapping it again closes the menu.
+document.getElementById('editor-container').addEventListener('click', function(e) {
+  const el = e.target.closest && e.target.closest('.tiptap [data-trinote-link-preview]');
+  if (!el) return;
+  const pos = findLinkPreviewPos(el);
+  if (pos == null) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (linkPreviewPopup.classList.contains('visible') && linkPreviewPopup._targetPos === pos) {
+    hideLinkPreviewPopup();
+    return;
+  }
+  editor.commands.setNodeSelection(pos);
+  showLinkPreviewPopup(el, pos);
+}, true);
+
+document.addEventListener('pointerdown', function(e) {
+  if (!linkPreviewPopup.classList.contains('visible')) return;
+  if (e.target.closest('.link-preview-popup') || e.target.closest('[data-trinote-link-preview]')) return;
+  hideLinkPreviewPopup();
+}, true);
+
+// Keep the menu on its preview through edits; close it when the preview goes (deleted, undone).
+editor.on('transaction', ({ transaction }) => {
+  if (!linkPreviewPopup.classList.contains('visible')) return;
+  let pos = linkPreviewPopup._targetPos;
+  if (transaction && transaction.docChanged && pos != null) {
+    try { pos = transaction.mapping.map(pos); } catch (_) { pos = null; }
+  }
+  if (!linkPreviewNodeAt(pos)) { hideLinkPreviewPopup(); return; }
+  linkPreviewPopup._targetPos = pos;
+});
+
+/*
+ * Turning new links into previews, as Trilium's AutoLinkToMention does. A link becomes a preview when its text is
+ * its own http(s) URL and it was just pasted, or just linked by autolink (typed, then Space or Enter). Native code
+ * fetches the metadata (`POST /api/link-embed/metadata`, Trilium v0.105+, which also stores the favicon and cover
+ * as attachments of this note) and answers through `editorBridge.applyLinkPreviewJSON`. Native turns this on with
+ * `editorBridge.setAutoLinkPreviews(true)` only when the server can and Trilium's "auto link previews" option is on.
+ */
+let linkPreviewAutoEnabled = false;
+/** The server understands link previews (Trilium v0.104+): links can be turned into previews from their menu. */
+let linkPreviewsAvailable = false;
+const pendingLinkPreviews = new Map();
+let linkPreviewRequestSeq = 0;
+
+function requestLinkPreview(url, pos) {
+  if (!linkPreviewAutoEnabled || !trinoteLinkPreview.isHttpUrl(url) || linkPreviewDismissedUrls.has(url)) return;
+  for (const pending of pendingLinkPreviews.values()) {
+    if (pending.url === url && Math.abs(pending.pos - pos) < 4) return;
+  }
+  const requestId = 'lp' + (++linkPreviewRequestSeq) + '_' + Math.random().toString(36).slice(2, 8);
+  pendingLinkPreviews.set(requestId, { url, pos });
+  try {
+    window.webkit.messageHandlers.editorRequest.postMessage({ action: 'linkPreview', requestId, url });
+  } catch (e) {
+    pendingLinkPreviews.delete(requestId);
+  }
+}
+
+/** Runs of one link mark in a textblock: `{ href, from, to, text }` with document positions. */
+function linkRunsInTextblock(block, blockPos) {
+  const linkType = editor.schema.marks.link;
+  const runs = [];
+  let run = null;
+  block.forEach((child, offset) => {
+    const start = blockPos + 1 + offset;
+    const mark = child.isText ? child.marks.find(m => m.type === linkType) : null;
+    if (mark && run && run.href === mark.attrs.href && run.to === start) {
+      run.to = start + child.nodeSize;
+      run.text += child.text;
+      return;
+    }
+    if (run) runs.push(run);
+    run = mark ? { href: mark.attrs.href, from: start, to: start + child.nodeSize, text: child.text } : null;
+  });
+  if (run) runs.push(run);
+  return runs;
+}
+
+function isBareUrlLinkRun(run) {
+  return !!run && run.text.trim() === run.href && trinoteLinkPreview.isHttpUrl(run.href);
+}
+
+/** Bare-URL links that the transaction linked without inserting their text: autolink after Space or Enter. */
+function newlyAutolinkedRuns(transaction) {
+  const doc = editor.state.doc;
+  const linkType = editor.schema.marks.link;
+  const before = transaction.before;
+  const mapping = transaction.mapping;
+  // Textblocks next to what the transaction changed. Autolink only adds marks, so positions in `editor.state`
+  // (after autolink) are the transaction's own.
+  const blocks = [];
+  mapping.maps.forEach((map, index) => {
+    const rest = mapping.slice(index + 1);
+    map.forEach((oldStart, oldEnd, newStart, newEnd) => {
+      const from = Math.max(0, rest.map(newStart, -1) - 1);
+      const to = Math.min(doc.content.size, rest.map(newEnd, 1) + 1);
+      doc.nodesBetween(from, to, (node, pos) => {
+        if (!node.isTextblock) return true;
+        if (!blocks.some(b => b.pos === pos)) blocks.push({ node, pos });
+        return false;
+      });
+    });
+  });
+  const inverse = mapping.invert();
+  const found = [];
+  blocks.forEach(({ node, pos }) => {
+    linkRunsInTextblock(node, pos).forEach(run => {
+      if (!isBareUrlLinkRun(run)) return;
+      const oldFrom = inverse.map(run.from, 1);
+      const oldTo = inverse.map(run.to, -1);
+      // Inserted text (pasted) maps back to nothing; text that was already linked was not linked just now.
+      if (oldTo - oldFrom !== run.to - run.from) return;
+      if (before.textBetween(oldFrom, oldTo, '', '') !== run.text) return;
+      if (before.rangeHasMark(oldFrom, oldTo, linkType)) return;
+      found.push(run);
+    });
+  });
+  return found;
+}
+
+editor.on('transaction', ({ transaction }) => {
+  if (!transaction || !transaction.docChanged) return;
+  if (pendingLinkPreviews.size) {
+    pendingLinkPreviews.forEach(p => { p.pos = transaction.mapping.map(p.pos); });
+  }
+  if (!linkPreviewAutoEnabled) return;
+  if (transaction.getMeta('trinoteNoLinkPreview') || transaction.getMeta('history$')) return;
+  let runs;
+  try {
+    const uiEvent = transaction.getMeta('uiEvent');
+    runs = (transaction.getMeta('paste') || uiEvent === 'paste' || uiEvent === 'drop')
+      ? pastedBareUrlRuns(transaction)
+      : newlyAutolinkedRuns(transaction);
+  } catch (e) { return; }
+  runs.forEach(run => requestLinkPreview(run.href, run.from));
+});
+
+/**
+ * A URL that reached the editor through WebKit's own paste or a drop rather than native's paste path (which asks for
+ * the preview itself): the inserted content is that one URL and nothing else, now a link to itself.
+ */
+function pastedBareUrlRuns(transaction) {
+  let inserted = '';
+  transaction.steps.forEach(step => {
+    if (step.slice && step.slice.content) inserted += step.slice.content.textBetween(0, step.slice.content.size, ' ', ' ');
+  });
+  const url = inserted.trim();
+  if (!url || /\s/.test(url) || !trinoteLinkPreview.isHttpUrl(url)) return [];
+  const doc = editor.state.doc;
+  const found = [];
+  transaction.mapping.maps.forEach((map, index) => {
+    const rest = transaction.mapping.slice(index + 1);
+    map.forEach((oldStart, oldEnd, newStart, newEnd) => {
+      const from = Math.max(0, rest.map(newStart, -1) - 1);
+      const to = Math.min(doc.content.size, rest.map(newEnd, 1) + 1);
+      doc.nodesBetween(from, to, (node, pos) => {
+        if (!node.isTextblock) return true;
+        linkRunsInTextblock(node, pos).forEach(run => {
+          if (run.href === url && isBareUrlLinkRun(run) && !found.some(f => f.from === run.from)) found.push(run);
+        });
+        return false;
+      });
+    });
+  });
+  return found;
+}
+
+/** True when a paste is one http(s) URL and nothing else (the HTML flavour, if any, holds just that URL). */
+function trinotePasteIsBareUrl(plain, html) {
+  const u = String(plain || '').trim();
+  if (!u || /\s/.test(u) || !trinoteLinkPreview.isHttpUrl(u)) return false;
+  if (!html || !String(html).trim()) return true;
+  try {
+    const doc = new DOMParser().parseFromString(String(html), 'text/html');
+    if (doc.body.querySelector('img, table, ul, ol, pre, section, figure')) return false;
+    return (doc.body.textContent || '').trim() === u;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Inserts a pasted http(s) URL as a link to itself and asks for its preview. False when `url` isn't one. */
+function insertPastedUrlAsLink(url) {
+  const u = String(url || '').trim();
+  if (!trinoteLinkPreview.isHttpUrl(u) || /\s/.test(u)) return false;
+  const pos = editor.state.selection.from;
+  editor.chain().focus()
+    .setMeta('trinoteNoLinkPreview', true)
+    .insertContent({ type: 'text', text: u, marks: [{ type: 'link', attrs: { href: u } }] })
+    .unsetMark('link')
+    .run();
+  requestLinkPreview(u, pos);
+  return true;
+}
+
+function linkPreviewAttrsFromMetadata(meta, url) {
+  const str = (v) => (v == null || v === '') ? null : String(v);
+  return {
+    url: trinoteLinkPreview.isHttpUrl(meta.url) ? String(meta.url) : url,
+    embedType: meta.embedType === 'youtube' ? 'youtube' : 'opengraph',
+    title: str(meta.title),
+    description: str(meta.description),
+    favicon: str(meta.favicon),
+    siteName: str(meta.siteName),
+    image: str(meta.image),
+  };
+}
+
+/**
+ * Replaces the pending link with its preview. As in Trilium (`chooseLinkPreviewKind`), it becomes a card (or a
+ * video) only when the URL is all there is in a top-level paragraph and the caret has left that paragraph;
+ * anything else becomes an inline mention. The conversion is one undo step, so Undo brings the plain link back.
+ */
+function convertLinkToPreview(pending, meta) {
+  const doc = editor.state.doc;
+  let best = null;
+  doc.descendants((node, pos) => {
+    if (!node.isTextblock) return true;
+    linkRunsInTextblock(node, pos).forEach(run => {
+      if (run.href !== pending.url || !isBareUrlLinkRun(run)) return;
+      const distance = Math.abs(run.from - pending.pos);
+      if (!best || distance < best.distance) best = Object.assign({ distance }, run);
+    });
+    return false;
+  });
+  if (!best) return;
+
+  const attrs = linkPreviewAttrsFromMetadata(meta, pending.url);
+  const $from = doc.resolve(best.from);
+  const block = $from.parent;
+  let aloneInBlock = true;
+  block.forEach(child => { if (!child.isText) aloneInBlock = false; });
+  aloneInBlock = aloneInBlock && block.textContent.trim() === best.href;
+  const standalone = $from.depth === 1 && block.type.name === 'paragraph';
+  const head = editor.state.selection.head;
+  const caretLeftBlock = head < $from.start() || head > $from.end();
+
+  if (aloneInBlock && standalone && caretLeftBlock) {
+    linkPreviewChain().insertContentAt(
+      { from: $from.before(), to: $from.after() },
+      { type: 'linkEmbed', attrs },
+      { updateSelection: false }
+    ).run();
+  } else {
+    linkPreviewChain().insertContentAt(
+      { from: best.from, to: best.to },
+      { type: 'linkMention', attrs },
+      { updateSelection: false }
+    ).run();
+  }
+}
+
+/* ---- A short message at the top of the editor ---- */
+const editorToast = document.createElement('div');
+editorToast.className = 'tn-editor-toast';
+editorToast.setAttribute('role', 'status');
+document.body.appendChild(editorToast);
+let editorToastTimer = null;
+
+function showEditorToast(text, ms) {
+  if (!text) return;
+  editorToast.textContent = String(text);
+  editorToast.classList.add('visible');
+  if (editorToastTimer) clearTimeout(editorToastTimer);
+  editorToastTimer = setTimeout(hideEditorToast, ms || 4500);
+}
+
+function hideEditorToast() {
+  if (editorToastTimer) { clearTimeout(editorToastTimer); editorToastTimer = null; }
+  editorToast.classList.remove('visible');
+}
+
+/*
+ * Turning an existing link into a preview, Trilium's "Display" choices for a plain link. Unlike a paste there is no
+ * gesture to read and no unresolved-page veto: the shape was picked outright, so the link always becomes a preview
+ * (Undo brings it back), titled by its host when the page's details can't be had. A labelled link's text gives way to
+ * the preview, as in Trilium. Native fetches the details and says why when it can't.
+ */
+const linkMenuPopup = document.createElement('div');
+linkMenuPopup.className = 'image-popup link-menu-popup';
+linkMenuPopup._run = null;
+document.body.appendChild(linkMenuPopup);
+
+/** The link run at `pos`: `{ href, from, to, text }`, or null. */
+function linkRunAt(pos) {
+  const doc = editor.state.doc;
+  if (pos == null || pos < 0 || pos > doc.content.size) return null;
+  const $pos = doc.resolve(pos);
+  if (!$pos.parent.isTextblock) return null;
+  const blockPos = $pos.depth > 0 ? $pos.before() : 0;
+  const runs = linkRunsInTextblock($pos.parent, blockPos);
+  return runs.find(run => run.from <= pos && pos <= run.to) || null;
+}
+
+function linkRunCanBeBlock(run) {
+  const $from = editor.state.doc.resolve(run.from);
+  return $from.depth === 1 && $from.parent.type.name === 'paragraph';
+}
+
+function requestExplicitLinkPreview(run, mode) {
+  hideLinkMenu();
+  if (!run || !trinoteLinkPreview.isHttpUrl(run.href)) return;
+  linkPreviewDismissedUrls.delete(run.href);
+  const requestId = 'lpx' + (++linkPreviewRequestSeq) + '_' + Math.random().toString(36).slice(2, 8);
+  pendingLinkPreviews.set(requestId, { url: run.href, pos: run.from, explicit: true, mode });
+  showEditorToast('Getting link preview…', 30000);
+  try {
+    window.webkit.messageHandlers.editorRequest.postMessage({ action: 'linkPreview', requestId, url: run.href, explicit: true });
+  } catch (e) {
+    // No native side to ask (never in the app): convert with what the link itself says.
+    pendingLinkPreviews.delete(requestId);
+    hideEditorToast();
+    convertLinkExplicitly({ url: run.href, pos: run.from, mode }, null);
+  }
+}
+
+/** Replaces the link run nearest `pending.pos` whose href is `pending.url` with a preview of `pending.mode`. */
+function convertLinkExplicitly(pending, meta) {
+  const doc = editor.state.doc;
+  let best = null;
+  doc.descendants((node, pos) => {
+    if (!node.isTextblock) return true;
+    linkRunsInTextblock(node, pos).forEach(run => {
+      if (run.href !== pending.url) return;
+      const distance = Math.abs(run.from - pending.pos);
+      if (!best || distance < best.distance) best = Object.assign({ distance }, run);
+    });
+    return false;
+  });
+  if (!best) return false;
+
+  const url = pending.url;
+  const attrs = linkPreviewAttrsFromMetadata(
+    meta || { url, embedType: trinoteLinkPreview.youTubeVideoId(url) ? 'youtube' : 'opengraph' },
+    url
+  );
+  const $from = doc.resolve(best.from);
+  const block = $from.parent;
+  let mode = pending.mode;
+  if (mode !== 'inline' && !linkRunCanBeBlock(best)) mode = 'inline';
+
+  if (mode === 'inline') {
+    linkPreviewChain().insertContentAt({ from: best.from, to: best.to }, { type: 'linkMention', attrs }).run();
+  } else {
+    attrs.embedType = mode === 'video' ? 'youtube' : 'opengraph';
+    let alone = true;
+    block.forEach(child => { if (!child.isText) alone = false; });
+    alone = alone && block.textContent.trim() === best.text.trim();
+    const range = alone ? { from: $from.before(), to: $from.after() } : { from: best.from, to: best.to };
+    linkPreviewChain().insertContentAt(range, { type: 'linkEmbed', attrs }).run();
+  }
+  return true;
+}
+
+function fillLinkMenu() {
+  const run = linkMenuPopup._run;
+  if (!run) { hideLinkMenu(); return; }
+  const icons = LINK_PREVIEW_MENU_ICONS;
+  linkMenuPopup.innerHTML = '';
+  const addLabel = (text) => {
+    const l = document.createElement('div');
+    l.className = 'image-popup-section-label';
+    l.textContent = text;
+    linkMenuPopup.appendChild(l);
+  };
+  const addRow = (html, onPick) => {
+    const row = document.createElement('div');
+    row.className = 'image-popup-row';
+    row.innerHTML = html;
+    function pick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const current = linkMenuPopup._run;
+      if (current) onPick(current);
+    }
+    row.addEventListener('pointerdown', pick, true);
+    row.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
+    row.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+    linkMenuPopup.appendChild(row);
+  };
+  addLabel('Link');
+  addRow(icons.open + '<span>Open Link</span>', (r) => {
+    hideLinkMenu();
+    try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'openURL', url: r.href }); } catch (e) {}
+  });
+  if (linkPreviewsAvailable) {
+    addLabel('Show As Preview');
+    addRow(icons.inline + '<span>Inline</span>', (r) => requestExplicitLinkPreview(r, 'inline'));
+    if (linkRunCanBeBlock(run)) {
+      addRow(icons.card + '<span>Card</span>', (r) => requestExplicitLinkPreview(r, 'card'));
+      if (trinoteLinkPreview.youTubeVideoId(run.href)) {
+        addRow(icons.video + '<span>Video</span>', (r) => requestExplicitLinkPreview(r, 'video'));
+      }
+    }
+  }
+  addRow(icons.remove + '<span>Remove Link</span>', (r) => {
+    hideLinkMenu();
+    linkPreviewChain().setTextSelection({ from: r.from, to: r.to }).unsetLink().setTextSelection(r.to).run();
+  });
+}
+
+function showLinkMenu(anchorEl, run) {
+  hideImagePopup();
+  hideInlineIconPopup();
+  hideLinkPreviewPopup();
+  document.querySelectorAll('.heading-popup.visible').forEach(p => hideHeadingPopup(p));
+  linkMenuPopup._run = run;
+  linkMenuPopup.classList.add('visible');
+  fillLinkMenu();
+  layoutPopupNearAnchor(linkMenuPopup, anchorEl);
+}
+
+function hideLinkMenu() {
+  linkMenuPopup.classList.remove('visible');
+  linkMenuPopup._run = null;
+}
+
+// Tapping a web link (not a preview, a note link or an attachment) opens its menu; the caret still lands in the link.
+document.getElementById('editor-container').addEventListener('click', function(e) {
+  const a = e.target.closest && e.target.closest('.tiptap a[href]');
+  if (!a || a.closest('[data-trinote-link-preview]') || a.closest('.tn-include-readonly')) return;
+  if (!trinoteLinkPreview.isHttpUrl(a.getAttribute('href'))) return;
+  let pos;
+  try { pos = editor.view.posAtDOM(a, 0); } catch (_) { return; }
+  const run = linkRunAt(pos) || linkRunAt(pos + 1);
+  if (!run) return;
+  e.preventDefault();
+  if (linkMenuPopup.classList.contains('visible') && linkMenuPopup._run && linkMenuPopup._run.from === run.from) {
+    hideLinkMenu();
+    return;
+  }
+  showLinkMenu(a, run);
+}, true);
+
+document.addEventListener('pointerdown', function(e) {
+  if (!linkMenuPopup.classList.contains('visible')) return;
+  if (e.target.closest('.link-menu-popup')) return;
+  hideLinkMenu();
+}, true);
+
+// The menu acts on the link it opened for; an edit elsewhere moves it, an edit to the link closes the menu.
+editor.on('transaction', ({ transaction }) => {
+  if (!linkMenuPopup.classList.contains('visible') || !transaction || !transaction.docChanged) return;
+  const run = linkMenuPopup._run;
+  if (!run) return;
+  const moved = linkRunAt(transaction.mapping.map(run.from, 1));
+  if (!moved || moved.href !== run.href) { hideLinkMenu(); return; }
+  linkMenuPopup._run = moved;
 });
 
 function afterColorMarkEdit() {
@@ -4078,7 +4887,7 @@ function makeLinkToolbar() {
     hideLinkPopup(popup);
     if (!r) return;
     withColorMarkEdit(() => {
-      editor.chain().setTextSelection({ from: r.from, to: r.to }).setLink({ href: url }).run();
+      editor.chain().setTextSelection({ from: r.from, to: r.to }).setLink({ href: url }).setMeta('trinoteNoLinkPreview', true).run();
     });
   }
 
@@ -5105,6 +5914,32 @@ function trinoteRunMermaidInSlot(slot) {
 }
 
 // --- Bridge ---
+/** The editor's body as Trilium stores it (CKEditor 5 markup, table captions back in, photo slots out). */
+function _serializeEditorContent() {
+  let html = tiptapToCk(editor.getHTML());
+  // tiptapToCk() already wraps all tables in <figure class="table">.
+  // Now inject <figcaption> for tables that have a caption in the DOM.
+  const wrappers = document.querySelectorAll('.tiptap .tableWrapper');
+  const caps = [];
+  wrappers.forEach((w, i) => {
+    const cd = Array.from(w.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'));
+    if (cd) caps.push({ idx: i, text: cd.textContent || '' });
+  });
+  if (caps.length > 0) {
+    const doc = new DOMParser().parseFromString(html || '<p></p>', 'text/html');
+    const figures = doc.querySelectorAll('figure.table');
+    caps.forEach(({ idx, text }) => {
+      const fig = figures[idx];
+      if (!fig) return;
+      const figcap = doc.createElement('figcaption');
+      figcap.textContent = text;
+      fig.appendChild(figcap);
+    });
+    html = serializeHtmlBodyPreservingTriliumMath(doc);
+  }
+  return stripPhotoSlotFigures(html);
+}
+
 window.editorBridge = {
   setKeyboardToolbarGap(px) {},
   setInsertToolsAtTop(atTop) {
@@ -5140,7 +5975,7 @@ window.editorBridge = {
       const node = editor.state.doc.nodeAt(replacePos);
       if (node && node.type.name === 'triliumInlineIcon') {
         editor.chain().focus().setNodeSelection(replacePos).updateAttributes('triliumInlineIcon', { iconClass: cls }).run();
-        try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+        try { _postContentChanged(); } catch (e) {}
         return;
       }
     }
@@ -5214,34 +6049,20 @@ window.editorBridge = {
           _setupCaptionInput(capDiv);
           _captionStore.set(wrapper, text);
         });
+        // Only now does reading the editor give back the captions too.
+        _hasLoadedContent = true;
       });
+    } else {
+      _hasLoadedContent = true;
     }
   },
+  /** The body as Trilium stores it. Sends a pending `contentChanged` first instead of dropping it. */
   getContent() {
-    clearTimeout(_contentTimer);
-    let html = tiptapToCk(editor.getHTML());
-    // tiptapToCk() already wraps all tables in <figure class="table">.
-    // Now inject <figcaption> for tables that have a caption in the DOM.
-    const wrappers = document.querySelectorAll('.tiptap .tableWrapper');
-    const caps = [];
-    wrappers.forEach((w, i) => {
-      const cd = Array.from(w.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'));
-      if (cd) caps.push({ idx: i, text: cd.textContent || '' });
-    });
-    if (caps.length > 0) {
-      const doc = new DOMParser().parseFromString(html || '<p></p>', 'text/html');
-      const figures = doc.querySelectorAll('figure.table');
-      caps.forEach(({ idx, text }) => {
-        const fig = figures[idx];
-        if (!fig) return;
-        const figcap = doc.createElement('figcaption');
-        figcap.textContent = text;
-        fig.appendChild(figcap);
-      });
-      html = serializeHtmlBodyPreservingTriliumMath(doc);
-    }
-    return stripPhotoSlotFigures(html);
+    if (_contentTimer !== null && _hasLoadedContent) return _postContentChanged();
+    return _serializeEditorContent();
   },
+  /** Whether native's `setContent` has run on this page (false on a page reloaded after its process ended). */
+  hasLoadedContent() { return _hasLoadedContent; },
   focus() {
     editor.commands.focus('end');
     scheduleScrollCaretIntoViewAfterKeyboard();
@@ -5259,6 +6080,10 @@ window.editorBridge = {
   pastePlainFallback(plain, html) {
     const p = (plain != null) ? String(plain) : '';
     const h = (html != null) ? String(html) : '';
+    if (editor.state.selection.empty && trinotePasteIsBareUrl(p, h) && insertPastedUrlAsLink(p)) {
+      try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+      return;
+    }
     if (h && h.trim()) {
       try {
         editor.chain().focus().insertContent(ckToTiptap(h) || h).run();
@@ -5268,18 +6093,18 @@ window.editorBridge = {
     } else if (p) {
       editor.chain().focus().insertContent(p).run();
     }
-    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+    try { _postContentChanged(); } catch (e) {}
   },
   insertPasteboardURL(url) {
     const u = (url != null) ? String(url).trim() : '';
     if (!u) return;
     const { from, to, empty } = editor.state.selection;
     if (!empty) {
-      editor.chain().focus().setTextSelection({ from, to }).setLink({ href: u }).run();
-    } else {
+      editor.chain().focus().setTextSelection({ from, to }).setLink({ href: u }).setMeta('trinoteNoLinkPreview', true).run();
+    } else if (!insertPastedUrlAsLink(u)) {
       editor.chain().focus().insertContent(u).run();
     }
-    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+    try { _postContentChanged(); } catch (e) {}
   },
   insertAttachmentLink(noteId, attachmentId, title) {
     const nid = (noteId != null) ? String(noteId).trim() : '';
@@ -5301,7 +6126,7 @@ window.editorBridge = {
       tr.setNodeMarkup(p, undefined, { ...node.attrs, title: label });
       return true;
     }).run();
-    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch (e) {}
+    try { _postContentChanged(); } catch (e) {}
   },
   scrollToFraction(fraction) {
     const ec = document.getElementById('editor-container');
@@ -5328,7 +6153,7 @@ window.editorBridge = {
     const bs = boxSize || 'medium';
     const t = (title != null && String(title).trim()) ? String(title).trim() : nid;
     editor.chain().focus().insertContent({ type: 'includeNote', attrs: { noteId: nid, boxSize: bs, noteTitle: t } }).run();
-    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch(e) {}
+    try { _postContentChanged(); } catch(e) {}
   },
   setIncludeNoteTitle(noteId, title) {
     const nid = (noteId || '').trim();
@@ -5348,6 +6173,54 @@ window.editorBridge = {
       }
     }
     if (tr.docChanged) editor.view.dispatch(tr);
+  },
+  /**
+   * Native: `available` when the server understands link previews (Trilium v0.104+), `auto` when pasted or autolinked
+   * URLs should also become previews by themselves (Trilium's auto link previews option, a note on the server).
+   */
+  setLinkPreviewSupport(available, auto) {
+    linkPreviewsAvailable = !!available;
+    linkPreviewAutoEnabled = !!available && !!auto;
+    if (!linkPreviewAutoEnabled) {
+      pendingLinkPreviews.forEach((p, id) => { if (!p.explicit) pendingLinkPreviews.delete(id); });
+    }
+  },
+  setAutoLinkPreviews(enabled) {
+    this.setLinkPreviewSupport(enabled || linkPreviewsAvailable, enabled);
+  },
+  /**
+   * Native answer to an `editorRequest` `linkPreview`: `{ requestId, metadata, problem, message }`. `metadata` is null
+   * when there is none; `message` says why a preview has no details (shown for a conversion the user asked for, and
+   * for a paste whose request failed outright).
+   */
+  applyLinkPreviewJSON(jsonStr) {
+    let o;
+    try { o = JSON.parse(jsonStr); } catch (e) { return; }
+    const requestId = String((o && o.requestId) || '');
+    const pending = pendingLinkPreviews.get(requestId);
+    if (!pending) return;
+    pendingLinkPreviews.delete(requestId);
+    const meta = o.metadata;
+    if (pending.explicit) {
+      hideEditorToast();
+      // A server without link previews would drop the element: the link stays a link.
+      if (o.problem === 'serverTooOld') {
+        if (o.message) showEditorToast(o.message);
+        return;
+      }
+      try { convertLinkExplicitly(pending, meta); } catch (e) {
+        try { window.webkit.messageHandlers.debugLog.postMessage('[LINK PREVIEW] explicit convert failed ' + e); } catch (_) {}
+      }
+      if (o.message) showEditorToast(o.message);
+      return;
+    }
+    if (!meta || meta.unresolved || !linkPreviewAutoEnabled) {
+      if (o.problem === 'requestFailed' && o.message) showEditorToast(o.message);
+      return;
+    }
+    try { convertLinkToPreview(pending, meta); } catch (e) {
+      try { window.webkit.messageHandlers.debugLog.postMessage('[LINK PREVIEW] convert failed ' + e); } catch (_) {}
+    }
   },
   applyIncludeNotePreviewJSON(jsonStr) {
     let o;
@@ -5382,6 +6255,7 @@ window.editorBridge = {
           return;
         }
         retrySlot.innerHTML = rawHtml;
+        try { trinoteLinkPreview.render(retrySlot); } catch (_) {}
         requestAnimationFrame(() => trinoteRunMermaidInSlot(retrySlot));
       });
       return;
@@ -5392,6 +6266,7 @@ window.editorBridge = {
       return;
     }
     slot.innerHTML = rawHtml;
+    try { trinoteLinkPreview.render(slot); } catch (_) {}
     requestAnimationFrame(() => trinoteRunMermaidInSlot(slot));
   },
 };
@@ -6053,7 +6928,7 @@ const _captionBtn = makeTableCtxBtn(TABLE_ICONS.caption, 'Toggle caption', () =>
   // Trigger auto-save so the caption add/remove persists
   clearTimeout(_contentTimer);
   _contentTimer = setTimeout(() => {
-    try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch(e) {}
+    try { _postContentChanged(); } catch(e) {}
   }, 300);
 });
 // "New line below" button (↵ symbol)
@@ -6101,7 +6976,8 @@ _ctxSaveBtn.addEventListener('pointerdown', (e) => {
   e.preventDefault(); e.stopPropagation();
   try {
     window.webkit.messageHandlers.requestSave.postMessage({
-      html: window.editorBridge.getContent(),
+      // A page reloaded after its process ended is empty until native re-seeds it: native saves what it has.
+      html: _hasLoadedContent ? window.editorBridge.getContent() : null,
       scrollFraction: window.editorBridge.getScrollFraction()
     });
   } catch (err) {
@@ -6158,7 +7034,7 @@ function _setupCaptionInput(capDiv) {
     if (wrapper) _captionStore.set(wrapper, capDiv.textContent || '');
     clearTimeout(_contentTimer);
     _contentTimer = setTimeout(() => {
-      try { window.webkit.messageHandlers.contentChanged.postMessage(window.editorBridge.getContent()); } catch(e) {}
+      try { _postContentChanged(); } catch(e) {}
     }, 300);
   });
   capDiv.addEventListener('mousedown', e => e.stopPropagation());

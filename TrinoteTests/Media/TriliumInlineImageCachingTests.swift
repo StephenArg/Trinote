@@ -144,4 +144,33 @@ final class TriliumInlineImageCachingTests: XCTestCase {
         XCTAssertEqual(bodies.count, 1)
         XCTAssertEqual(bodies[0].noteId, "filled")
     }
+
+    // MARK: - Link previews (issue #35)
+
+    private static let linkPreviewBody = #"<p><span class="link-mention" data-url="https://github.com/x" data-favicon="api/attachments/fav1/image/github.com.svg"></span></p><section class="link-embed" data-url="https://example.com/" data-embed-type="opengraph" data-favicon="api/attachments/fav2/image/example.com.ico" data-image="api/attachments/cover1/image/example.com-1a2b3c4d.jpeg"></section>"#
+
+    func testExtractImageReferencesIncludesLinkPreviewPictures() {
+        let refs = TriliumInlineImageCaching.extractImageReferences(from: Self.linkPreviewBody)
+        XCTAssertEqual(refs, [
+            .init(routeType: "attachments", entityId: "fav1"),
+            .init(routeType: "attachments", entityId: "fav2"),
+            .init(routeType: "attachments", entityId: "cover1"),
+        ])
+        // The same attribute names outside a link preview are not pictures.
+        XCTAssertTrue(TriliumInlineImageCaching.extractImageReferences(
+            from: #"<div data-image="api/attachments/x1/image/a.png"></div>"#
+        ).isEmpty)
+    }
+
+    func testInlineAttachmentImagesLeavesLinkPreviewAttributesAsStored() async {
+        let rewritten = await TriliumInlineImageCaching.inlineAttachmentImages(
+            in: Self.linkPreviewBody,
+            client: nil,
+            persistence: persistence,
+            serverProfileId: "s1",
+            sourceNoteId: "host",
+            parentNoteIds: []
+        )
+        XCTAssertEqual(rewritten, Self.linkPreviewBody)
+    }
 }

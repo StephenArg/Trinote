@@ -372,8 +372,16 @@ actor MockTriliumClient: TriliumClientProtocol {
         updateNoteContentError = error
     }
 
+    /// Thrown by `updateNoteContent` for one note only, ahead of `updateNoteContentError`.
+    var updateNoteContentErrorsByNote: [String: Error] = [:]
+
+    func setUpdateNoteContentError(_ error: Error?, forNote noteId: String) {
+        updateNoteContentErrorsByNote[noteId] = error
+    }
+
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws {
         updateNoteContentCalls.append((noteId, content))
+        if let error = updateNoteContentErrorsByNote[noteId] { throw error }
         if let error = updateNoteContentError { throw error }
     }
 
@@ -482,8 +490,20 @@ actor MockTriliumClient: TriliumClientProtocol {
     var getOrCreateDayNoteCalls: [String] = []
     var getOrCreateDayNoteResult = NoteIdTitle(noteId: "day1", title: "27 - Sunday", isProtected: false)
 
+    /// Per-day answers, ahead of `getOrCreateDayNoteResult` (journal captures for several days).
+    var dayNoteResultsByDay: [String: Result<NoteIdTitle, Error>] = [:]
+
+    func setDayNote(_ note: NoteIdTitle) {
+        getOrCreateDayNoteResult = note
+    }
+
+    func setDayNoteResult(_ result: Result<NoteIdTitle, Error>, forDay day: String) {
+        dayNoteResultsByDay[day] = result
+    }
+
     func getOrCreateDayNote(onISODay day: String) async throws -> NoteIdTitle {
         getOrCreateDayNoteCalls.append(day)
+        if let result = dayNoteResultsByDay[day] { return try result.get() }
         return getOrCreateDayNoteResult
     }
 
@@ -496,6 +516,10 @@ actor MockTriliumClient: TriliumClientProtocol {
     }
 
     var inboxTargetResult: Result<InboxTargetResponse, Error> = .success(InboxTargetResponse(kind: "root", noteId: "root", title: "root"))
+
+    func setInboxTargetResult(_ result: Result<InboxTargetResponse, Error>) {
+        inboxTargetResult = result
+    }
 
     func getInboxTarget() async throws -> InboxTargetResponse {
         try inboxTargetResult.get()
@@ -685,7 +709,11 @@ actor MockTriliumClient: TriliumClientProtocol {
         return Data("file-content".utf8)
     }
 
-    func uploadAttachmentContent(_ attachmentId: String, data: Data, contentType: String) async throws {}
+    var uploadedAttachmentContents: [(attachmentId: String, data: Data, contentType: String)] = []
+
+    func uploadAttachmentContent(_ attachmentId: String, data: Data, contentType: String) async throws {
+        uploadedAttachmentContents.append((attachmentId: attachmentId, data: data, contentType: contentType))
+    }
 
     func uploadNoteAttachment(noteId: String, data: Data, filename: String, contentType: String) async throws -> String {
         uploadNoteAttachmentCalls.append((noteId: noteId, filename: filename, contentType: contentType))
@@ -695,9 +723,13 @@ actor MockTriliumClient: TriliumClientProtocol {
         return "dest-att-\(uploadNoteAttachmentCalls.count)"
     }
 
+    var createAttachmentRequests: [CreateAttachmentRequest] = []
+
     func createAttachment(_ request: CreateAttachmentRequest) async throws -> AttachmentResponse {
+        createAttachmentRequests.append(request)
         if let result = createAttachmentResult { return try result.get() }
-        return TestFixtures.attachmentResponse(ownerId: request.ownerId, title: request.title)
+        let id = createAttachmentRequests.count == 1 ? "att1" : "att\(createAttachmentRequests.count)"
+        return TestFixtures.attachmentResponse(attachmentId: id, ownerId: request.ownerId, title: request.title, mime: request.mime)
     }
 
     func renameAttachment(attachmentId: String, title: String) async throws {}
@@ -733,6 +765,21 @@ actor MockTriliumClient: TriliumClientProtocol {
     func getNoteOfficePreview(_ noteId: String) async throws -> OfficePreviewResponse {
         if let result = noteOfficePreviewResults[noteId] { return try result.get() }
         throw APIError.notFound("office-preview \(noteId)")
+    }
+
+    var linkPreviewMetadataResults: [String: Result<LinkPreviewMetadata, Error>] = [:]
+    var linkPreviewMetadataCalls: [LinkPreviewMetadataRequest] = []
+
+    func setLinkPreviewMetadataResult(url: String, _ result: Result<LinkPreviewMetadata, Error>) {
+        linkPreviewMetadataResults[url] = result
+    }
+
+    func setAppInfoResult(_ result: Result<AppInfoResponse, Error>) { appInfoResult = result }
+
+    func fetchLinkPreviewMetadata(url: String, noteId: String) async throws -> LinkPreviewMetadata {
+        linkPreviewMetadataCalls.append(LinkPreviewMetadataRequest(url: url, noteId: noteId))
+        if let result = linkPreviewMetadataResults[url] { return try result.get() }
+        throw APIError.notFound("link-embed/metadata \(url)")
     }
 
     func getAttachmentOfficePreview(_ attachmentId: String) async throws -> OfficePreviewResponse {

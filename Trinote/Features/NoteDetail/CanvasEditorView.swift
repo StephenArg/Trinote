@@ -18,9 +18,13 @@ struct CanvasEditorView: UIViewRepresentable {
     let initialJSON: String
     let bridge: CanvasEditorBridge
     var onSceneChanged: (() -> Void)?
+    /// The note's newest saved scene (Autosave updates it), shown if the page reloads after its process ended.
+    var currentJSON: (() -> String)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(initialJSON: initialJSON, onSceneChanged: onSceneChanged)
+        let coordinator = Coordinator(initialJSON: initialJSON, onSceneChanged: onSceneChanged)
+        coordinator.currentJSON = currentJSON
+        return coordinator
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -81,6 +85,7 @@ struct CanvasEditorView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onSceneChanged = onSceneChanged
+        context.coordinator.currentJSON = currentJSON
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -95,8 +100,11 @@ struct CanvasEditorView: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var onSceneChanged: (() -> Void)?
+        var currentJSON: (() -> String)?
         private let initialJSON: String
         private var canvasReady = false
+        private var isRecovering = false
+        private let processRecovery = WebContentProcessRecovery(label: "Canvas editor")
 
         init(initialJSON: String, onSceneChanged: (() -> Void)?) {
             self.initialJSON = initialJSON
@@ -107,7 +115,13 @@ struct CanvasEditorView: UIViewRepresentable {
             switch message.name {
             case "canvasReady":
                 canvasReady = true
-                loadScene(initialJSON)
+                let recovering = isRecovering
+                isRecovering = false
+                loadScene(EditorReloadRecovery.content(
+                    pending: nil,
+                    latest: recovering ? currentJSON?() : nil,
+                    initial: initialJSON
+                ))
 
             case "sceneChanged":
                 DispatchQueue.main.async { [weak self] in
@@ -121,6 +135,17 @@ struct CanvasEditorView: UIViewRepresentable {
 
             default:
                 break
+            }
+        }
+
+        /// iOS ended the page's process (see `EditorReloadRecovery`). Until the reloaded page is ready again the
+        /// bridge hands back a placeholder, which saving ignores, instead of the empty scene a fresh page has.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            canvasReady = false
+            isRecovering = true
+            processRecovery.pageProcessEnded { [weak webView] in
+                guard let webView, let fileURL = Bundle.main.url(forResource: "canvas-editor", withExtension: "html") else { return }
+                webView.loadFileURL(fileURL, allowingReadAccessTo: Bundle.main.bundleURL)
             }
         }
 

@@ -54,6 +54,7 @@ final class MermaidRenderer: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     /// `nil` until the first successful `mermaidReady`; thereafter tracks `UserDefaults` appearance key.
     private var lastAppearanceFingerprint: String?
     private var serialTail: Task<String?, Never>?
+    private let processRecovery = WebContentProcessRecovery(label: "Mermaid renderer")
 
     private override init() {
         super.init()
@@ -139,6 +140,13 @@ final class MermaidRenderer: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {}
+
+    /// iOS ended the hidden viewer's process (often while the app is in the background). WebKit only reloads a page
+    /// once its view is visible, and this one never is, so renders would wait on a dead page. Reload it here.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        isReady = false
+        processRecovery.pageProcessEnded { [weak webView] in webView?.reload() }
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {}
 

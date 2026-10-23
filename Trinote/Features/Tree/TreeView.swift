@@ -261,6 +261,20 @@ struct TreeView: View {
                         )
                         appState.shareImport.consumePendingOpenNote()
                     }
+                    // `initial`: also when the tree first appears, after a cold launch set the request.
+                    .onChange(of: appState.pendingExternalOpen, initial: true) { _, request in
+                        guard let request else { return }
+                        appState.consumePendingExternalOpen()
+                        switch request {
+                        case .note(let note):
+                            openExternalNote(note)
+                        case .edit(let note):
+                            // A note Create Note just made: opened in the editor, as a shared import is.
+                            openSharedImportNote(noteId: note.noteId, title: note.title)
+                        case .failed(let message):
+                            todaysJournalNoteError = message
+                        }
+                    }
             } else {
                 treeViewCommonSheetsAndAlerts
             }
@@ -1403,6 +1417,31 @@ struct TreeView: View {
             }
         } else {
             navigateToNoteForEdit = target
+        }
+    }
+
+    /// Opens a note asked for from outside the app's screens (the Open Today's Journal Shortcut), in read mode, as
+    /// the tree's Open Today's Journal Note does.
+    private func openExternalNote(_ note: NoteNavItem) {
+        if let paneWorkspace {
+            paneWorkspace.open(NoteRoute(noteId: note.noteId, title: note.title, openTabId: note.openTabId))
+            return
+        }
+        // As with shared imports: pop what's open first, or the user stays on the old note.
+        let hadExistingDestination = navigateToNote != nil
+            || navigateToNoteForEdit != nil
+            || drillDownTarget != nil
+            || tabsBarNav != nil
+        navigateToNote = nil
+        navigateToNoteForEdit = nil
+        drillDownTarget = nil
+        tabsBarNav = nil
+        if hadExistingDestination {
+            DispatchQueue.main.async {
+                tabsBarNav = note
+            }
+        } else {
+            tabsBarNav = note
         }
     }
 

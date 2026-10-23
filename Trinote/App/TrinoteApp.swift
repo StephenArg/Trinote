@@ -191,6 +191,7 @@ struct TrinoteApp: App {
                     // Keychain and defaults with the ones the tests build, and race them.
                     guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
                     let state = AppState()
+                    AppState.current = state
                     appState = state
                     deliverPendingIncomingURLIfNeeded(to: state)
                 } catch {

@@ -682,9 +682,15 @@ struct NoteDetailView: View {
     """
 
     /// Fetches HTML + scroll fraction from `editor.html` in one round-trip (see `getScrollFraction` / `scrollToFraction`).
+    /// Gives no HTML while a page reloaded after its process ended hasn't been re-seeded yet, so the save falls back
+    /// to the last body the editor sent instead of saving the empty page over the note.
     private static let richTextEditorSavePayloadScript = """
     (function(){
       try {
+        var b = window.editorBridge;
+        if (typeof b.hasLoadedContent === 'function' && !b.hasLoadedContent()) {
+          return JSON.stringify({ html: null, f: null });
+        }
         var html = window.editorBridge.getContent();
         var f = window.editorBridge.getScrollFraction();
         return JSON.stringify({ html: html, f: f });
@@ -800,6 +806,30 @@ struct NoteDetailView: View {
               let json = String(data: data, encoding: .utf8) else { return }
         let escaped = javaScriptTemplateLiteralContent(json)
         webView.evaluateJavaScript("window.editorBridge.applyIncludeNotePreviewJSON(`\(escaped)`);", completionHandler: nil)
+    }
+
+    /// Answers the editor's `linkPreview` request with the page's details, and why there are none.
+    private static func pushLinkPreviewToEditor(
+        webView: WKWebView?,
+        requestId: String,
+        answer: LinkPreviewAnswer,
+        explicit: Bool
+    ) {
+        guard let webView else { return }
+        var payload: [String: Any] = ["requestId": requestId, "metadata": NSNull()]
+        if let problem = answer.problem {
+            payload["problem"] = problem.code
+            if let message = problem.message(explicit: explicit) { payload["message"] = message }
+        }
+        if let metadata = answer.metadata,
+           let data = try? JSONEncoder().encode(metadata),
+           let object = try? JSONSerialization.jsonObject(with: data) {
+            payload["metadata"] = object
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        let escaped = javaScriptTemplateLiteralContent(json)
+        webView.evaluateJavaScript("window.editorBridge.applyLinkPreviewJSON(`\(escaped)`);", completionHandler: nil)
     }
 
     private static func insertAttachmentLinkInEditor(webView: WKWebView?, noteId: String, attachmentId: String, title: String) {
@@ -3124,6 +3154,15 @@ struct NoteDetailView: View {
                             let html = await vm.resolvedIncludePreviewHTML(noteId: nid, boxSize: box)
                             Self.pushIncludeNotePreviewToEditor(webView: editorWebView, previewId: previewId, html: html)
                         }
+                    case .linkPreview(let requestId, let url, let explicit):
+                        Task { @MainActor in
+                            let answer = await vm.linkPreviewAnswer(url: url, explicit: explicit)
+                            Self.pushLinkPreviewToEditor(
+                                webView: editorWebView, requestId: requestId, answer: answer, explicit: explicit
+                            )
+                        }
+                    case .openExternalURL(let url):
+                        UIApplication.shared.open(url)
                     case .renameAttachment(let attachmentId, _, let title, let pos):
                         let split = AttachmentFilename.split(title)
                         attachmentRenameBasename = split.basename
@@ -3147,7 +3186,8 @@ struct NoteDetailView: View {
                 insertToolsAtTop: noteEditorInsertToolsAtTop,
                 onInsertToolsAtTopChanged: { noteEditorInsertToolsAtTop = $0 },
                 onContentLoaded: { vm.setAutosaveBaselineFromEditor($0) },
-                hidesSaveButton: !showsEditorSaveButton(vm)
+                hidesSaveButton: !showsEditorSaveButton(vm),
+                linkPreviews: vm.linkPreviewSupport
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
             // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).
@@ -3270,7 +3310,8 @@ struct NoteDetailView: View {
                     canvasHasUnsavedChanges = true
                     vm.noteEditorChanged()
                     scheduleAutosave(vm: vm)
-                }
+                },
+                currentJSON: { vm.editableContent }
             )
             .onAppear {
                 canvasHasUnsavedChanges = false
@@ -3349,7 +3390,8 @@ struct NoteDetailView: View {
                     spreadsheetHasUnsavedChanges = true
                     vm.noteEditorChanged()
                     scheduleAutosave(vm: vm)
-                }
+                },
+                currentJSON: { vm.editableContent }
             )
             .onAppear {
                 spreadsheetHasUnsavedChanges = false
@@ -3451,7 +3493,8 @@ struct NoteDetailView: View {
                     spreadsheetHasUnsavedChanges = true
                     vm.noteEditorChanged()
                     scheduleAutosave(vm: vm)
-                }
+                },
+                currentJSON: { vm.editableContent }
             )
             .ignoresSafeArea(edges: .bottom)
             .navigationTitle(vm.note?.uiTitle(forProtectedSessionActive: appState.protectedSessionActive) ?? "")
@@ -3594,7 +3637,8 @@ struct NoteDetailView: View {
                 },
                 imageBytes: { routeType, entityId in
                     await vm.loadImageBytes(routeType: routeType, entityId: entityId)
-                }
+                },
+                currentJSON: { vm.editableContent }
             )
             .onAppear {
                 mindMapHasUnsavedChanges = false

@@ -298,6 +298,21 @@ final class PendingNoteBodyUpload {
     }
 }
 
+extension PendingNoteBodyUpload {
+    /// Whether the server's body already is the queued one, so an upload cut off before its reply (the app suspended
+    /// or killed mid-request) landed after all. Only a match counts: anything else is treated as a real conflict.
+    static func serverAlreadyHas(_ server: Data, queued: Data) -> Bool {
+        if server == queued { return true }
+        // Leading or trailing whitespace is all a round trip might change in a text body, and it means nothing there.
+        // Binary bodies (not valid UTF-8) must match exactly.
+        guard let serverText = String(data: server, encoding: .utf8),
+              let queuedText = String(data: queued, encoding: .utf8)
+        else { return false }
+        return serverText.trimmingCharacters(in: .whitespacesAndNewlines)
+            == queuedText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// Title (and optional MIME) change queued while offline; flushed via `updateNote` when online.
 /// One row per note (latest patch wins). `mime` is set when the code-note language was changed.
 @Model

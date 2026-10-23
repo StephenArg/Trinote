@@ -359,6 +359,77 @@
         }
       }
     },
+    "Add ${text} to today's journal" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إضافة ${text} إلى يوميات اليوم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidat ${text} do dnešního deníku"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "${text} zum heutigen Journal hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add ${text} to today's journal"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir ${text} al diario de hoy"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter ${text} au journal d’aujourd’hui"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "${text} को आज के जर्नल में जोड़ें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "${text} hozzáadása a mai naplóhoz"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiungi ${text} al diario di oggi"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaj ${text} do dzisiejszego dziennika"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить ${text} в сегодняшний журнал"
+          }
+        }
+      }
+    },
     "Add a provider in Trilium under Options → AI to start chatting." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -430,6 +501,77 @@
         }
       }
     },
+    "Add Now" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إضافة الآن"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidat nyní"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jetzt hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Now"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir ahora"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter maintenant"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अभी जोड़ें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hozzáadás most"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiungi ora"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaj teraz"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить сейчас"
+          }
+        }
+      }
+    },
     "Add or edit providers in Trilium under Options → AI." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -497,6 +639,361 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Добавляйте и изменяйте провайдеров в Trilium в разделе Параметры → ИИ."
+          }
+        }
+      }
+    },
+    "Add Time" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إضافة الوقت"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidat čas"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uhrzeit hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Time"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir la hora"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter l’heure"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "समय जोड़ें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Időpont hozzáadása"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiungi l’ora"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaj godzinę"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить время"
+          }
+        }
+      }
+    },
+    "Add to Journal" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إضافة إلى اليوميات"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidat do deníku"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zum Journal hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to Journal"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir al diario"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter au journal"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "जर्नल में जोड़ें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hozzáadás a naplóhoz"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiungi al diario"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaj do dziennika"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить в журнал"
+          }
+        }
+      }
+    },
+    "Add to Today's Journal" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إضافة إلى يوميات اليوم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidat do dnešního deníku"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zum heutigen Journal hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to Today's Journal"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir al diario de hoy"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter au journal d’aujourd’hui"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आज के जर्नल में जोड़ें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hozzáadás a mai naplóhoz"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiungi al diario di oggi"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaj do dzisiejszego dziennika"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить в сегодняшний журнал"
+          }
+        }
+      }
+    },
+    "Added to today's journal." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تمت الإضافة إلى يوميات اليوم."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidáno do dnešního deníku."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zum heutigen Journal hinzugefügt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added to today's journal."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadido al diario de hoy."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouté au journal d’aujourd’hui."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आज के जर्नल में जोड़ दिया गया।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hozzáadva a mai naplóhoz."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiunto al diario di oggi."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodano do dzisiejszego dziennika."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавлено в сегодняшний журнал."
+          }
+        }
+      }
+    },
+    "Adds text to the end of today's journal note. Without a connection, the text is kept on this device and added when Trinote next connects." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يضيف نصًا إلى نهاية ملاحظة يوميات اليوم. بدون اتصال، يُحفظ النص على هذا الجهاز ويُضاف عند اتصال Trinote التالي."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidá text na konec dnešní deníkové poznámky. Bez připojení se text uloží v tomto zařízení a přidá se, až se Trinote znovu připojí."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fügt Text am Ende der heutigen Journalnotiz hinzu. Ohne Verbindung bleibt der Text auf diesem Gerät und wird hinzugefügt, sobald Trinote wieder verbunden ist."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adds text to the end of today's journal note. Without a connection, the text is kept on this device and added when Trinote next connects."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añade texto al final de la nota del diario de hoy. Sin conexión, el texto se guarda en este dispositivo y se añade cuando Trinote vuelva a conectarse."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajoute du texte à la fin de la note du journal d’aujourd’hui. Sans connexion, le texte est conservé sur cet appareil et ajouté à la prochaine connexion de Trinote."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आज के जर्नल नोट के अंत में टेक्स्ट जोड़ता है। कनेक्शन न होने पर टेक्स्ट इस डिवाइस पर रखा जाता है और Trinote के अगली बार कनेक्ट होने पर जोड़ा जाता है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Szöveget ad a mai naplójegyzet végéhez. Kapcsolat nélkül a szöveg ezen az eszközön marad, és a Trinote következő csatlakozásakor kerül be."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiunge testo alla fine della nota del diario di oggi. Senza connessione, il testo resta su questo dispositivo e viene aggiunto alla prossima connessione di Trinote."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaje tekst na końcu dzisiejszej notatki dziennika. Bez połączenia tekst zostaje na tym urządzeniu i zostanie dodany, gdy Trinote ponownie się połączy."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавляет текст в конец сегодняшней заметки журнала. Без подключения текст сохраняется на этом устройстве и добавляется, когда Trinote снова подключится."
           }
         }
       }
@@ -2276,6 +2773,77 @@
         }
       }
     },
+    "Couldn't reach your Trilium server." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعذّر الوصول إلى خادم Trilium الخاص بك."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Váš server Trilium není dostupný."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dein Trilium-Server ist nicht erreichbar."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't reach your Trilium server."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo conectar con tu servidor Trilium."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de joindre votre serveur Trilium."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आपके Trilium सर्वर तक नहीं पहुँचा जा सका।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nem sikerült elérni a Trilium-kiszolgálódat."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile raggiungere il tuo server Trilium."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nie udało się połączyć z Twoim serwerem Trilium."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось связаться с вашим сервером Trilium."
+          }
+        }
+      }
+    },
     "Couldn't save the chat." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2489,6 +3057,219 @@
         }
       }
     },
+    "Create ${noteTitle} in ${destination}" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إنشاء ${noteTitle} في ${destination}"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vytvořit ${noteTitle} v: ${destination}"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "${noteTitle} in ${destination} erstellen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create ${noteTitle} in ${destination}"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crear ${noteTitle} en ${destination}"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Créer ${noteTitle} dans ${destination}"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "${destination} में ${noteTitle} बनाएँ"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "${noteTitle} létrehozása itt: ${destination}"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crea ${noteTitle} in ${destination}"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utwórz ${noteTitle} w: ${destination}"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Создать ${noteTitle} в: ${destination}"
+          }
+        }
+      }
+    },
+    "Create Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إنشاء ملاحظة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vytvořit poznámku"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiz erstellen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crear nota"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Créer une note"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नोट बनाएँ"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jegyzet létrehozása"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crea nota"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utwórz notatkę"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Создать заметку"
+          }
+        }
+      }
+    },
+    "Creates a text note in your inbox, today's journal note, or at the top of the tree, and opens it in Trinote to edit." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ينشئ ملاحظة نصية في صندوق الوارد أو في ملاحظة يوميات اليوم أو في أعلى الشجرة، ويفتحها في Trinote لتحريرها."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vytvoří textovou poznámku v Doručených, v dnešní deníkové poznámce nebo na nejvyšší úrovni stromu a otevře ji v Trinote k úpravám."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erstellt eine Textnotiz in deinem Eingang, in der heutigen Journalnotiz oder auf der obersten Ebene des Baums und öffnet sie in Trinote zum Bearbeiten."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Creates a text note in your inbox, today's journal note, or at the top of the tree, and opens it in Trinote to edit."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crea una nota de texto en tu bandeja de entrada, en la nota del diario de hoy o en la raíz del árbol, y la abre en Trinote para editarla."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crée une note de texte dans votre boîte de réception, dans la note du journal d’aujourd’hui ou à la racine de l’arborescence, puis l’ouvre dans Trinote pour la modifier."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आपके इनबॉक्स, आज के जर्नल नोट या ट्री के शीर्ष पर एक टेक्स्ट नोट बनाता है और उसे संपादन के लिए Trinote में खोलता है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Szöveges jegyzetet hoz létre a Beérkezőkben, a mai naplójegyzetben vagy a fa legtetején, és megnyitja szerkesztésre a Trinote-ban."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crea una nota di testo in In arrivo, nella nota del diario di oggi o nella radice dell’albero, e la apre in Trinote per modificarla."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tworzy notatkę tekstową w skrzynce odbiorczej, w dzisiejszej notatce dziennika lub na najwyższym poziomie drzewa i otwiera ją w Trinote do edycji."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Создаёт текстовую заметку во «Входящих», в сегодняшней заметке журнала или в корне дерева и открывает её в Trinote для редактирования."
+          }
+        }
+      }
+    },
     "Default (%@)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2627,6 +3408,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Удалить чат?"
+          }
+        }
+      }
+    },
+    "Destination" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الوجهة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cíl"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ziel"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destination"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destino"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destination"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "गंतव्य"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cél"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destinazione"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Miejsce docelowe"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Куда"
           }
         }
       }
@@ -2840,6 +3692,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Адрес"
+          }
+        }
+      }
+    },
+    "Enter some text to add." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أدخل النص المراد إضافته."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zadejte text, který chcete přidat."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gib den Text ein, der hinzugefügt werden soll."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter some text to add."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribe el texto que quieres añadir."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisissez le texte à ajouter."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "जोड़ने के लिए कुछ टेक्स्ट दर्ज करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Írd be a hozzáadandó szöveget."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inserisci il testo da aggiungere."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wpisz tekst do dodania."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введите текст, который нужно добавить."
           }
         }
       }
@@ -3408,6 +4331,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ввод"
+          }
+        }
+      }
+    },
+    "Journal captures waiting" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "نصوص يوميات قيد الانتظار"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Čekající záznamy do deníku"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wartende Journaleinträge"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Journal captures waiting"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Textos del diario pendientes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Textes du journal en attente"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रतीक्षा में जर्नल प्रविष्टियाँ"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Várakozó naplóbejegyzések"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testi del diario in attesa"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oczekujące wpisy do dziennika"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ожидающие записи журнала"
           }
         }
       }
@@ -4903,6 +5897,77 @@
         }
       }
     },
+    "Nothing is waiting." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لا يوجد شيء قيد الانتظار."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nic nečeká."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es wartet nichts."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing is waiting."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay nada pendiente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rien n’est en attente."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कुछ भी प्रतीक्षा में नहीं है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nincs várakozó bejegyzés."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non c’è nulla in attesa."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nic nie oczekuje."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ничего не ожидает."
+          }
+        }
+      }
+    },
     "Open Chat as Note" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4970,6 +6035,148 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Открыть чат как заметку"
+          }
+        }
+      }
+    },
+    "Open Today's Journal" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "فتح يوميات اليوم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otevřít dnešní deník"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Heutiges Journal öffnen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Today's Journal"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir el diario de hoy"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrir le journal d’aujourd’hui"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आज का जर्नल खोलें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mai napló megnyitása"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apri il diario di oggi"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otwórz dzisiejszy dziennik"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Открыть сегодняшний журнал"
+          }
+        }
+      }
+    },
+    "Opens today's journal note in Trinote, making it when it doesn't exist yet." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يفتح ملاحظة يوميات اليوم في Trinote، وينشئها إن لم تكن موجودة بعد."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otevře v Trinote dnešní deníkovou poznámku a vytvoří ji, pokud ještě neexistuje."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffnet die heutige Journalnotiz in Trinote und erstellt sie, falls es sie noch nicht gibt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens today's journal note in Trinote, making it when it doesn't exist yet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre la nota del diario de hoy en Trinote y la crea si aún no existe."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvre la note du journal d’aujourd’hui dans Trinote et la crée si elle n’existe pas encore."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote में आज का जर्नल नोट खोलता है, और न हो तो उसे बनाता है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Megnyitja a mai naplójegyzetet a Trinote-ban, és létrehozza, ha még nincs."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apre la nota del diario di oggi in Trinote e la crea se non esiste ancora."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otwiera dzisiejszą notatkę dziennika w Trinote i tworzy ją, jeśli jeszcze nie istnieje."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Открывает сегодняшнюю заметку журнала в Trinote и создаёт её, если её ещё нет."
           }
         }
       }
@@ -6039,6 +7246,290 @@
         }
       }
     },
+    "Saved by Add to Today's Journal while the server couldn't be reached, the login had expired, or protected notes were locked. Each is added to the journal day it was captured on." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "حفظها إجراء «إضافة إلى يوميات اليوم» حين تعذّر الوصول إلى الخادم أو انتهت صلاحية تسجيل الدخول أو كانت الملاحظات المحمية مقفلة. يُضاف كل منها إلى يوم اليوميات الذي كُتب فيه."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uložila je akce Přidat do dnešního deníku, když server nebyl dostupný, přihlášení vypršelo nebo byly chráněné poznámky zamčené. Každý se přidá do dne deníku, kdy byl zapsán."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Von „Zum heutigen Journal hinzufügen“ gespeichert, als der Server nicht erreichbar war, die Anmeldung abgelaufen war oder geschützte Notizen gesperrt waren. Jeder Eintrag kommt in den Journaltag, an dem er erfasst wurde."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved by Add to Today's Journal while the server couldn't be reached, the login had expired, or protected notes were locked. Each is added to the journal day it was captured on."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardados por Añadir al diario de hoy cuando no se podía conectar con el servidor, la sesión había caducado o las notas protegidas estaban bloqueadas. Cada uno se añade al día del diario en que se escribió."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistrés par Ajouter au journal d’aujourd’hui alors que le serveur était injoignable, la connexion avait expiré ou les notes protégées étaient verrouillées. Chacun est ajouté au jour du journal où il a été saisi."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ये आज के जर्नल में जोड़ें से तब सहेजे गए जब सर्वर तक नहीं पहुँचा जा सका, लॉगिन की अवधि समाप्त हो गई थी, या सुरक्षित नोट्स लॉक थे। हर एक उसी जर्नल दिन में जोड़ा जाता है जिस दिन वह लिखा गया था।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Hozzáadás a mai naplóhoz mentette őket, amikor a kiszolgáló nem volt elérhető, a bejelentkezés lejárt, vagy a védett jegyzetek zárolva voltak. Mindegyik ahhoz a naplónaphoz kerül, amikor rögzítetted."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvati da Aggiungi al diario di oggi mentre il server non era raggiungibile, l’accesso era scaduto o le note protette erano bloccate. Ognuno viene aggiunto al giorno del diario in cui è stato scritto."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zapisane przez Dodaj do dzisiejszego dziennika, gdy serwer był niedostępny, logowanie wygasło lub chronione notatki były zablokowane. Każdy wpis trafia do dnia dziennika, w którym został zapisany."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранены действием «Добавить в сегодняшний журнал», когда сервер был недоступен, вход истёк или защищённые заметки были заблокированы. Каждая запись добавляется в день журнала, когда она была сделана."
+          }
+        }
+      }
+    },
+    "Saved on this device. It will be added to your journal when Trinote next connects to your server." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تم الحفظ على هذا الجهاز. ستتم إضافته إلى يومياتك عند اتصال Trinote التالي بالخادم."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uloženo v tomto zařízení. Do deníku se přidá, až se Trinote znovu připojí k vašemu serveru."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf diesem Gerät gespeichert. Es wird zu deinem Journal hinzugefügt, sobald Trinote wieder mit deinem Server verbunden ist."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved on this device. It will be added to your journal when Trinote next connects to your server."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardado en este dispositivo. Se añadirá a tu diario cuando Trinote vuelva a conectarse a tu servidor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistré sur cet appareil. Il sera ajouté à votre journal à la prochaine connexion de Trinote à votre serveur."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस डिवाइस पर सहेजा गया। Trinote के अगली बार आपके सर्वर से कनेक्ट होने पर यह आपके जर्नल में जोड़ दिया जाएगा।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mentve ezen az eszközön. A Trinote következő csatlakozásakor bekerül a naplódba."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvato su questo dispositivo. Verrà aggiunto al tuo diario alla prossima connessione di Trinote al tuo server."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zapisano na tym urządzeniu. Zostanie dodane do dziennika, gdy Trinote ponownie połączy się z Twoim serwerem."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранено на этом устройстве. Текст будет добавлен в журнал, когда Trinote снова подключится к вашему серверу."
+          }
+        }
+      }
+    },
+    "Saved on this device. It will be added to your journal when you unlock protected notes in Trinote." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تم الحفظ على هذا الجهاز. ستتم إضافته إلى يومياتك عند فتح قفل الملاحظات المحمية في Trinote."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uloženo v tomto zařízení. Do deníku se přidá, až v Trinote odemknete chráněné poznámky."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf diesem Gerät gespeichert. Es wird zu deinem Journal hinzugefügt, sobald du geschützte Notizen in Trinote entsperrst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved on this device. It will be added to your journal when you unlock protected notes in Trinote."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardado en este dispositivo. Se añadirá a tu diario cuando desbloquees las notas protegidas en Trinote."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistré sur cet appareil. Il sera ajouté à votre journal quand vous déverrouillerez les notes protégées dans Trinote."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस डिवाइस पर सहेजा गया। Trinote में सुरक्षित नोट्स अनलॉक करने पर यह आपके जर्नल में जोड़ दिया जाएगा।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mentve ezen az eszközön. Akkor kerül a naplódba, amikor feloldod a védett jegyzeteket a Trinote-ban."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvato su questo dispositivo. Verrà aggiunto al tuo diario quando sbloccherai le note protette in Trinote."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zapisano na tym urządzeniu. Zostanie dodane do dziennika, gdy odblokujesz chronione notatki w Trinote."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранено на этом устройстве. Текст будет добавлен в журнал, когда вы разблокируете защищённые заметки в Trinote."
+          }
+        }
+      }
+    },
+    "Saved on this device. Sign in again in Trinote and it will be added to your journal." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تم الحفظ على هذا الجهاز. سجّل الدخول مجددًا في Trinote وستتم إضافته إلى يومياتك."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uloženo v tomto zařízení. Přihlaste se v Trinote znovu a přidá se do vašeho deníku."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf diesem Gerät gespeichert. Melde dich in Trinote erneut an, dann wird es zu deinem Journal hinzugefügt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved on this device. Sign in again in Trinote and it will be added to your journal."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardado en este dispositivo. Vuelve a iniciar sesión en Trinote y se añadirá a tu diario."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistré sur cet appareil. Reconnectez-vous dans Trinote et il sera ajouté à votre journal."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस डिवाइस पर सहेजा गया। Trinote में फिर से साइन इन करें, फिर यह आपके जर्नल में जोड़ दिया जाएगा।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mentve ezen az eszközön. Jelentkezz be újra a Trinote-ban, és bekerül a naplódba."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvato su questo dispositivo. Accedi di nuovo in Trinote e verrà aggiunto al tuo diario."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zapisano na tym urządzeniu. Zaloguj się ponownie w Trinote, a zostanie dodane do dziennika."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранено на этом устройстве. Войдите снова в Trinote, и текст будет добавлен в журнал."
+          }
+        }
+      }
+    },
     "Search the internet and cite sources." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6394,6 +7885,77 @@
         }
       }
     },
+    "Shortcuts" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الاختصارات"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zkratky"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kurzbefehle"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shortcuts"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atajos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Raccourcis"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "शॉर्टकट्स"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parancsok"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comandi rapidi"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skróty"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Быстрые команды"
+          }
+        }
+      }
+    },
     "Show details" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6461,6 +8023,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Показать подробности"
+          }
+        }
+      }
+    },
+    "Sign in to your Trilium server in Trinote first." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "سجّل الدخول أولًا إلى خادم Trilium الخاص بك في Trinote."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nejprve se v Trinote přihlaste ke svému serveru Trilium."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Melde dich zuerst in Trinote bei deinem Trilium-Server an."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in to your Trilium server in Trinote first."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Primero inicia sesión en tu servidor Trilium en Trinote."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connectez-vous d’abord à votre serveur Trilium dans Trinote."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहले Trinote में अपने Trilium सर्वर में साइन इन करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Előbb jelentkezz be a Trilium-kiszolgálódra a Trinote-ban."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accedi prima al tuo server Trilium in Trinote."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Najpierw zaloguj się do swojego serwera Trilium w Trinote."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сначала войдите на свой сервер Trilium в Trinote."
           }
         }
       }
@@ -7814,6 +9447,290 @@
         }
       }
     },
+    "Today's Journal" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يوميات اليوم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dnešní deník"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Heutiges Journal"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today's Journal"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diario de hoy"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Journal d’aujourd’hui"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आज का जर्नल"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mai napló"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diario di oggi"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dzisiejszy dziennik"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сегодняшний журнал"
+          }
+        }
+      }
+    },
+    "Today's journal note is protected. Unlock protected notes in Trinote to add to it." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ملاحظة يوميات اليوم محمية. افتح قفل الملاحظات المحمية في Trinote للإضافة إليها."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dnešní deníková poznámka je chráněná. Chcete-li do ní přidat text, odemkněte v Trinote chráněné poznámky."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die heutige Journalnotiz ist geschützt. Entsperre geschützte Notizen in Trinote, um etwas hinzuzufügen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today's journal note is protected. Unlock protected notes in Trinote to add to it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La nota del diario de hoy está protegida. Desbloquea las notas protegidas en Trinote para añadirle texto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La note du journal d’aujourd’hui est protégée. Déverrouillez les notes protégées dans Trinote pour y ajouter du texte."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आज का जर्नल नोट सुरक्षित है। इसमें जोड़ने के लिए Trinote में सुरक्षित नोट्स अनलॉक करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A mai naplójegyzet védett. A hozzáadáshoz oldd fel a védett jegyzeteket a Trinote-ban."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La nota del diario di oggi è protetta. Sblocca le note protette in Trinote per aggiungervi testo."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dzisiejsza notatka dziennika jest chroniona. Odblokuj chronione notatki w Trinote, aby coś do niej dodać."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сегодняшняя заметка журнала защищена. Разблокируйте защищённые заметки в Trinote, чтобы добавить в неё текст."
+          }
+        }
+      }
+    },
+    "Today's journal note isn't a text note, so text can't be added to it." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ملاحظة يوميات اليوم ليست ملاحظة نصية، لذا لا يمكن إضافة نص إليها."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dnešní deníková poznámka není textová, takže do ní nelze přidat text."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die heutige Journalnotiz ist keine Textnotiz, daher kann kein Text hinzugefügt werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today's journal note isn't a text note, so text can't be added to it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La nota del diario de hoy no es una nota de texto, así que no se le puede añadir texto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La note du journal d’aujourd’hui n’est pas une note de texte : impossible d’y ajouter du texte."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आज का जर्नल नोट टेक्स्ट नोट नहीं है, इसलिए इसमें टेक्स्ट नहीं जोड़ा जा सकता।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A mai naplójegyzet nem szöveges jegyzet, ezért nem adható hozzá szöveg."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La nota del diario di oggi non è una nota di testo, quindi non è possibile aggiungervi testo."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dzisiejsza notatka dziennika nie jest notatką tekstową, więc nie można dodać do niej tekstu."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сегодняшняя заметка журнала не текстовая, поэтому в неё нельзя добавить текст."
+          }
+        }
+      }
+    },
+    "Trilium couldn't save it: %@" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعذّر على Trilium حفظه: %@"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium to nemohl uložit: %@"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium konnte es nicht speichern: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium couldn't save it: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium no pudo guardarlo: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium n’a pas pu l’enregistrer : %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium इसे सहेज नहीं सका: %@"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Trilium nem tudta menteni: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium non è riuscito a salvarlo: %@"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium nie mógł tego zapisać: %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium не удалось сохранить: %@"
+          }
+        }
+      }
+    },
     "Trilium didn't keep the chat." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -7881,6 +9798,219 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Trilium не сохранил чат."
+          }
+        }
+      }
+    },
+    "Trinote didn't finish starting. Try again." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لم يكتمل تشغيل Trinote. حاول مرة أخرى."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote se nestihl spustit. Zkuste to znovu."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote ist nicht fertig gestartet. Versuche es noch einmal."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote didn't finish starting. Try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote no terminó de iniciarse. Inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote n’a pas fini de démarrer. Réessayez."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote शुरू होना पूरा नहीं हुआ। फिर से कोशिश करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Trinote nem indult el teljesen. Próbáld újra."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote non ha finito di avviarsi. Riprova."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote nie zdążył się uruchomić. Spróbuj ponownie."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote не успел запуститься. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "Trinote is signed out of your Trilium server. Open Trinote and sign in again." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تم تسجيل خروج Trinote من خادم Trilium الخاص بك. افتح Trinote وسجّل الدخول مجددًا."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote je odhlášen od vašeho serveru Trilium. Otevřete Trinote a přihlaste se znovu."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote ist von deinem Trilium-Server abgemeldet. Öffne Trinote und melde dich erneut an."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote is signed out of your Trilium server. Open Trinote and sign in again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote ha cerrado la sesión en tu servidor Trilium. Abre Trinote e inicia sesión de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote est déconnecté de votre serveur Trilium. Ouvrez Trinote et reconnectez-vous."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote आपके Trilium सर्वर से साइन आउट हो गया है। Trinote खोलें और फिर से साइन इन करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Trinote kijelentkezett a Trilium-kiszolgálódról. Nyisd meg a Trinote-ot, és jelentkezz be újra."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote è stato disconnesso dal tuo server Trilium. Apri Trinote ed esegui di nuovo l’accesso."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote został wylogowany z Twojego serwera Trilium. Otwórz Trinote i zaloguj się ponownie."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote вышел из вашего сервера Trilium. Откройте Trinote и войдите снова."
+          }
+        }
+      }
+    },
+    "Trinote's actions in the Shortcuts app: Add to Today's Journal, Create Note and Open Today's Journal. To add to your journal with the Action Button, choose Settings → Action Button → Shortcut, then Add to Today's Journal." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إجراءات Trinote في تطبيق الاختصارات: إضافة إلى يوميات اليوم، وإنشاء ملاحظة، وفتح يوميات اليوم. للإضافة إلى يومياتك بزر الإجراء، اختر الإعدادات ← زر الإجراء ← اختصار، ثم إضافة إلى يوميات اليوم."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Akce Trinote v aplikaci Zkratky: Přidat do dnešního deníku, Vytvořit poznámku a Otevřít dnešní deník. Chcete-li přidávat do deníku akčním tlačítkem, zvolte Nastavení → Akční tlačítko → Zkratka a pak Přidat do dnešního deníku."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote-Aktionen in der Kurzbefehle-App: Zum heutigen Journal hinzufügen, Notiz erstellen und Heutiges Journal öffnen. Um mit der Aktionstaste zum Journal hinzuzufügen, wähle Einstellungen → Aktionstaste → Kurzbefehl und dann Zum heutigen Journal hinzufügen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinote's actions in the Shortcuts app: Add to Today's Journal, Create Note and Open Today's Journal. To add to your journal with the Action Button, choose Settings → Action Button → Shortcut, then Add to Today's Journal."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acciones de Trinote en la app Atajos: Añadir al diario de hoy, Crear nota y Abrir el diario de hoy. Para añadir a tu diario con el botón de acción, elige Ajustes → Botón de acción → Atajo y luego Añadir al diario de hoy."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actions de Trinote dans l’app Raccourcis : Ajouter au journal d’aujourd’hui, Créer une note et Ouvrir le journal d’aujourd’hui. Pour ajouter à votre journal avec le bouton Action, choisissez Réglages → Bouton Action → Raccourci, puis Ajouter au journal d’aujourd’hui."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shortcuts ऐप में Trinote की क्रियाएँ: आज के जर्नल में जोड़ें, नोट बनाएँ और आज का जर्नल खोलें। ऐक्शन बटन से जर्नल में जोड़ने के लिए सेटिंग्स → ऐक्शन बटन → शॉर्टकट चुनें, फिर आज के जर्नल में जोड़ें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Trinote műveletei a Parancsok appban: Hozzáadás a mai naplóhoz, Jegyzet létrehozása és Mai napló megnyitása. Ha a Művelet gombbal szeretnél a naplóhoz adni, válaszd a Beállítások → Művelet gomb → Parancs lehetőséget, majd a Hozzáadás a mai naplóhoz műveletet."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Azioni di Trinote nell’app Comandi: Aggiungi al diario di oggi, Crea nota e Apri il diario di oggi. Per aggiungere al diario con il tasto Azione, scegli Impostazioni → Tasto Azione → Comando rapido, poi Aggiungi al diario di oggi."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Czynności Trinote w aplikacji Skróty: Dodaj do dzisiejszego dziennika, Utwórz notatkę i Otwórz dzisiejszy dziennik. Aby dodawać do dziennika przyciskiem czynności, wybierz Ustawienia → Przycisk czynności → Skrót, a następnie Dodaj do dzisiejszego dziennika."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Действия Trinote в приложении «Быстрые команды»: «Добавить в сегодняшний журнал», «Создать заметку» и «Открыть сегодняшний журнал». Чтобы добавлять в журнал кнопкой действия, выберите «Настройки» → «Кнопка действия» → «Быстрая команда», затем «Добавить в сегодняшний журнал»."
           }
         }
       }
@@ -8378,6 +10508,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Поиск в интернете"
+          }
+        }
+      }
+    },
+    "What would you like to add to today's journal?" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ماذا تريد أن تضيف إلى يوميات اليوم؟"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Co chcete přidat do dnešního deníku?"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Was möchtest du zum heutigen Journal hinzufügen?"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What would you like to add to today's journal?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Qué quieres añadir al diario de hoy?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Que voulez-vous ajouter au journal d’aujourd’hui ?"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आज के जर्नल में क्या जोड़ना चाहेंगे?"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit szeretnél hozzáadni a mai naplóhoz?"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cosa vuoi aggiungere al diario di oggi?"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Co chcesz dodać do dzisiejszego dziennika?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Что добавить в сегодняшний журнал?"
           }
         }
       }

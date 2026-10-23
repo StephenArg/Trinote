@@ -19,13 +19,16 @@ struct MindMapEditorView: View {
     var onMapChanged: (() -> Void)?
     /// Serves `trinote-img://` photos rewritten from Trilium `api/attachments` / `api/images` URLs.
     var imageBytes: TriliumImageSchemeHandler.ByteProvider?
+    /// The note's newest saved map (Autosave updates it), shown if the page reloads after its process ended.
+    var currentJSON: (() -> String)?
 
     var body: some View {
         MindMapEditorWebView(
             initialJSON: initialJSON,
             bridge: bridge,
             onMapChanged: onMapChanged,
-            imageBytes: imageBytes
+            imageBytes: imageBytes,
+            currentJSON: currentJSON
         )
             .background {
                 NavigationPopGestureBlocker(blocked: true, label: "MindMapEditor")
@@ -38,9 +41,12 @@ private struct MindMapEditorWebView: UIViewRepresentable {
     let bridge: MindMapEditorBridge
     var onMapChanged: (() -> Void)?
     var imageBytes: TriliumImageSchemeHandler.ByteProvider?
+    var currentJSON: (() -> String)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(initialJSON: initialJSON, onMapChanged: onMapChanged)
+        let coordinator = Coordinator(initialJSON: initialJSON, onMapChanged: onMapChanged)
+        coordinator.currentJSON = currentJSON
+        return coordinator
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -85,6 +91,7 @@ private struct MindMapEditorWebView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         webView.applyTrinoteAppearanceMode()
         context.coordinator.onMapChanged = onMapChanged
+        context.coordinator.currentJSON = currentJSON
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -101,8 +108,11 @@ private struct MindMapEditorWebView: UIViewRepresentable {
         var onMapChanged: (() -> Void)?
         /// Held so the handler outlives the configuration that registered it.
         var imageSchemeHandler: TriliumImageSchemeHandler?
+        var currentJSON: (() -> String)?
         private let initialJSON: String
         private var editorReady = false
+        private var isRecovering = false
+        private let processRecovery = WebContentProcessRecovery(label: "Mind map editor")
 
         init(initialJSON: String, onMapChanged: (() -> Void)?) {
             self.initialJSON = initialJSON
@@ -113,13 +123,30 @@ private struct MindMapEditorWebView: UIViewRepresentable {
             switch message.name {
             case "mindmapEditorReady":
                 editorReady = true
-                loadData(initialJSON)
+                let recovering = isRecovering
+                isRecovering = false
+                loadData(EditorReloadRecovery.content(
+                    pending: nil,
+                    latest: recovering ? currentJSON?() : nil,
+                    initial: initialJSON
+                ))
             case "mindmapChanged":
                 DispatchQueue.main.async { [weak self] in
                     self?.onMapChanged?()
                 }
             default:
                 break
+            }
+        }
+
+        /// iOS ended the page's process (see `EditorReloadRecovery`). Until the reloaded page is ready again the
+        /// bridge hands back a placeholder, which saving ignores.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            editorReady = false
+            isRecovering = true
+            processRecovery.pageProcessEnded { [weak webView] in
+                guard let webView, let fileURL = Bundle.main.url(forResource: "mindmap-editor", withExtension: "html") else { return }
+                webView.loadFileURL(fileURL, allowingReadAccessTo: Bundle.main.bundleURL)
             }
         }
 

@@ -53,3 +53,7 @@ cd Trinote/Resources/editor-vendor
 npm install
 npm run build:collapsible
 ```
+
+## `link-preview.js` and `link-preview.css`
+
+Hand-written, no build step. They draw Trilium's **link previews** (`span.link-mention` and `section.link-embed`, Trilium v0.104+) from the `data-*` attributes Trilium stores them with. `editor.html` loads both directly. The read-only note view inlines them through `LinkPreviewHTML.swift`, so keep `link-preview.js` free of the text `</script`.

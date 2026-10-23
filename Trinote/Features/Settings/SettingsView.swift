@@ -75,6 +75,7 @@ struct SettingsView: View {
                 ssoSection
                 connectionSection
                 AISettingsSection()
+                ShortcutsSettingsSection()
             case .data:
                 offlineCacheSection
                 cacheSection

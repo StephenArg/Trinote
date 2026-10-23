@@ -218,6 +218,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         handler.webView = webView
         handler.themeColors = themeColors
+        handler.baseURL = baseURL
+        handler.collapsibleTogglePersistEnabled = collapsibleTogglePersistEnabled
         handler.checkboxReorderEnabled = checkboxReorderEnabled
         handler.collapsibleReorderEnabled = collapsibleReorderEnabled
         handler.listInteractionEnabled = listInteractionEnabled
@@ -340,6 +342,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         coordinator.loadedHTML = html
         coordinator.themeColors = themeColors
+        coordinator.baseURL = baseURL
+        coordinator.collapsibleTogglePersistEnabled = collapsibleTogglePersistEnabled
         coordinator.checkboxReorderEnabled = checkboxReorderEnabled
         coordinator.collapsibleReorderEnabled = collapsibleReorderEnabled
         coordinator.listInteractionEnabled = listInteractionEnabled
@@ -473,7 +477,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             position: relative;
         }
         @media (prefers-color-scheme: dark) {
-            :root { --text-color: \(theme.darkText); --code-bg: rgba(255,255,255,0.06); --border: rgba(255,255,255,0.15); }
+            :root { --text-color: \(theme.darkText); --code-bg: rgba(255,255,255,0.06); --border: rgba(255,255,255,0.15); --link-preview-accent: \(theme.darkLink); }
             body { color: \(theme.darkText); }
             a { color: \(theme.darkLink); }
             a.reference-link,
@@ -491,7 +495,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             }
         }
         @media (prefers-color-scheme: light) {
-            :root { --text-color: \(theme.lightText); --code-bg: rgba(0,0,0,0.04); --border: rgba(0,0,0,0.12); }
+            :root { --text-color: \(theme.lightText); --code-bg: rgba(0,0,0,0.04); --border: rgba(0,0,0,0.12); --link-preview-accent: \(theme.lightLink); }
             body { color: \(theme.lightText); }
             a { color: \(theme.lightLink); }
         }
@@ -968,6 +972,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         </head>
         <body>
         \(body)
+        \(LinkPreviewHTML.readingViewSnippet(forBody: body))
         <script>
         window.__trinoteFind = (function() {
             var HIGHLIGHT = 'trinote-find-hit';
@@ -2142,6 +2147,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         weak var webView: WKWebView?
         weak var viewportContainer: ReadOnlyWebViewportContainer?
         var loadedHTML: String?
+        /// The page's canonical base URL and the last wrap option not kept elsewhere: what reloading the page after its
+        /// process ended needs, along with `loadedHTML` and the options below.
+        var baseURL: URL?
+        var collapsibleTogglePersistEnabled = false
+        private let processRecovery = WebContentProcessRecovery(label: "Read-only note")
         var loadHTMLStartedAt: CFAbsoluteTime?
         /// TEMP (`NoteOpenTrace`): when the current page load started; kept after `didFinish`.
         var traceLoadStartedAt: CFAbsoluteTime?
@@ -2248,6 +2258,39 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             NoteOpenTrace.log("web didFail \(error.localizedDescription)")
+        }
+
+        /// iOS ended the page's process, often while the app is in the background. WebKit's own reload brings a page
+        /// loaded from a string back blank, which left the note white until it was opened in the editor. So load it
+        /// again from the body it shows (checkbox taps patched in included), at the height it had: the height
+        /// filter in `heightUpdate` ignores the shorter heights reported before its images are back in.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            endCheckboxDrag()
+            processRecovery.pageProcessEnded { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                self.reloadPage(in: webView)
+            }
+        }
+
+        private func reloadPage(in webView: WKWebView) {
+            guard let html = loadedHTML, let themeColors else { return }
+            pageLoaded = false
+            if let lastReportedHeight { heightFromCache = lastReportedHeight }
+            let page = HTMLNoteWebView.wrapHTML(
+                html,
+                theme: themeColors,
+                checkboxReorderEnabled: checkboxReorderEnabled,
+                listInteractionEnabled: listInteractionEnabled,
+                taskStateCycleEnabled: taskStateCycleEnabled,
+                collapsibleReorderEnabled: collapsibleReorderEnabled,
+                collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
+            )
+            loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
+            traceLoadStartedAt = loadHTMLStartedAt
+            webView.loadHTMLString(
+                page,
+                baseURL: HTMLNoteWebView.effectiveReadOnlyHTMLBaseURL(body: html, canonicalBase: baseURL)
+            )
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {

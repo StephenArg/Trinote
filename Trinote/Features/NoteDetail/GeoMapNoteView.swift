@@ -158,6 +158,8 @@ private struct GeoMapWebView: UIViewRepresentable {
             switch message.name {
             case "geoMapViewerReady":
                 ready = true
+                // A fresh page (including one WebKit reloaded after iOS ended its process) has drawn nothing yet.
+                mapReady = false
                 runJSInitOnce()
             case "geoMapViewerOpenNote":
                 guard let noteId = message.body as? String, !noteId.isEmpty else { return }

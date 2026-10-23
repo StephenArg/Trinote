@@ -129,6 +129,8 @@ struct ChatTranscriptWebView: UIViewRepresentable {
             switch type {
             case "ready":
                 isReady = true
+                // A fresh page (including one WebKit reloaded after iOS ended its process) has been sent nothing.
+                sent = (nil, nil, nil, 0)
                 flush()
             case "noteLink":
                 if let noteId = Self.noteId(fromHashLink: strings["href"] ?? "") {

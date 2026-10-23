@@ -52,6 +52,33 @@ struct TriliumOptionsResponse: Decodable, Equatable {
     var protectedSessionTimeoutSeconds: TimeInterval? {
         ProtectedSessionTimeout.seconds(fromOptionValue: values["protectedSessionTimeout"])
     }
+
+    /// Trilium's "auto link previews" option (`textNoteAutoLinkPreviewsEnabled`, v0.104+): whether a pasted or typed
+    /// URL becomes a link preview. On unless the server says `"false"`, as on a server that predates the option.
+    var autoLinkPreviewsEnabled: Bool {
+        values["textNoteAutoLinkPreviewsEnabled"]?.lowercased() != "false"
+    }
+}
+
+/// `POST /api/link-embed/metadata` body (Trilium v0.105+). The server stores the favicon and cover image as
+/// attachments of `noteId` and answers with their `api/attachments/{id}/image/{name}` URLs.
+struct LinkPreviewMetadataRequest: Encodable, Equatable {
+    let url: String
+    let noteId: String
+}
+
+/// `POST /api/link-embed/metadata` answer: what a link preview stores in its `data-*` attributes.
+struct LinkPreviewMetadata: Codable, Equatable, Sendable {
+    let url: String
+    var title: String?
+    var description: String?
+    var image: String?
+    var favicon: String?
+    var siteName: String?
+    /// `opengraph` (drawn as a card) or `youtube` (drawn as a video).
+    var embedType: String?
+    /// True when the page could not be read; the link then stays a plain link.
+    var unresolved: Bool?
 }
 
 /// Server compatibility envelope for the native `/api/*` surface Trinote consumes.
@@ -199,6 +226,18 @@ enum TriliumServerCompatibility {
     static func supportsBulkNoteDeletion(_ info: AppInfoResponse?) -> Bool {
         guard let info else { return false }
         return isAppVersion(info.appVersion, atLeast: bulkNoteDeletionMinAppVersion)
+    }
+
+    /// Trilium release that added link previews (`span.link-mention` / `section.link-embed`) and
+    /// `POST /api/link-embed/metadata`. From v0.105 the server stores a preview's favicon and cover image as
+    /// attachments of the note named in the request; v0.104 ignores the note and answers with inline `data:` images,
+    /// which Trilium v0.104's own editor stores in the note as they are.
+    static let linkPreviewCreationMinAppVersion = "0.104.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.104.0 or newer (links can become link previews).
+    static func supportsLinkPreviewCreation(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: linkPreviewCreationMinAppVersion)
     }
 
     /// Trilium release of the AI chat this app uses: `llmChat` notes with `POST /api/llm-chat/stream` (SSE), the
@@ -820,6 +859,8 @@ struct NoteIdTitle: Sendable, Equatable, Identifiable {
     let noteId: String
     let title: String
     let isProtected: Bool
+    /// The note type (`text`, `code`, …) when the server sent it; set by `getOrCreateDayNote`.
+    var type: String? = nil
 
     var id: String { noteId }
 }
