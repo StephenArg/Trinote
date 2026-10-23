@@ -481,6 +481,188 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(url.absoluteString, "https://trilium.test/sub/api/notes/a%20b")
     }
 
+    /// Query values are encoded as `encodeURIComponent` encodes them; a bare `+` would reach Express as a space.
+    func testMakeURLEncodesQueryValuesLikeEncodeURIComponent() throws {
+        let url = try TriliumClient.makeURL(
+            baseURL: URL(string: "https://trilium.test")!,
+            path: "/api/search",
+            queryParams: ["searchString": "C++ #tag=a&b /x?é", "ancestorNoteId": "anc1"]
+        )
+        XCTAssertEqual(
+            url.absoluteString,
+            "https://trilium.test/api/search?ancestorNoteId=anc1&searchString=C%2B%2B%20%23tag%3Da%26b%20%2Fx%3F%C3%A9"
+        )
+    }
+
+    // MARK: - Routes Trilium v0.107 replaced
+
+    private let v0107AppInfoJSON = #"{"appVersion":"0.107.0","dbVersion":242,"syncVersion":41}"#
+
+    /// A client with a restored session on a server reporting `appInfo`; `handler` answers every other request with a
+    /// status and a body.
+    private func clientForRouteTests(
+        appInfo: String,
+        handler: @escaping (URLRequest) -> (Int, String)
+    ) async throws -> TriliumClient {
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            let (status, body): (Int, String)
+            if path.hasSuffix("/bootstrap") {
+                (status, body) = (200, #"{"csrfToken":"x","device":"desktop"}"#)
+            } else if path.contains("/api/app-info") {
+                (status, body) = (200, appInfo)
+            } else {
+                (status, body) = handler(request)
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+        return client
+    }
+
+    func testSearchUsesQueryParameterOnV0107() async throws {
+        var urls: [URL] = []
+        let client = try await clientForRouteTests(appInfo: v0107AppInfoJSON) { request in
+            urls.append(request.url!)
+            return (200, #"["n1"]"#)
+        }
+        let ids = try await client.searchNoteIds(query: "C++ #tag", ancestorNoteId: "anc1")
+        XCTAssertEqual(ids, ["n1"])
+        XCTAssertEqual(urls.map(\.path), ["/api/search"])
+        let query = URLComponents(url: try XCTUnwrap(urls.first), resolvingAgainstBaseURL: false)?.percentEncodedQuery
+        XCTAssertEqual(query, "ancestorNoteId=anc1&searchString=C%2B%2B%20%23tag")
+    }
+
+    /// Builds of Trilium's main branch report 0.106.0 but already answer the v0.107 routes (sync version 41).
+    func testQuickSearchUsesQueryParameterWhenSyncVersionIs41() async throws {
+        var urls: [URL] = []
+        let appInfo = #"{"appVersion":"0.106.0","dbVersion":242,"syncVersion":41}"#
+        let client = try await clientForRouteTests(appInfo: appInfo) { request in
+            urls.append(request.url!)
+            return (200, #"{"searchResultNoteIds":["n1"],"searchResults":[{"noteId":"n1","notePath":"root/n1","noteTitle":"N","notePathTitle":"N","icon":"bx bx-note"}],"highlightedTokens":[],"error":null}"#)
+        }
+        let results = try await client.quickSearchResults(query: "a b")
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(urls.map(\.path), ["/api/quick-search"])
+        XCTAssertEqual(URLComponents(url: try XCTUnwrap(urls.first), resolvingAgainstBaseURL: false)?.percentEncodedQuery, "searchString=a%20b")
+    }
+
+    /// An older version whose server answers 404 to the path form (a server upgraded since sign-in) gets the query
+    /// form, and keeps getting it without another 404.
+    func testSearchSwitchesToQueryParameterAfter404() async throws {
+        var paths: [String] = []
+        let client = try await clientForRouteTests(appInfo: appInfoJSON) { request in
+            let path = request.url!.path
+            paths.append(path)
+            return path == "/api/search" ? (200, #"["n1"]"#) : (404, "")
+        }
+        let first = try await client.searchNoteIds(query: "x", ancestorNoteId: nil)
+        let second = try await client.searchNoteIds(query: "y", ancestorNoteId: nil)
+        XCTAssertEqual(first, ["n1"])
+        XCTAssertEqual(second, ["n1"])
+        XCTAssertEqual(paths, ["/api/search/x", "/api/search", "/api/search"])
+    }
+
+    /// The other way round: a v0.107 version, a server that only answers the path form.
+    func testSearchSwitchesToPathFormAfter404() async throws {
+        var paths: [String] = []
+        let client = try await clientForRouteTests(appInfo: v0107AppInfoJSON) { request in
+            let path = request.url!.path
+            paths.append(path)
+            return path == "/api/search" ? (404, "") : (200, #"["n1"]"#)
+        }
+        let ids = try await client.searchNoteIds(query: "x", ancestorNoteId: nil)
+        XCTAssertEqual(ids, ["n1"])
+        XCTAssertEqual(paths, ["/api/search", "/api/search/x"])
+    }
+
+    /// Trilium 0.107+ marks its read-only help pages `isContentWritable: false` in `tree/load`.
+    func testGetNoteReadsWhetherTheServerSavesTheNote() async throws {
+        let client = try await clientForRouteTests(appInfo: v0107AppInfoJSON) { request in
+            switch request.url!.path {
+            case "/api/notes/_help_x", "/api/notes/n1":
+                let id = request.url!.lastPathComponent
+                return (200, #"{"noteId":"\#(id)","title":"T","isProtected":false,"type":"text","mime":"text/html","blobId":"b"}"#)
+            case "/api/tree/load":
+                return (200, #"{"notes":[{"noteId":"_help_x","title":"T","isProtected":false,"type":"text","mime":"text/html","blobId":"b","isContentWritable":false},{"noteId":"n1","title":"T","isProtected":false,"type":"text","mime":"text/html","blobId":"b"}],"branches":[],"attributes":[]}"#)
+            default:
+                return (404, "")
+            }
+        }
+        let help = try await client.getNote("_help_x")
+        let own = try await client.getNote("n1")
+        XCTAssertEqual(help.isContentWritable, false)
+        XCTAssertEqual(own.isContentWritable, true)
+        XCTAssertFalse(NoteItem(from: help).isContentEditable)
+        XCTAssertTrue(NoteItem(from: own).isContentEditable)
+    }
+
+    func testAnswerToolApprovalPostsTheAnswer() async throws {
+        var requests: [(path: String, method: String?, body: Data)] = []
+        let client = try await clientForRouteTests(appInfo: v0107AppInfoJSON) { [self] request in
+            requests.append((request.url!.path, request.httpMethod, requestBody(request)))
+            return (200, requests.count == 1 ? #"{"answered":true}"# : #"{"answered":false}"#)
+        }
+        let allowed = try await client.answerToolApproval(streamId: "s1", toolCallId: "t1", approved: true, allowForChat: true)
+        let denied = try await client.answerToolApproval(streamId: "s1", toolCallId: "t2", approved: false, allowForChat: true)
+        XCTAssertTrue(allowed)
+        XCTAssertFalse(denied, "the turn had ended")
+        XCTAssertEqual(requests.map(\.path), ["/api/llm-chat/tool-approval", "/api/llm-chat/tool-approval"])
+        XCTAssertEqual(requests.map(\.method), ["POST", "POST"])
+        let bodies = try requests.map { try XCTUnwrap(JSONSerialization.jsonObject(with: $0.body) as? NSDictionary) }
+        XCTAssertEqual(bodies[0], ["streamId": "s1", "toolCallId": "t1", "approved": true, "scope": "chat"])
+        XCTAssertEqual(bodies[1], ["streamId": "s1", "toolCallId": "t2", "approved": false], "a denial has no scope")
+    }
+
+    func testMoveBranchSendsBranchListOnV0107() async throws {
+        var requests: [(method: String?, path: String, body: Data)] = []
+        let client = try await clientForRouteTests(appInfo: v0107AppInfoJSON) { [self] request in
+            requests.append((request.httpMethod, request.url!.path, requestBody(request)))
+            return (200, #"{"success":true}"#)
+        }
+        try await client.moveBranchToParent(branchId: "p1_n1", parentBranchId: "root_p2")
+        XCTAssertEqual(requests.map(\.method), ["PUT"])
+        XCTAssertEqual(requests.map(\.path), ["/api/branches/move-to/root_p2"])
+        let body = try JSONSerialization.jsonObject(with: try XCTUnwrap(requests.first?.body)) as? [String: [String]]
+        XCTAssertEqual(body, ["branchIds": ["p1_n1"]])
+    }
+
+    func testMoveBranchUsesOneBranchRouteBeforeV0107() async throws {
+        var paths: [String] = []
+        let client = try await clientForRouteTests(appInfo: appInfoJSON) { request in
+            paths.append(request.url!.path)
+            return (200, #"{"success":true}"#)
+        }
+        try await client.moveBranchToParent(branchId: "p1_n1", parentBranchId: "root_p2")
+        XCTAssertEqual(paths, ["/api/branches/p1_n1/move-to/root_p2"])
+    }
+
+    /// A v0.107 version on a server without the batch route: the one-branch route after its 404.
+    func testMoveBranchSwitchesToOneBranchRouteAfter404() async throws {
+        var paths: [String] = []
+        let client = try await clientForRouteTests(appInfo: v0107AppInfoJSON) { request in
+            let path = request.url!.path
+            paths.append(path)
+            return path == "/api/branches/move-to/root_p2" ? (404, "") : (200, #"{"success":true}"#)
+        }
+        try await client.moveBranchToParent(branchId: "p1_n1", parentBranchId: "root_p2")
+        XCTAssertEqual(paths, ["/api/branches/move-to/root_p2", "/api/branches/p1_n1/move-to/root_p2"])
+    }
+
+    /// A refused move (a cycle, say) still surfaces Trilium's message on the batch route.
+    func testMoveBranchSurfacesRefusalOnV0107() async throws {
+        let client = try await clientForRouteTests(appInfo: v0107AppInfoJSON) { _ in
+            (200, #"{"success":false,"message":"Moving note here would create cycle."}"#)
+        }
+        do {
+            try await client.moveBranchToParent(branchId: "p1_n1", parentBranchId: "root_p2")
+            XCTFail("Expected the refusal to throw")
+        } catch let APIError.serverError(_, message) {
+            XCTAssertEqual(message, "Moving note here would create cycle.")
+        }
+    }
+
     func testQuickSearchDecodesV0105AndV0106Shapes() throws {
         let v105 = #"{"searchResultNoteIds":["n1"],"searchResults":[{"notePath":"root/p1/n1","noteTitle":"Note","notePathTitle":"Parent / Note","contentSnippet":"a match here","highlightedContentSnippet":"a <b>match</b> here","icon":"bx bx-note"}],"error":null}"#
         let r105 = try JSONDecoder().decode(QuickSearchResponse.self, from: Data(v105.utf8))
@@ -1983,6 +2165,7 @@ final class TriliumClientTests: XCTestCase {
         try await client.restoreSession()
 
         let stream = await client.streamLlmChat(
+            streamId: "turn12345678",
             messages: [LlmApiMessage(role: .user, text: "Hi")],
             config: LlmChatRequestConfig(provider: "anthropic", providerId: "p1", model: "m", enableWebSearch: true, enableNoteTools: false, chatNoteId: "chat1")
         )
@@ -1996,6 +2179,7 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: captured.body) as? [String: Any])
+        XCTAssertEqual(body["streamId"] as? String, "turn12345678")
         XCTAssertEqual(body["messages"] as? [[String: String]], [["role": "user", "content": "Hi"]])
         XCTAssertEqual(
             body["config"] as? NSDictionary,
@@ -2018,7 +2202,7 @@ final class TriliumClientTests: XCTestCase {
         let client = makeClient(persistedCookies: oidcSessionCookieData())
         try await client.restoreSession()
 
-        let stream = await client.streamLlmChat(messages: [], config: LlmChatRequestConfig())
+        let stream = await client.streamLlmChat(streamId: "turn12345678", messages: [], config: LlmChatRequestConfig())
         do {
             for try await _ in stream { XCTFail("no chunks expected") }
             XCTFail("expected the refusal")

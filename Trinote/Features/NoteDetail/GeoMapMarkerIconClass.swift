@@ -48,8 +48,8 @@ enum GeoMapMarkerIconClass {
 
         switch type {
         case .text:
-            if let geo = NoteIconClassResolver.geoDefaultIconClass(isTextNote: true, labelValue: labelValue) {
-                return geo
+            if let labelled = NoteIconClassResolver.defaultIconClass(isTextNote: true, labelValue: labelValue) {
+                return labelled
             }
             return childNoteCount > 0 ? "bx bx-folder" : "bx bx-note"
         case .file:

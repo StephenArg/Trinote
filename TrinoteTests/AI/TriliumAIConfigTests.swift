@@ -92,6 +92,18 @@ final class TriliumAIConfigTests: XCTestCase {
         )
     }
 
+    /// Trilium 0.107+: `llmPermissionMode`, and web search providers kept in `llmProviders` beside the chat ones.
+    func testPermissionModeAndSearchProviders() {
+        let config = TriliumAIConfig(options: options([
+            "llmPermissionMode": "always_ask",
+            "llmProviders": #"[{"id":"tavily_1","name":"Tavily","provider":"tavily","kind":"search","apiKey":"k"},{"id":"ok","name":"OK","provider":"openai","apiKey":"k","kind":"llm"},{"id":"old","name":"Old","provider":"anthropic","apiKey":"k"}]"#
+        ]))
+        XCTAssertEqual(config.permissionMode, .alwaysAsk)
+        XCTAssertEqual(config.providers.map(\.id), ["ok", "old"], "search providers aren't chat providers")
+        XCTAssertNil(TriliumAIConfig(options: options([:])).permissionMode)
+        XCTAssertNil(TriliumAIConfig(options: options(["llmPermissionMode": " "])).permissionMode)
+    }
+
     func testProviderTypeNamesFollowDesktop() {
         XCTAssertEqual(LlmProviderTypeNames.displayName("google"), "Google Gemini")
         XCTAssertEqual(LlmProviderTypeNames.displayName("claude-agent"), "Claude Code")

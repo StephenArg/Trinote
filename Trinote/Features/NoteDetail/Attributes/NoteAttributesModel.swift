@@ -31,10 +31,11 @@ final class NoteAttributesModel {
         reload()
     }
 
-    /// Changes go straight to the server: online, on the server the sheet was opened for, and not while a
-    /// protected note is locked.
+    /// Changes go straight to the server: online, on the server the sheet was opened for, not while a protected
+    /// note is locked, and not on a note the server keeps read-only (Trilium 0.107+'s help pages).
     var canEdit: Bool {
         client != nil && appState.isOnline && !isStale && !viewModel.needsProtectedSession
+            && viewModel.note?.isContentWritable != false
     }
 
     /// Signed in to another server since the sheet opened.

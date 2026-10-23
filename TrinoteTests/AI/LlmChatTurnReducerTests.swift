@@ -125,4 +125,54 @@ final class LlmChatTurnReducerTests: XCTestCase {
         XCTAssertNil(LlmChatTurnReducer.conversationForRegenerate([user]))
         XCTAssertNil(LlmChatTurnReducer.conversationForRegenerate([reply]))
     }
+
+    // MARK: Tool approvals (Trilium 0.107+)
+
+    func testApprovalRequestMarksTheCallWaitingEvenBeforeItsToolUse() {
+        var t = turn([
+            .toolInputStart(toolCallId: "c1", toolName: "edit_note_content"),
+            .toolInputDelta(toolCallId: "c1", delta: "{\"noteId\":"),
+            .toolApprovalRequest(toolCallId: "c1", toolName: "edit_note_content", toolInput: ["noteId": .string("n1")]),
+            .toolApprovalRequest(toolCallId: "c2", toolName: "delete_note", toolInput: ["noteId": .string("n2")])
+        ])
+        XCTAssertEqual(t.blocks, [
+            .toolCall(ToolCall(id: "c1", toolName: "edit_note_content", input: ["noteId": .string("n1")], approval: .pending)),
+            .toolCall(ToolCall(id: "c2", toolName: "delete_note", input: ["noteId": .string("n2")], approval: .pending))
+        ])
+        XCTAssertEqual(LlmChatTurnReducer.waitingToolCalls(in: t).map(\.id), ["c1", "c2"])
+
+        LlmChatTurnReducer.settleApproval(toolCallId: "c1", approved: true, in: &t)
+        LlmChatTurnReducer.settleApproval(toolCallId: "c2", approved: false, in: &t)
+        XCTAssertEqual(LlmChatTurnReducer.waitingToolCalls(in: t), [])
+        guard case .toolCall(let allowed) = t.blocks[0], case .toolCall(let denied) = t.blocks[1] else { return XCTFail() }
+        XCTAssertNil(allowed.approval)
+        XCTAssertEqual(denied.approval, .declined)
+        // An answer only settles a call that waits.
+        LlmChatTurnReducer.settleApproval(toolCallId: "c2", approved: true, in: &t)
+        guard case .toolCall(let stillDenied) = t.blocks[1] else { return XCTFail() }
+        XCTAssertEqual(stillDenied.approval, .declined)
+    }
+
+    func testFinalizeStopsCallsStillWaitingAndKeepsDenials() {
+        let t = turn([
+            .toolApprovalRequest(toolCallId: "waiting", toolName: "rename_note", toolInput: [:]),
+            .toolApprovalRequest(toolCallId: "answered", toolName: "get_note", toolInput: [:]),
+            .toolResult(toolCallId: "answered", toolName: "get_note", result: "{}", isError: false)
+        ])
+        var denied = t
+        LlmChatTurnReducer.apply(.toolApprovalRequest(toolCallId: "no", toolName: "delete_note", toolInput: [:]), to: &denied)
+        LlmChatTurnReducer.settleApproval(toolCallId: "no", approved: false, in: &denied)
+        LlmChatTurnReducer.apply(.toolResult(toolCallId: "no", toolName: "delete_note", result: #"{"error":"The user declined this tool call."}"#, isError: true), to: &denied)
+
+        let stored = LlmChatTurnReducer.finalize(denied)
+        guard case .blocks(let blocks) = stored.last?.content else { return XCTFail("expected blocks") }
+        let calls = blocks.compactMap { block -> ToolCall? in
+            if case .toolCall(let call) = block { return call }
+            return nil
+        }
+        XCTAssertEqual(calls.map(\.id), ["waiting", "answered", "no"])
+        XCTAssertEqual(calls.map(\.approval), [nil, nil, .declined])
+        XCTAssertEqual(calls[0].result, LlmChatTurnReducer.stoppedToolResult)
+        XCTAssertEqual(calls.map(\.failed), [true, false, false])
+    }
 }

@@ -124,4 +124,33 @@ final class ChatViewerPageTests: XCTestCase {
         let openAfterStore = try await call("return document.querySelector('[data-key=\"tool:t1\"]').open && document.querySelector('[data-key=\"thinking:th\"]').open;") as? Bool
         XCTAssertEqual(openAfterStore, true)
     }
+
+    /// Trilium 0.107+: a call waiting for the user says so, and a denied one says "denied" without the error look.
+    func testToolCardsShowWaitingAndDeniedCalls() async throws {
+        _ = try await loadPage()
+        let stored = LlmChatContent(messages: [
+            StoredMessage(id: "u1", role: .user, content: .text("Delete it")),
+            StoredMessage(id: "a1", role: .assistant, content: .blocks([
+                .toolCall(ToolCall(id: "t0", toolName: "delete_note", result: #"{"error":"x"}"#, isError: true, approval: .declined))
+            ]))
+        ])
+        _ = try await call("window.trinoteChat.setTranscript(json)", ["json": ChatTranscriptRenderer.transcriptJSON(for: stored, canRetryLast: false)])
+        let streaming = ChatTranscriptRenderer.streamingJSON(status: nil, thinking: "", blocks: [
+            .toolCall(ToolCall(id: "t1", toolName: "edit_note_content", input: ["noteId": .string("n1")], approval: .pending))
+        ])
+        _ = try await call("window.trinoteChat.setStreaming(json)", ["json": streaming])
+        let summary = try await call("""
+            const card = key => document.querySelector('[data-key="' + key + '"]');
+            return JSON.stringify({
+                waiting: card('tool:t1').querySelector('.status').textContent,
+                denied: card('tool:t0').querySelector('.status').textContent,
+                deniedLooksFailed: card('tool:t0').classList.contains('error')
+            });
+            """) as? String
+        let labels = ChatTranscriptLabels()
+        XCTAssertEqual(
+            summary,
+            #"{"waiting":"\#(labels.awaitingApproval)","denied":"\#(labels.denied)","deniedLooksFailed":false}"#
+        )
+    }
 }

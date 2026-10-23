@@ -152,7 +152,12 @@ struct RichTextEditorView: UIViewRepresentable {
         Self.removeInputAccessoryView(from: webView)
 
         if let binding = webViewBinding {
-            DispatchQueue.main.async { binding.wrappedValue = webView }
+            // Next turn, as SwiftUI state can't change during this update. An editor already taken down by then must
+            // not be handed over, or the note screen would keep its web view (and save through it).
+            DispatchQueue.main.async { [weak coordinator, weak webView] in
+                guard let webView, coordinator?.webView === webView else { return }
+                binding.wrappedValue = webView
+            }
         }
 
         if let fileURL = Bundle.main.url(forResource: "editor", withExtension: "html") {
@@ -215,6 +220,7 @@ struct RichTextEditorView: UIViewRepresentable {
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         coordinator.stopKeyboardToolbarGapTracking()
+        coordinator.webView = nil
         let uc = webView.configuration.userContentController
         uc.removeScriptMessageHandler(forName: "editorReady")
         uc.removeScriptMessageHandler(forName: "contentChanged")

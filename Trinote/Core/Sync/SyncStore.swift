@@ -7,8 +7,12 @@ import SwiftData
 /// `.trinoteTreeShouldRefresh`.
 ///
 /// Not a `@ModelActor`: its default executor runs each call on the thread that enqueues it, which for `SyncManager`
-/// is the main thread. This actor runs on its own serial queue instead, and makes its context there on first use, so
-/// the context only ever lives on that queue (a context made on the main thread would act as a main context).
+/// is the main thread. This actor runs on its own serial queue instead, and makes its contexts there, so they only
+/// ever live on that queue (a context made on the main thread would act as a main context).
+///
+/// Each call works in a context of its own and drops it when it returns (`releaseContext()`). A `ModelContext` keeps
+/// every model it reads, small bodies included, until it next saves, so one context kept across a full sync with
+/// nothing to write held every note it walked at once.
 actor SyncStore {
     private let queue = DispatchSerialQueue(label: "com.trinote.sync-store", qos: .userInitiated)
     private let modelContainer: ModelContainer
@@ -22,13 +26,31 @@ actor SyncStore {
         self.modelContainer = modelContainer
     }
 
-    /// Made on first use, which is always on `queue`.
+    /// Made on first use in a call, which is always on `queue`.
     private var modelContext: ModelContext {
         if let contextStorage { return contextStorage }
         let context = ModelContext(modelContainer)
         context.autosaveEnabled = false
         contextStorage = context
         return context
+    }
+
+    /// Ends a call: saves anything it left unsaved (as the next save on a kept context used to) and drops the
+    /// context, which frees the models it read.
+    private func releaseContext() {
+        guard let context = contextStorage else { return }
+        contextStorage = nil
+        guard context.hasChanges else { return }
+        do {
+            try context.save()
+        } catch {
+            Log.sync.error("SyncStore: saving before dropping its context failed: \(error)")
+        }
+    }
+
+    /// Whether a context outlived the last call (it shouldn't). For tests.
+    var hasLiveContext: Bool {
+        contextStorage != nil
     }
 
     /// System subtrees sync neither walks nor deletes.
@@ -47,18 +69,22 @@ actor SyncStore {
     // MARK: - Pull cursor and sync status
 
     func pullCursor(profileId: String) throws -> Int64 {
-        try cache.getEntityPullCursor(serverProfileId: profileId)
+        defer { releaseContext() }
+        return try cache.getEntityPullCursor(serverProfileId: profileId)
     }
 
     func setPullCursor(_ lastEntityChangeId: Int64, profileId: String) throws {
+        defer { releaseContext() }
         try cache.setEntityPullCursor(serverProfileId: profileId, lastEntityChangeId: lastEntityChangeId)
     }
 
     func recordSyncSuccess(domain: String, profileId: String) throws {
+        defer { releaseContext() }
         try cache.updateSyncStatus(domain: domain, serverProfileId: profileId)
     }
 
     func recordSyncError(domain: String, error: String, profileId: String) throws {
+        defer { releaseContext() }
         try cache.recordSyncError(domain: domain, error: error, serverProfileId: profileId)
     }
 
@@ -66,7 +92,8 @@ actor SyncStore {
 
     /// What the cache holds for these notes, for `fullSyncFetchTreeBatch` to skip unchanged ones.
     func cachedStates(noteIds: [String], profileId: String) throws -> [String: FullSyncCachedNoteState] {
-        try cache.fetchCachedNotes(ids: noteIds, serverProfileId: profileId).mapValues { row in
+        defer { releaseContext() }
+        return try cache.fetchCachedNotes(ids: noteIds, serverProfileId: profileId).mapValues { row in
             FullSyncCachedNoteState(
                 blobId: row.blobId,
                 title: row.title,
@@ -81,6 +108,7 @@ actor SyncStore {
     /// Caches walked notes with their attributes and child branches: existing rows fetched together, only rows that
     /// differ written, one save. Returns how many rows it inserted or changed.
     func cacheWalkEntries(_ entries: [FullSyncTreeBatchEntry], profileId: String) throws -> Int {
+        defer { releaseContext() }
         guard !entries.isEmpty else { return 0 }
         let cache = self.cache
         let notes = try cache.fetchCachedNotes(ids: entries.map(\.note.noteId), serverProfileId: profileId)
@@ -113,10 +141,12 @@ actor SyncStore {
 
     /// Rebuilds every note's parent/child lists from branch rows; returns how many notes changed.
     func reconcileTreeLists(profileId: String) throws -> Int {
-        try cache.reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
+        defer { releaseContext() }
+        return try cache.reconcileCachedNoteBranchesMetadata(serverProfileId: profileId)
     }
 
     func reconcileTreeLists(forNoteId noteId: String, profileId: String) throws {
+        defer { releaseContext() }
         try cache.reconcileCachedNoteBranchesMetadata(forNoteId: noteId, serverProfileId: profileId)
         if modelContext.hasChanges { try modelContext.save() }
     }
@@ -139,6 +169,7 @@ actor SyncStore {
         media: MediaBodyPolicy,
         profileId: String
     ) throws -> ContentCandidates {
+        defer { releaseContext() }
         let cache = self.cache
         let stale = isProtected
             ? try cache.fetchProtectedNotesNeedingContent(serverProfileId: profileId, serverModifiedAfter: candidates)
@@ -160,6 +191,7 @@ actor SyncStore {
 
     /// Remembers bodies left out for their size, by blob id, so sync doesn't download them again until they change.
     func markBodiesSkipped(_ noteIds: [String], profileId: String) throws {
+        defer { releaseContext() }
         for row in try cache.fetchCachedNotes(ids: noteIds, serverProfileId: profileId).values {
             row.contentSkippedBlobId = row.blobId
         }
@@ -168,7 +200,8 @@ actor SyncStore {
 
     /// Notes with no cached body yet: note id → "" (date unknown).
     func notesMissingContent(isProtected: Bool, profileId: String) throws -> [String: String] {
-        isProtected
+        defer { releaseContext() }
+        return isProtected
             ? try cache.serverModifiedMapForProtectedNotesMissingContent(serverProfileId: profileId)
             : try cache.serverModifiedMapForUnprotectedNotesMissingContent(serverProfileId: profileId)
     }
@@ -181,6 +214,7 @@ actor SyncStore {
         exclusion: CacheExclusionSnapshot?,
         profileId: String
     ) throws -> Int {
+        defer { releaseContext() }
         let rows = try cache.fetchCachedNotes(ids: bodies.map(\.noteId), serverProfileId: profileId)
         var stored = 0
         for (noteId, data) in bodies {
@@ -204,6 +238,7 @@ actor SyncStore {
         syncStartedAt: Date,
         profileId: String
     ) throws -> Int {
+        defer { releaseContext() }
         let cache = self.cache
         let local = Set(try cache.fetchAllCachedNoteIds(serverProfileId: profileId))
         let gone = local.subtracting(serverNoteIds).subtracting(Self.hiddenNoteIds)
@@ -216,6 +251,7 @@ actor SyncStore {
     }
 
     func deleteNotes(_ noteIds: Set<String>, profileId: String) throws {
+        defer { releaseContext() }
         try cache.deleteCachedNotes(noteIds: noteIds, serverProfileId: profileId)
     }
 
@@ -226,6 +262,7 @@ actor SyncStore {
         liveBranchIds: Set<String>,
         profileId: String
     ) throws -> (pruned: Int, cachedChildCount: Int) {
+        defer { releaseContext() }
         let cache = self.cache
         let cachedChildCount = try cache.fetchCachedChildren(parentNoteId: parentNoteId, serverProfileId: profileId).count
         let pruned = try cache.pruneStaleBranchesUnderParent(
@@ -259,6 +296,7 @@ actor SyncStore {
         notesToRefreshContent: [String: String],
         profileId: String
     ) throws -> PullBatchResult {
+        defer { releaseContext() }
         var result = PullBatchResult(notesToRefreshContent: notesToRefreshContent)
         let pendingDeletions = (try? cache.pendingDeletionNoteIds(serverProfileId: profileId)) ?? []
         let context = PullContext(profileId: profileId, exclusion: exclusion, media: media, pendingDeletions: pendingDeletions)

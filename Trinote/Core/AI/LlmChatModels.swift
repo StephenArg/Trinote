@@ -42,6 +42,10 @@ struct LlmChatContent: Codable, Equatable, Sendable {
     var enableNoteTools: Bool?
     var enableExtendedThinking: Bool?
     var reasoningEffort: LlmReasoningEffort?
+    /// Which tool calls wait for the user in this chat (Trilium 0.107+); absent: the `llmPermissionMode` option.
+    var permissionMode: LlmPermissionMode?
+    /// Tools the user allowed for this whole chat, whose calls run without asking (Trilium 0.107+).
+    var allowedTools: [String]?
     /// Keys desktop wrote that this app doesn't model (`highlights` lives on messages; future keys land here).
     var extra: [String: JSONValue] = [:]
 
@@ -52,7 +56,8 @@ struct LlmChatContent: Codable, Equatable, Sendable {
 
     private static let knownKeys: Set<String> = [
         "version", "messages", "selectedModel", "selectedProvider", "selectedProviderId",
-        "enableWebSearch", "enableNoteTools", "enableExtendedThinking", "reasoningEffort"
+        "enableWebSearch", "enableNoteTools", "enableExtendedThinking", "reasoningEffort",
+        "permissionMode", "allowedTools"
     ]
 
     init(from decoder: Decoder) throws {
@@ -66,6 +71,8 @@ struct LlmChatContent: Codable, Equatable, Sendable {
         enableNoteTools = try c.decodeIfPresent(Bool.self, forKey: DynamicKey("enableNoteTools"))
         enableExtendedThinking = try c.decodeIfPresent(Bool.self, forKey: DynamicKey("enableExtendedThinking"))
         reasoningEffort = try c.decodeIfPresent(LlmReasoningEffort.self, forKey: DynamicKey("reasoningEffort"))
+        permissionMode = try c.decodeIfPresent(LlmPermissionMode.self, forKey: DynamicKey("permissionMode"))
+        allowedTools = try? c.decodeIfPresent([String].self, forKey: DynamicKey("allowedTools"))
         var extra: [String: JSONValue] = [:]
         for key in c.allKeys where !Self.knownKeys.contains(key.stringValue) {
             extra[key.stringValue] = try c.decode(JSONValue.self, forKey: key)
@@ -84,6 +91,10 @@ struct LlmChatContent: Codable, Equatable, Sendable {
         try c.encodeIfPresent(enableNoteTools, forKey: DynamicKey("enableNoteTools"))
         try c.encodeIfPresent(enableExtendedThinking, forKey: DynamicKey("enableExtendedThinking"))
         try c.encodeIfPresent(reasoningEffort, forKey: DynamicKey("reasoningEffort"))
+        try c.encodeIfPresent(permissionMode, forKey: DynamicKey("permissionMode"))
+        if let allowedTools, !allowedTools.isEmpty {
+            try c.encode(allowedTools, forKey: DynamicKey("allowedTools"))
+        }
         for (key, value) in extra where !Self.knownKeys.contains(key) {
             try c.encode(value, forKey: DynamicKey(key))
         }
@@ -379,17 +390,26 @@ struct ToolCall: Codable, Equatable, Sendable {
     var inputStreaming: String?
     var result: String?
     var isError: Bool?
+    /// `pending` while the call waits for the user to allow it, `declined` once they denied it (Trilium 0.107+).
+    var approval: ToolCallApproval?
 
-    init(id: String, toolName: String, input: [String: JSONValue] = [:], inputStreaming: String? = nil, result: String? = nil, isError: Bool? = nil) {
+    init(
+        id: String, toolName: String, input: [String: JSONValue] = [:], inputStreaming: String? = nil,
+        result: String? = nil, isError: Bool? = nil, approval: ToolCallApproval? = nil
+    ) {
         self.id = id
         self.toolName = toolName
         self.input = input
         self.inputStreaming = inputStreaming
         self.result = result
         self.isError = isError
+        self.approval = approval
     }
 
-    private enum CodingKeys: String, CodingKey { case id, toolName, input, inputStreaming, result, isError }
+    /// Whether the call failed. A call the user denied never ran, so it didn't fail (desktop's `isFailedToolCall`).
+    var failed: Bool { approval != .declined && isError == true }
+
+    private enum CodingKeys: String, CodingKey { case id, toolName, input, inputStreaming, result, isError, approval }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -399,6 +419,7 @@ struct ToolCall: Codable, Equatable, Sendable {
         inputStreaming = try c.decodeIfPresent(String.self, forKey: .inputStreaming)
         result = try Self.decodeText(c, forKey: .result)
         isError = try c.decodeIfPresent(Bool.self, forKey: .isError)
+        approval = try? c.decodeIfPresent(ToolCallApproval.self, forKey: .approval)
     }
 
     /// A string, or any other JSON value as its text (a tool result is typed as a string but comes from the provider).
@@ -407,6 +428,17 @@ struct ToolCall: Codable, Equatable, Sendable {
         guard let value = try c.decodeIfPresent(JSONValue.self, forKey: key) else { return nil }
         return value.jsonText
     }
+}
+
+/// Where a tool call stands with the user, kept as text so a state this app doesn't know still decodes.
+struct ToolCallApproval: RawRepresentable, Codable, Hashable, Sendable {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+
+    /// Waits for the user to allow or deny it.
+    static let pending = ToolCallApproval(rawValue: "pending")
+    /// The user denied it; it never ran.
+    static let declined = ToolCallApproval(rawValue: "declined")
 }
 
 struct LlmCitation: Codable, Equatable, Sendable {
@@ -480,6 +512,8 @@ enum LlmStreamChunk: Decodable, Equatable, Sendable {
     case toolInputStart(toolCallId: String, toolName: String)
     case toolInputDelta(toolCallId: String, delta: String)
     case toolUse(toolCallId: String, toolName: String, toolInput: [String: JSONValue])
+    /// The call waits until the user allows or denies it (`POST /api/llm-chat/tool-approval`, Trilium 0.107+).
+    case toolApprovalRequest(toolCallId: String, toolName: String, toolInput: [String: JSONValue])
     case toolResult(toolCallId: String, toolName: String, result: String, isError: Bool)
     case citation(LlmCitation)
     case usage(LlmUsage)
@@ -515,6 +549,12 @@ enum LlmStreamChunk: Decodable, Equatable, Sendable {
             )
         case "tool_use":
             self = .toolUse(
+                toolCallId: try c.decodeIfPresent(String.self, forKey: .toolCallId) ?? "",
+                toolName: try c.decodeIfPresent(String.self, forKey: .toolName) ?? "",
+                toolInput: try c.decodeIfPresent([String: JSONValue].self, forKey: .toolInput) ?? [:]
+            )
+        case "tool_approval_request":
+            self = .toolApprovalRequest(
                 toolCallId: try c.decodeIfPresent(String.self, forKey: .toolCallId) ?? "",
                 toolName: try c.decodeIfPresent(String.self, forKey: .toolName) ?? "",
                 toolInput: try c.decodeIfPresent([String: JSONValue].self, forKey: .toolInput) ?? [:]
@@ -680,11 +720,16 @@ struct LlmChatRequestConfig: Codable, Equatable, Sendable {
     var contextNoteId: String?
     /// The chat note, so the server can name it after the first turn.
     var chatNoteId: String?
+    /// Tools whose calls run without asking (Trilium 0.107+).
+    var allowedTools: [String]?
+    /// Which tool calls wait for the user (Trilium 0.107+); the server asks before every one when it's absent.
+    var permissionMode: LlmPermissionMode?
 
     init(
         provider: String? = nil, providerId: String? = nil, model: String? = nil, systemPrompt: String? = nil,
         enableWebSearch: Bool? = nil, enableNoteTools: Bool? = nil, enableExtendedThinking: Bool? = nil,
-        thinkingBudget: Int? = nil, reasoningEffort: LlmReasoningEffort? = nil, contextNoteId: String? = nil, chatNoteId: String? = nil
+        thinkingBudget: Int? = nil, reasoningEffort: LlmReasoningEffort? = nil, contextNoteId: String? = nil, chatNoteId: String? = nil,
+        allowedTools: [String]? = nil, permissionMode: LlmPermissionMode? = nil
     ) {
         self.provider = provider
         self.providerId = providerId
@@ -697,10 +742,28 @@ struct LlmChatRequestConfig: Codable, Equatable, Sendable {
         self.reasoningEffort = reasoningEffort
         self.contextNoteId = contextNoteId
         self.chatNoteId = chatNoteId
+        self.allowedTools = allowedTools
+        self.permissionMode = permissionMode
     }
 }
 
+/// Which of a chat's tool calls wait for the user (Trilium 0.107+), kept as text so a new mode still decodes.
+struct LlmPermissionMode: RawRepresentable, Codable, Hashable, Sendable {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+
+    /// Every call, reads included.
+    static let alwaysAsk = LlmPermissionMode(rawValue: "always_ask")
+    /// Only calls that change notes; the default of Trilium's `llmPermissionMode` option.
+    static let askBeforeChanges = LlmPermissionMode(rawValue: "ask_before_changes")
+    /// None.
+    static let dontAsk = LlmPermissionMode(rawValue: "dont_ask")
+}
+
 struct LlmChatStreamRequest: Codable, Equatable, Sendable {
+    /// Names the turn: Trilium 0.107+ refuses a turn without one, and its tool-call approvals name the turn by it.
+    /// Older servers ignore it.
+    var streamId: String
     var messages: [LlmApiMessage]
     var config: LlmChatRequestConfig
 }

@@ -156,6 +156,16 @@ struct ChatConversationView: View {
             notice(text, systemImage: appState.aiAvailability.noticeSystemImage)
         } else if let session {
             VStack(spacing: 0) {
+                if let call = session.waitingToolCalls.first {
+                    ToolApprovalBar(
+                        call: call,
+                        isAnswering: session.answeringToolCallIds.contains(call.id),
+                        error: session.toolApprovalError
+                    ) { approved, forChat in
+                        session.answerToolCall(call.id, approved: approved, forChat: forChat)
+                    }
+                    Divider()
+                }
                 if let status = statusText(session) {
                     Text(status)
                         .font(.footnote)

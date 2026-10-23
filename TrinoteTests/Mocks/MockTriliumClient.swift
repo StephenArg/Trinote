@@ -172,18 +172,44 @@ actor MockTriliumClient: TriliumClientProtocol {
         streamLlmChatResult = result
     }
 
-    func streamLlmChat(messages: [LlmApiMessage], config: LlmChatRequestConfig) async -> AsyncThrowingStream<LlmStreamChunk, Error> {
-        streamLlmChatCalls.append(LlmChatStreamRequest(messages: messages, config: config))
-        let result = streamLlmChatResult
-        return AsyncThrowingStream { continuation in
-            switch result {
-            case .success(let chunks):
-                for chunk in chunks { continuation.yield(chunk) }
+    /// When set, a stream yields its chunks and stays open until `finishHeldStream` (a turn waiting on the user).
+    var holdsStreamOpen = false
+    private var heldStreamContinuation: AsyncThrowingStream<LlmStreamChunk, Error>.Continuation?
+
+    func setHoldsStreamOpen(_ holds: Bool) { holdsStreamOpen = holds }
+
+    func finishHeldStream(with chunks: [LlmStreamChunk]) {
+        for chunk in chunks { heldStreamContinuation?.yield(chunk) }
+        heldStreamContinuation?.finish()
+        heldStreamContinuation = nil
+    }
+
+    func streamLlmChat(streamId: String, messages: [LlmApiMessage], config: LlmChatRequestConfig) async -> AsyncThrowingStream<LlmStreamChunk, Error> {
+        streamLlmChatCalls.append(LlmChatStreamRequest(streamId: streamId, messages: messages, config: config))
+        let (stream, continuation) = AsyncThrowingStream<LlmStreamChunk, Error>.makeStream()
+        switch streamLlmChatResult {
+        case .success(let chunks):
+            for chunk in chunks { continuation.yield(chunk) }
+            if holdsStreamOpen {
+                heldStreamContinuation = continuation
+            } else {
                 continuation.finish()
-            case .failure(let error):
-                continuation.finish(throwing: error)
             }
+        case .failure(let error):
+            continuation.finish(throwing: error)
         }
+        return stream
+    }
+
+    var answerToolApprovalCalls: [(streamId: String, toolCallId: String, approved: Bool, allowForChat: Bool)] = []
+    var answerToolApprovalError: Error?
+
+    func setAnswerToolApprovalError(_ error: Error?) { answerToolApprovalError = error }
+
+    func answerToolApproval(streamId: String, toolCallId: String, approved: Bool, allowForChat: Bool) async throws -> Bool {
+        if let answerToolApprovalError { throw answerToolApprovalError }
+        answerToolApprovalCalls.append((streamId, toolCallId, approved, allowForChat))
+        return true
     }
 
     var createLlmChatResult: Result<CreatedLlmChat, Error> = .success(CreatedLlmChat(noteId: "chat_new", title: "Chat: 2026-10-08 10:00:00"))

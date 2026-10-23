@@ -42,5 +42,25 @@ struct RootView: View {
                 appState.shareImport.checkForPendingPayload()
             }
         }
+        .alert(
+            String(localized: "Changes Not Saved", comment: "Alert title: the server refused offline changes to notes it keeps read-only"),
+            isPresented: Binding(
+                get: { !appState.refusedChangesNoteTitles.isEmpty },
+                set: { if !$0 { appState.refusedChangesNoteTitles = [] } }
+            )
+        ) {
+            Button(String(localized: "OK", comment: "Dismiss alert"), role: .cancel) {}
+        } message: {
+            Text(refusedChangesMessage)
+        }
+    }
+
+    private var refusedChangesMessage: String {
+        let titles = appState.refusedChangesNoteTitles.map { "“\($0)”" }
+        return String(
+            format: String(localized: "The server doesn't allow changes to %@, so your edits weren't saved.", comment: "Alert message: offline edits the server refused; %@ is a list of note titles"),
+            locale: .current,
+            ListFormatter.localizedString(byJoining: titles)
+        )
     }
 }

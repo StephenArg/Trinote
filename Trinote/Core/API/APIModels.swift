@@ -251,6 +251,22 @@ enum TriliumServerCompatibility {
         return isAppVersion(info.appVersion, atLeast: llmChatMinAppVersion)
     }
 
+    /// Trilium release whose search routes take the query as `?searchString=` (`GET /api/search`,
+    /// `GET /api/quick-search`; the `/:searchString` forms are gone) and whose move route takes a list of branches
+    /// (`PUT /api/branches/move-to/:parentBranchId` with `{ branchIds }`; the one-branch route is gone).
+    static let v0107RoutesMinAppVersion = "0.107.0"
+
+    /// The sync version v0.107 brought. Builds of Trilium's main branch report it while their app version still
+    /// reads 0.106.0.
+    static let v0107RoutesMinSyncVersion = 41
+
+    /// `true` when `/api/app-info` reports Trilium v0.107.0 or newer (query-parameter search, batch branch moves).
+    static func usesV0107Routes(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: v0107RoutesMinAppVersion)
+            || (info.syncVersion ?? 0) >= v0107RoutesMinSyncVersion
+    }
+
     /// Semantic compare for Trilium `appVersion` strings (`0.103.0`, `v0.102.1`, `0.103.0-beta.1`).
     static func isAppVersion(_ version: String, atLeast minimum: String) -> Bool {
         compareAppVersions(version, minimum) != .orderedAscending
@@ -341,6 +357,8 @@ struct NoteResponse: Decodable {
     var isInLlmChatFolder: Bool?
     /// What the note inherits from ancestors and templates, worked out from `tree/load` by `getNote` only.
     var inheritedAttributes: [AttributeResponse] = []
+    /// `false` when `tree/load` says the server won't save the note (Trilium 0.107+'s help pages); `nil` when unknown.
+    var isContentWritable: Bool?
 
     enum CodingKeys: String, CodingKey {
         case noteId, isProtected, title, type, mime, blobId, isDeleted
@@ -632,8 +650,9 @@ struct CreateAttachmentRequest: Encodable {
     let position: Int?
 }
 
-/// `GET /api/quick-search/:query` — the web's quick search. Trinote uses it for the snippet and breadcrumb Trilium
-/// builds per result. Every field is optional: older servers return fewer of them.
+/// `GET /api/quick-search?searchString=` (`/api/quick-search/:query` before Trilium 0.107) — the web's quick search.
+/// Trinote uses it for the snippet and breadcrumb Trilium builds per result. Every field is optional: older servers
+/// return fewer of them.
 struct QuickSearchResponse: Decodable, Sendable {
     let searchResults: [QuickSearchResult]?
 }
@@ -956,6 +975,8 @@ struct TreeLoadNoteRow: Decodable {
     let mime: String
     let blobId: String?
     let isDeleted: Bool?
+    /// `false` for a note the server won't save (Trilium 0.107+'s virtual help pages); absent otherwise.
+    var isContentWritable: Bool? = nil
 }
 
 struct TreeLoadBranchRow: Decodable {

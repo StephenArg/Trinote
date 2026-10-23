@@ -17,6 +17,8 @@ struct ChatTranscriptBlock: Encodable, Equatable, Sendable {
     var toolResult: String?
     var toolError: Bool?
     var running: Bool?
+    /// `pending` while the call waits for the user to allow it, `declined` once they denied it.
+    var approval: String?
     var attachmentId: String?
     var mime: String?
     var title: String?
@@ -38,8 +40,9 @@ struct ChatTranscriptBlock: Encodable, Equatable, Sendable {
             toolCallId: call.id,
             toolInput: input,
             toolResult: call.result,
-            toolError: call.isError == true,
-            running: call.result == nil
+            toolError: call.failed,
+            running: call.result == nil,
+            approval: call.approval?.rawValue
         )
     }
 }
@@ -84,6 +87,8 @@ struct ChatTranscriptLabels: Encodable, Equatable, Sendable {
     var showDetails = String(localized: "Show details", comment: "AI chat: expands a failed turn's technical details")
     var retry = String(localized: "Retry", comment: "AI chat: re-run the failed turn")
     var running = String(localized: "Running…", comment: "AI chat: a tool call without a result yet")
+    var awaitingApproval = String(localized: "Waiting for approval…", comment: "AI chat: a tool call waits for the user to allow it")
+    var denied = String(localized: "denied", comment: "AI chat: a tool call the user refused to allow")
     var input = String(localized: "Input", comment: "AI chat: a tool call's arguments")
     var result = String(localized: "Result", comment: "AI chat: a tool call's result")
     var attachment = String(localized: "Attachment", comment: "AI chat: a file attached to a message, when its name is unknown")

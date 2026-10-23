@@ -133,4 +133,18 @@ final class ChatTranscriptRendererTests: XCTestCase {
         XCTAssertEqual(ChatTranscriptRenderer.toolActivity("rename_note"), "Editing a note…")
         XCTAssertEqual(ChatTranscriptRenderer.toolActivity("load_skill"), "Running load_skill…")
     }
+
+    func testToolCardsCarryTheirApproval() {
+        let waiting = ChatTranscriptBlock.tool(ToolCall(id: "c1", toolName: "edit_note_content", input: ["noteId": .string("n1")], approval: .pending))
+        XCTAssertEqual(waiting.approval, "pending")
+        XCTAssertEqual(waiting.running, true)
+
+        let denied = ChatTranscriptBlock.tool(ToolCall(id: "c2", toolName: "delete_note", result: #"{"error":"x"}"#, isError: true, approval: .declined))
+        XCTAssertEqual(denied.approval, "declined")
+        XCTAssertEqual(denied.toolError, false, "a denied call isn't drawn as failed")
+
+        let failed = ChatTranscriptBlock.tool(ToolCall(id: "c3", toolName: "get_note", result: "x", isError: true))
+        XCTAssertNil(failed.approval)
+        XCTAssertEqual(failed.toolError, true)
+    }
 }

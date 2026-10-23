@@ -148,6 +148,11 @@
         return '<details class="card ' + classes + '" data-key="' + esc(key) + '"' + openAttr(key) + '><summary>' + summaryHTML
             + '</summary><div class="body">' + bodyHTML + '</div></details>';
     }
+    function toolStatus(block) {
+        if (block.approval === 'pending') return label('awaitingApproval');
+        if (block.approval === 'declined') return label('denied');
+        return block.running ? label('running') : '';
+    }
 
     function blockHTML(block, streaming, isLast, key) {
         switch (block.type) {
@@ -157,8 +162,9 @@
             return card(key, 'thinking', esc(label('thoughtProcess')), esc(block.text || '') + (streaming ? '<span class="cursor"></span>' : ''));
         case 'tool':
             var toolKey = block.toolCallId ? 'tool:' + block.toolCallId : key;
+            var status = toolStatus(block);
             return card(toolKey, 'tool' + (block.toolError ? ' error' : ''),
-                '<span class="tool-name">' + esc(block.toolName) + '</span>' + (block.running ? '<span class="status">' + esc(label('running')) + '</span>' : ''),
+                '<span class="tool-name">' + esc(block.toolName) + '</span>' + (status ? '<span class="status">' + esc(status) + '</span>' : ''),
                 (block.toolInput ? '<div class="tool-label">' + esc(label('input')) + '</div><pre class="tool-io">' + esc(block.toolInput) + '</pre>' : '')
                 + (block.toolResult ? '<div class="tool-label">' + esc(label('result')) + '</div><pre class="tool-io">' + esc(block.toolResult) + '</pre>' : ''));
         case 'image':

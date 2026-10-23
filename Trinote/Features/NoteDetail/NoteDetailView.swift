@@ -391,7 +391,7 @@ struct NoteDetailView: View {
     private static let floatingEditSettlingDuration: TimeInterval = 0.4
 
     private func floatingEditFABEligible(vm: NoteDetailViewModel, note: NoteItem) -> Bool {
-        !noteEditorLongPressToEdit && note.type.isEditable && !vm.needsProtectedSession && !vm.isEditing
+        !noteEditorLongPressToEdit && note.isContentEditable && !vm.needsProtectedSession && !vm.isEditing
     }
 
     /// Always show the edit FAB when a note opens; suppress directional hide until layout / scroll restore settles.
@@ -458,7 +458,7 @@ struct NoteDetailView: View {
 
     /// Uses `UIScrollView.contentOffset.y` (via `NoteDetailScrollOffsetReader`): increases when scrolling **down**, decreases when scrolling **up**.
     private func updateFloatingEditVisibility(contentOffsetY: CGFloat, vm: NoteDetailViewModel, note: NoteItem) {
-        guard !noteEditorLongPressToEdit, note.type.isEditable, !vm.needsProtectedSession, !vm.isEditing else {
+        guard !noteEditorLongPressToEdit, note.isContentEditable, !vm.needsProtectedSession, !vm.isEditing else {
             if showFloatingEditButton {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                     showFloatingEditButton = false
@@ -630,7 +630,7 @@ struct NoteDetailView: View {
         LongPressGesture(minimumDuration: Self.noteEditorLongPressToEditDuration)
             .onEnded { _ in
                 guard noteEditorLongPressToEdit,
-                      note.type.isEditable,
+                      note.isContentEditable,
                       !vm.needsProtectedSession,
                       !vm.isEditing
                 else { return }
@@ -1328,7 +1328,7 @@ struct NoteDetailView: View {
             guard !vm.isEditing else { return }
             vm.showCreateChild = true
         case .editNote:
-            guard !vm.isEditing, note.type.isEditable, !vm.needsProtectedSession else { return }
+            guard !vm.isEditing, note.isContentEditable, !vm.needsProtectedSession else { return }
             vm.startEditing()
         case .saveNote:
             guard vm.isEditing, !vm.isSaving else { return }
@@ -1932,7 +1932,7 @@ struct NoteDetailView: View {
                         metadataSection(note, vm: vm)
                     }
 
-                    if note.type.isEditable, !vm.needsProtectedSession, !noteEditorLongPressToEdit {
+                    if note.isContentEditable, !vm.needsProtectedSession, !noteEditorLongPressToEdit {
                         Color.clear.frame(
                             height: NoteDetailFloatingChipLayout.scrollClearance(
                                 findBarPresented: findControl.isPresented,
@@ -2702,7 +2702,7 @@ struct NoteDetailView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .if(!note.isCalendarRoot) { view in
+                .if(!note.isCalendarRoot && note.isContentWritable) { view in
                     view.onTapGesture {
                         vm.editedTitle = note.title
                         vm.editingTitle = true
@@ -3987,6 +3987,7 @@ struct NoteDetailView: View {
                     Spacer(minLength: 0)
                 }
                 .onTapGesture {
+                    guard note.isContentWritable else { return }
                     vm.editedTitle = note.title
                     vm.editingTitle = true
                 }
@@ -4916,7 +4917,7 @@ struct NoteDetailView: View {
 
     @ViewBuilder
     private func noteOverflowActionButtons(vm: NoteDetailViewModel, note: NoteItem) -> some View {
-        if note.type.isEditable {
+        if note.isContentEditable {
             Button {
                 dismissNoteOverflow()
                 if vm.isEditing {
@@ -5004,6 +5005,7 @@ struct NoteDetailView: View {
         } label: {
             noteOverflowLabel(String(localized: "Rename", comment: "Note overflow menu"), systemImage: "pencil")
         }
+        .disabled(!note.isContentWritable)
         .buttonStyle(.plain)
 
         if canChangeNoteAppearance(note) {

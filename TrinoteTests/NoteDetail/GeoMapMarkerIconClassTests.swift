@@ -59,14 +59,14 @@ final class GeoMapMarkerIconClassTests: XCTestCase {
 
     func testGeoDefaultIconClassForShapes() {
         func icon(_ shape: String) -> String? {
-            NoteIconClassResolver.geoDefaultIconClass(isTextNote: true) { $0 == "geoShape" ? shape : nil }
+            NoteIconClassResolver.defaultIconClass(isTextNote: true) { $0 == "geoShape" ? shape : nil }
         }
         XCTAssertEqual(icon("polygon:1,2 3,4 5,6"), "bx bx-shape-polygon")
         XCTAssertEqual(icon("circle:1,2 500"), "bx bx-shape-circle")
         XCTAssertEqual(icon("line:1,2 3,4"), "bx bx-vector")
         XCTAssertEqual(icon("garbage"), "bx bx-vector")
-        XCTAssertNil(NoteIconClassResolver.geoDefaultIconClass(isTextNote: false) { _ in "48,2" })
-        XCTAssertNil(NoteIconClassResolver.geoDefaultIconClass(isTextNote: true) { _ in nil })
+        XCTAssertNil(NoteIconClassResolver.defaultIconClass(isTextNote: false) { _ in "48,2" })
+        XCTAssertNil(NoteIconClassResolver.defaultIconClass(isTextNote: true) { _ in nil })
     }
 
     // MARK: - #geoShape parsing

@@ -56,10 +56,12 @@ final class LlmChatSessionTests: XCTestCase {
 
         let calls = await mock.streamLlmChatCalls
         XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls[0].streamId.count, 12, "Trilium 0.107+ refuses a turn without a stream id")
+        XCTAssertTrue(TriliumEntityId.isValid(calls[0].streamId))
         XCTAssertEqual(calls[0].messages, [LlmApiMessage(role: .user, text: "Hi")])
         XCTAssertEqual(calls[0].config, LlmChatRequestConfig(
             provider: "anthropic", providerId: "p1", model: "m1", enableWebSearch: true, enableNoteTools: false,
-            enableExtendedThinking: false, chatNoteId: "chat1"
+            enableExtendedThinking: false, chatNoteId: "chat1", permissionMode: .askBeforeChanges
         ))
 
         let saves = await mock.updateNoteContentCalls
@@ -92,6 +94,7 @@ final class LlmChatSessionTests: XCTestCase {
         XCTAssertEqual(session.messages[1].text, "OK")
         let calls = await mock.streamLlmChatCalls
         XCTAssertEqual(calls.count, 2)
+        XCTAssertNotEqual(calls[0].streamId, calls[1].streamId, "each turn names itself")
         XCTAssertEqual(calls[1].messages, [LlmApiMessage(role: .user, text: "Hi")])
         XCTAssertEqual(recorder.firstTurns, 1)
     }
@@ -291,5 +294,130 @@ final class LlmChatSessionTests: XCTestCase {
             .textAttachment(attachmentId: file.attachmentId, filename: "script.py")
         ]))
         XCTAssertFalse(session.canSend(text: ""), "nothing left to send")
+    }
+
+    // MARK: Tool approvals (Trilium 0.107+)
+
+    /// Polls until `condition` holds; the session publishes a streaming turn in bursts.
+    private func waitUntil(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<200 where !condition() {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(condition(), "condition never held", file: file, line: line)
+    }
+
+    private func storedToolCalls(_ session: LlmChatSession) -> [ToolCall] {
+        session.messages.flatMap { message -> [ToolCall] in
+            guard case .blocks(let blocks) = message.content else { return [] }
+            return blocks.compactMap { block in
+                if case .toolCall(let call) = block { return call }
+                return nil
+            }
+        }
+    }
+
+    func testPermissionModeComesFromTheChatThenTheServerOption() async throws {
+        let mock = MockTriliumClient()
+        let recorder = Recorder()
+        let serverConfig = TriliumAIConfig(aiEnabled: true, providers: config.providers, permissionMode: .alwaysAsk)
+        let fromServer = makeSession(mock, recorder: recorder, config: serverConfig)
+        XCTAssertEqual(fromServer.permissionMode, .alwaysAsk)
+
+        var content = LlmChatContent()
+        content.permissionMode = .dontAsk
+        content.allowedTools = ["get_note"]
+        let ownChoice = makeSession(mock, content: content, recorder: recorder, config: serverConfig)
+        ownChoice.send(text: "Hi")
+        await ownChoice.waitForTurn()
+        let calls = await mock.streamLlmChatCalls
+        XCTAssertEqual(calls.last?.config.permissionMode, .dontAsk)
+        XCTAssertEqual(calls.last?.config.allowedTools, ["get_note"])
+    }
+
+    func testAllowingAToolForTheChatAnswersAndRemembersIt() async throws {
+        let mock = MockTriliumClient()
+        await mock.setHoldsStreamOpen(true)
+        await mock.setStreamLlmChatResult(.success([
+            .toolUse(toolCallId: "t1", toolName: "edit_note_content", toolInput: [:]),
+            .toolApprovalRequest(toolCallId: "t1", toolName: "edit_note_content", toolInput: ["noteId": .string("n1")]),
+            .toolApprovalRequest(toolCallId: "t2", toolName: "edit_note_content", toolInput: ["noteId": .string("n2")])
+        ]))
+        let recorder = Recorder()
+        let session = makeSession(mock, recorder: recorder)
+        session.send(text: "Fix both notes")
+        try await waitUntil { session.waitingToolCalls.map(\.id) == ["t1", "t2"] }
+        XCTAssertEqual(session.waitingToolCalls.first?.input, ["noteId": .string("n1")], "the request carries the input")
+
+        session.answerToolCall("t1", approved: true, forChat: true)
+        try await waitUntil { session.waitingToolCalls.isEmpty }
+        let answers = await mock.answerToolApprovalCalls
+        let streamId = await mock.streamLlmChatCalls.first?.streamId
+        XCTAssertEqual(answers.map(\.toolCallId), ["t1"], "the server lets the tool's other waiting call run itself")
+        XCTAssertEqual(answers.first?.streamId, streamId)
+        XCTAssertEqual(answers.first?.approved, true)
+        XCTAssertEqual(answers.first?.allowForChat, true)
+        XCTAssertEqual(session.content.allowedTools, ["edit_note_content"])
+
+        await mock.finishHeldStream(with: [
+            .toolResult(toolCallId: "t1", toolName: "edit_note_content", result: "{}", isError: false),
+            .toolResult(toolCallId: "t2", toolName: "edit_note_content", result: "{}", isError: false),
+            .done
+        ])
+        await session.waitForTurn()
+        XCTAssertEqual(storedToolCalls(session).map(\.approval), [nil, nil])
+        XCTAssertEqual(LlmChatContent.parse(try XCTUnwrap(recorder.saved.last))?.allowedTools, ["edit_note_content"])
+
+        await mock.setHoldsStreamOpen(false)
+        await mock.setStreamLlmChatResult(.success([.text("Done"), .done]))
+        session.send(text: "Thanks")
+        await session.waitForTurn()
+        let calls = await mock.streamLlmChatCalls
+        XCTAssertEqual(calls.last?.config.allowedTools, ["edit_note_content"], "later turns run the tool without asking")
+    }
+
+    func testDenyingACallStoresItAsDeniedNotFailed() async throws {
+        let mock = MockTriliumClient()
+        await mock.setHoldsStreamOpen(true)
+        await mock.setStreamLlmChatResult(.success([
+            .toolApprovalRequest(toolCallId: "t1", toolName: "delete_note", toolInput: ["noteId": .string("n1")])
+        ]))
+        let recorder = Recorder()
+        let session = makeSession(mock, recorder: recorder)
+        session.send(text: "Delete it")
+        try await waitUntil { session.waitingToolCalls.count == 1 }
+        session.answerToolCall("t1", approved: false)
+        try await waitUntil { session.waitingToolCalls.isEmpty }
+        await mock.finishHeldStream(with: [
+            .toolResult(toolCallId: "t1", toolName: "delete_note", result: #"{"error":"The user declined this tool call."}"#, isError: true),
+            .text("OK, I left it."),
+            .done
+        ])
+        await session.waitForTurn()
+        let call = try XCTUnwrap(storedToolCalls(session).first)
+        XCTAssertEqual(call.approval, .declined)
+        XCTAssertFalse(call.failed, "a denied call never ran")
+        XCTAssertNil(session.content.allowedTools)
+    }
+
+    func testAFailedAnswerKeepsTheCallWaiting() async throws {
+        let mock = MockTriliumClient()
+        await mock.setHoldsStreamOpen(true)
+        await mock.setAnswerToolApprovalError(APIError.networkUnavailable)
+        await mock.setStreamLlmChatResult(.success([
+            .toolApprovalRequest(toolCallId: "t1", toolName: "rename_note", toolInput: [:])
+        ]))
+        let session = makeSession(mock, recorder: Recorder())
+        session.send(text: "Rename it")
+        try await waitUntil { session.waitingToolCalls.count == 1 }
+        session.answerToolCall("t1", approved: true)
+        try await waitUntil { session.toolApprovalError != nil }
+        XCTAssertEqual(session.waitingToolCalls.map(\.id), ["t1"], "it can be answered again")
+
+        session.stop()
+        await session.waitForTurn()
+        let call = try XCTUnwrap(storedToolCalls(session).first)
+        XCTAssertNil(call.approval, "a call left waiting is stored as stopped")
+        XCTAssertEqual(call.result, LlmChatTurnReducer.stoppedToolResult)
+        XCTAssertNil(session.toolApprovalError)
     }
 }

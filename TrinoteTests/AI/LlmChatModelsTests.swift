@@ -189,6 +189,7 @@ final class LlmChatModelsTests: XCTestCase {
 
     func testStreamRequestEncodesLikeTheWebClient() throws {
         let request = LlmChatStreamRequest(
+            streamId: "turn12345678",
             messages: [
                 LlmApiMessage(role: .user, text: "Hello"),
                 LlmApiMessage(role: "user", content: .parts([
@@ -207,7 +208,8 @@ final class LlmChatModelsTests: XCTestCase {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let written = try jsonObject(String(decoding: try encoder.encode(request), as: UTF8.self))
         let expected = try jsonObject("""
-        {"messages":[{"role":"user","content":"Hello"},
+        {"streamId":"turn12345678",
+         "messages":[{"role":"user","content":"Hello"},
                      {"role":"user","content":[{"type":"text","text":"Look"},
                                                {"type":"image","attachmentId":"att1","mime":"image/png"},
                                                {"type":"file","attachmentId":"att2","mime":"application/pdf","filename":"a.pdf"},
@@ -231,5 +233,44 @@ final class LlmChatModelsTests: XCTestCase {
 
         let created = try JSONDecoder().decode(CreatedLlmChat.self, from: Data(#"{"noteId":"c1","title":"Chat: now","type":"llmChat","mime":"application/json","isProtected":false}"#.utf8))
         XCTAssertEqual(created, CreatedLlmChat(noteId: "c1", title: "Chat: now"))
+    }
+
+    // MARK: Tool approvals (Trilium 0.107+)
+
+    func testApprovalChunkAndStateDecode() throws {
+        XCTAssertEqual(
+            try chunk(#"{"type":"tool_approval_request","toolCallId":"c1","toolName":"edit_note_content","toolInput":{"noteId":"n1"}}"#),
+            .toolApprovalRequest(toolCallId: "c1", toolName: "edit_note_content", toolInput: ["noteId": .string("n1")])
+        )
+
+        let json = #"{"version":1,"messages":[{"id":"m","role":"assistant","createdAt":"2026-10-23T00:00:00.000Z","content":[{"type":"tool_call","toolCall":{"id":"c1","toolName":"delete_note","input":{},"result":"{\"error\":\"no\"}","isError":true,"approval":"declined"}}]}],"permissionMode":"always_ask","allowedTools":["get_note"]}"#
+        let content = try XCTUnwrap(LlmChatContent.parse(json))
+        XCTAssertEqual(content.permissionMode, .alwaysAsk)
+        XCTAssertEqual(content.allowedTools, ["get_note"])
+        XCTAssertTrue(content.extra.isEmpty)
+        guard case .blocks(let blocks) = content.messages.first?.content, case .toolCall(let call) = blocks.first else {
+            return XCTFail("expected a tool call")
+        }
+        XCTAssertEqual(call.approval, .declined)
+        XCTAssertFalse(call.failed)
+
+        let written = try jsonObject(try content.jsonString())
+        XCTAssertEqual(written["permissionMode"] as? String, "always_ask")
+        XCTAssertEqual(written["allowedTools"] as? [String], ["get_note"])
+        let messages = written["messages"] as? [[String: Any]]
+        let toolCall = ((messages?.first?["content"] as? [[String: Any]])?.first?["toolCall"]) as? [String: Any]
+        XCTAssertEqual(toolCall?["approval"] as? String, "declined")
+    }
+
+    func testRequestCarriesPermissionModeAndAllowedTools() throws {
+        let request = LlmChatStreamRequest(
+            streamId: "turn12345678",
+            messages: [],
+            config: LlmChatRequestConfig(enableNoteTools: true, allowedTools: ["get_note"], permissionMode: .askBeforeChanges)
+        )
+        let written = try jsonObject(String(decoding: try JSONEncoder().encode(request), as: UTF8.self))
+        let config = written["config"] as? [String: Any]
+        XCTAssertEqual(config?["permissionMode"] as? String, "ask_before_changes")
+        XCTAssertEqual(config?["allowedTools"] as? [String], ["get_note"])
     }
 }

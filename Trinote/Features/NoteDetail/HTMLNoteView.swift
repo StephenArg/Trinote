@@ -131,6 +131,20 @@ struct HTMLThemeColors: Equatable {
     var headingColor: String? = nil
 }
 
+/// Trilium 0.107's help pages use the server's static files with relative URLs (`<img src="assets/v0.107.0/help/…">`,
+/// served without a login). The read view's base is the server URL without its trailing slash, or the app bundle when
+/// Mermaid or math is drawn, which would resolve them in the wrong folder; they're pointed at the server instead.
+enum TriliumServerAssetURLs {
+    static func resolving(in html: String, serverBase: URL?) -> String {
+        guard let serverBase, html.containsASCII("=\"assets/") else { return html }
+        var base = serverBase.absoluteString
+        if !base.hasSuffix("/") { base += "/" }
+        return html
+            .replacingOccurrences(of: "src=\"assets/", with: "src=\"\(base)assets/")
+            .replacingOccurrences(of: "href=\"assets/", with: "href=\"\(base)assets/")
+    }
+}
+
 private struct HTMLNoteWebView: UIViewRepresentable {
     let html: String
     let baseURL: URL?
@@ -229,7 +243,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         handler.lastAppliedColorScheme = colorScheme
         webView.applyTrinoteAppearanceMode()
         let wrapped = Self.wrapHTMLTimed(
-            html,
+            TriliumServerAssetURLs.resolving(in: html, serverBase: baseURL),
             theme: themeColors,
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
@@ -350,7 +364,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.taskStateCycleEnabled = taskStateCycleEnabled
         coordinator.checkboxOnlyRevision = checkboxOnlyRevision
         let wrapped = Self.wrapHTMLTimed(
-            html,
+            TriliumServerAssetURLs.resolving(in: html, serverBase: baseURL),
             theme: themeColors,
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
@@ -2277,7 +2291,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             pageLoaded = false
             if let lastReportedHeight { heightFromCache = lastReportedHeight }
             let page = HTMLNoteWebView.wrapHTML(
-                html,
+                TriliumServerAssetURLs.resolving(in: html, serverBase: baseURL),
                 theme: themeColors,
                 checkboxReorderEnabled: checkboxReorderEnabled,
                 listInteractionEnabled: listInteractionEnabled,

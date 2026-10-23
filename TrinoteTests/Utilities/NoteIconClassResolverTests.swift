@@ -65,4 +65,19 @@ final class NoteIconClassResolverTests: XCTestCase {
         )
         XCTAssertEqual(result, "bx bx-list-ul")
     }
+
+    /// Trilium v0.107: a clipping shows its `#clipType` (migration 241 drops the clipper's globe `#iconClass`).
+    func testClippingsTakeTheIconOfTheirClipType() {
+        func icon(_ labels: [String: String], isTextNote: Bool = true) -> String? {
+            NoteIconClassResolver.defaultIconClass(isTextNote: isTextNote) { labels[$0] }
+        }
+        XCTAssertEqual(icon(["clipType": "clippings"]), "bx bx-paperclip")
+        XCTAssertEqual(icon(["clipType": "page"]), "bx bx-globe")
+        XCTAssertEqual(icon(["clipType": "note"]), "bx bx-bookmark")
+        XCTAssertEqual(icon(["clipType": "tabs"]), "bx bx-window-alt")
+        XCTAssertEqual(icon(["clipType": "share"]), "bx bx-share")
+        XCTAssertNil(icon(["clipType": "something-new"]))
+        XCTAssertNil(icon(["clipType": "page"], isTextNote: false), "only text notes, as in Trilium")
+        XCTAssertEqual(icon(["clipType": "page", "geolocation": "48.85,2.29"]), "bx bx-pin", "a place outranks it")
+    }
 }

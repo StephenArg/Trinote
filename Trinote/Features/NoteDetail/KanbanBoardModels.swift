@@ -722,8 +722,7 @@ enum KanbanBoardModels {
 
     /// Random column id in the character set Trilium's own ids use.
     static func makeColumnId() -> String {
-        let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-        return String((0..<12).map { _ in alphabet.randomElement()! })
+        TriliumEntityId.random()
     }
 
     /// Reads the group-by label/relation value from a note's attributes.

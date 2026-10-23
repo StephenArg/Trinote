@@ -920,7 +920,7 @@ body { display: flex; flex-direction: column; }
 <script src="list-styles-extension.js"></script>
 <script src="indent-extension.js"></script>
 <script src="link-preview.js"></script>
-<script src="vendor/mermaid.min.js"></script>
+<!-- vendor/mermaid.min.js (5 MB) loads on demand: see trinoteEnsureMermaid(). -->
 <script>
 if (typeof TipTap === 'undefined') {
   const le = document.getElementById('loading');
@@ -5873,11 +5873,40 @@ function tiptapToCk(html) {
   return serializeHtmlBodyPreservingTriliumMath(doc);
 }
 
+/** Loads the Mermaid bundle the first time an include preview needs it. Linked diagrams normally arrive as SVG
+ *  drawn by the app (MermaidRenderer), so most editors never need the 5 MB script. Resolves to whether it loaded. */
+let __trinoteMermaidLoading = null;
+function trinoteEnsureMermaid() {
+  if (typeof window.mermaid !== 'undefined') return Promise.resolve(true);
+  if (!__trinoteMermaidLoading) {
+    __trinoteMermaidLoading = new Promise(function (resolve) {
+      const script = document.createElement('script');
+      script.src = 'vendor/mermaid.min.js';
+      script.onload = function () { resolve(typeof window.mermaid !== 'undefined'); };
+      script.onerror = function () {
+        __trinoteMermaidLoading = null;
+        resolve(false);
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return __trinoteMermaidLoading;
+}
+
+let __trinoteMermaidRunTail = Promise.resolve();
+
 /** Renders `.mermaid` blocks inside an include-note preview slot (read-only HTML uses the same Mermaid bundle). */
 function trinoteRunMermaidInSlot(slot) {
-  if (!slot || typeof window.mermaid === 'undefined' || !window.mermaid.run) return;
+  if (!slot) return;
   const nodes = slot.querySelectorAll('.mermaid');
   if (!nodes.length) return;
+  if (typeof window.mermaid === 'undefined') {
+    trinoteEnsureMermaid().then(function (loaded) {
+      if (loaded) trinoteRunMermaidInSlot(slot);
+    });
+    return;
+  }
+  if (!window.mermaid.run) return;
   try {
     if (!window.__trinoteEditorMermaidInited) {
       window.__trinoteEditorMermaidInited = true;
@@ -5908,9 +5937,15 @@ function trinoteRunMermaidInSlot(slot) {
         } : undefined
       });
     }
-    const runOut = window.mermaid.run({ nodes: Array.from(nodes) });
-    if (runOut && typeof runOut.then === 'function') runOut.catch(function () {});
-  } catch (e) {}
+  } catch (e) {
+    return;
+  }
+  // One run at a time. Mermaid names a run's first diagram after Date.now(), so slots that start in the same
+  // millisecond (several waiting on the script load above) would draw into each other's SVG.
+  const pending = Array.from(nodes);
+  __trinoteMermaidRunTail = __trinoteMermaidRunTail
+    .then(function () { return window.mermaid.run({ nodes: pending }); })
+    .catch(function () {});
 }
 
 // --- Bridge ---

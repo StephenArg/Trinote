@@ -59,6 +59,16 @@ enum LlmChatTurnReducer {
             }) {
                 turn.blocks.append(.toolCall(ToolCall(id: toolCallId, toolName: toolName, input: toolInput)))
             }
+        case .toolApprovalRequest(let toolCallId, let toolName, let toolInput):
+            turn.status = nil
+            // The request can arrive before the call's `tool_use` chunk.
+            if !update(toolCallId: toolCallId, in: &turn, { call in
+                call.input = toolInput
+                call.inputStreaming = nil
+                call.approval = .pending
+            }) {
+                turn.blocks.append(.toolCall(ToolCall(id: toolCallId, toolName: toolName, input: toolInput, approval: .pending)))
+            }
         case .toolResult(let toolCallId, let toolName, let result, let isError):
             if !update(toolCallId: toolCallId, in: &turn, { call in
                 call.result = result
@@ -81,6 +91,24 @@ enum LlmChatTurnReducer {
         }
     }
 
+    // MARK: Tool approvals
+
+    /// The calls of `turn` that wait for the user to allow or deny them, in the order they came.
+    static func waitingToolCalls(in turn: LlmChatStreamingTurn) -> [ToolCall] {
+        turn.blocks.compactMap { block in
+            if case .toolCall(let call) = block, call.approval == .pending { return call }
+            return nil
+        }
+    }
+
+    /// The user's answer to a waiting call: allowed, it runs like any other; denied, it stays marked as such.
+    static func settleApproval(toolCallId: String, approved: Bool, in turn: inout LlmChatStreamingTurn) {
+        update(toolCallId: toolCallId, in: &turn) { call in
+            guard call.approval == .pending else { return }
+            call.approval = approved ? nil : .declined
+        }
+    }
+
     /// Changes the latest tool call with `toolCallId`; `false` when there is none.
     @discardableResult
     private static func update(toolCallId: String, in turn: inout LlmChatStreamingTurn, _ change: (inout ToolCall) -> Void) -> Bool {
@@ -97,7 +125,8 @@ enum LlmChatTurnReducer {
     // MARK: Ending a turn
 
     /// The messages a finished (or stopped) turn stores: the thinking first, if any, then the reply with its
-    /// citations and usage. A tool call still running is marked stopped so it doesn't spin forever.
+    /// citations and usage. A tool call still running (or still waiting for the user) is marked stopped so it doesn't
+    /// spin forever, as desktop's `finalizeStream` does.
     static func finalize(_ turn: LlmChatStreamingTurn, now: Date = Date()) -> [StoredMessage] {
         var messages: [StoredMessage] = []
         let createdAt = StoredMessage.isoTimestamp(now)
@@ -105,10 +134,15 @@ enum LlmChatTurnReducer {
             messages.append(StoredMessage(role: .assistant, content: .text(turn.thinking), createdAt: createdAt, type: .thinking))
         }
         let blocks = turn.blocks.map { block -> ContentBlock in
-            guard case .toolCall(var call) = block, call.result == nil else { return block }
-            call.inputStreaming = nil
-            call.result = stoppedToolResult
-            call.isError = true
+            guard case .toolCall(var call) = block else { return block }
+            if call.result == nil {
+                call.inputStreaming = nil
+                call.result = stoppedToolResult
+                call.isError = true
+                call.approval = nil
+            } else if call.approval == .pending {
+                call.approval = nil
+            }
             return .toolCall(call)
         }
         if !blocks.isEmpty {

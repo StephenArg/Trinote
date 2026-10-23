@@ -116,7 +116,7 @@ struct GeoMapDetailPanel: View {
     private var shapeHeaderIcon: some View {
         if let shape {
             NoteIconView(
-                iconClass: NoteIconClassResolver.geoDefaultIconClass(isTextNote: true) { name in
+                iconClass: NoteIconClassResolver.defaultIconClass(isTextNote: true) { name in
                     name == GeoMapShape.label ? shape.kind.rawValue + ":" : nil
                 },
                 fallbackNoteType: .text,

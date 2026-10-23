@@ -428,6 +428,36 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(try persistence.fetchRecentSearches(serverProfileId: "s2").map(\.query), ["gamma"])
     }
 
+    // MARK: - Reads through their own context
+
+    func testCachedImageDataReturnsTheStoredBytes() throws {
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01])
+        try persistence.cacheImage(entityId: "img1", entityType: "images", data: bytes, mime: "image/png", serverProfileId: "s1")
+
+        XCTAssertEqual(try persistence.cachedImageData(entityId: "img1", entityType: "images", serverProfileId: "s1"), bytes)
+        XCTAssertNil(try persistence.cachedImageData(entityId: "img1", entityType: "images", serverProfileId: "s2"))
+        XCTAssertNil(try persistence.cachedImageData(entityId: "missing", entityType: "images", serverProfileId: "s1"))
+    }
+
+    /// The whole-server reconcile saves from a context of its own; notes the main context already holds must show it.
+    func testWholeServerReconcileReachesNotesTheMainContextAlreadyHolds() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "p", title: "Parent"), serverProfileId: "s1")
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "c", title: "Child", parentNoteIds: ["p"]), serverProfileId: "s1")
+        try persistence.cacheBranch(
+            from: TestFixtures.branchResponse(branchId: "branch_p_c", noteId: "c", parentNoteId: "p"),
+            serverProfileId: "s1"
+        )
+        try persistence.commitBatch()
+        let held = try XCTUnwrap(persistence.fetchCachedNote(id: "p", serverProfileId: "s1"))
+        XCTAssertEqual(held.childNoteIds, [])
+
+        let changed = try persistence.reconcileCachedNoteBranchesMetadata(serverProfileId: "s1")
+
+        XCTAssertGreaterThan(changed, 0)
+        XCTAssertEqual(try persistence.fetchCachedNote(id: "p", serverProfileId: "s1")?.childNoteIds, ["c"])
+        XCTAssertEqual(held.childNoteIds, ["c"])
+    }
+
     // MARK: - Cleanup
 
     func testDeleteCachedNotesPurgesAuxiliaryStores() throws {
@@ -741,6 +771,20 @@ final class PersistenceTests: XCTestCase {
 
         try persistence.setCachedIconClass("bx bx-moon", noteId: "folder", serverProfileId: "server1")
         XCTAssertEqual(persistence.cachedEffectiveNoteIconClass(noteId: "folder", serverProfileId: "server1"), "bx bx-moon")
+    }
+
+    /// A clipping whose globe `#iconClass` Trilium v0.107 deleted shows its `#clipType` icon, unless it inherits one.
+    func testClippingWithoutIconClassShowsItsClipType() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "clip", parentNoteIds: ["root"]), serverProfileId: "server1")
+        try persistence.cacheAttributeBatch(
+            from: AttributeResponse(attributeId: "ct", noteId: "clip", type: "label", name: "clipType", value: "clippings", position: 10, isInheritable: false, utcDateModified: nil),
+            serverProfileId: "server1"
+        )
+        try persistence.commitBatch()
+        XCTAssertEqual(persistence.cachedEffectiveNoteIconClass(noteId: "clip", serverProfileId: "server1"), "bx bx-paperclip")
+
+        try persistence.setCachedIconClass("bx bx-star", noteId: "clip", serverProfileId: "server1")
+        XCTAssertEqual(persistence.cachedEffectiveNoteIconClass(noteId: "clip", serverProfileId: "server1"), "bx bx-star", "its own icon wins")
     }
 
     func testEachServerKeepsItsOwnRowsForTheSameIds() throws {

@@ -65,7 +65,8 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse
     /// Search note ids, then one `tree/load` for titles (no per-note `GET /api/notes`).
     func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle]
-    /// `GET /api/quick-search/:query` — per-result snippets and breadcrumbs (up to 200 results, archived notes excluded).
+    /// `GET /api/quick-search?searchString=` (Trilium 0.107+; `/api/quick-search/:query` before) — per-result snippets
+    /// and breadcrumbs (up to 200 results, archived notes excluded).
     func quickSearchResults(query: String) async throws -> [QuickSearchResult]
     /// Matching note ids only. `ancestorNoteId` limits the search to that subtree on Trilium 0.106+; older servers
     /// ignore it, so callers that need the scope intersect with the notes they hold.
@@ -87,7 +88,11 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func getInboxTarget() async throws -> InboxTargetResponse
     /// `POST /api/llm-chat/stream` (Trilium 0.105+): one assistant turn as it streams. The stream ends after `done`,
     /// or after an `error` chunk (no `done` follows one). Stop iterating to stop the generation server-side.
-    func streamLlmChat(messages: [LlmApiMessage], config: LlmChatRequestConfig) async -> AsyncThrowingStream<LlmStreamChunk, Error>
+    func streamLlmChat(streamId: String, messages: [LlmApiMessage], config: LlmChatRequestConfig) async -> AsyncThrowingStream<LlmStreamChunk, Error>
+    /// `POST /api/llm-chat/tool-approval` (Trilium 0.107+): allows or denies a tool call the turn `streamId` holds.
+    /// `allowForChat` allows the tool's other calls of the turn too. `false` when the turn had ended or the call was
+    /// already answered.
+    func answerToolApproval(streamId: String, toolCallId: String, approved: Bool, allowForChat: Bool) async throws -> Bool
     /// `POST /api/special-notes/llm-chat`: a new chat note in Trilium's hidden AI Chat History folder.
     func createLlmChat() async throws -> CreatedLlmChat
     /// `GET /api/special-notes/recent-llm-chats?limit=`: the newest chats still in that folder.
@@ -113,7 +118,8 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func cloneNote(_ noteId: String, toParentNoteId parentNoteId: String) async throws -> CloneNoteResult
     /// Resolves the branch linking `childNoteId` as a child of `parentNoteId` (from `POST /api/tree/load`).
     func branchId(fromParentNoteId parentNoteId: String, toChildNoteId childNoteId: String) async throws -> String?
-    /// `PUT /api/branches/:branchId/move-to/:parentBranchId` — moves the branch (tree placement) under the target parent’s branch.
+    /// `PUT /api/branches/move-to/:parentBranchId` with `{ branchIds }` (Trilium 0.107+; `…/:branchId/move-to/…` before) —
+    /// moves the branch (tree placement) under the target parent’s branch.
     func moveBranchToParent(branchId: String, parentBranchId: String) async throws
 
     func getAttribute(_ attributeId: String) async throws -> AttributeResponse
@@ -1421,11 +1427,7 @@ actor TriliumClient: TriliumClientProtocol {
         _ = orderBy
         _ = orderDirection
 
-        let ids: [String] = try await get(
-            "/api/search/\(Self.percentEncodePathSegment(query))",
-            csrf: false,
-            pathIsPercentEncoded: true
-        )
+        let ids = try await searchResultNoteIds(query)
 
         let max = limit ?? 50
         let slice = Array(ids.prefix(max))
@@ -1434,12 +1436,24 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     func searchNoteIds(query: String, ancestorNoteId: String?) async throws -> [String] {
-        try await get(
-            "/api/search/\(Self.percentEncodePathSegment(query))",
-            queryParams: ancestorNoteId.map { ["ancestorNoteId": $0] },
-            csrf: false,
-            pathIsPercentEncoded: true
-        )
+        try await searchResultNoteIds(query, ancestorNoteId: ancestorNoteId)
+    }
+
+    /// `GET /api/search?searchString=` (Trilium 0.107+) or `GET /api/search/:searchString` (older): the matching note ids.
+    private func searchResultNoteIds(_ query: String, ancestorNoteId: String? = nil) async throws -> [String] {
+        try await withChangedRoute(.search) { usesV0107Form in
+            var params = ancestorNoteId.map { ["ancestorNoteId": $0] } ?? [:]
+            if usesV0107Form {
+                params["searchString"] = query
+                return try await get("/api/search", queryParams: params, csrf: false)
+            }
+            return try await get(
+                "/api/search/\(Self.percentEncodePathSegment(query))",
+                queryParams: params.isEmpty ? nil : params,
+                csrf: false,
+                pathIsPercentEncoded: true
+            )
+        }
     }
 
     func lintSearchQuery(_ query: String) async throws -> String? {
@@ -1451,20 +1465,21 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     func quickSearchResults(query: String) async throws -> [QuickSearchResult] {
-        let response: QuickSearchResponse = try await get(
-            "/api/quick-search/\(Self.percentEncodePathSegment(query))",
-            csrf: false,
-            pathIsPercentEncoded: true
-        )
+        let response: QuickSearchResponse = try await withChangedRoute(.search) { usesV0107Form in
+            if usesV0107Form {
+                return try await get("/api/quick-search", queryParams: ["searchString": query], csrf: false)
+            }
+            return try await get(
+                "/api/quick-search/\(Self.percentEncodePathSegment(query))",
+                csrf: false,
+                pathIsPercentEncoded: true
+            )
+        }
         return response.searchResults ?? []
     }
 
     func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle] {
-        let ids: [String] = try await get(
-            "/api/search/\(Self.percentEncodePathSegment(query))",
-            csrf: false,
-            pathIsPercentEncoded: true
-        )
+        let ids = try await searchResultNoteIds(query)
         let slice = Array(ids.prefix(max(0, limit)))
         guard !slice.isEmpty else { return [] }
         let tree = try await batchTreeLoad(noteIds: slice)
@@ -1665,15 +1680,33 @@ actor TriliumClient: TriliumClientProtocol {
     }
 
     func moveBranchToParent(branchId: String, parentBranchId: String) async throws {
-        let request = try buildRequest(
-            path: "/api/branches/\(branchId)/move-to/\(parentBranchId)",
-            method: "PUT",
-            queryParams: nil,
-            csrf: true,
-            jsonBody: false
-        )
-        let (data, response) = try await session.data(for: request)
-        try validateResponse(response, data: data)
+        let data: Data = try await withChangedRoute(.branchMove) { usesV0107Form in
+            var request: URLRequest
+            if usesV0107Form {
+                // Trilium 0.107+ moves a list of branches in one transaction.
+                struct Body: Encodable { let branchIds: [String] }
+                request = try buildRequest(
+                    path: "/api/branches/move-to/\(parentBranchId)",
+                    method: "PUT",
+                    queryParams: nil,
+                    csrf: true,
+                    jsonBody: true
+                )
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = try encoder.encode(Body(branchIds: [branchId]))
+            } else {
+                request = try buildRequest(
+                    path: "/api/branches/\(branchId)/move-to/\(parentBranchId)",
+                    method: "PUT",
+                    queryParams: nil,
+                    csrf: true,
+                    jsonBody: false
+                )
+            }
+            let (data, response) = try await session.data(for: request)
+            try validateResponse(response, data: data)
+            return data
+        }
         // Trilium returns HTTP 200 with `{ success: false, message }` when validation fails (e.g. cycle, duplicate placement).
         struct BranchMoveBody: Decodable {
             let success: Bool?
@@ -2091,7 +2124,7 @@ actor TriliumClient: TriliumClientProtocol {
     /// How long one assistant turn may take in all; an agent turn with tools can run for minutes.
     private static let llmStreamTotalTimeout: TimeInterval = 3600
 
-    func streamLlmChat(messages: [LlmApiMessage], config: LlmChatRequestConfig) async -> AsyncThrowingStream<LlmStreamChunk, Error> {
+    func streamLlmChat(streamId: String, messages: [LlmApiMessage], config: LlmChatRequestConfig) async -> AsyncThrowingStream<LlmStreamChunk, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { [weak self] in
                 guard let self else {
@@ -2099,7 +2132,7 @@ actor TriliumClient: TriliumClientProtocol {
                     return
                 }
                 do {
-                    try await self.runLlmChatStream(messages: messages, config: config, continuation: continuation)
+                    try await self.runLlmChatStream(streamId: streamId, messages: messages, config: config, continuation: continuation)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: APIError.from(error))
@@ -2110,7 +2143,21 @@ actor TriliumClient: TriliumClientProtocol {
         }
     }
 
+    func answerToolApproval(streamId: String, toolCallId: String, approved: Bool, allowForChat: Bool) async throws -> Bool {
+        struct Body: Encodable {
+            let streamId: String
+            let toolCallId: String
+            let approved: Bool
+            let scope: String?
+        }
+        struct Answered: Decodable { let answered: Bool? }
+        let body = Body(streamId: streamId, toolCallId: toolCallId, approved: approved, scope: approved && allowForChat ? "chat" : nil)
+        let response: Answered = try await postJSON("/api/llm-chat/tool-approval", body: body, csrf: true)
+        return response.answered ?? false
+    }
+
     private func runLlmChatStream(
+        streamId: String,
         messages: [LlmApiMessage],
         config: LlmChatRequestConfig,
         continuation: AsyncThrowingStream<LlmStreamChunk, Error>.Continuation
@@ -2118,7 +2165,7 @@ actor TriliumClient: TriliumClientProtocol {
         var request = try buildRequest(path: "/api/llm-chat/stream", method: "POST", queryParams: nil, csrf: true, jsonBody: true)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.httpBody = try encoder.encode(LlmChatStreamRequest(messages: messages, config: config))
+        request.httpBody = try encoder.encode(LlmChatStreamRequest(streamId: streamId, messages: messages, config: config))
         request.timeoutInterval = Self.llmStreamIdleTimeout
         let (bytes, response) = try await streamingSession.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
@@ -2195,8 +2242,40 @@ actor TriliumClient: TriliumClientProtocol {
     private var streamingSessionStorage: URLSession?
 
     deinit {
+        // A URLSession keeps itself and its delegate alive until it is invalidated.
+        session.finishTasksAndInvalidate()
         longRunningSessionStorage?.finishTasksAndInvalidate()
         streamingSessionStorage?.finishTasksAndInvalidate()
+    }
+
+    // MARK: - Routes Trilium v0.107 replaced
+
+    /// Routes Trilium v0.107 replaced with a new form; the old form answers 404 there, the new one 404 before.
+    enum ChangedRoute: Hashable, Sendable {
+        /// `GET /api/search?searchString=` and `GET /api/quick-search?searchString=` (before: `…/:searchString`).
+        case search
+        /// `PUT /api/branches/move-to/:parentBranchId` with `{ branchIds }` (before: `…/:branchId/move-to/:parentBranchId`).
+        case branchMove
+    }
+
+    /// The form a 404 showed this server answers, per route, where it differs from what the server's version says
+    /// (a build of Trilium's main branch, or a server upgraded while the app ran).
+    private var learnedV0107RouteForms: [ChangedRoute: Bool] = [:]
+
+    /// Runs `request` in the form this server should answer (`true`: v0.107's). After a 404 it runs once more in the
+    /// other form, which this client then keeps using.
+    private func withChangedRoute<T>(
+        _ route: ChangedRoute,
+        _ request: (_ usesV0107Form: Bool) async throws -> T
+    ) async throws -> T {
+        let preferred = learnedV0107RouteForms[route] ?? TriliumServerCompatibility.usesV0107Routes(lastFetchedAppInfo)
+        do {
+            return try await request(preferred)
+        } catch APIError.notFound {
+            let result = try await request(!preferred)
+            learnedV0107RouteForms[route] = !preferred
+            return result
+        }
     }
 
     // MARK: - Request helpers
@@ -2334,6 +2413,16 @@ actor TriliumClient: TriliumClientProtocol {
         request.setValue(parts.joined(separator: "; "), forHTTPHeaderField: "Cookie")
     }
 
+    /// What `encodeURIComponent` leaves unencoded: ASCII letters, digits and `-_.!~*'()`.
+    private static let queryComponentAllowed = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()"
+    )
+
+    /// Encodes a query parameter's name or value as `encodeURIComponent` does.
+    static func percentEncodeQueryComponent(_ component: String) -> String {
+        component.addingPercentEncoding(withAllowedCharacters: queryComponentAllowed) ?? ""
+    }
+
     /// Encodes one path segment, `/` included, so a value such as a search query stays a single segment.
     static func percentEncodePathSegment(_ segment: String) -> String {
         var allowed = CharacterSet.urlPathAllowed
@@ -2361,7 +2450,12 @@ actor TriliumClient: TriliumClientProtocol {
             components.path = fullPath
         }
         if let queryParams, !queryParams.isEmpty {
-            components.queryItems = queryParams.map { URLQueryItem(name: $0.key, value: $0.value) }
+            // Encoded as `encodeURIComponent` encodes them: `URLQueryItem` leaves `+` as it is, which Express reads as
+            // a space (a search for "C++" would reach Trilium as "C  ").
+            components.percentEncodedQuery = queryParams
+                .sorted { $0.key < $1.key }
+                .map { "\(percentEncodeQueryComponent($0.key))=\(percentEncodeQueryComponent($0.value))" }
+                .joined(separator: "&")
         }
         guard let url = components.url else { throw APIError.invalidURL }
         return url
@@ -2488,6 +2582,7 @@ actor TriliumClient: TriliumClientProtocol {
         )
         response.hasShareAncestor = index.hasAncestor(TriliumSharing.shareRootNoteId, of: noteId)
         response.isInLlmChatFolder = index.hasAncestor(TriliumAIChat.historyRootNoteId, of: noteId)
+        response.isContentWritable = index.isContentWritable(noteId)
         return response
     }
 }
@@ -2499,6 +2594,7 @@ private struct TreeLoadIndex {
     private var branchesByParentId: [String: [TreeLoadBranchRow]] = [:]
     private var attributesByNoteId: [String: [TreeLoadAttributeRow]] = [:]
     private var deletedNoteIds = Set<String>()
+    private var readOnlyNoteIds = Set<String>()
 
     init(_ tree: TreeLoadResponse) {
         for branch in tree.branches {
@@ -2511,6 +2607,14 @@ private struct TreeLoadIndex {
         for note in tree.notes where note.isDeleted == true {
             deletedNoteIds.insert(note.noteId)
         }
+        for note in tree.notes where note.isContentWritable == false {
+            readOnlyNoteIds.insert(note.noteId)
+        }
+    }
+
+    /// Whether the server saves `noteId`: Trilium 0.107+ marks its read-only notes (the help pages) in `tree/load`.
+    func isContentWritable(_ noteId: String) -> Bool {
+        !readOnlyNoteIds.contains(noteId)
     }
 
     /// Parents by branch id, as `reconcileCachedNoteBranchesMetadata` orders them.

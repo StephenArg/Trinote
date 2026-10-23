@@ -24,6 +24,9 @@ final class AppState {
     }
     var isLoading = true
     var connectionError: String?
+    /// Titles of notes whose offline changes the server refused for good (Trilium 0.107+ keeps its help pages
+    /// read-only); those changes left the upload queue. Shown once, then cleared.
+    var refusedChangesNoteTitles: [String] = []
     var lastRefreshed: Date?
     /// Cached from the latest successful `restoreSession()` (`/api/app-info`). Used for server capability gates (e.g. spreadsheet note type).
     private(set) var serverAppInfo: AppInfoResponse?
@@ -848,11 +851,24 @@ final class AppState {
                 Log.sync.info("Flushed offline note patch for note \(row.noteId)")
             } catch {
                 let apiErr = APIError.from(error)
+                let rowNoteId = row.noteId
                 if case .notFound = apiErr {
-                    try? persistence.deletePendingNotePatch(noteId: row.noteId, serverProfileId: profileId)
+                    try? persistence.deletePendingNotePatch(noteId: rowNoteId, serverProfileId: profileId)
                     didAny = true
+                } else if case .serverError(400, _) = apiErr,
+                          let fresh = try? await client.getNote(rowNoteId), fresh.isContentWritable == false {
+                    // A note the server keeps read-only: the change can never go through, and retrying it would hold
+                    // up every row after it.
+                    try? persistence.deletePendingNotePatch(noteId: rowNoteId, serverProfileId: profileId)
+                    if let cached = try? persistence.fetchCachedNote(id: rowNoteId, serverProfileId: profileId) {
+                        cached.title = fresh.title
+                        cached.mime = fresh.mime
+                    }
+                    refusedChangesNoteTitles.append(fresh.title)
+                    didAny = true
+                    Log.sync.warning("Dropped pending note patch for \(rowNoteId): the server keeps the note read-only")
                 } else {
-                    Log.sync.warning("Pending note patch failed for \(row.noteId): \(error)")
+                    Log.sync.warning("Pending note patch failed for \(rowNoteId): \(error)")
                     break
                 }
             }
@@ -1005,6 +1021,25 @@ final class AppState {
                 } catch {
                     if case .notFound = APIError.from(error) { noteMissingOnServer = true }
                     fresh = nil
+                }
+                if let fresh, fresh.isContentWritable == false {
+                    // A note the server keeps read-only (Trilium 0.107+'s help pages): the body would be refused, and
+                    // retrying it would hold up every row after it. Drop it and put the server's copy back.
+                    try? persistence.deletePendingNoteBodyUpload(noteId: rowNoteId, serverProfileId: profileId)
+                    if let serverBody = try? await client.getNoteContent(rowNoteId) {
+                        let parentNoteIds = (try? persistence.fetchCachedNote(id: rowNoteId, serverProfileId: profileId))?.parentNoteIds ?? []
+                        try? persistence.cacheNoteContentIfAllowed(
+                            rowNoteId,
+                            content: serverBody,
+                            parentNoteIds: parentNoteIds,
+                            serverProfileId: profileId,
+                            utcDateModified: fresh.utcDateModified,
+                            policy: cacheExclusion
+                        )
+                    }
+                    refusedChangesNoteTitles.append(fresh.title)
+                    Log.sync.warning("Dropped pending body upload for \(rowNoteId): the server keeps the note read-only")
+                    continue
                 }
                 let base = row.baseUtcDateModified.trimmingCharacters(in: .whitespacesAndNewlines)
                 var isRealConflict = false
@@ -1284,7 +1319,10 @@ final class AppState {
     }
 
     private func startRealtimeIfPossible() {
-        realtime?.stop()
+        // Invalidated, not just stopped: a stopped connection stays in memory (its URLSession keeps it) and a late
+        // close from the server could start it again beside the new one.
+        realtime?.invalidate()
+        realtime = nil
         guard let client = client as? TriliumClient,
               activeProfile?.id != nil else { return }
 
@@ -1505,7 +1543,10 @@ final class AppState {
         }
 
         syncManager.cancel()
-        realtime?.stop()
+        // Invalidated, not stopped: a reconnect it had scheduled would otherwise reopen it to the old server. Every way
+        // out of here starts a new one (`startRealtimeIfPossible`).
+        realtime?.invalidate()
+        realtime = nil
 
         let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: cookieData)
 
@@ -1747,7 +1788,7 @@ final class AppState {
     private func clearLocalSessionState(notifyServer: Bool) async {
         SessionCookieTrace.log("clear local session state (notifyServer: \(notifyServer))")
         syncManager.cancel()
-        realtime?.stop()
+        realtime?.invalidate()
         realtime = nil
         protectedSessionActive = false
 
@@ -1766,6 +1807,10 @@ final class AppState {
         }
 
         client = nil
+        // A sync awaited elsewhere can finish during the awaits above and start a connection; without a client, none
+        // can start after this one goes.
+        realtime?.invalidate()
+        realtime = nil
         isAuthenticated = false
         connectionError = nil
         lastRefreshed = nil

@@ -25,8 +25,13 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     /// Whether the note sits under Trilium's hidden AI Chat History folder (`_llmChat`): a chat kept nowhere yet,
     /// which "Keep Chat" moves into the notes. Known for the note on screen only; never cached.
     var isInLlmChatFolder: Bool = false
+    /// `false` when the server won't save changes to the note (Trilium 0.107+ keeps its help pages read-only). Known
+    /// for the note on screen only; never cached.
+    var isContentWritable: Bool = true
 
     var id: String { noteId }
+    /// Whether the editor can open the note: a type it edits, on a note the server saves.
+    var isContentEditable: Bool { type.isEditable && isContentWritable }
     /// Branch placements are canonical; `childNoteIds` alone can be stale after a server delete until reconcile runs.
     var hasChildren: Bool { !childBranchIds.isEmpty }
     var isRoot: Bool { noteId == "root" }
@@ -239,6 +244,7 @@ extension NoteItem {
         self.inheritedAttributes = response.inheritedAttributes.map(AttributeItem.init)
         self.serverTypeName = response.type
         self.isInLlmChatFolder = response.isInLlmChatFolder ?? false
+        self.isContentWritable = response.isContentWritable ?? true
     }
 
     /// A copy with these own attributes and everything else (inherited attributes included) unchanged.
@@ -258,7 +264,8 @@ extension NoteItem {
             attributes: attributes,
             inheritedAttributes: inheritedAttributes,
             serverTypeName: serverTypeName,
-            isInLlmChatFolder: isInLlmChatFolder
+            isInLlmChatFolder: isInLlmChatFolder,
+            isContentWritable: isContentWritable
         )
     }
 
@@ -302,7 +309,8 @@ extension NoteItem {
             attributes: nextAttributes,
             inheritedAttributes: inheritedAttributes,
             serverTypeName: serverTypeName,
-            isInLlmChatFolder: isInLlmChatFolder
+            isInLlmChatFolder: isInLlmChatFolder,
+            isContentWritable: isContentWritable
         )
     }
 
@@ -345,7 +353,8 @@ extension NoteItem {
             attributes: nextAttributes,
             inheritedAttributes: inheritedAttributes,
             serverTypeName: serverTypeName,
-            isInLlmChatFolder: isInLlmChatFolder
+            isInLlmChatFolder: isInLlmChatFolder,
+            isContentWritable: isContentWritable
         )
     }
 

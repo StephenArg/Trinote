@@ -25,7 +25,13 @@ final class LlmChatSession {
     private(set) var uploadingAttachmentCount = 0
     /// Why the last attachment couldn't be added; cleared when shown.
     var attachmentError: String?
+    /// Waiting tool calls whose answer is on its way to the server.
+    private(set) var answeringToolCallIds: Set<String> = []
+    /// Why the last answer to a waiting tool call didn't reach the server; the call keeps waiting.
+    var toolApprovalError: String?
 
+    /// The running turn's `streamId`, which answers to its tool calls name.
+    @ObservationIgnored private var currentStreamId: String?
     @ObservationIgnored private var pendingTurn: LlmChatStreamingTurn?
     @ObservationIgnored private var publishTask: Task<Void, Never>?
     @ObservationIgnored private var streamTask: Task<Void, Never>?
@@ -111,6 +117,12 @@ final class LlmChatSession {
 
     /// Desktop: on a Google model, web search can't be combined with the note tools.
     var webSearchUnavailable: Bool { selectedModel?.provider == "google" && enableNoteTools }
+
+    /// Which tool calls wait for the user (Trilium 0.107+): the chat's own choice (desktop can make one), else the
+    /// server's `llmPermissionMode` option, else that option's default.
+    var permissionMode: LlmPermissionMode {
+        content.permissionMode ?? aiConfig()?.permissionMode ?? .askBeforeChanges
+    }
 
     // MARK: Turns
 
@@ -240,6 +252,51 @@ final class LlmChatSession {
         await streamTask?.value
     }
 
+    // MARK: Tool approvals
+
+    /// Calls of the running turn that wait for the user to allow or deny them (Trilium 0.107+), in the order they came.
+    var waitingToolCalls: [ToolCall] {
+        streamingTurn.map(LlmChatTurnReducer.waitingToolCalls(in:)) ?? []
+    }
+
+    /// Allows or denies a waiting call, as desktop's `answerToolCall` does. Allowed for the chat, the tool runs without
+    /// asking from then on: its other waiting calls in this turn, and its calls in later turns (`allowedTools`, saved
+    /// with the chat). A call whose answer didn't reach the server keeps waiting, to be answered again.
+    func answerToolCall(_ toolCallId: String, approved: Bool, forChat: Bool = false) {
+        guard let streamId = currentStreamId, let client = client(), !answeringToolCallIds.contains(toolCallId),
+              let turn = pendingTurn,
+              let call = LlmChatTurnReducer.waitingToolCalls(in: turn).first(where: { $0.id == toolCallId }) else { return }
+        answeringToolCallIds.insert(toolCallId)
+        Task {
+            defer { answeringToolCallIds.remove(toolCallId) }
+            do {
+                _ = try await client.answerToolApproval(
+                    streamId: streamId, toolCallId: toolCallId, approved: approved, allowForChat: forChat
+                )
+            } catch {
+                toolApprovalError = APIError.from(error).localizedDescription
+                return
+            }
+            toolApprovalError = nil
+            let allowsTool = approved && forChat
+            if allowsTool, !(content.allowedTools ?? []).contains(call.toolName) {
+                content.allowedTools = (content.allowedTools ?? []) + [call.toolName]
+                // A turn still running saves it when it ends.
+                if !isStreaming { saveSettings() }
+            }
+            guard currentStreamId == streamId, var turn = pendingTurn else { return }
+            LlmChatTurnReducer.settleApproval(toolCallId: toolCallId, approved: approved, in: &turn)
+            if allowsTool {
+                // The server lets the tool's other waiting calls run now.
+                for other in LlmChatTurnReducer.waitingToolCalls(in: turn) where other.toolName == call.toolName {
+                    LlmChatTurnReducer.settleApproval(toolCallId: other.id, approved: true, in: &turn)
+                }
+            }
+            pendingTurn = turn
+            streamingTurn = turn
+        }
+    }
+
     private func run(conversation: [StoredMessage]) {
         guard let model = selectedModel, let client = client() else { return }
         streamTask?.cancel()
@@ -262,7 +319,9 @@ final class LlmChatSession {
             model: model.id,
             enableWebSearch: enableWebSearch && !webSearchUnavailable,
             enableNoteTools: enableNoteTools,
-            contextNoteId: contextNoteId
+            contextNoteId: contextNoteId,
+            allowedTools: content.allowedTools?.isEmpty == false ? content.allowedTools : nil,
+            permissionMode: permissionMode
         )
         if model.hasReasoningLevels {
             baseConfig.reasoningEffort = reasoningEffort
@@ -270,6 +329,8 @@ final class LlmChatSession {
             baseConfig.enableExtendedThinking = enableExtendedThinking
         }
         let isFirstTurn = conversation.filter { $0.role == .user }.count == 1
+        let streamId = TriliumEntityId.random()
+        currentStreamId = streamId
 
         streamTask = Task { [weak self] in
             if let failure = await self?.ensureChatNote() {
@@ -278,7 +339,7 @@ final class LlmChatSession {
             }
             var config = baseConfig
             config.chatNoteId = self?.noteId
-            let stream = await client.streamLlmChat(messages: request, config: config)
+            let stream = await client.streamLlmChat(streamId: streamId, messages: request, config: config)
             var stopped = false
             var transportFailure: LlmChatStreamFailure?
             do {
@@ -348,6 +409,8 @@ final class LlmChatSession {
         publishTask?.cancel()
         publishTask = nil
         streamTask = nil
+        currentStreamId = nil
+        toolApprovalError = nil
         guard let turn = pendingTurn else { return }
         pendingTurn = nil
         var messages = content.messages

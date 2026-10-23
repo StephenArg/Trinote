@@ -66,9 +66,8 @@ final class ImageCachePrefetcher {
         do {
             let bodies = try persistence.cachedNoteBodies(serverProfileId: profileId)
             var refs: [(TriliumInlineImageCaching.Reference, String, [String])] = []
-            for (noteId, content) in bodies {
+            for (noteId, content, parentNoteIds) in bodies {
                 if Task.isCancelled { return }
-                let parentNoteIds = (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
                 if cacheExclusion.isNoteExcludedFromCache(
                     noteId: noteId,
                     parentNoteIds: parentNoteIds,

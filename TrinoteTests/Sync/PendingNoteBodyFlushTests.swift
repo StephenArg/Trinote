@@ -2,7 +2,8 @@ import XCTest
 @testable import Trinote
 
 /// Uploading queued note bodies (`AppState.flushPendingNoteBodyUploadsIfPossible`): an upload cut off before its reply,
-/// a real conflict, a note deleted on the server, a note made offline, and a failed upload (issue #26).
+/// a real conflict, a note deleted on the server, a note made offline, and a failed upload (issue #26); and queued
+/// bodies and renames for a note the server keeps read-only.
 /// Uses the app's shared store under a server id of its own, cleared after each test.
 @MainActor
 final class PendingNoteBodyFlushTests: XCTestCase {
@@ -131,5 +132,52 @@ final class PendingNoteBodyFlushTests: XCTestCase {
         let uploaded = await uploadedNoteIds()
         XCTAssertEqual(uploaded, ["slow"])
         XCTAssertEqual(Set(queuedNoteIds()), ["slow", "next"])
+    }
+
+    // MARK: Notes the server keeps read-only (Trilium 0.107+)
+
+    private func readOnlyHelpNote() -> NoteResponse {
+        var help = TestFixtures.noteResponse(id: "_help_x", title: "Feature Highlights", parentNoteIds: ["_help"])
+        help.isContentWritable = false
+        return help
+    }
+
+    func testBodyForANoteTheServerKeepsReadOnlyIsDroppedAndReported() async throws {
+        try queue("_help_x", "<p>my edit</p>")
+        try queue("kept", "<p>b</p>")
+        await client.setNoteResult("_help_x", .success(readOnlyHelpNote()))
+        await client.setNoteContentResult("_help_x", .success(Data("<p>the guide</p>".utf8)))
+
+        await appState.flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
+
+        let uploaded = await uploadedNoteIds()
+        XCTAssertEqual(uploaded, ["kept"], "never sent, and the rows after it still go")
+        XCTAssertEqual(queuedNoteIds(), [])
+        XCTAssertEqual(appState.refusedChangesNoteTitles, ["Feature Highlights"])
+    }
+
+    func testRenameTheServerRefusesForAReadOnlyNoteIsDroppedAndReported() async throws {
+        try PersistenceManager.shared.upsertPendingNotePatch(noteId: "_help_x", title: "My title", serverProfileId: profileId)
+        await client.setNoteResult("_help_x", .success(readOnlyHelpNote()))
+        await client.setUpdateNoteResult(.failure(APIError.serverError(
+            statusCode: 400, message: "Cannot save note '_help_x': it is a virtual entity (provided by a virtual note provider) and is read-only."
+        )))
+
+        await appState.flushPendingNotePatchesIfPossible(assumeSessionIsReady: true)
+
+        let patches = (try? PersistenceManager.shared.fetchPendingNotePatches(serverProfileId: profileId)) ?? []
+        XCTAssertTrue(patches.isEmpty)
+        XCTAssertEqual(appState.refusedChangesNoteTitles, ["Feature Highlights"])
+    }
+
+    func testOtherRefusedRenamesStayQueued() async throws {
+        try PersistenceManager.shared.upsertPendingNotePatch(noteId: "n1", title: "My title", serverProfileId: profileId)
+        await client.setUpdateNoteResult(.failure(APIError.serverError(statusCode: 400, message: "Something else")))
+
+        await appState.flushPendingNotePatchesIfPossible(assumeSessionIsReady: true)
+
+        let patches = (try? PersistenceManager.shared.fetchPendingNotePatches(serverProfileId: profileId)) ?? []
+        XCTAssertEqual(patches.map(\.noteId), ["n1"])
+        XCTAssertTrue(appState.refusedChangesNoteTitles.isEmpty)
     }
 }

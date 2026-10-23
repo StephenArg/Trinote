@@ -154,6 +154,22 @@ final class FullSyncTests: XCTestCase {
         XCTAssertFalse(onMain)
     }
 
+    /// A context keeps every model it reads until it saves, so none may outlive a call (a kept one held a whole
+    /// no-change full sync's notes at once).
+    func testNoContextOutlivesASyncAndTheNextSyncStillWrites() async throws {
+        try await runFullSync()
+        let store = await sync.store
+        var contextLeft = await store.hasLiveContext
+        XCTAssertFalse(contextLeft)
+
+        await serveTree(bTitle: "B renamed")
+        try await runFullSync()
+
+        contextLeft = await store.hasLiveContext
+        XCTAssertFalse(contextLeft)
+        XCTAssertEqual(try persistence.fetchCachedNote(id: "b", serverProfileId: profileId)?.title, "B renamed")
+    }
+
     func testUIWritesDuringAFullSyncSaveWithoutErrors() async throws {
         try await runFullSync()
         await serveTree(bTitle: "B renamed")

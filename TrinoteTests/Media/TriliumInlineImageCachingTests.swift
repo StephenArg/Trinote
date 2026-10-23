@@ -143,6 +143,27 @@ final class TriliumInlineImageCachingTests: XCTestCase {
         let bodies = try persistence.cachedNoteBodies(serverProfileId: "s1")
         XCTAssertEqual(bodies.count, 1)
         XCTAssertEqual(bodies[0].noteId, "filled")
+        XCTAssertEqual(bodies[0].parentNoteIds, ["root"])
+    }
+
+    /// Image and file bodies are pictures and attachments, not pages with pictures, and can be huge.
+    func testCachedNoteBodiesLeavesOutImageAndFileNotes() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "page", title: "Page"), serverProfileId: "s1")
+        try persistence.cacheNote(
+            from: TestFixtures.noteResponse(id: "photo", title: "Photo", type: "image", mime: "image/png"),
+            serverProfileId: "s1"
+        )
+        try persistence.cacheNote(
+            from: TestFixtures.noteResponse(id: "pdf", title: "PDF", type: "file", mime: "application/pdf"),
+            serverProfileId: "s1"
+        )
+        try persistence.cacheNoteContent("page", content: Data(#"<p><img src="api/images/photo/x.png"></p>"#.utf8), serverProfileId: "s1")
+        try persistence.cacheNoteContent("photo", content: Data([0x89, 0x50, 0x4E, 0x47]), serverProfileId: "s1")
+        try persistence.cacheNoteContent("pdf", content: Data("%PDF-1.7".utf8), serverProfileId: "s1")
+
+        let bodies = try persistence.cachedNoteBodies(serverProfileId: "s1")
+
+        XCTAssertEqual(bodies.map(\.noteId), ["page"])
     }
 
     // MARK: - Link previews (issue #35)

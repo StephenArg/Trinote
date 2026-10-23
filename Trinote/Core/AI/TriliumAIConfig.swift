@@ -45,20 +45,28 @@ struct TriliumAIConfig: Equatable, Sendable {
     let assistantModel: AIAssistantModel?
     /// Whether the server publishes its tools over MCP (per server, not synced).
     let mcpEnabled: Bool
+    /// Which tool calls wait for the user in a chat that didn't choose (`llmPermissionMode`, Trilium 0.107+).
+    let permissionMode: LlmPermissionMode?
 
-    init(aiEnabled: Bool, providers: [LlmProviderSummary], assistantModel: AIAssistantModel? = nil, mcpEnabled: Bool = false) {
+    init(
+        aiEnabled: Bool, providers: [LlmProviderSummary], assistantModel: AIAssistantModel? = nil, mcpEnabled: Bool = false,
+        permissionMode: LlmPermissionMode? = nil
+    ) {
         self.aiEnabled = aiEnabled
         self.providers = providers
         self.assistantModel = assistantModel
         self.mcpEnabled = mcpEnabled
+        self.permissionMode = permissionMode
     }
 
     init(options: TriliumOptionsResponse) {
+        let permissionMode = options["llmPermissionMode"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.init(
             aiEnabled: options["aiEnabled"] == "true",
             providers: Self.providers(fromOption: options["llmProviders"]),
             assistantModel: Self.assistantModel(fromOption: options["aiAssistantModel"]),
-            mcpEnabled: options["mcpEnabled"] == "true"
+            mcpEnabled: options["mcpEnabled"] == "true",
+            permissionMode: permissionMode.isEmpty ? nil : LlmPermissionMode(rawValue: permissionMode)
         )
     }
 
@@ -73,17 +81,20 @@ struct TriliumAIConfig: Equatable, Sendable {
         let apiKey: String?
         let baseURL: String?
         let selectedModels: [LlmModelInfo]?
+        /// `llm` (chat models; also when absent) or `search` (a web search provider, Trilium 0.107+).
+        let kind: String?
     }
 
-    /// The providers in the `llmProviders` option. A row that doesn't parse is skipped; a value that isn't a JSON
-    /// array (or is missing) gives none, as desktop's `getConfiguredProviders` does.
+    /// The chat providers in the `llmProviders` option. A row that doesn't parse is skipped, as are web search
+    /// providers; a value that isn't a JSON array (or is missing) gives none, as desktop's `getConfiguredProviders` does.
     static func providers(fromOption json: String?) -> [LlmProviderSummary] {
         guard let json, let data = json.data(using: .utf8),
               let rows = try? JSONDecoder().decode([JSONValue].self, from: data) else { return [] }
         let decoder = JSONDecoder()
         let encoder = JSONEncoder()
         return rows.compactMap { row -> LlmProviderSummary? in
-            guard let rowData = try? encoder.encode(row), let setup = try? decoder.decode(ProviderSetup.self, from: rowData) else {
+            guard let rowData = try? encoder.encode(row), let setup = try? decoder.decode(ProviderSetup.self, from: rowData),
+                  (setup.kind ?? "llm") == "llm" else {
                 return nil
             }
             let baseURL = (setup.baseURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1892,6 +1892,8 @@ final class NoteDetailViewModel {
     }
 
     func startEditing() {
+        // The server refuses changes to a note it keeps read-only; every way into the editor ends here.
+        guard note?.isContentWritable != false else { return }
         _pendingEditorHTML = nil
         if !hasDraft {
             editableContent = richTextEditorSeedHTML

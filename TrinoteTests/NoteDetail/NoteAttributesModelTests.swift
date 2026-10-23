@@ -90,6 +90,21 @@ final class NoteAttributesModelTests: XCTestCase {
         XCTAssertNotNil(model.errorMessage)
     }
 
+    /// Trilium 0.107+ keeps its help pages read-only (`tree/load` marks them `isContentWritable: false`).
+    func testANoteTheServerKeepsReadOnlyCantBeChanged() async throws {
+        let model = try await makeModel(client: MockTriliumClient(), attributes: [label("a1", "archived")])
+        try XCTSkipUnless(appState.isOnline, "attribute changes need a connection")
+        XCTAssertTrue(model.canEdit)
+
+        var response = note([label("a1", "archived")])
+        response.isContentWritable = false
+        let vm = NoteDetailViewModel(noteId: noteId, appState: appState)
+        vm.note = NoteItem(from: response)
+        XCTAssertFalse(NoteAttributesModel(viewModel: vm, appState: appState).canEdit)
+        vm.startEditing()
+        XCTAssertFalse(vm.isEditing, "the editor doesn't open either")
+    }
+
     func testListsOwnAttributesWithoutAutoLinksAndInheritedOnesByOwner() async throws {
         let model = try await makeModel(client: nil, attributes: [
             label("a1", "archived"),

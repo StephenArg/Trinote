@@ -317,9 +317,17 @@ final class PersistenceManager {
         try cache.reconcileCachedNoteBranchesMetadata(forNoteId: noteId, serverProfileId: serverProfileId)
     }
 
+    /// Reads every note and branch of the server, so it runs in a context of its own that frees them when it's done:
+    /// the main context would keep them until it next saves, and this often has nothing to save.
     @discardableResult
     func reconcileCachedNoteBranchesMetadata(serverProfileId: String) throws -> Int {
-        try cache.reconcileCachedNoteBranchesMetadata(serverProfileId: serverProfileId)
+        let context = ModelContext(container)
+        let changed = try withExtendedLifetime(context) {
+            try CacheStore(context: context).reconcileCachedNoteBranchesMetadata(serverProfileId: serverProfileId)
+        }
+        // Saved by another context: answers derived from the main one may be stale.
+        if changed > 0 { invalidateDerivedCaches() }
+        return changed
     }
 
     func fetchNotesNeedingContent(serverProfileId: String, serverModifiedAfter: [String: String]) throws -> [String] {
@@ -1031,7 +1039,7 @@ final class PersistenceManager {
         )
         if let resolved { return resolved }
         let isTextNote = (try? fetchCachedNote(id: noteId, serverProfileId: serverProfileId))?.noteType == NoteType.text.rawValue
-        return NoteIconClassResolver.geoDefaultIconClass(isTextNote: isTextNote) { name in
+        return NoteIconClassResolver.defaultIconClass(isTextNote: isTextNote) { name in
             attrs.first { $0.type == "label" && $0.name == name }?.value
         }
     }
@@ -2429,21 +2437,43 @@ final class PersistenceManager {
 
     // MARK: - Image Cache
 
-    /// Note bodies already stored locally (non-empty), for bulk image prefetch.
-    func cachedNoteBodies(serverProfileId: String) throws -> [(noteId: String, content: Data)] {
+    /// Note bodies already stored locally (non-empty) and their parents, for bulk image prefetch. Read through a
+    /// context of its own, which frees the notes when done; the main context would keep them all until it next saves.
+    /// Image and file notes are left out: they are pictures and attachments, not pages that show pictures, and their
+    /// bodies (videos, PDFs) could exhaust memory read all at once.
+    func cachedNoteBodies(serverProfileId: String) throws -> [(noteId: String, content: Data, parentNoteIds: [String])] {
         let profileId = serverProfileId
-        let notes = try context.fetch(
-            FetchDescriptor<CachedNote>(
-                predicate: #Predicate { $0.serverProfileId == profileId }
+        let imageType = NoteType.image.rawValue
+        let fileType = NoteType.file.rawValue
+        let context = ModelContext(container)
+        return try withExtendedLifetime(context) {
+            let notes = try context.fetch(
+                FetchDescriptor<CachedNote>(
+                    predicate: #Predicate {
+                        $0.serverProfileId == profileId && $0.noteType != imageType && $0.noteType != fileType
+                    }
+                )
             )
-        )
-        var result: [(noteId: String, content: Data)] = []
-        result.reserveCapacity(notes.count)
-        for note in notes {
-            guard let content = note.content, !content.isEmpty else { continue }
-            result.append((note.noteId, content))
+            var result: [(noteId: String, content: Data, parentNoteIds: [String])] = []
+            result.reserveCapacity(notes.count)
+            for note in notes {
+                guard let content = note.content, !content.isEmpty else { continue }
+                result.append((note.noteId, content, note.parentNoteIds))
+            }
+            return result
         }
-        return result
+    }
+
+    /// The bytes of a cached image, read through a context of its own so they're freed with the caller's copy. The
+    /// main context keeps every model it reads until it next saves, which kept every picture a note showed in memory.
+    func cachedImageData(entityId: String, entityType: String, serverProfileId: String) throws -> Data? {
+        let id = "\(serverProfileId):\(entityType):\(entityId)"
+        var descriptor = FetchDescriptor<CachedImageData>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        let context = ModelContext(container)
+        return try withExtendedLifetime(context) {
+            try context.fetch(descriptor).first?.data
+        }
     }
 
     func fetchCachedImage(entityId: String, entityType: String, serverProfileId: String) throws -> CachedImageData? {

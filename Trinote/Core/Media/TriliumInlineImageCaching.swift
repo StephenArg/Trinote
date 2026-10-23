@@ -336,15 +336,14 @@ enum TriliumInlineImageCaching {
         serverProfileId: String,
         persistence: PersistenceManager
     ) -> Data? {
-        guard let cached = try? persistence.fetchCachedImage(
+        guard let data = try? persistence.cachedImageData(
             entityId: entityId,
             entityType: entityType,
             serverProfileId: serverProfileId
-        ) else {
+        ), data.isPlausibleInlineImagePayload else {
             return nil
         }
-        guard cached.data.isPlausibleInlineImagePayload else { return nil }
-        return cached.data
+        return data
     }
 
     /// Seeds the cache with bytes we just uploaded, so the read-only render that follows a save shows

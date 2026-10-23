@@ -18,7 +18,9 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     /// Invalidates receive loops belonging to sockets we have already torn down, so a stale
     /// completion cannot drive a reconnect for a connection nobody is using any more.
     private var connectionGeneration = 0
-    private var isReconnectScheduled = false
+    private(set) var isReconnectScheduled = false
+    /// Set by `invalidate()`: the connection never starts again.
+    private var isInvalidated = false
     private var lastPingAckAt: Date?
 
     /// We answer the server's `ping` with a message of the same type, so without a floor the two
@@ -65,7 +67,7 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
 
     func start() {
         stop()
-        guard let wsURL = Self.webSocketURL(from: baseURL) else { return }
+        guard !isInvalidated, let wsURL = Self.webSocketURL(from: baseURL) else { return }
         var request = URLRequest(url: wsURL)
         if let cloudflareAccessCredentials {
             for (name, value) in cloudflareAccessCredentials.httpHeaders {
@@ -86,6 +88,21 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
         task = nil
         debounceTask?.cancel()
         debounceTask = nil
+    }
+
+    /// Stops for good and lets the connection be freed. Its `URLSession` keeps its delegate (this object) until it is
+    /// invalidated, so a connection that is only stopped stays in memory for the rest of the run, and a late close
+    /// from the server could still start it again.
+    func invalidate() {
+        guard !isInvalidated else { return }
+        isInvalidated = true
+        stop()
+        session.invalidateAndCancel()
+    }
+
+    /// The current socket's task identifier, if a socket is open or opening. For tests.
+    var currentSocketIdentifier: Int? {
+        task?.taskIdentifier
     }
 
     private func receiveLoop(generation: Int) {
@@ -201,13 +218,15 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func scheduleReconnect() {
-        guard !isReconnectScheduled else { return }
+        guard !isInvalidated, !isReconnectScheduled else { return }
         isReconnectScheduled = true
         stop()
         reconnectAttempt = min(reconnectAttempt + 1, 8)
         let delay = min(Double(reconnectAttempt) * 1.5, 30)
-        Task { @MainActor in
+        // Weak: a connection nobody uses any more mustn't keep itself alive by reconnecting.
+        Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self else { return }
             self.isReconnectScheduled = false
             self.start()
         }
@@ -225,12 +244,9 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
         webSocketTask: URLSessionWebSocketTask,
         didOpenWithProtocol protocol: String?
     ) {
-        Task { @MainActor in
-            self.reconnectAttempt = 0
-            if self.hasOpenedBefore {
-                self.onReconnected?()
-            }
-            self.hasOpenedBefore = true
+        let taskIdentifier = webSocketTask.taskIdentifier
+        Task { @MainActor [weak self] in
+            self?.socketDidOpen(taskIdentifier: taskIdentifier)
         }
     }
 
@@ -240,8 +256,26 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
         didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
         reason: Data?
     ) {
-        Task { @MainActor in
-            self.scheduleReconnect()
+        let taskIdentifier = webSocketTask.taskIdentifier
+        Task { @MainActor [weak self] in
+            self?.socketDidClose(taskIdentifier: taskIdentifier)
         }
+    }
+
+    private func socketDidOpen(taskIdentifier: Int) {
+        guard task?.taskIdentifier == taskIdentifier else { return }
+        reconnectAttempt = 0
+        if hasOpenedBefore {
+            onReconnected?()
+        }
+        hasOpenedBefore = true
+    }
+
+    /// Only the current socket's close reconnects. A socket this side stopped or replaced still reports its close
+    /// (the server's answer to `stop()`'s `cancel(with: .goingAway)` comes later); reconnecting then started a
+    /// connection nobody used, which kept itself alive.
+    func socketDidClose(taskIdentifier: Int) {
+        guard task?.taskIdentifier == taskIdentifier else { return }
+        scheduleReconnect()
     }
 }

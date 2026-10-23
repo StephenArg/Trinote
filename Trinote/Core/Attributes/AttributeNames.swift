@@ -59,6 +59,12 @@ enum AttributeNames {
 /// can't turn into another route (`DELETE …/attributes/..` would otherwise reach `DELETE /api/notes/X` behind a
 /// proxy that normalizes paths).
 enum TriliumEntityId {
+    /// A new random 12-character id in that character set (letters and digits), as Trilium's `randomString(12)` makes.
+    static func random() -> String {
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        return String((0..<12).map { _ in alphabet.randomElement()! })
+    }
+
     static func isValid(_ id: String) -> Bool {
         guard !id.isEmpty, id.utf8.count <= 128 else { return false }
         return id.utf8.allSatisfy { byte in
