@@ -44,3 +44,22 @@ struct LaunchAppMark: View {
             .frame(width: size, height: size)
     }
 }
+
+/// `LaunchAppMark` breathing gently: the app's own activity indicator (launch, connecting, signing in).
+struct PulsingLaunchAppMark: View {
+    var size: CGFloat = 72
+    var useTransparentGlyphForBootstrap: Bool = false
+
+    @State private var pulse: CGFloat = 0
+
+    var body: some View {
+        LaunchAppMark(size: size, useTransparentGlyphForBootstrap: useTransparentGlyphForBootstrap)
+            .scaleEffect(1 + pulse * 0.055)
+            .opacity(0.9 + pulse * 0.1)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.25).repeatForever(autoreverses: true)) {
+                    pulse = 1
+                }
+            }
+    }
+}

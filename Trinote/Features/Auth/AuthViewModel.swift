@@ -13,6 +13,9 @@ final class AuthViewModel {
     var cloudflareClientId = ""
     var cloudflareClientSecret = ""
     var isLoading = false
+    /// What the connecting screen says while a sign-in or reconnect runs. Stays set after success so the screen keeps
+    /// covering the form until the main app replaces it; cleared when the attempt fails or is cancelled.
+    var connecting: ConnectingState?
     var errorMessage: String?
     var showError = false
     var profiles: [ServerProfile] = []
@@ -27,6 +30,18 @@ final class AuthViewModel {
         case setupWarning
         case waitingForSafari
     }
+
+    struct ConnectingState: Equatable {
+        /// "Connecting to Home…"
+        var title: String
+        /// The server address, under the title.
+        var detail: String?
+        /// Password logins and saved-server reconnects can be cancelled; finishing an SSO or TOTP sign-in can't.
+        var isCancellable: Bool
+    }
+
+    /// The password login or saved-server reconnect in progress, for Cancel on the connecting screen.
+    @ObservationIgnored private var connectingTask: Task<Void, Never>?
 
     /// Context for the in-progress Safari SSO login.
     var ssoBaseURL: URL?
@@ -67,6 +82,67 @@ final class AuthViewModel {
 
     var canSubmitSSO: Bool {
         !serverURL.trimmingCharacters(in: .whitespaces).isEmpty && !isLoading
+    }
+
+    /// Pasting a full address ("https://notes.example.com") into the URL field sets the scheme picker and keeps
+    /// the rest, instead of showing "https://https://…".
+    func serverURLDidChange() {
+        let trimmed = serverURL.trimmingCharacters(in: .whitespaces)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("https://") {
+            urlScheme = .https
+            serverURL = String(trimmed.dropFirst("https://".count))
+        } else if lower.hasPrefix("http://") {
+            urlScheme = .http
+            serverURL = String(trimmed.dropFirst("http://".count))
+        }
+    }
+
+    /// Starts a password login that Cancel on the connecting screen can stop.
+    func startLogin(appState: AppState, rejectIfServerAlreadyAdded: Bool = false) {
+        connectingTask?.cancel()
+        connectingTask = Task { [weak self] in
+            await self?.login(appState: appState, rejectIfServerAlreadyAdded: rejectIfServerAlreadyAdded)
+        }
+    }
+
+    /// Starts a saved-server reconnect that Cancel on the connecting screen can stop.
+    func startConnect(to profile: ServerProfile, appState: AppState) {
+        connectingTask?.cancel()
+        connectingTask = Task { [weak self] in
+            await self?.connectToProfile(profile, appState: appState)
+        }
+    }
+
+    func cancelConnecting() {
+        connectingTask?.cancel()
+    }
+
+    /// The address without its scheme or trailing slash, for the connecting screen and saved-server rows.
+    static func displayAddress(_ urlString: String) -> String {
+        var address = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in ["https://", "http://"] where address.lowercased().hasPrefix(prefix) {
+            address = String(address.dropFirst(prefix.count))
+        }
+        while address.hasSuffix("/") { address.removeLast() }
+        return address
+    }
+
+    private func connectingState(name: String?, urlString: String, isCancellable: Bool) -> ConnectingState {
+        let address = Self.displayAddress(urlString)
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedName.isEmpty, trimmedName != urlString, trimmedName != address {
+            return ConnectingState(
+                title: String(localized: "Connecting to \(trimmedName)…", comment: "Connecting screen title; the server's display name"),
+                detail: address,
+                isCancellable: isCancellable
+            )
+        }
+        return ConnectingState(
+            title: String(localized: "Connecting…", comment: "Launch connecting"),
+            detail: address,
+            isCancellable: isCancellable
+        )
     }
 
     func loadProfiles() {
@@ -206,6 +282,10 @@ final class AuthViewModel {
         defer { isLoading = false }
 
         guard let profile = ssoPendingProfile else { return }
+        connecting = connectingState(name: profile.name, urlString: profile.normalizedBaseURL, isCancellable: false)
+        defer {
+            if !didFinishSuccessfulLogin { connecting = nil }
+        }
 
         if ssoRejectIfServerAlreadyAdded {
             loadProfiles()
@@ -256,7 +336,11 @@ final class AuthViewModel {
         didFinishSuccessfulLogin = false
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        connecting = connectingState(name: serverName, urlString: fullServerURL, isCancellable: true)
+        defer {
+            isLoading = false
+            if !didFinishSuccessfulLogin { connecting = nil }
+        }
 
         let displayName = serverName.nilIfEmpty ?? serverURL
         let normalizedInput = ServerProfile(name: displayName, baseURL: fullServerURL).normalizedBaseURL
@@ -306,7 +390,12 @@ final class AuthViewModel {
             errorMessage = error.localizedDescription
             showError = true
         } catch {
-            errorMessage = APIError.from(error).localizedDescription
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError {
+                Log.auth.info("Login cancelled")
+                return
+            }
+            errorMessage = apiError.localizedDescription
             showError = true
             Log.auth.error("Login failed: \(error)")
         }
@@ -318,7 +407,11 @@ final class AuthViewModel {
         didFinishSuccessfulLogin = false
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        connecting = connectingState(name: profile.name, urlString: profile.normalizedBaseURL, isCancellable: false)
+        defer {
+            isLoading = false
+            if !didFinishSuccessfulLogin { connecting = nil }
+        }
 
         do {
             try await appState.loginWithPassword(
@@ -357,21 +450,34 @@ final class AuthViewModel {
     }
 
     func connectToProfile(_ profile: ServerProfile, appState: AppState) async {
+        didFinishSuccessfulLogin = false
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        connecting = connectingState(name: profile.name, urlString: profile.normalizedBaseURL, isCancellable: true)
+        defer {
+            isLoading = false
+            if !didFinishSuccessfulLogin { connecting = nil }
+        }
 
         do {
             try await appState.activateProfile(profile)
+            didFinishSuccessfulLogin = true
         } catch let apiError as APIError where apiError.isAuthError {
             if profile.authMethod == .sso {
+                // The SSO cover takes over; the connecting screen comes back once Safari hands the session back.
+                connecting = nil
                 await beginSSOLogin(for: profile, appState: appState)
             } else {
                 errorMessage = apiError.localizedDescription
                 showError = true
             }
         } catch {
-            errorMessage = APIError.from(error).localizedDescription
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError {
+                Log.auth.info("Reconnect cancelled")
+                return
+            }
+            errorMessage = apiError.localizedDescription
             showError = true
         }
     }

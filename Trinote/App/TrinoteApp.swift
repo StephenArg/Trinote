@@ -56,18 +56,9 @@ private struct AppLaunchLoadingPanel: View {
     /// Spoken by VoiceOver (icon is decorative).
     let accessibilityLabelText: String
 
-    @State private var pulse: CGFloat = 0
-
     var body: some View {
         VStack(spacing: 16) {
-            LaunchAppMark(size: 72, useTransparentGlyphForBootstrap: true)
-                .scaleEffect(1 + pulse * 0.055)
-                .opacity(0.9 + pulse * 0.1)
-                .onAppear {
-                    withAnimation(.easeInOut(duration: 1.25).repeatForever(autoreverses: true)) {
-                        pulse = 1
-                    }
-                }
+            PulsingLaunchAppMark(size: 72, useTransparentGlyphForBootstrap: true)
 
             Text(message)
                 .font(.subheadline)

@@ -11510,6 +11510,77 @@
         }
       }
     },
+    "6-digit code" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "رمز من 6 أرقام"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6místný kód"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6-stelliger Code"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6-digit code"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Código de 6 dígitos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code à 6 chiffres"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6 अंकों का कोड"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6 jegyű kód"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codice a 6 cifre"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6-cyfrowy kod"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6-значный код"
+          }
+        }
+      }
+    },
     "(empty line)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -12978,6 +13049,77 @@
         }
       }
     },
+    "Add Instance" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إضافة خادم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidat instanci"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instanz hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Instance"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir instancia"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter une instance"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इंस्टेंस जोड़ें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Példány hozzáadása"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiungi istanza"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaj instancję"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить сервер"
+          }
+        }
+      }
+    },
     "Add New Column" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -13400,6 +13542,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Добавить во «Входящие»"
+          }
+        }
+      }
+    },
+    "Advanced" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "متقدم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rozšířené"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erweitert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Advanced"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avanzado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avancé"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "उन्नत"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speciális"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avanzate"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zaawansowane"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Дополнительно"
           }
         }
       }
@@ -19230,6 +19443,219 @@
         }
       }
     },
+    "Cloudflare Access / Zero Trust" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access / Zero Trust"
+          }
+        }
+      }
+    },
+    "Cloudflare Access Client ID" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "معرّف عميل Cloudflare Access"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID klienta Cloudflare Access"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access Client-ID"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access Client ID"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID de cliente de Cloudflare Access"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID client Cloudflare Access"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access क्लाइंट ID"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access ügyfélazonosító"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID client Cloudflare Access"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Identyfikator klienta Cloudflare Access"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID клиента Cloudflare Access"
+          }
+        }
+      }
+    },
+    "Cloudflare Access Client Secret" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "سر عميل Cloudflare Access"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tajný klíč klienta Cloudflare Access"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access Client-Secret"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access Client Secret"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secreto de cliente de Cloudflare Access"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret client Cloudflare Access"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access क्लाइंट सीक्रेट"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access ügyféltitok"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Segreto client Cloudflare Access"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sekret klienta Cloudflare Access"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Секрет клиента Cloudflare Access"
+          }
+        }
+      }
+    },
     "Code" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -19652,6 +20078,148 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Закомментировать строки"
+          }
+        }
+      }
+    },
+    "Complete sign-in in Safari" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أكمل تسجيل الدخول في Safari"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dokončete přihlášení v Safari"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anmeldung in Safari abschließen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complete sign-in in Safari"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completa el inicio de sesión en Safari"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terminez la connexion dans Safari"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari में साइन इन पूरा करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fejezd be a bejelentkezést a Safariban"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completa l’accesso in Safari"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dokończ logowanie w Safari"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Завершите вход в Safari"
+          }
+        }
+      }
+    },
+    "Connect" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اتصال"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Připojit"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verbinden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se connecter"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कनेक्ट करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Csatlakozás"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connetti"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Połącz"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключиться"
           }
         }
       }
@@ -20366,6 +20934,77 @@
         }
       }
     },
+    "Connecting to %@…" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "جارٍ الاتصال بـ %@…"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Připojování k %@…"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verbindung mit %@ …"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connecting to %@…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectando a %@…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connexion à %@…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ से कनेक्ट हो रहा है…"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Csatlakozás: %@…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connessione a %@…"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Łączenie z %@…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключение к %@…"
+          }
+        }
+      }
+    },
     "Connecting. Loading, please wait." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -20721,6 +21360,148 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Продолжить"
+          }
+        }
+      }
+    },
+    "Copied handler script" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تم نسخ السكربت"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skript zkopírován"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Handler-Skript kopiert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copied handler script"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Script copiado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Script copié"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्क्रिप्ट कॉपी हो गई"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Szkript kimásolva"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Script copiato"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skopiowano skrypt"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скрипт скопирован"
+          }
+        }
+      }
+    },
+    "Copy handler script" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "نسخ سكربت المعالج"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kopírovat skript"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Handler-Skript kopieren"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy handler script"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiar script del controlador"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copier le script du gestionnaire"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हैंडलर स्क्रिप्ट कॉपी करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kezelő szkript másolása"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copia script del gestore"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kopiuj skrypt handlera"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скопировать скрипт"
           }
         }
       }
@@ -26121,6 +26902,77 @@
         }
       }
     },
+    "Enter the code from your authenticator app." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أدخل الرمز من تطبيق المصادقة."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zadejte kód z ověřovací aplikace."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gib den Code aus deiner Authenticator-App ein."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter the code from your authenticator app."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduce el código de tu app de autenticación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisissez le code de votre application d’authentification."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अपने ऑथेंटिकेटर ऐप का कोड दर्ज करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add meg a hitelesítő alkalmazás kódját."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inserisci il codice della tua app di autenticazione."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wpisz kod z aplikacji uwierzytelniającej."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введите код из приложения-аутентификатора."
+          }
+        }
+      }
+    },
     "Enter the same document password you use in Trilium for protected notes. It stays active until you sign out or the server ends the session." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -26969,6 +27821,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Пропущенные файлы загружаются, когда вы их открываете."
+          }
+        }
+      }
+    },
+    "Fill In Details" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعبئة البيانات"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vyplnit údaje"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Daten übernehmen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fill In Details"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rellenar datos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remplir les champs"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "विवरण भरें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adatok kitöltése"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compila i dati"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wypełnij dane"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заполнить поля"
           }
         }
       }
@@ -28673,6 +29596,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Значок и цвет…"
+          }
+        }
+      }
+    },
+    "If Safari says “No handler matched”" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إذا عرض Safari الرسالة “No handler matched”"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pokud Safari hlásí „No handler matched“"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn Safari „No handler matched“ meldet"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If Safari says “No handler matched”"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si Safari muestra “No handler matched”"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si Safari affiche « No handler matched »"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अगर Safari “No handler matched” दिखाए"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ha a Safari „No handler matched” hibát ír"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se Safari mostra “No handler matched”"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jeśli Safari pokazuje „No handler matched”"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Если Safari пишет «No handler matched»"
           }
         }
       }
@@ -36850,6 +37844,77 @@
         }
       }
     },
+    "Opens Safari for Authelia, Authentik, Keycloak, and other providers (Face ID and security keys work). After your notes load, return here and tap Continue." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يفتح Safari لـ Authelia وAuthentik وKeycloak ومزودين آخرين (يعمل Face ID ومفاتيح الأمان). بعد تحميل ملاحظاتك، عد إلى هنا واضغط على «متابعة»."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otevře Safari pro Authelia, Authentik, Keycloak a další poskytovatele (Face ID a bezpečnostní klíče fungují). Až se načtou vaše poznámky, vraťte se sem a klepněte na Pokračovat."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffnet Safari für Authelia, Authentik, Keycloak und andere Anbieter (Face ID und Sicherheitsschlüssel funktionieren). Sobald deine Notizen geladen sind, kehre hierher zurück und tippe auf Weiter."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens Safari for Authelia, Authentik, Keycloak, and other providers (Face ID and security keys work). After your notes load, return here and tap Continue."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre Safari para Authelia, Authentik, Keycloak y otros proveedores (Face ID y llaves de seguridad funcionan). Cuando se carguen tus notas, vuelve aquí y toca Continuar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvre Safari pour Authelia, Authentik, Keycloak et d’autres fournisseurs (Face ID et clés de sécurité fonctionnent). Une fois vos notes chargées, revenez ici et touchez Continuer."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authelia, Authentik, Keycloak और अन्य प्रदाताओं के लिए Safari खोलता है (Face ID और सुरक्षा कुंजियाँ काम करती हैं)। नोट लोड होने के बाद यहाँ लौटें और जारी रखें पर टैप करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Megnyitja a Safarit az Authelia, Authentik, Keycloak és más szolgáltatókhoz (a Face ID és a biztonsági kulcsok működnek). Ha betöltődtek a jegyzeteid, térj vissza ide, és koppints a Folytatás gombra."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apre Safari per Authelia, Authentik, Keycloak e altri provider (Face ID e chiavi di sicurezza funzionano). Quando le note sono caricate, torna qui e tocca Continua."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otwiera Safari dla Authelia, Authentik, Keycloak i innych dostawców (Face ID i klucze bezpieczeństwa działają). Gdy notatki się wczytają, wróć tutaj i stuknij Kontynuuj."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Открывает Safari для Authelia, Authentik, Keycloak и других провайдеров (работают Face ID и ключи безопасности). Когда заметки загрузятся, вернитесь сюда и нажмите «Продолжить»."
+          }
+        }
+      }
+    },
     "Option" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -36921,6 +37986,77 @@
         }
       }
     },
+    "Optional. Required only if your Trilium server is behind Cloudflare Access / Zero Trust." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اختياري. مطلوب فقط إذا كان خادم Trilium خلف Cloudflare Access / Zero Trust."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volitelné. Potřebné jen tehdy, když je váš server Trilium za Cloudflare Access / Zero Trust."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Optional. Nur nötig, wenn dein Trilium-Server hinter Cloudflare Access / Zero Trust liegt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Optional. Required only if your Trilium server is behind Cloudflare Access / Zero Trust."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opcional. Solo es necesario si tu servidor Trilium está detrás de Cloudflare Access / Zero Trust."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Facultatif. Requis uniquement si votre serveur Trilium est derrière Cloudflare Access / Zero Trust."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "वैकल्पिक। केवल तभी आवश्यक जब आपका Trilium सर्वर Cloudflare Access / Zero Trust के पीछे हो।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nem kötelező. Csak akkor szükséges, ha a Trilium-kiszolgáló Cloudflare Access / Zero Trust mögött van."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Facoltativo. Necessario solo se il server Trilium è dietro Cloudflare Access / Zero Trust."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opcjonalne. Wymagane tylko wtedy, gdy serwer Trilium jest za Cloudflare Access / Zero Trust."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Необязательно. Нужно только если сервер Trilium находится за Cloudflare Access / Zero Trust."
+          }
+        }
+      }
+    },
     "Options" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -36988,6 +38124,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Варианты"
+          }
+        }
+      }
+    },
+    "or" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أو"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nebo"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "oder"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "or"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ou"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "या"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "vagy"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "oppure"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "lub"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "или"
           }
         }
       }
@@ -40475,6 +41682,77 @@
         }
       }
     },
+    "Safari should open your SSO sign-in page. Finish Face ID or your provider there. When your notes load, return here and tap Continue." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "من المفترض أن يفتح Safari صفحة تسجيل الدخول عبر SSO. أكمل Face ID أو مزود الهوية هناك. بعد تحميل ملاحظاتك، عد إلى هنا واضغط على «متابعة»."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari by mělo otevřít přihlašovací stránku SSO. Dokončete tam Face ID nebo přihlášení u poskytovatele. Až se načtou vaše poznámky, vraťte se sem a klepněte na Pokračovat."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari sollte deine SSO-Anmeldeseite öffnen. Schließe Face ID oder deinen Anbieter dort ab. Sobald deine Notizen geladen sind, kehre hierher zurück und tippe auf Weiter."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari should open your SSO sign-in page. Finish Face ID or your provider there. When your notes load, return here and tap Continue."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari debería abrir tu página de inicio de sesión SSO. Completa Face ID o tu proveedor allí. Cuando se carguen tus notas, vuelve aquí y toca Continuar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari devrait ouvrir votre page de connexion SSO. Terminez Face ID ou votre fournisseur là-bas. Une fois vos notes chargées, revenez ici et touchez Continuer."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari को आपका SSO साइन-इन पेज खोलना चाहिए। वहाँ Face ID या अपने प्रदाता से साइन इन पूरा करें। नोट लोड होने के बाद यहाँ लौटें और जारी रखें पर टैप करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Safarinak meg kell nyitnia az SSO bejelentkezési oldalt. Fejezd be ott a Face ID-t vagy a szolgáltatód bejelentkezését. Ha betöltődtek a jegyzeteid, térj vissza ide, és koppints a Folytatás gombra."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari dovrebbe aprire la pagina di accesso SSO. Completa Face ID o il tuo provider lì. Quando le note sono caricate, torna qui e tocca Continua."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari powinno otworzyć stronę logowania SSO. Dokończ tam Face ID lub logowanie u dostawcy. Gdy notatki się wczytają, wróć tutaj i stuknij Kontynuuj."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safari должен открыть страницу входа SSO. Завершите Face ID или вход у провайдера там. Когда заметки загрузятся, вернитесь сюда и нажмите «Продолжить»."
+          }
+        }
+      }
+    },
     "Same login as the Trilium web app (session, not ETAPI)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -42037,6 +43315,148 @@
         }
       }
     },
+    "Server" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الخادم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Servidor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serveur"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सर्वर"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kiszolgáló"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serwer"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер"
+          }
+        }
+      }
+    },
+    "Server address" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "عنوان الخادم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adresa serveru"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serveradresse"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server address"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dirección del servidor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adresse du serveur"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सर्वर पता"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kiszolgáló címe"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indirizzo del server"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adres serwera"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Адрес сервера"
+          }
+        }
+      }
+    },
     "Server didn’t respond — showing results from this device" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -42108,6 +43528,77 @@
         }
       }
     },
+    "Server display name" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اسم الخادم المعروض"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zobrazovaný název serveru"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anzeigename des Servers"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server display name"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre del servidor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom du serveur"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सर्वर का प्रदर्शित नाम"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kiszolgáló megjelenített neve"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome del server"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wyświetlana nazwa serwera"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отображаемое имя сервера"
+          }
+        }
+      }
+    },
     "Server is syncing" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -42175,6 +43666,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Сервер синхронизируется"
+          }
+        }
+      }
+    },
+    "Server options" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "خيارات الخادم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Možnosti serveru"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serveroptionen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server options"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opciones del servidor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Options du serveur"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सर्वर विकल्प"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kiszolgáló beállításai"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opzioni server"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opcje serwera"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Параметры сервера"
           }
         }
       }
@@ -42459,6 +44021,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Синхронизация сервера: %lld/%lld изменений…"
+          }
+        }
+      }
+    },
+    "Server URL" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "رابط الخادم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL serveru"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server-URL"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server URL"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL del servidor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL du serveur"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सर्वर URL"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kiszolgáló URL-je"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL del server"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adres URL serwera"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL сервера"
           }
         }
       }
@@ -43812,6 +45445,148 @@
         }
       }
     },
+    "Shows the Cloudflare Access fields" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يعرض حقول Cloudflare Access"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zobrazí pole Cloudflare Access"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zeigt die Cloudflare-Access-Felder"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the Cloudflare Access fields"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muestra los campos de Cloudflare Access"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Affiche les champs Cloudflare Access"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access फ़ील्ड दिखाता है"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Megjeleníti a Cloudflare Access mezőket"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra i campi di Cloudflare Access"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pokazuje pola Cloudflare Access"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показывает поля Cloudflare Access"
+          }
+        }
+      }
+    },
+    "Sign In" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تسجيل الدخول"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přihlášení"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anmelden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign In"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connexion"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "साइन इन"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bejelentkezés"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accedi"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Logowanie"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вход"
+          }
+        }
+      }
+    },
     "Sign in and connect to your server to save." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -43883,6 +45658,77 @@
         }
       }
     },
+    "Sign in to another Trilium server." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "سجّل الدخول إلى خادم Trilium آخر."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přihlaste se k dalšímu serveru Trilium."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Melde dich bei einem weiteren Trilium-Server an."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in to another Trilium server."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia sesión en otro servidor Trilium."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connectez-vous à un autre serveur Trilium."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "किसी अन्य Trilium सर्वर में साइन इन करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jelentkezz be egy másik Trilium-kiszolgálóra."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accedi a un altro server Trilium."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zaloguj się do innego serwera Trilium."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Войдите на другой сервер Trilium."
+          }
+        }
+      }
+    },
     "Sign in to create notes." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -43950,6 +45796,148 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Войдите, чтобы создавать заметки."
+          }
+        }
+      }
+    },
+    "Sign in to your Trilium server." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "سجّل الدخول إلى خادم Trilium الخاص بك."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přihlaste se ke svému serveru Trilium."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Melde dich bei deinem Trilium-Server an."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in to your Trilium server."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia sesión en tu servidor Trilium."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connectez-vous à votre serveur Trilium."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अपने Trilium सर्वर में साइन इन करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jelentkezz be a Trilium-kiszolgálódra."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accedi al tuo server Trilium."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zaloguj się do swojego serwera Trilium."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Войдите на свой сервер Trilium."
+          }
+        }
+      }
+    },
+    "Sign in with SSO" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تسجيل الدخول عبر SSO"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přihlásit se přes SSO"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit SSO anmelden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in with SSO"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión con SSO"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se connecter avec SSO"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO से साइन इन करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bejelentkezés SSO-val"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accedi con SSO"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zaloguj się przez SSO"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Войти через SSO"
           }
         }
       }
@@ -44593,6 +46581,77 @@
         }
       }
     },
+    "SSO" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSO"
+          }
+        }
+      }
+    },
     "Start Sync" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -44877,6 +46936,77 @@
         }
       }
     },
+    "Stay signed in" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "البقاء مسجّل الدخول"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zůstat přihlášen"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Angemeldet bleiben"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stay signed in"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mantener la sesión iniciada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rester connecté"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "साइन इन रहें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maradjak bejelentkezve"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resta connesso"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nie wylogowuj mnie"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оставаться в системе"
+          }
+        }
+      }
+    },
     "Stay signed in (Remember me)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -44944,6 +47074,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Оставаться в системе (Запомнить меня)"
+          }
+        }
+      }
+    },
+    "Still trying to reach the server. Check the address and that your server is online." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ما زلنا نحاول الوصول إلى الخادم. تحقق من العنوان ومن أن الخادم متصل."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stále se pokoušíme spojit se serverem. Zkontrolujte adresu a zda je server online."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server wird weiterhin gesucht. Prüfe die Adresse und ob dein Server online ist."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Still trying to reach the server. Check the address and that your server is online."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguimos intentando conectar con el servidor. Comprueba la dirección y que el servidor esté en línea."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tentative de connexion au serveur toujours en cours. Vérifiez l’adresse et que votre serveur est en ligne."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अभी भी सर्वर से संपर्क की कोशिश जारी है। पता जाँचें और देखें कि सर्वर ऑनलाइन है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Még mindig próbáljuk elérni a kiszolgálót. Ellenőrizd a címet, és hogy a kiszolgáló elérhető-e."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stiamo ancora cercando di raggiungere il server. Controlla l’indirizzo e che il server sia online."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nadal próbujemy połączyć się z serwerem. Sprawdź adres i czy serwer jest online."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Всё ещё пытаемся связаться с сервером. Проверьте адрес и что сервер в сети."
           }
         }
       }
@@ -46229,6 +48430,77 @@
     "The image format is not supported for preview." : {
       "comment" : "A description of the error that occurs when the image format is not supported.",
       "isCommentAutoGenerated" : true
+    },
+    "The JS Backend handler is missing on Trilium. Create that note, add the label below, paste the script, then tap Continue." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "معالج JS Backend غير موجود في Trilium. أنشئ تلك الملاحظة، وأضف التسمية أدناه، والصق السكربت، ثم اضغط على «متابعة»."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "V Triliu chybí obslužná rutina JS Backend. Vytvořte tu poznámku, přidejte níže uvedený štítek, vložte skript a klepněte na Pokračovat."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der JS-Backend-Handler fehlt auf Trilium. Erstelle diese Notiz, füge das Label unten hinzu, füge das Skript ein und tippe dann auf Weiter."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The JS Backend handler is missing on Trilium. Create that note, add the label below, paste the script, then tap Continue."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falta el controlador JS Backend en Trilium. Crea esa nota, añade la etiqueta de abajo, pega el script y toca Continuar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le gestionnaire JS Backend est absent de Trilium. Créez cette note, ajoutez le libellé ci-dessous, collez le script, puis touchez Continuer."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium में JS Backend हैंडलर नहीं है। वह नोट बनाएँ, नीचे दिया लेबल जोड़ें, स्क्रिप्ट पेस्ट करें, फिर जारी रखें पर टैप करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A JS Backend kezelő hiányzik a Triliumból. Hozd létre azt a jegyzetet, add hozzá az alábbi címkét, illeszd be a szkriptet, majd koppints a Folytatás gombra."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il gestore JS Backend manca su Trilium. Crea quella nota, aggiungi l’etichetta qui sotto, incolla lo script e tocca Continua."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "W Trilium brakuje handlera JS Backend. Utwórz tę notatkę, dodaj poniższą etykietę, wklej skrypt i stuknij Kontynuuj."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В Trilium нет обработчика JS Backend. Создайте эту заметку, добавьте метку ниже, вставьте скрипт и нажмите «Продолжить»."
+          }
+        }
+      }
     },
     "The note could not be added to the board." : {
       "extractionState" : "stale",
@@ -48798,6 +51070,77 @@
         }
       }
     },
+    "TOTP code" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "رمز TOTP"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kód TOTP"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TOTP-Code"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TOTP code"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Código TOTP"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code TOTP"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TOTP कोड"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TOTP-kód"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codice TOTP"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kod TOTP"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Код TOTP"
+          }
+        }
+      }
+    },
     "Tree View" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -49362,6 +51705,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Trinote хранит копию ваших заметок на этом устройстве, чтобы они быстро открывались и работали офлайн. Выберите, что хранить, до первой синхронизации."
+          }
+        }
+      }
+    },
+    "Two-Factor Authentication" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "المصادقة الثنائية"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dvoufázové ověření"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zwei-Faktor-Authentifizierung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Two-Factor Authentication"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autenticación de dos factores"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentification à deux facteurs"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "दो-चरणीय प्रमाणीकरण"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kétlépcsős hitelesítés"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autenticazione a due fattori"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uwierzytelnianie dwuskładnikowe"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Двухфакторная аутентификация"
           }
         }
       }
@@ -50502,6 +52916,219 @@
         }
       }
     },
+    "Verify" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تحقق"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ověřit"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bestätigen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verify"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifier"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सत्यापित करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ellenőrzés"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifica"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zweryfikuj"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверить"
+          }
+        }
+      }
+    },
+    "Verify Identity" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "التحقق من الهوية"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ověření identity"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Identität bestätigen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verify Identity"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificar identidad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifier l’identité"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहचान सत्यापित करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Személyazonosság ellenőrzése"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifica identità"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weryfikacja tożsamości"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подтверждение личности"
+          }
+        }
+      }
+    },
+    "Verify TOTP code" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "التحقق من رمز TOTP"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ověřit kód TOTP"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TOTP-Code bestätigen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verify TOTP code"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificar código TOTP"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifier le code TOTP"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TOTP कोड सत्यापित करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TOTP-kód ellenőrzése"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifica codice TOTP"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zweryfikuj kod TOTP"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверить код TOTP"
+          }
+        }
+      }
+    },
     "VersaTiles Colorful/Eclipse" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -51212,6 +53839,77 @@
         }
       }
     },
+    "You can also enter a recovery code." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يمكنك أيضًا إدخال رمز استرداد."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Můžete také zadat kód pro obnovení."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Du kannst auch einen Wiederherstellungscode eingeben."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You can also enter a recovery code."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "También puedes introducir un código de recuperación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous pouvez aussi saisir un code de récupération."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आप रिकवरी कोड भी दर्ज कर सकते हैं।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Helyreállítási kódot is megadhatsz."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puoi anche inserire un codice di recupero."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Możesz też wpisać kod odzyskiwania."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Можно также ввести код восстановления."
+          }
+        }
+      }
+    },
     "You have an unsaved draft for this note. Would you like to restore it?" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -51492,6 +54190,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Не удалось определить ваше местоположение. Повторите попытку чуть позже."
+          }
+        }
+      }
+    },
+    "Your Trilium password, not an ETAPI token. Two-factor codes are supported." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "كلمة مرور Trilium، وليس رمز ETAPI. رموز التحقق بخطوتين مدعومة."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vaše heslo k Triliu, ne token ETAPI. Dvoufázové kódy jsou podporovány."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dein Trilium-Passwort, kein ETAPI-Token. Zwei-Faktor-Codes werden unterstützt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your Trilium password, not an ETAPI token. Two-factor codes are supported."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu contraseña de Trilium, no un token ETAPI. Se admiten códigos de dos factores."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre mot de passe Trilium, pas un jeton ETAPI. Les codes à deux facteurs sont pris en charge."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आपका Trilium पासवर्ड, ETAPI टोकन नहीं। दो-चरणीय कोड समर्थित हैं।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Trilium-jelszavad, nem ETAPI-token. A kétlépcsős kódok támogatottak."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La password di Trilium, non un token ETAPI. I codici a due fattori sono supportati."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Twoje hasło Trilium, nie token ETAPI. Kody dwuskładnikowe są obsługiwane."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пароль Trilium, а не токен ETAPI. Коды двухфакторной аутентификации поддерживаются."
           }
         }
       }
