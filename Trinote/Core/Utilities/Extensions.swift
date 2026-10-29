@@ -54,6 +54,8 @@ extension Notification.Name {
     static let trinoteTreeReloadFromServerUserInfoKey = "reloadTreeFromServer"
     /// Posted after a sync wrote protected notes. `userInfo["noteIds"]` is `[String]`, `userInfo["profileId"]` the server.
     static let trinoteProtectedNotesSynced = Notification.Name("TrinoteProtectedNotesSynced")
+    /// A sync pull changed the server's to-do task states (`userInfo["profileId"]`).
+    static let trinoteTaskStatesChanged = Notification.Name("TrinoteTaskStatesChanged")
     /// Posted when an offline-created note receives a server id after sync. `userInfo["from"]` / `["to"]` are note ids.
     static let trinoteOfflineNoteIdReplaced = Notification.Name("TrinoteOfflineNoteIdReplaced")
     /// Posted when the open-note tab strip is updated (add/remove / prune) so visible bars can reload.

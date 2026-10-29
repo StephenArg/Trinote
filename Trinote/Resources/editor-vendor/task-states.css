@@ -1,0 +1,40 @@
+/* The editor's to-do state menu (task-states.js). The boxes themselves come from Swift's TaskStateStyles. */
+.tn-task-menu {
+  --tn-task-menu-bg: #ffffff;
+  --tn-task-menu-border: rgba(0, 0, 0, 0.12);
+  --tn-task-menu-shadow: rgba(0, 0, 0, 0.18);
+  --tn-task-menu-fg: #1c1c1e;
+  --tn-task-menu-active: rgba(0, 122, 255, 0.12);
+  --tn-task-menu-accent: #007aff;
+  display: none; position: fixed; z-index: 10001;
+  min-width: 220px; max-width: min(92vw, 300px); padding: 6px;
+  background: var(--tn-task-menu-bg); color: var(--tn-task-menu-fg);
+  border: 1px solid var(--tn-task-menu-border); border-radius: 12px;
+  box-shadow: 0 4px 20px var(--tn-task-menu-shadow);
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+@media (prefers-color-scheme: dark) {
+  .tn-task-menu {
+    --tn-task-menu-bg: #2c2c2e;
+    --tn-task-menu-border: rgba(255, 255, 255, 0.12);
+    --tn-task-menu-shadow: rgba(0, 0, 0, 0.5);
+    --tn-task-menu-fg: #f2f2f7;
+    --tn-task-menu-active: rgba(10, 132, 255, 0.2);
+    --tn-task-menu-accent: #0a84ff;
+  }
+}
+.tn-task-menu.visible { display: flex; flex-direction: column; }
+.tn-task-menu-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px; padding: 0 10px;
+  border: none; border-radius: 8px; background: transparent; color: inherit;
+  font: inherit; font-size: 15px; text-align: left; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.tn-task-menu-row:active { background: var(--tn-task-menu-active); }
+.tn-task-menu-row.current { background: var(--tn-task-menu-active); }
+.tn-task-menu-row .tn-task-checkbox { width: 20px; height: 20px; }
+.tn-task-menu-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tn-task-menu-check { width: 16px; color: var(--tn-task-menu-accent); font-weight: 700; text-align: center; }
+.tn-task-menu-edit { color: var(--tn-task-menu-accent); }
+.tn-task-menu-edit svg { width: 20px; height: 20px; flex-shrink: 0; }
+.tn-task-menu-divider { height: 1px; margin: 4px 6px; background: var(--tn-task-menu-border); }

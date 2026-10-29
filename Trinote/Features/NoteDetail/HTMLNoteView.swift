@@ -8,9 +8,13 @@ struct HTMLNoteView: View {
     /// Changes only when `html` differs from the last one by checkbox `checked` state alone.
     var checkboxOnlyRevision: Int = 0
     var onNoteLinkTapped: ((String) -> Void)?
-    var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
-    /// Cycles Markdown/Trilium multi-state todos (`[ ]`→`[x]`→`[/]`→`[?]`→`[-]`). Takes precedence over binary toggle.
-    var onTaskStateCycled: ((_ index: Int) -> Void)?
+    /// A to-do item was set to a task state (by a tap, or from the state menu a hold opens). `index` counts
+    /// checkboxes in document order, leaving out included-note cards. The page already shows the change.
+    var onTaskStateSet: ((_ index: Int, _ stateName: String) -> Void)?
+    /// Edit States in the state menu.
+    var onEditTaskStates: (() -> Void)?
+    /// The state menu opened (a hold on a checkbox), so the reader's own hold gesture can stand down.
+    var onTaskStateMenuShown: (() -> Void)?
     /// Reorder a todo-list item among siblings. `beforeIndex` is nil when appending at end of the sibling group.
     var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
     var onCollapsibleReordered: ((_ fromIndex: Int, _ beforeChildIndex: Int?) -> Void)?
@@ -24,8 +28,8 @@ struct HTMLNoteView: View {
     var findControl: FindOnPageControl?
     /// When false, todo checkboxes stay disabled (no toggle/reorder JS).
     var listInteractionEnabled: Bool = true
-    /// When true with `listInteractionEnabled`, clicks cycle Trilium task states instead of binary toggle.
-    var taskStateCycleEnabled: Bool = false
+    /// The to-do task states the page draws and offers, and what a tap sets.
+    var taskStates: TaskStateWebConfig = .plain
     /// When false, skip drag-reorder handles even if list interaction is on (Markdown preview).
     var allowListReorder: Bool = true
     /// When false, skip collapsible-section drag handles (Markdown preview / non-text surfaces).
@@ -77,11 +81,12 @@ struct HTMLNoteView: View {
             themeColors: themeColors,
             checkboxReorderEnabled: listInteractionEnabled && allowListReorder && noteCheckboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
-            taskStateCycleEnabled: listInteractionEnabled && taskStateCycleEnabled,
+            taskStates: taskStates,
             checkboxOnlyRevision: checkboxOnlyRevision,
             onNoteLinkTapped: onNoteLinkTapped,
-            onCheckboxToggled: onCheckboxToggled,
-            onTaskStateCycled: onTaskStateCycled,
+            onTaskStateSet: onTaskStateSet,
+            onEditTaskStates: onEditTaskStates,
+            onTaskStateMenuShown: onTaskStateMenuShown,
             onCheckboxReordered: onCheckboxReordered,
             onCollapsibleReordered: onCollapsibleReordered,
             onCollapsibleToggled: onCollapsibleToggled,
@@ -151,11 +156,12 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     let themeColors: HTMLThemeColors
     let checkboxReorderEnabled: Bool
     let listInteractionEnabled: Bool
-    let taskStateCycleEnabled: Bool
+    let taskStates: TaskStateWebConfig
     let checkboxOnlyRevision: Int
     var onNoteLinkTapped: ((String) -> Void)?
-    var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
-    var onTaskStateCycled: ((_ index: Int) -> Void)?
+    var onTaskStateSet: ((_ index: Int, _ stateName: String) -> Void)?
+    var onEditTaskStates: (() -> Void)?
+    var onTaskStateMenuShown: (() -> Void)?
     var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
     var onCollapsibleReordered: ((_ fromIndex: Int, _ beforeChildIndex: Int?) -> Void)?
     var onCollapsibleToggled: ((_ index: Int, _ open: Bool) -> Void)?
@@ -173,8 +179,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onNoteLinkTapped: onNoteLinkTapped,
-            onCheckboxToggled: onCheckboxToggled,
-            onTaskStateCycled: onTaskStateCycled,
+            onTaskStateSet: onTaskStateSet,
+            onEditTaskStates: onEditTaskStates,
+            onTaskStateMenuShown: onTaskStateMenuShown,
             onCheckboxReordered: onCheckboxReordered,
             onCollapsibleReordered: onCollapsibleReordered,
             onCollapsibleToggled: onCollapsibleToggled,
@@ -191,8 +198,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         contentController.add(handler, name: "heightUpdate")
         contentController.add(handler, name: "noteLink")
         contentController.add(handler, name: "attachmentLink")
-        contentController.add(handler, name: "checkboxToggle")
-        contentController.add(handler, name: "checkboxCycle")
+        contentController.add(handler, name: "taskStateSet")
+        contentController.add(handler, name: "taskStateMenu")
         contentController.add(handler, name: "checkboxReorder")
         contentController.add(handler, name: "checkboxDragScroll")
         contentController.add(handler, name: "checkboxDragState")
@@ -237,7 +244,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         handler.checkboxReorderEnabled = checkboxReorderEnabled
         handler.collapsibleReorderEnabled = collapsibleReorderEnabled
         handler.listInteractionEnabled = listInteractionEnabled
-        handler.taskStateCycleEnabled = taskStateCycleEnabled
+        handler.taskStates = taskStates
         handler.checkboxOnlyRevision = checkboxOnlyRevision
         handler.findControl = findControl
         handler.lastAppliedColorScheme = colorScheme
@@ -247,7 +254,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             theme: themeColors,
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
-            taskStateCycleEnabled: taskStateCycleEnabled,
+            taskStates: taskStates,
             collapsibleReorderEnabled: collapsibleReorderEnabled,
             collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
             phase: "makeUIView"
@@ -272,8 +279,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.findControl = findControl
         coordinator.onNoteLinkTapped = onNoteLinkTapped
-        coordinator.onCheckboxToggled = onCheckboxToggled
-        coordinator.onTaskStateCycled = onTaskStateCycled
+        coordinator.onTaskStateSet = onTaskStateSet
+        coordinator.onEditTaskStates = onEditTaskStates
+        coordinator.onTaskStateMenuShown = onTaskStateMenuShown
         coordinator.onCheckboxReordered = onCheckboxReordered
         coordinator.onCollapsibleReordered = onCollapsibleReordered
         coordinator.onCollapsibleToggled = onCollapsibleToggled
@@ -304,7 +312,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let reorderChanged = checkboxReorderEnabled != coordinator.checkboxReorderEnabled
             || collapsibleReorderEnabled != coordinator.collapsibleReorderEnabled
         let listInteractionChanged = listInteractionEnabled != coordinator.listInteractionEnabled
-        let cycleChanged = taskStateCycleEnabled != coordinator.taskStateCycleEnabled
+        let cycleChanged = taskStates != coordinator.taskStates
         let compareMs = CheckboxPerf.ms(tCompare)
         guard htmlChanged || themeChanged || reorderChanged || listInteractionChanged || cycleChanged else {
             if CheckboxPerf.lastToggleEndedAt > 0,
@@ -322,14 +330,13 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let revisionChanged = checkboxOnlyRevision != coordinator.checkboxOnlyRevision
         if htmlChanged, !themeChanged, !reorderChanged, !listInteractionChanged, !cycleChanged, revisionChanged,
            let previous = coordinator.loadedHTML,
-           // Binary checkbox patches are tiny; multi-state Markdown HTML can grow by more than that.
-           taskStateCycleEnabled || Self.lengthChangeFitsCheckboxToggle(previous: previous, incoming: html) {
+           Self.lengthChangeFitsTaskStateChange(previous: previous, incoming: html) {
             coordinator.loadedHTML = html
             coordinator.checkboxOnlyRevision = checkboxOnlyRevision
             if coordinator.layoutCacheKey != nil {
                 // The page now matches `html` without reloading; key its remembered height to that, off the toggle's path.
                 let theme = themeColors
-                let options = (checkboxReorderEnabled, listInteractionEnabled, taskStateCycleEnabled,
+                let options = (checkboxReorderEnabled, listInteractionEnabled, taskStates,
                                collapsibleReorderEnabled, collapsibleTogglePersistEnabled)
                 DispatchQueue.main.async { [weak coordinator] in
                     guard let coordinator, coordinator.loadedHTML == html else { return }
@@ -338,7 +345,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                         theme: theme,
                         checkboxReorderEnabled: options.0,
                         listInteractionEnabled: options.1,
-                        taskStateCycleEnabled: options.2,
+                        taskStates: options.2,
                         collapsibleReorderEnabled: options.3,
                         collapsibleTogglePersistEnabled: options.4
                     )
@@ -361,14 +368,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.checkboxReorderEnabled = checkboxReorderEnabled
         coordinator.collapsibleReorderEnabled = collapsibleReorderEnabled
         coordinator.listInteractionEnabled = listInteractionEnabled
-        coordinator.taskStateCycleEnabled = taskStateCycleEnabled
+        coordinator.taskStates = taskStates
         coordinator.checkboxOnlyRevision = checkboxOnlyRevision
         let wrapped = Self.wrapHTMLTimed(
             TriliumServerAssetURLs.resolving(in: html, serverBase: baseURL),
             theme: themeColors,
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
-            taskStateCycleEnabled: taskStateCycleEnabled,
+            taskStates: taskStates,
             collapsibleReorderEnabled: collapsibleReorderEnabled,
             collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
             phase: "updateUIView-reload"
@@ -416,8 +423,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "heightUpdate")
         uc.removeScriptMessageHandler(forName: "noteLink")
         uc.removeScriptMessageHandler(forName: "attachmentLink")
-        uc.removeScriptMessageHandler(forName: "checkboxToggle")
-        uc.removeScriptMessageHandler(forName: "checkboxCycle")
+        uc.removeScriptMessageHandler(forName: "taskStateSet")
+        uc.removeScriptMessageHandler(forName: "taskStateMenu")
         uc.removeScriptMessageHandler(forName: "checkboxReorder")
         uc.removeScriptMessageHandler(forName: "checkboxDragScroll")
         uc.removeScriptMessageHandler(forName: "checkboxDragState")
@@ -427,11 +434,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "imagePreview")
     }
 
-    /// Guards the revision signal: toggling one `checked` attribute moves the body length by a few
-    /// characters at most, so a bigger jump means something else changed in the same update and the
-    /// WebView really does need reloading.
-    private static func lengthChangeFitsCheckboxToggle(previous: String, incoming: String) -> Bool {
-        abs(incoming.utf16.count - previous.utf16.count) <= 64
+    /// Guards the revision signal: setting one item's state changes its `checked` and the `<li>`'s state attribute and
+    /// title, a few hundred characters at most, so a bigger jump means something else changed in the same update and
+    /// the WebView really does need reloading.
+    private static func lengthChangeFitsTaskStateChange(previous: String, incoming: String) -> Bool {
+        abs(incoming.utf16.count - previous.utf16.count) <= 400
     }
 
     private static func wrapHTMLTimed(
@@ -439,7 +446,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         theme: HTMLThemeColors,
         checkboxReorderEnabled: Bool,
         listInteractionEnabled: Bool,
-        taskStateCycleEnabled: Bool,
+        taskStates: TaskStateWebConfig,
         collapsibleReorderEnabled: Bool,
         collapsibleTogglePersistEnabled: Bool,
         phase: String
@@ -450,7 +457,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             theme: theme,
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
-            taskStateCycleEnabled: taskStateCycleEnabled,
+            taskStates: taskStates,
             collapsibleReorderEnabled: collapsibleReorderEnabled,
             collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
         )
@@ -465,7 +472,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         theme: HTMLThemeColors,
         checkboxReorderEnabled: Bool = false,
         listInteractionEnabled: Bool = true,
-        taskStateCycleEnabled: Bool = false,
+        taskStates: TaskStateWebConfig = .plain,
         collapsibleReorderEnabled: Bool = false,
         collapsibleTogglePersistEnabled: Bool = false
     ) -> String {
@@ -749,67 +756,18 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         li ul.todo-list { padding-left: 24px; }
         ul.todo-list li { margin: 4px 0; }
         .todo-list__label { display: flex; align-items: flex-start; gap: 8px; cursor: default; }
-        .todo-list__label input[type="checkbox"] {
-          margin: 0;
-          margin-top: 6px;
-          flex-shrink: 0;
-          pointer-events: auto;
-          cursor: pointer;
-          width: 18px;
-          height: 18px;
-          accent-color: \(theme.lightLink);
-        }
-        @media (prefers-color-scheme: dark) {
-          .todo-list__label input[type="checkbox"] { accent-color: \(theme.darkLink); }
-        }
         .todo-list__label__description { flex: 1; min-width: 0; transition: opacity 0.15s, text-decoration 0.15s; }
-        .todo-list__label--checked .todo-list__label__description { text-decoration: line-through; opacity: 0.5; }
-        /* Trilium multi-state todos: [/]=doing, [?]=maybe, [-]=cancelled */
-        .tn-task-checkbox,
-        .todo-list__label input[type="checkbox"][data-trilium-task-state] {
-          display: inline-block;
-          box-sizing: border-box;
-          width: 18px;
-          height: 18px;
-          margin: 0;
-          margin-top: 6px;
-          flex-shrink: 0;
-          border: none;
-          border-radius: 4px;
-          background-repeat: no-repeat;
-          background-position: center;
-          background-size: 72% 72%;
-          -webkit-appearance: none;
-          appearance: none;
-          pointer-events: none;
-          opacity: 1;
-          vertical-align: top;
-        }
-        .tn-task-checkbox[data-trilium-task-state="doing"],
-        .todo-list__label input[type="checkbox"][data-trilium-task-state="doing"] {
-          background-color: #a68b5a;
-          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='%23fff' transform='translate(12 12)'%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(45)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(90)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(135)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(180)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(225)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(270)'/%3E%3Crect x='-1' y='-10' width='2' height='4.5' rx='1' transform='rotate(315)'/%3E%3C/g%3E%3C/svg%3E");
-        }
-        .tn-task-checkbox[data-trilium-task-state="maybe"],
-        .todo-list__label input[type="checkbox"][data-trilium-task-state="maybe"] {
-          background-color: #6e6e6e;
-          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ctext x='12' y='17.5' text-anchor='middle' fill='%23fff' font-size='15' font-weight='700' font-family='-apple-system,BlinkMacSystemFont,sans-serif'%3E%3F%3C/text%3E%3C/svg%3E");
-        }
-        .tn-task-checkbox[data-trilium-task-state="cancelled"],
-        .todo-list__label input[type="checkbox"][data-trilium-task-state="cancelled"] {
-          background-color: #c75a5a;
-          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Cline x1='7' y1='7' x2='17' y2='17' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
-        }
-        \(taskStateCycleEnabled ? """
-        .todo-list__label { cursor: pointer; }
-        .todo-list__label input[type="checkbox"][data-trilium-task-state] {
-          pointer-events: auto;
-          cursor: pointer;
-        }
-        """ : "")
-        \(listInteractionEnabled ? "" : """
+        /* Trilium to-do task states: the boxes for every state (TaskStateStyles). */
+        \(taskStates.css)
+        ul.todo-list li > .todo-list__label input[type="checkbox"] { margin-top: 6px; }
+        \(listInteractionEnabled ? """
+        /* A hold on a to-do row opens the state menu, so iOS mustn't start a text selection there. */
+        ul.todo-list .todo-list__label { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: pointer; }
+        .trinote-include ul.todo-list .todo-list__label { -webkit-user-select: auto; user-select: auto; cursor: default; }
+        .trinote-include .todo-list__label input[type="checkbox"] { pointer-events: none; cursor: default; }
+        """ : """
         /* Static preview: no write-back — match include-note disabled look */
-        .todo-list__label input[type="checkbox"]:not([data-trilium-task-state]) { pointer-events: none; opacity: 0.55; cursor: default; }
+        .todo-list__label input[type="checkbox"] { pointer-events: none; opacity: 0.55; cursor: default; }
         """)
         body.trinote-list-reorder ul > li,
         body.trinote-list-reorder ol > li {
@@ -987,6 +945,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         <body>
         \(body)
         \(LinkPreviewHTML.readingViewSnippet(forBody: body))
+        \(TaskStateWebConfig.bundledScript.map { "<script>\n\($0)\ntrinoteTaskStates.configure(\(taskStates.json));\n</script>" } ?? "")
         <script>
         window.__trinoteFind = (function() {
             var HIGHLIGHT = 'trinote-find-hit';
@@ -1360,52 +1319,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             });
         })();
 
-        // Enable todo checkboxes for interactive toggling (+ optional list-item reorder)
+        // To-do checkboxes: a tap sets the next task state, a hold opens the state menu (+ optional list-item reorder)
         (function() {
             if (!\(listInteractionEnabled ? "true" : "false")) return;
             var reorderEnabled = \(checkboxReorderEnabled ? "true" : "false");
-            var cycleEnabled = \(taskStateCycleEnabled ? "true" : "false");
-            var CYCLE = ['none', 'done', 'doing', 'maybe', 'cancelled'];
-            var CYCLE_TITLE = { doing: 'Doing', maybe: 'Maybe', cancelled: 'Cancelled' };
-            function updateStrikethrough(cb) {
-                var label = cb.closest('.todo-list__label');
-                if (!label) return;
-                if (cb.checked && !cb.getAttribute('data-trilium-task-state')) {
-                    label.classList.add('todo-list__label--checked');
-                } else {
-                    label.classList.remove('todo-list__label--checked');
-                }
-            }
-            function currentCycleState(cb) {
-                var custom = cb.getAttribute('data-trilium-task-state');
-                if (custom) return custom;
-                return cb.checked ? 'done' : 'none';
-            }
-            function applyCycleState(cb, state) {
-                var label = cb.closest('.todo-list__label');
-                var li = cb.closest('li');
-                cb.removeAttribute('data-trilium-task-state');
-                cb.checked = false;
-                if (label) {
-                    label.classList.remove('todo-list__label--checked');
-                    label.removeAttribute('title');
-                }
-                if (li) li.removeAttribute('data-trilium-task-state');
-                if (state === 'done') {
-                    cb.checked = true;
-                    if (label) label.classList.add('todo-list__label--checked');
-                } else if (state !== 'none') {
-                    cb.setAttribute('data-trilium-task-state', state);
-                    cb.checked = false;
-                    if (label && CYCLE_TITLE[state]) label.setAttribute('title', CYCLE_TITLE[state]);
-                    if (li) li.setAttribute('data-trilium-task-state', state);
-                }
-            }
-            function nextCycleState(state) {
-                var i = CYCLE.indexOf(state);
-                if (i < 0) i = 0;
-                return CYCLE[(i + 1) % CYCLE.length];
-            }
+            var TS = window.trinoteTaskStates;
             function siblingLis(li) {
                 var parent = li.parentElement;
                 if (!parent) return [];
@@ -1570,7 +1488,25 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             var supportsPointer = typeof window.PointerEvent !== 'undefined';
 
             const boxes = document.querySelectorAll('input[type="checkbox"]');
-            var idx = 0;
+            var interactiveBoxes = [];
+            function postTaskState(cb, name) {
+                try {
+                    window.webkit.messageHandlers.taskStateSet.postMessage({
+                        index: parseInt(cb.dataset.cbIndex, 10),
+                        state: name
+                    });
+                } catch (err) {}
+            }
+            function setTaskState(cb, name) {
+                if (!TS) return;
+                TS.applyToItem(cb.closest('li'), cb, name);
+                postTaskState(cb, name);
+            }
+            // The state menu (native) hands the picked state back here.
+            window.trinoteSetTaskStateAt = function(index, name) {
+                var cb = interactiveBoxes[index];
+                if (cb) setTaskState(cb, name);
+            };
             boxes.forEach(function(cb) {
                 if (cb.closest('.trinote-include')) {
                     cb.setAttribute('disabled', 'disabled');
@@ -1579,53 +1515,58 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 }
                 cb.removeAttribute('disabled');
                 cb.disabled = false;
-                cb.dataset.cbIndex = String(idx);
-                idx += 1;
-                updateStrikethrough(cb);
-                if (cycleEnabled) {
-                    var stateBeforeClick = null;
-                    function cycleFromState(state, e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        var next = nextCycleState(state);
-                        function apply() {
-                            applyCycleState(cb, next);
-                            try {
-                                window.webkit.messageHandlers.checkboxCycle.postMessage({
-                                    index: parseInt(cb.dataset.cbIndex, 10)
-                                });
-                            } catch (err) {}
-                        }
-                        // WebKit may discard `checked` set in the same turn as preventDefault on the input.
-                        if (e.target === cb) requestAnimationFrame(apply);
-                        else apply();
-                    }
-                    // Snapshot before the native checkbox toggle flips `checked`.
-                    cb.addEventListener('pointerdown', function() {
-                        stateBeforeClick = currentCycleState(cb);
-                    });
-                    cb.addEventListener('click', function(e) {
-                        var state = stateBeforeClick != null ? stateBeforeClick : currentCycleState(cb);
-                        stateBeforeClick = null;
-                        cycleFromState(state, e);
-                    });
-                    var label = cb.closest('.todo-list__label');
-                    if (label) {
-                        label.addEventListener('click', function(e) {
-                            if (e.target === cb) return;
-                            cycleFromState(currentCycleState(cb), e);
-                        });
-                    }
-                } else {
-                    cb.addEventListener('change', function() {
-                        updateStrikethrough(this);
-                        window.webkit.messageHandlers.checkboxToggle.postMessage({
-                            index: parseInt(this.dataset.cbIndex, 10),
-                            checked: this.checked
-                        });
+                cb.dataset.cbIndex = String(interactiveBoxes.length);
+                interactiveBoxes.push(cb);
+                if (!TS) return;
+                var li = cb.closest('li');
+                var before = null;
+                function tap(state, checked, e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var next = TS.afterTap(state, checked);
+                    // WebKit may discard `checked` set in the same turn as preventDefault on the input.
+                    if (e.target === cb) requestAnimationFrame(function() { setTaskState(cb, next); });
+                    else setTaskState(cb, next);
+                }
+                // Snapshot before the native toggle flips `checked`.
+                cb.addEventListener('pointerdown', function() {
+                    before = { state: TS.stateOf(li, cb.checked), checked: cb.checked };
+                });
+                cb.addEventListener('click', function(e) {
+                    var snap = before || { state: TS.stateOf(li, !cb.checked), checked: !cb.checked };
+                    before = null;
+                    tap(snap.state, snap.checked, e);
+                });
+                var label = cb.closest('.todo-list__label');
+                if (label) {
+                    label.addEventListener('click', function(e) {
+                        if (e.target === cb) return;
+                        if (e.target.closest && e.target.closest('a')) return;
+                        tap(TS.stateOf(li, cb.checked), cb.checked, e);
                     });
                 }
             });
+            if (TS && TS.config().menu) {
+                TS.attachHold(document.body, {
+                    resolve: function(target) {
+                        if (!target || !target.closest) return null;
+                        if (target.closest('.trinote-include') || target.closest('a')) return null;
+                        var label = target.closest('.todo-list__label');
+                        var cb = label && label.querySelector('input[type="checkbox"]');
+                        return cb && cb.dataset.cbIndex != null ? cb : null;
+                    },
+                    onHold: function(cb) {
+                        var r = cb.getBoundingClientRect();
+                        try {
+                            window.webkit.messageHandlers.taskStateMenu.postMessage({
+                                index: parseInt(cb.dataset.cbIndex, 10),
+                                state: TS.stateOf(cb.closest('li'), cb.checked),
+                                x: r.left, y: r.top, width: r.width, height: r.height
+                            });
+                        } catch (err) {}
+                    }
+                });
+            }
 
             if (!reorderEnabled) return;
             document.body.classList.add('trinote-list-reorder');
@@ -2173,13 +2114,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var checkboxReorderEnabled: Bool = false
         var collapsibleReorderEnabled: Bool = false
         var listInteractionEnabled: Bool = true
-        var taskStateCycleEnabled: Bool = false
+        var taskStates: TaskStateWebConfig = .plain
         var checkboxOnlyRevision: Int = 0
         weak var findControl: FindOnPageControl?
         var lastAppliedColorScheme: ColorScheme?
         var onNoteLinkTapped: ((String) -> Void)?
-        var onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?
-        var onTaskStateCycled: ((_ index: Int) -> Void)?
+        var onTaskStateSet: ((_ index: Int, _ stateName: String) -> Void)?
+        var onEditTaskStates: (() -> Void)?
+        var onTaskStateMenuShown: (() -> Void)?
         var onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?
         var onCollapsibleReordered: ((_ fromIndex: Int, _ beforeChildIndex: Int?) -> Void)?
         var onCollapsibleToggled: ((_ index: Int, _ open: Bool) -> Void)?
@@ -2248,8 +2190,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         init(
             onNoteLinkTapped: ((String) -> Void)?,
-            onCheckboxToggled: ((_ index: Int, _ checked: Bool) -> Void)?,
-            onTaskStateCycled: ((_ index: Int) -> Void)?,
+            onTaskStateSet: ((_ index: Int, _ stateName: String) -> Void)?,
+            onEditTaskStates: (() -> Void)?,
+            onTaskStateMenuShown: (() -> Void)?,
             onCheckboxReordered: ((_ fromIndex: Int, _ beforeIndex: Int?) -> Void)?,
             onCollapsibleReordered: ((_ fromIndex: Int, _ beforeChildIndex: Int?) -> Void)?,
             onCollapsibleToggled: ((_ index: Int, _ open: Bool) -> Void)?,
@@ -2259,8 +2202,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             onImagePreview: ((FullScreenImagePayload) -> Void)?
         ) {
             self.onNoteLinkTapped = onNoteLinkTapped
-            self.onCheckboxToggled = onCheckboxToggled
-            self.onTaskStateCycled = onTaskStateCycled
+            self.onTaskStateSet = onTaskStateSet
+            self.onEditTaskStates = onEditTaskStates
+            self.onTaskStateMenuShown = onTaskStateMenuShown
             self.onCheckboxReordered = onCheckboxReordered
             self.onCollapsibleReordered = onCollapsibleReordered
             self.onCollapsibleToggled = onCollapsibleToggled
@@ -2272,6 +2216,28 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             NoteOpenTrace.log("web didFail \(error.localizedDescription)")
+        }
+
+        /// The state menu a held checkbox opens, as a popover at the box (`rect` is in the page's viewport, which is
+        /// the web view's own bounds). The picked state goes back through the page, which posts `taskStateSet`.
+        private func showTaskStateMenu(index: Int, current: String, rect: CGRect, in webView: WKWebView) {
+            let states = taskStates.menuStates
+            guard !states.isEmpty else { return }
+            onTaskStateMenuShown?()
+            TaskStateMenuPresenter.present(
+                states: states,
+                current: current,
+                from: webView,
+                rect: rect,
+                onPick: { [weak webView] name in
+                    guard let webView, name != current,
+                          let literal = try? JSONEncoder().encode(name),
+                          let argument = String(data: literal, encoding: .utf8)
+                    else { return }
+                    webView.evaluateJavaScript("window.trinoteSetTaskStateAt && window.trinoteSetTaskStateAt(\(index), \(argument));")
+                },
+                onEditStates: onEditTaskStates
+            )
         }
 
         /// iOS ended the page's process, often while the app is in the background. WebKit's own reload brings a page
@@ -2295,7 +2261,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 theme: themeColors,
                 checkboxReorderEnabled: checkboxReorderEnabled,
                 listInteractionEnabled: listInteractionEnabled,
-                taskStateCycleEnabled: taskStateCycleEnabled,
+                taskStates: taskStates,
                 collapsibleReorderEnabled: collapsibleReorderEnabled,
                 collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
             )
@@ -2338,24 +2304,25 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 if let s = message.body as? String {
                     Log.ui.debug("[INCLUDE] HTMLNoteView JS: \(s, privacy: .public)")
                 }
-            case "checkboxToggle":
+            case "taskStateSet":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
                       let index = Self.intFromScriptValue(dict["index"]),
-                      let checked = Self.boolFromScriptValue(dict["checked"])
-                else {
-                    CheckboxPerf.log("js checkboxToggle parse-failed")
-                    return
-                }
-                CheckboxPerf.log("js checkboxToggle index=\(index) checked=\(checked) (native toggleCheckbox next)")
-                onCheckboxToggled?(index, checked)
-            case "checkboxCycle":
+                      let state = dict["state"] as? String, !state.isEmpty
+                else { return }
+                onTaskStateSet?(index, state)
+            case "taskStateMenu":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
-                      let index = Self.intFromScriptValue(dict["index"])
-                else {
-                    CheckboxPerf.log("js checkboxCycle parse-failed")
-                    return
-                }
-                onTaskStateCycled?(index)
+                      let index = Self.intFromScriptValue(dict["index"]),
+                      let webView
+                else { return }
+                let current = (dict["state"] as? String) ?? TaskStateCatalog.noneName
+                let rect = CGRect(
+                    x: Self.cgFloatFromScriptValue(dict["x"]) ?? 0,
+                    y: Self.cgFloatFromScriptValue(dict["y"]) ?? 0,
+                    width: Self.cgFloatFromScriptValue(dict["width"]) ?? 18,
+                    height: Self.cgFloatFromScriptValue(dict["height"]) ?? 18
+                )
+                showTaskStateMenu(index: index, current: current, rect: rect, in: webView)
             case "checkboxReorder":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
                       let fromIndex = Self.intFromScriptValue(dict["fromIndex"])

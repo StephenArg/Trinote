@@ -274,8 +274,7 @@ final class MarkdownToNoteHTMLTests: XCTestCase {
         """
         let html = MarkdownToNoteHTML.convert(md, options: .preview)
         XCTAssertTrue(html.contains("<ul class=\"todo-list\">"), html)
-        XCTAssertTrue(html.contains("todo-list__label--checked"), html)
-        XCTAssertTrue(html.contains("checked"), html)
+        XCTAssertTrue(html.contains("<input type=\"checkbox\" checked disabled>"), html)
         XCTAssertTrue(html.contains("Define SLI"), html)
         XCTAssertTrue(html.contains("Wire alerts to runbooks"), html)
         XCTAssertTrue(html.contains("data-trilium-task-state=\"doing\""), html)
@@ -290,38 +289,55 @@ final class MarkdownToNoteHTMLTests: XCTestCase {
         XCTAssertFalse(html.contains("[-] Cancelled"), html)
     }
 
-    func testCyclingTaskStateOrder() {
-        var md = "- [ ] one"
-        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
-        XCTAssertEqual(md, "- [x] one")
-        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
-        XCTAssertEqual(md, "- [/] one")
-        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
-        XCTAssertEqual(md, "- [?] one")
-        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
-        XCTAssertEqual(md, "- [-] one")
-        md = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 0)!
-        XCTAssertEqual(md, "- [ ] one")
+    /// Trilium's markup: the state and its title on the `<li>` only; `checked` only for completed states.
+    func testPreviewTaskStateMarkupMatchesTrilium() {
+        let html = MarkdownToNoteHTML.convert("- [/] Doing it", options: .preview)
+        XCTAssertTrue(html.contains("<li data-trilium-task-state=\"doing\" title=\"Doing\"><label class=\"todo-list__label\"><input type=\"checkbox\" disabled>"), html)
+        XCTAssertFalse(html.contains("<input type=\"checkbox\" data-trilium-task-state"), html)
     }
 
-    func testCyclingTaskStateByIndex() {
+    func testPreviewUsesServerSymbolsAndCompletion() {
+        var wontDo = TaskStateCatalog.defaultCustom[2]
+        wontDo.name = "_wontdo"
+        wontDo.title = "Won't do"
+        wontDo.markdownSymbol = "~"
+        wontDo.isCompleted = true
+        let states = [TaskStateCatalog.none, TaskStateCatalog.done, wontDo]
+        let html = MarkdownToNoteHTML.convert("- [~] Skip it\n- [/] Not a state here", options: .preview(taskStates: states))
+        XCTAssertTrue(html.contains("data-trilium-task-state=\"_wontdo\" title=\"Won&#39;t do\""), html)
+        XCTAssertTrue(html.contains("<input type=\"checkbox\" checked disabled>"), html)
+        // A symbol no state defines stays plain text.
+        XCTAssertTrue(html.contains("[/] Not a state here"), html)
+    }
+
+    func testSettingTaskStateWritesSymbol() {
         let md = """
         - [ ] a
         - [/] b
-        - [x] c
+        * [x] c
         """
-        let next = MarkdownToNoteHTML.cyclingTaskState(in: md, at: 1)
-        XCTAssertEqual(next, """
+        XCTAssertEqual(MarkdownToNoteHTML.settingTaskState(in: md, at: 1, symbol: "?"), """
         - [ ] a
         - [?] b
-        - [x] c
+        * [x] c
         """)
-        XCTAssertNil(MarkdownToNoteHTML.cyclingTaskState(in: md, at: 9))
+        XCTAssertEqual(MarkdownToNoteHTML.settingTaskState(in: md, at: 2, symbol: " "), """
+        - [ ] a
+        - [/] b
+        * [ ] c
+        """)
+        var tilde = TaskStateCatalog.defaultCustom[0]
+        tilde.markdownSymbol = "~"
+        XCTAssertEqual(MarkdownToNoteHTML.settingTaskState(in: "- [~] custom", at: 0, symbol: "x", states: [tilde]), "- [x] custom")
+        // `[a]` isn't a task item in the preview, so it isn't counted either.
+        XCTAssertEqual(MarkdownToNoteHTML.settingTaskState(in: "- [a] note\n- [ ] task", at: 0, symbol: "x"), "- [a] note\n- [x] task")
+        XCTAssertNil(MarkdownToNoteHTML.settingTaskState(in: md, at: 9, symbol: "x"))
+        XCTAssertNil(MarkdownToNoteHTML.settingTaskState(in: md, at: 0, symbol: " "), "no change")
     }
 
     func testEqualsIgnoringTaskMarkers() {
         let a = "- [ ] one\n- [/] two"
-        let b = "- [x] one\n- [?] two"
+        let b = "- [x] one\n- [~] two"
         XCTAssertTrue(MarkdownToNoteHTML.equalsIgnoringTaskMarkers(a, b))
         XCTAssertFalse(MarkdownToNoteHTML.equalsIgnoringTaskMarkers(a, "- [ ] one\n- [/] changed"))
     }

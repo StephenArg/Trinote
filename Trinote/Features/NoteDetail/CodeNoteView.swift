@@ -1,6 +1,12 @@
 import SwiftUI
 import UIKit
 
+/// Re-renders Markdown when its text or the server's task states change.
+private struct MarkdownRenderKey: Equatable {
+    let content: String
+    let states: [TaskStateDefinition]
+}
+
 private enum CodeNoteTextWidthKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -20,8 +26,14 @@ struct CodeNoteView: View {
     var loadAttachmentPreview: ((String) async -> AttachmentPreviewItem?)?
     /// Called when the user picks a new language from the MIME pill.
     var onMimeSelected: ((String) -> Void)?
-    /// Cycles a Markdown todo marker in the source (`[ ]`→`[x]`→`[/]`→`[?]`→`[-]`).
-    var onTaskStateCycled: ((Int) -> Void)?
+    /// Sets the `index`-th Markdown to-do item to a task state (writes its symbol into the source).
+    var onTaskStateSet: ((_ index: Int, _ stateName: String) -> Void)?
+    /// Edit States in the state menu.
+    var onEditTaskStates: (() -> Void)?
+    /// The state menu opened.
+    var onTaskStateMenuShown: (() -> Void)?
+    /// The task states the rendered Markdown draws and offers.
+    var taskStates: TaskStateWebConfig = .plain
     /// Matches text-note checkbox toggles: lets `HTMLNoteView` skip a full reload when only a task state changed.
     var checkboxOnlyRevision: Int = 0
 
@@ -34,8 +46,10 @@ struct CodeNoteView: View {
     /// rendered/source toggle on iOS for `text/markdown` notes; defaults to rendered since
     /// reading is the primary use case in the mobile reader.
     @State private var markdownShowSource = false
-    /// Last markdown we fully converted into `renderedHTML` (for cycle-only skip).
+    /// Last markdown we fully converted into `renderedHTML` (for state-change-only skip).
     @State private var lastConvertedMarkdown: String?
+    /// The task states `renderedHTML` was converted with.
+    @State private var lastConvertedStates: [TaskStateDefinition]?
 
     private var isMarkdown: Bool {
         CodeNoteLanguage.isMarkdownMime(mime)
@@ -95,11 +109,13 @@ struct CodeNoteView: View {
                     baseURL: baseURL,
                     checkboxOnlyRevision: checkboxOnlyRevision,
                     onNoteLinkTapped: onNoteLinkTapped,
-                    onTaskStateCycled: onTaskStateCycled,
+                    onTaskStateSet: onTaskStateSet,
+                    onEditTaskStates: onEditTaskStates,
+                    onTaskStateMenuShown: onTaskStateMenuShown,
                     loadAttachmentPreview: loadAttachmentPreview,
                     findControl: findControl,
-                    listInteractionEnabled: onTaskStateCycled != nil,
-                    taskStateCycleEnabled: onTaskStateCycled != nil,
+                    listInteractionEnabled: onTaskStateSet != nil,
+                    taskStates: taskStates,
                     allowListReorder: false,
                     allowCollapsibleReorder: false
                 )
@@ -122,35 +138,39 @@ struct CodeNoteView: View {
                 .background(Color(.secondarySystemGroupedBackground))
             }
         }
-        .task(id: content) {
+        .task(id: MarkdownRenderKey(content: content, states: taskStates.states)) {
             guard isMarkdown else {
                 renderedHTML = ""
                 lastConvertedMarkdown = nil
                 return
             }
             let source = content
-            // Task-state cycles already mutate the live DOM; skip reconvert+reload to avoid flicker.
-            if let previous = lastConvertedMarkdown,
+            let states = taskStates.states
+            // Task-state changes already updated the live DOM; skip reconvert+reload to avoid flicker.
+            if let previous = lastConvertedMarkdown, lastConvertedStates == states,
                MarkdownToNoteHTML.equalsIgnoringTaskMarkers(previous, source) {
                 lastConvertedMarkdown = source
                 return
             }
             // Convert on the calling executor so the first paint is real HTML (async left a blank flash).
-            let html = MarkdownToNoteHTML.convert(source, options: .preview)
+            let html = MarkdownToNoteHTML.convert(source, options: .preview(taskStates: states))
             renderedHTML = html
             lastConvertedMarkdown = source
+            lastConvertedStates = states
         }
         .onChange(of: markdownShowSource) { _, showSource in
-            // Cycles leave `renderedHTML` intentionally stale (live DOM already matches). Reconvert
+            // State changes leave `renderedHTML` intentionally stale (live DOM already matches). Reconvert
             // when returning to rendered mode so a remounted WebView shows the saved markers.
             guard isMarkdown, !showSource else { return }
             let source = content
+            let states = taskStates.states
             Task {
                 let html = await Task.detached(priority: .userInitiated) {
-                    MarkdownToNoteHTML.convert(source, options: .preview)
+                    MarkdownToNoteHTML.convert(source, options: .preview(taskStates: states))
                 }.value
                 renderedHTML = html
                 lastConvertedMarkdown = source
+                lastConvertedStates = states
             }
         }
         .onPreferenceChange(CodeNoteTextWidthKey.self) { w in

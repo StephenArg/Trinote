@@ -35,6 +35,8 @@ final class NoteDetailViewModel {
     /// The read-only WebView uses this to skip a `loadHTMLString` it doesn't need — JS already
     /// updated the live DOM.
     private(set) var checkboxOnlyContentRevision = 0
+    /// When a hold on a to-do checkbox last opened the state menu; the reader's hold-to-edit stands down for it.
+    @ObservationIgnored var taskStateMenuShownAt: Date?
     private var rawContentString: String?
     var attachments: [AttachmentItem] = []
     /// Set once `loadAttachments` has finished (or can't run), so an empty `attachments` means there are none.
@@ -1596,105 +1598,49 @@ final class NoteDetailViewModel {
         }
     }
 
-    // MARK: - Checkbox Toggle
+    // MARK: - To-do Task States
 
-    func toggleCheckbox(index: Int, checked: Bool) {
-        let id = CheckboxPerf.nextID()
-        let t0 = CFAbsoluteTimeGetCurrent()
-        guard let raw = rawContentString ?? contentString else {
-            CheckboxPerf.log("toggle #\(id) abort=no-body index=\(index) checked=\(checked)")
-            return
+    /// Sets the to-do item whose checkbox is the `index`-th on the read-only page (included-note cards not counted)
+    /// to `stateName`, as Trilium stores it, and queues the body for upload. The page already shows the change.
+    func setTaskState(index: Int, stateName: String) {
+        guard let raw = rawContentString ?? contentString else { return }
+        let definition = appState.taskStates.definition(named: stateName)
+        let isCompleted = stateName == TaskStateCatalog.doneName || definition?.isCompleted == true
+        let title = definition?.displayTitle
+        guard let newRaw = TodoTaskStateHTML.settingState(
+            stateName, isCompleted: isCompleted, title: title, checkboxIndex: index, in: raw
+        ) else { return }
+        rawContentString = newRaw
+        serverContentHash = newRaw.hashValue
+
+        if let display = contentString,
+           let newDisplay = TodoTaskStateHTML.settingState(
+               stateName, isCompleted: isCompleted, title: title, checkboxIndex: index, in: display
+           ) {
+            // Bump before assigning so the web view keeps its live page instead of reloading.
+            checkboxOnlyContentRevision += 1
+            contentString = newDisplay
         }
-        let usedRawFallback = rawContentString == nil
-        let display = contentString
-        CheckboxPerf.log(
-            "toggle #\(id) start index=\(index) checked=\(checked) note=\(self.noteId) usedRawFallback=\(usedRawFallback) raw[\(CheckboxPerf.bodyStats(raw))] display[\(display.map(CheckboxPerf.bodyStats) ?? "nil")]"
-        )
-
-        let checkboxPattern = try! NSRegularExpression(
-            pattern: #"<input\s+[^>]*type\s*=\s*["']checkbox["'][^>]*/?\s*>"#,
-            options: .caseInsensitive
-        )
-        let tRegexRaw = CFAbsoluteTimeGetCurrent()
-        let nsRaw = raw as NSString
-        let matches = checkboxPattern.matches(in: raw, range: NSRange(location: 0, length: nsRaw.length))
-        CheckboxPerf.log(
-            "toggle #\(id) regexRaw ms=\(CheckboxPerf.ms(tRegexRaw)) matches=\(matches.count) index=\(index)"
-        )
-
-        guard index < matches.count else {
-            CheckboxPerf.log("toggle #\(id) abort=index-out-of-range matches=\(matches.count)")
-            return
-        }
-        let matchRange = matches[index].range
-        let original = nsRaw.substring(with: matchRange)
-
-        var updated: String
-        if checked {
-            if original.contains("checked") {
-                CheckboxPerf.log("toggle #\(id) abort=already-checked")
-                return
-            }
-            updated = original.replacingOccurrences(of: ">", with: " checked=\"checked\">")
-            // Handle self-closing tags
-            updated = updated.replacingOccurrences(of: "/ checked=\"checked\">", with: " checked=\"checked\" />")
-        } else {
-            updated = original
-                .replacingOccurrences(of: " checked=\"checked\"", with: "")
-                .replacingOccurrences(of: " checked", with: "")
-                .replacingOccurrences(of: "checked=\"checked\" ", with: "")
-                .replacingOccurrences(of: "checked ", with: "")
-        }
-
-        let newRaw = (raw as NSString).replacingCharacters(in: matchRange, with: updated)
-        self.rawContentString = newRaw
-        let tHash = CFAbsoluteTimeGetCurrent()
-        self.serverContentHash = newRaw.hashValue
-        CheckboxPerf.log("toggle #\(id) hashRaw ms=\(CheckboxPerf.ms(tHash))")
-
-        if let display {
-            let tRegexDisplay = CFAbsoluteTimeGetCurrent()
-            let nsDisplay = display as NSString
-            let displayMatches = checkboxPattern.matches(in: display, range: NSRange(location: 0, length: nsDisplay.length))
-            CheckboxPerf.log(
-                "toggle #\(id) regexDisplay ms=\(CheckboxPerf.ms(tRegexDisplay)) matches=\(displayMatches.count)"
-            )
-            if index < displayMatches.count {
-                let displayOriginal = nsDisplay.substring(with: displayMatches[index].range)
-                var displayUpdated: String
-                if checked {
-                    displayUpdated = displayOriginal.replacingOccurrences(of: ">", with: " checked=\"checked\">")
-                    displayUpdated = displayUpdated.replacingOccurrences(of: "/ checked=\"checked\">", with: " checked=\"checked\" />")
-                } else {
-                    displayUpdated = displayOriginal
-                        .replacingOccurrences(of: " checked=\"checked\"", with: "")
-                        .replacingOccurrences(of: " checked", with: "")
-                        .replacingOccurrences(of: "checked=\"checked\" ", with: "")
-                        .replacingOccurrences(of: "checked ", with: "")
-                }
-                let tAssign = CFAbsoluteTimeGetCurrent()
-                self.checkboxOnlyContentRevision += 1
-                self.contentString = (display as NSString).replacingCharacters(in: displayMatches[index].range, with: displayUpdated)
-                CheckboxPerf.log(
-                    "toggle #\(id) assignDisplay ms=\(CheckboxPerf.ms(tAssign)) checkboxOnlyRevision=\(self.checkboxOnlyContentRevision)"
-                )
-            } else {
-                CheckboxPerf.log("toggle #\(id) display-index-miss displayMatches=\(displayMatches.count)")
-            }
-        }
-
-        CheckboxPerf.lastToggleEndedAt = CFAbsoluteTimeGetCurrent()
-        saveNoteBodyChange(newRaw, toggleID: id)
-        CheckboxPerf.lastToggleEndedAt = CFAbsoluteTimeGetCurrent()
-        CheckboxPerf.log("toggle #\(id) nativeDone ms=\(CheckboxPerf.ms(t0)) (SwiftUI updateUIView follows)")
+        saveNoteBodyChange(newRaw)
     }
 
-    // MARK: - Markdown Task State Cycle
+    // MARK: - Markdown Task States
 
-    /// Cycles the `index`-th Markdown todo marker: `[ ]` → `[x]` → `[/]` → `[?]` → `[-]` → `[ ]`.
-    func cycleMarkdownTaskState(index: Int) {
+    /// Sets the `index`-th Markdown to-do item to `stateName` by writing its symbol (`[ ]`, `[x]`, `[/]` …) into the
+    /// source. A state without a Markdown symbol can't be stored in Markdown, so it's ignored.
+    func setMarkdownTaskState(index: Int, stateName: String) {
         guard let raw = contentString else { return }
-        guard let newRaw = MarkdownToNoteHTML.cyclingTaskState(in: raw, at: index) else { return }
+        let symbol: String
+        switch stateName {
+        case TaskStateCatalog.noneName: symbol = " "
+        case TaskStateCatalog.doneName: symbol = "x"
+        default:
+            guard let defined = appState.taskStates.definition(named: stateName)?.markdownSymbol, !defined.isEmpty else { return }
+            symbol = defined
+        }
+        guard let newRaw = MarkdownToNoteHTML.settingTaskState(
+            in: raw, at: index, symbol: symbol, states: appState.taskStates.states
+        ) else { return }
         // Bump before assigning content so the WebView can skip reload in the same update cycle.
         self.checkboxOnlyContentRevision += 1
         self.contentString = newRaw

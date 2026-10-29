@@ -385,6 +385,12 @@ struct SettingsView: View {
                 String(localized: "Reorder List Items", comment: "Settings toggle: show drag handles to reorder bullet, numbered, and checkbox list items in read-only notes"),
                 isOn: $noteCheckboxReorderEnabled
             )
+            NavigationLink {
+                TaskStatesSettingsView()
+                    .environment(appState)
+            } label: {
+                Text(String(localized: "To-do Task States", comment: "Settings link to the to-do task states screen"))
+            }
             Toggle(
                 String(localized: "Split Editor Toolbar", comment: "Settings toggle: move insert tools to a top toolbar above the note"),
                 isOn: $noteEditorInsertToolsAtTop

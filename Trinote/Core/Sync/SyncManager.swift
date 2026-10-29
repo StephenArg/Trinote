@@ -373,6 +373,11 @@ final class SyncManager {
         )
     }
 
+    private func announceTaskStatesChangedIfNeeded(_ pull: EntityPullResult, profileId: String) {
+        guard pull.touchesTaskStates else { return }
+        NotificationCenter.default.post(name: .trinoteTaskStatesChanged, object: nil, userInfo: ["profileId": profileId])
+    }
+
     private func isStale(_ generation: UInt64) -> Bool {
         Task.isCancelled || self.syncGeneration != generation
     }
@@ -485,6 +490,7 @@ final class SyncManager {
                     reportsProgress: false
                 ) else { return }
                 announceProtectedNotesSynced(pull.protectedNoteIds, profileId: profileId)
+                announceTaskStatesChangedIfNeeded(pull, profileId: profileId)
                 if pull.appliedCount > 0 || pull.deletionCount > 0 { changedLocalDatabase = true }
                 if pull.serverBehindCursor {
                     // The server's history restarted (restored or replaced); the walk just read everything, so
@@ -561,6 +567,7 @@ final class SyncManager {
                 reportsProgress: true
             ) else { return }
             announceProtectedNotesSynced(pull.protectedNoteIds, profileId: profileId)
+            announceTaskStatesChangedIfNeeded(pull, profileId: profileId)
             let totalApplied = pull.appliedCount
             var deletionCount = pull.deletionCount
             let notesToRefreshContent = pull.notesToRefreshContent
@@ -677,6 +684,8 @@ final class SyncManager {
         var gaveUp = false
         /// Protected notes the pull wrote (their titles came encrypted and were left as they were).
         var protectedNoteIds: Set<String> = []
+        /// The pull changed a to-do task state definition.
+        var touchesTaskStates = false
         /// The server's newest change id is below the saved cursor: its database was restored or replaced.
         var serverBehindCursor = false
     }
@@ -753,6 +762,7 @@ final class SyncManager {
             result.deletionCount += applied.deletionCount
             result.notesToRefreshContent = applied.notesToRefreshContent
             result.protectedNoteIds.formUnion(applied.protectedNoteIds)
+            if applied.touchesTaskStates { result.touchesTaskStates = true }
             for erasedNoteId in applied.erasedNoteIds {
                 try? cacheExclusion.removeExcludedRootNoteIfNeeded(noteId: erasedNoteId, serverProfileId: profileId)
             }

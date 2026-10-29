@@ -164,6 +164,15 @@ enum TriliumServerCompatibility {
         return isAppVersion(info.appVersion, atLeast: boardOverhaulMinAppVersion)
     }
 
+    /// Trilium release that added configurable to-do task states (the hidden `_taskStates` note).
+    static let customTaskStatesMinAppVersion = "0.104.0"
+
+    /// `true` when `/api/app-info` reports Trilium v0.104.0 or newer (custom to-do task states).
+    static func supportsCustomTaskStates(_ info: AppInfoResponse?) -> Bool {
+        guard let info else { return false }
+        return isAppVersion(info.appVersion, atLeast: customTaskStatesMinAppVersion)
+    }
+
     /// Trilium release that added `POST /api/notes/metadata` (the timestamps of several notes in one request).
     static let bulkNoteMetadataMinAppVersion = "0.106.0"
 

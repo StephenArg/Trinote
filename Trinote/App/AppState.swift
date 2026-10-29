@@ -10,7 +10,11 @@ final class AppState {
     /// they use its signed-in client instead of building a second one. Set by `TrinoteApp`; tests leave it nil.
     static weak var current: AppState?
 
-    var activeProfile: ServerProfile?
+    var activeProfile: ServerProfile? {
+        didSet {
+            if activeProfile?.id != oldValue?.id { taskStates.activate(profileId: activeProfile?.id) }
+        }
+    }
     var client: (any TriliumClientProtocol)?
     var isAuthenticated = false {
         didSet {
@@ -19,6 +23,7 @@ final class AppState {
             if isAuthenticated, let profileId = activeProfile?.id {
                 OfflineSearchIndex.shared.scheduleRefresh(profileId: profileId, minimumInterval: 60)
                 Task { await self.refreshAIConfig() }
+                Task { await self.refreshTaskStates() }
             }
         }
     }
@@ -35,6 +40,9 @@ final class AppState {
     /// Trilium's "auto link previews" option (`textNoteAutoLinkPreviewsEnabled`), read with the server's other options.
     /// On until the server says otherwise; it only decides whether pasted or typed URLs become link previews.
     private(set) var serverAutoLinkPreviewsEnabled = true
+    /// The server's to-do task states and Trinote's tap choice, for the active profile.
+    let taskStates = TaskStateStore()
+    @ObservationIgnored private var taskStatesChangedObserver: NSObjectProtocol?
     /// In-memory: whether the user has unlocked protected notes. The session ends when Trinote leaves the foreground
     /// or, with Lock Protected Notes set to After Server Timeout, once the server's timeout passes without a protected
     /// note being opened or saved (`ProtectedSessionLockPolicy`). It also ends after restoring the main login (see
@@ -1365,6 +1373,7 @@ final class AppState {
                 Task { @MainActor in
                     await self?.refreshServerAppInfo()
                     await self?.refreshAIConfig()
+                    await self?.refreshTaskStates()
                 }
             }
         )
@@ -1412,6 +1421,31 @@ final class AppState {
             Log.api.warning("Could not read the server's AI options: \(error)")
         }
         return aiConfig
+    }
+
+    // MARK: - To-do task states
+
+    /// Re-reads the server's task states (`_taskStates`): after sign-in, on reconnect, when a sync pull touches them and
+    /// when the Task States screen appears or writes. Offline, the remembered list stays.
+    func refreshTaskStates() async {
+        observeTaskStatesChangedIfNeeded()
+        guard let profile = activeProfile else { return }
+        taskStates.activate(profileId: profile.id)
+        guard networkMonitor.isConnected, isAuthenticated, let client else { return }
+        await taskStates.refresh(client: client, serverInfo: serverAppInfo, profileId: profile.id)
+    }
+
+    private func observeTaskStatesChangedIfNeeded() {
+        guard taskStatesChangedObserver == nil else { return }
+        taskStatesChangedObserver = NotificationCenter.default.addObserver(
+            forName: .trinoteTaskStatesChanged, object: nil, queue: .main
+        ) { [weak self] notification in
+            let profileId = notification.userInfo?["profileId"] as? String
+            Task { @MainActor in
+                guard let self, profileId == self.activeProfile?.id else { return }
+                await self.refreshTaskStates()
+            }
+        }
     }
 
     /// Writes AI options (`PUT /api/options`), then re-reads them so the screens show what the server holds.
@@ -1829,6 +1863,7 @@ final class AppState {
         try? await keychain.deleteCloudflareAccessCredentials(forServer: profile.id)
         OfflineCacheSettings.remove(profileId: profile.id)
         ProtectedSessionTimeout.forgetServerValue(profileId: profile.id)
+        TaskStateStore.forget(profileId: profile.id)
         do {
             try persistence.clearCache(for: profile.id)
             try persistence.deleteProfile(profile)

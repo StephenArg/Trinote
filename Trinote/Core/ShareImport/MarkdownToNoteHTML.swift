@@ -7,57 +7,62 @@ enum MarkdownToNoteHTML {
     struct Options: Equatable {
         /// Turn ` ```mermaid ` fences into `<div class="mermaid">` for HTMLNoteView’s inline renderer.
         var mermaidFencesAsDiagrams = false
-        /// Parse GFM / Trilium task items (`[ ]`/`[x]`/`[/]`/`[?]`/`[-]`) into `ul.todo-list` markup.
+        /// Parse GFM / Trilium task items (`[ ]`, `[x]` and each state's Markdown symbol) into `ul.todo-list` markup.
         var taskLists = false
+        /// The task states whose symbols `taskLists` recognizes (the server's, in a Markdown note's preview).
+        var taskStates: [TaskStateDefinition] = TaskStateCatalog.defaults
 
         static let noteImport = Options()
         static let preview = Options(mermaidFencesAsDiagrams: true, taskLists: true)
+
+        /// `preview` with the server's task states.
+        static func preview(taskStates: [TaskStateDefinition]) -> Options {
+            var options = preview
+            options.taskStates = taskStates
+            return options
+        }
     }
 
-    /// Cycle order for interactive Markdown todos: `[ ]` → `[x]` → `[/]` → `[?]` → `[-]` → `[ ]`.
-    static let taskStateCycleMarkers: [Character] = [" ", "x", "/", "?", "-"]
-
-    /// Advances the `index`-th unordered task marker (`- [ ]` / `- [x]` / …) one step in
-    /// ``taskStateCycleMarkers``. Returns `nil` when `index` is out of range.
-    static func cyclingTaskState(in markdown: String, at index: Int) -> String? {
-        guard index >= 0 else { return nil }
-        let pattern = try! NSRegularExpression(
-            pattern: #"(?m)^([ \t]*[-*+][ \t]+)\[([ Xx/\?-])\]"#
-        )
+    /// Sets the `index`-th unordered task item (`- [ ]` / `- [x]` / `- [/]` …) to `symbol`: `" "` for None, `"x"` for
+    /// Done, or a state's Markdown symbol. Items are counted as the preview draws them: a marker only makes a task item
+    /// when it is a space, `x` or one of `states`' symbols. Returns `nil` when `index` is out of range or nothing changes.
+    static func settingTaskState(
+        in markdown: String,
+        at index: Int,
+        symbol: String,
+        states: [TaskStateDefinition] = TaskStateCatalog.defaults
+    ) -> String? {
+        guard index >= 0, symbol.count == 1 else { return nil }
         let ns = markdown as NSString
-        let matches = pattern.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
-        guard index < matches.count else { return nil }
-        let midRange = matches[index].range(at: 2)
-        guard midRange.location != NSNotFound, midRange.length == 1 else { return nil }
-        let current = ns.substring(with: midRange)
-        let next = nextTaskStateMarker(current)
-        return ns.replacingCharacters(in: midRange, with: String(next))
+        let known = Set(states.filter { !$0.isAnchor }.map(\.markdownSymbol)).union([" ", "x", "X"])
+        let markers = taskMarkerPattern.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
+            .map { $0.range(at: 2) }
+            .filter { $0.location != NSNotFound && $0.length == 1 && known.contains(ns.substring(with: $0)) }
+        guard index < markers.count else { return nil }
+        let midRange = markers[index]
+        guard ns.substring(with: midRange) != symbol else { return nil }
+        return ns.replacingCharacters(in: midRange, with: symbol)
     }
 
-    /// True when `a` and `b` are identical after normalizing GFM/Trilium task markers to `[ ]`.
-    /// Used to skip Markdown→HTML reconvert (and WebView reload) on checkbox state cycles.
+    /// A task item's marker: the list bullet, then any single character in brackets.
+    private static let taskMarkerPattern = try! NSRegularExpression(
+        pattern: #"(?m)^([ \t]*[-*+][ \t]+)\[([^\]\n])\]"#
+    )
+
+    /// True when `a` and `b` are identical after normalizing task markers to `[ ]`.
+    /// Used to skip Markdown→HTML reconvert (and WebView reload) when only a task state changed.
     static func equalsIgnoringTaskMarkers(_ a: String, _ b: String) -> Bool {
         if a == b { return true }
         return normalizingTaskMarkers(a) == normalizingTaskMarkers(b)
     }
 
     private static func normalizingTaskMarkers(_ markdown: String) -> String {
-        let pattern = try! NSRegularExpression(pattern: #"\[([ Xx/\?-])\]"#)
         let ns = markdown as NSString
-        return pattern.stringByReplacingMatches(
+        return taskMarkerPattern.stringByReplacingMatches(
             in: markdown,
             range: NSRange(location: 0, length: ns.length),
-            withTemplate: "[ ]"
+            withTemplate: "$1[ ]"
         )
-    }
-
-    private static func nextTaskStateMarker(_ current: String) -> Character {
-        let ch = current.first ?? " "
-        let normalized: Character = (ch == "X") ? "x" : ch
-        if let i = taskStateCycleMarkers.firstIndex(of: normalized) {
-            return taskStateCycleMarkers[(i + 1) % taskStateCycleMarkers.count]
-        }
-        return "x"
     }
 
     static func convert(_ markdown: String, options: Options = .noteImport) -> String {
@@ -306,7 +311,7 @@ enum MarkdownToNoteHTML {
             // Lists (ordered / unordered), including nested via indent
             if var listItem = matchListItem(line) {
                 flushParagraph()
-                if options.taskLists, !listItem.ordered, let task = matchTaskListMarker(listItem.text) {
+                if options.taskLists, !listItem.ordered, let task = matchTaskListMarker(listItem.text, states: options.taskStates) {
                     listItem.taskState = task.state
                     listItem.text = task.rest
                 }
@@ -451,31 +456,17 @@ enum MarkdownToNoteHTML {
         let isTodoList: Bool
     }
 
-    /// Trilium/GFM task-list states. Custom states use `data-trilium-task-state`.
-    private enum TaskListState: Equatable {
-        case unchecked
-        case checked
-        case doing
-        case maybe
-        case cancelled
+    /// A task item's state as Trilium stores it: `name` goes in `data-trilium-task-state` (not for None and Done),
+    /// `isCompleted` sets `checked`.
+    private struct TaskListState: Equatable {
+        let name: String
+        let title: String
+        let isCompleted: Bool
 
-        var dataAttributeValue: String? {
-            switch self {
-            case .doing: return "doing"
-            case .maybe: return "maybe"
-            case .cancelled: return "cancelled"
-            case .unchecked, .checked: return nil
-            }
-        }
+        var isAnchor: Bool { TaskStateCatalog.isAnchor(name) }
 
-        var title: String? {
-            switch self {
-            case .doing: return "Doing"
-            case .maybe: return "Maybe"
-            case .cancelled: return "Cancelled"
-            case .unchecked, .checked: return nil
-            }
-        }
+        static let unchecked = TaskListState(name: TaskStateCatalog.noneName, title: "", isCompleted: false)
+        static let checked = TaskListState(name: TaskStateCatalog.doneName, title: "", isCompleted: true)
     }
 
     private struct ListItemMatch {
@@ -489,30 +480,17 @@ enum MarkdownToNoteHTML {
     }
 
     private static func openListItemMarkup(taskState: TaskListState?) -> String {
-        if let name = taskState?.dataAttributeValue {
-            return "<li data-trilium-task-state=\"\(name)\">"
-        }
-        return "<li>"
+        guard let taskState, !taskState.isAnchor else { return "<li>" }
+        return "<li data-trilium-task-state=\"\(escapeAttribute(taskState.name))\" title=\"\(escapeAttribute(taskState.title))\">"
     }
 
     private static func renderTodoListLabel(state: TaskListState, descriptionHTML: String) -> String {
-        switch state {
-        case .unchecked, .checked:
-            let checkedAttr = state == .checked ? " checked" : ""
-            let checkedClass = state == .checked ? " todo-list__label--checked" : ""
-            // `disabled` until interactive JS enables them (text notes / Markdown cycle mode).
-            return "<label class=\"todo-list__label\(checkedClass)\">"
-                + "<input type=\"checkbox\"\(checkedAttr) disabled>"
-                + "<span class=\"todo-list__label__description\">\(descriptionHTML)</span>"
-                + "</label>"
-        case .doing, .maybe, .cancelled:
-            let name = state.dataAttributeValue!
-            let title = state.title!
-            return "<label class=\"todo-list__label\" title=\"\(title)\">"
-                + "<input type=\"checkbox\" data-trilium-task-state=\"\(name)\" disabled title=\"\(title)\">"
-                + "<span class=\"todo-list__label__description\">\(descriptionHTML)</span>"
-                + "</label>"
-        }
+        let checkedAttr = state.isCompleted ? " checked" : ""
+        // `disabled` until interactive JS enables them (text notes / Markdown preview).
+        return "<label class=\"todo-list__label\">"
+            + "<input type=\"checkbox\"\(checkedAttr) disabled>"
+            + "<span class=\"todo-list__label__description\">\(descriptionHTML)</span>"
+            + "</label>"
     }
 
     private static func matchHeading(_ line: String) -> (level: Int, text: String)? {
@@ -545,8 +523,9 @@ enum MarkdownToNoteHTML {
         return t.allSatisfy({ $0 == "-" }) || t.allSatisfy({ $0 == "*" }) || t.allSatisfy({ $0 == "_" })
     }
 
-    /// GFM / Trilium task-list marker: `[ ]` / `[x]` / `[/]` / `[?]` / `[-]`.
-    private static func matchTaskListMarker(_ text: String) -> (state: TaskListState, rest: String)? {
+    /// GFM / Trilium task-list marker: `[ ]`, `[x]`, or a state's Markdown symbol (`[/]` …). An unknown symbol is not a
+    /// task item.
+    private static func matchTaskListMarker(_ text: String, states: [TaskStateDefinition]) -> (state: TaskListState, rest: String)? {
         guard text.count >= 3 else { return nil }
         var idx = text.startIndex
         guard text[idx] == "[" else { return nil }
@@ -559,10 +538,11 @@ enum MarkdownToNoteHTML {
         switch mid {
         case " ": state = .unchecked
         case "x", "X": state = .checked
-        case "/": state = .doing
-        case "?": state = .maybe
-        case "-": state = .cancelled
-        default: return nil
+        default:
+            guard let definition = states.first(where: { !$0.isAnchor && $0.markdownSymbol == String(mid) }) else {
+                return nil
+            }
+            state = TaskListState(name: definition.name, title: definition.displayTitle, isCompleted: definition.isCompleted)
         }
         idx = text.index(after: idx)
         if idx < text.endIndex, text[idx] == " " {

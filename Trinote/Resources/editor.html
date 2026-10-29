@@ -373,8 +373,12 @@ body { display: flex; flex-direction: column; }
 .tiptap ul[data-type="taskList"] > li > label input[type="checkbox"] {
   margin: 0;
   vertical-align: top;
-  accent-color: var(--btn-active);
   cursor: pointer;
+}
+/* Trilium task states: the boxes come from Swift (TaskStateStyles via setTaskStates). A hold on a box opens the
+   state menu, so iOS mustn't select or show its callout there. */
+.tiptap ul[data-type="taskList"] > li > label {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 /* TipTap puts copy in div > p; dropping first-p top margin avoids text sitting low vs checkbox */
 .tiptap ul[data-type="taskList"] > li > div > p:first-child { margin-top: 0; }
@@ -898,6 +902,8 @@ body { display: flex; flex-direction: column; }
 </style>
 <link rel="stylesheet" href="vendor/katex/katex.min.css">
 <link rel="stylesheet" href="link-preview.css">
+<link rel="stylesheet" href="task-states.css">
+<style id="tn-task-state-styles"></style>
 <script src="vendor/katex/katex.min.js"></script>
 </head>
 <body>
@@ -920,6 +926,7 @@ body { display: flex; flex-direction: column; }
 <script src="list-styles-extension.js"></script>
 <script src="indent-extension.js"></script>
 <script src="link-preview.js"></script>
+<script src="task-states.js"></script>
 <!-- vendor/mermaid.min.js (5 MB) loads on demand: see trinoteEnsureMermaid(). -->
 <script>
 if (typeof TipTap === 'undefined') {
@@ -1846,6 +1853,114 @@ const AttachmentReference = Image.extend({
 });
 
 /* Preserve Trilium `class="reference-link"` on internal note links (attachment refs use AttachmentReference). */
+/* Trilium to-do task states (v0.104+): `data-trilium-task-state` (+ a `title` tooltip) on the item, `checked` for every
+   state that counts as completed. task-states.js holds the server's states and the tap rule; the stock node view only
+   refreshes `checked` on update, so the state attribute is kept in step here too. */
+const TriliumTaskItem = TaskItem.extend({
+  addAttributes() {
+    return {
+      ...(this.parent ? this.parent() : {}),
+      taskState: {
+        default: null,
+        keepOnSplit: false,
+        parseHTML: (el) => {
+          const value = el.getAttribute('data-trilium-task-state');
+          return value && value !== 'none' && value !== 'done' ? value : null;
+        },
+        renderHTML: (attrs) => attrs.taskState ? { 'data-trilium-task-state': attrs.taskState } : {},
+      },
+      taskTitle: {
+        default: null,
+        keepOnSplit: false,
+        parseHTML: (el) => el.getAttribute('data-trilium-task-state') ? el.getAttribute('title') : null,
+        renderHTML: (attrs) => attrs.taskState && attrs.taskTitle ? { title: attrs.taskTitle } : {},
+      },
+    };
+  },
+  addNodeView() {
+    const parentFactory = this.parent ? this.parent() : null;
+    if (!parentFactory) return null;
+    return (props) => {
+      const view = parentFactory(props);
+      const li = view.dom;
+      const syncState = (node) => {
+        if (node.attrs.taskState) li.setAttribute('data-trilium-task-state', node.attrs.taskState);
+        else li.removeAttribute('data-trilium-task-state');
+        // No tooltip while editing.
+        li.removeAttribute('title');
+      };
+      syncState(props.node);
+      li._trinoteGetPos = props.getPos;
+      const checkbox = li.querySelector(':scope > label input[type="checkbox"]');
+      if (checkbox) {
+        // A tap follows the tap rule (Trilium's None ↔ Done toggle by default) instead of flipping `checked`.
+        checkbox.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          if (!props.editor.isEditable || typeof props.getPos !== 'function') return;
+          const pos = props.getPos();
+          const node = typeof pos === 'number' ? props.editor.state.doc.nodeAt(pos) : null;
+          if (!node || !window.trinoteTaskStates) return;
+          const TS = window.trinoteTaskStates;
+          const current = node.attrs.taskState || (node.attrs.checked ? TS.DONE : TS.NONE);
+          trinoteSetTaskItemState(pos, TS.afterTap(current, !!node.attrs.checked));
+        }, true);
+      }
+      const parentUpdate = view.update;
+      view.update = (node, ...rest) => {
+        const ok = parentUpdate ? parentUpdate(node, ...rest) : false;
+        if (ok) syncState(node);
+        return ok;
+      };
+      return view;
+    };
+  },
+});
+
+/** Sets the task item at `pos` to the state `name`, as Trilium stores it. */
+function trinoteSetTaskItemState(pos, name) {
+  const TS = window.trinoteTaskStates;
+  if (!editor || !TS) return;
+  const node = editor.state.doc.nodeAt(pos);
+  if (!node || node.type.name !== 'taskItem') return;
+  const anchor = TS.isAnchor(name);
+  const def = TS.definition(name);
+  const attrs = {
+    ...node.attrs,
+    checked: TS.isCompleted(name),
+    taskState: anchor ? null : name,
+    taskTitle: anchor ? null : (def ? (def.title || def.name) : node.attrs.taskTitle),
+  };
+  editor.view.dispatch(editor.state.tr.setNodeMarkup(pos, undefined, attrs));
+}
+
+/** A hold (or right-click) on a task box opens the state menu by it. */
+function trinoteSetUpTaskStateMenu() {
+  const TS = window.trinoteTaskStates;
+  if (!TS) return;
+  TS.attachHold(document.body, {
+    resolve: (target) => {
+      if (!TS.config().menu || !editor || !editor.isEditable) return null;
+      const label = target && target.closest ? target.closest('.tiptap ul[data-type="taskList"] > li > label') : null;
+      return label ? label.querySelector('input[type="checkbox"]') : null;
+    },
+    onHold: (checkbox) => {
+      const li = checkbox.closest('li');
+      const getPos = li && li._trinoteGetPos;
+      const pos = typeof getPos === 'function' ? getPos() : null;
+      const node = typeof pos === 'number' ? editor.state.doc.nodeAt(pos) : null;
+      if (!node || node.type.name !== 'taskItem') return;
+      const current = node.attrs.taskState || (node.attrs.checked ? TS.DONE : TS.NONE);
+      TS.showMenu(checkbox, current, (name) => {
+        const freshPos = getPos();
+        if (typeof freshPos === 'number' && name !== current) trinoteSetTaskItemState(freshPos, name);
+      }, () => {
+        try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'editTaskStates' }); } catch (e) {}
+      });
+    },
+  });
+}
+
 const CustomLink = Link.extend({
   addAttributes() {
     return {
@@ -1885,7 +2000,7 @@ const editorExtensions = [
   TriliumInlineIcon,
   TriliumMath,
   TaskList,
-  TaskItem.configure({ nested: true }),
+  TriliumTaskItem.configure({ nested: true }),
   Placeholder.configure({ placeholder: 'Start writing…' }),
   Subscript,
   Superscript,
@@ -2237,6 +2352,13 @@ const editor = new Editor({
 
 // WKWebView / iOS: tapping the toolbar blurs the editor and collapses the DOM selection.
 // Keep the last ProseMirror ranged selection so color / highlight pickers can still apply.
+trinoteSetUpTaskStateMenu();
+editor.on('transaction', () => {
+  if (window.trinoteTaskStates && window.trinoteTaskStates.isMenuVisible()) {
+    requestAnimationFrame(() => window.trinoteTaskStates.layoutMenu());
+  }
+});
+
 let editorSavedRange = null;
 editor.on('selectionUpdate', ({ editor }) => {
   const { from, to, empty } = editor.state.selection;
@@ -5819,6 +5941,16 @@ function tiptapToCk(html) {
       const checked = li.getAttribute('data-checked') === 'true';
       li.removeAttribute('data-type');
       li.removeAttribute('data-checked');
+      // Trilium task state: kept on the item with its title as Trilium writes it (the server's current title when
+      // this server defines the state, else the stored one); none and done are only `checked`.
+      const taskState = li.getAttribute('data-trilium-task-state');
+      if (!taskState || taskState === 'none' || taskState === 'done') {
+        li.removeAttribute('data-trilium-task-state');
+        li.removeAttribute('title');
+      } else {
+        const def = window.trinoteTaskStates ? window.trinoteTaskStates.definition(taskState) : null;
+        if (def) li.setAttribute('title', def.title || def.name);
+      }
 
       const tiptapLabel = li.querySelector(':scope > label');
       if (tiptapLabel) tiptapLabel.remove();
@@ -6213,6 +6345,15 @@ window.editorBridge = {
    * Native: `available` when the server understands link previews (Trilium v0.104+), `auto` when pasted or autolinked
    * URLs should also become previews by themselves (Trilium's auto link previews option, a note on the server).
    */
+  /**
+   * Native: the server's to-do task states and what a tap sets (`trinoteTaskStates.configure`'s argument), and the
+   * stylesheet that draws their boxes (`TaskStateStyles`).
+   */
+  setTaskStates(config, css) {
+    if (window.trinoteTaskStates) window.trinoteTaskStates.configure(config);
+    const style = document.getElementById('tn-task-state-styles');
+    if (style && typeof css === 'string') style.textContent = css;
+  },
   setLinkPreviewSupport(available, auto) {
     linkPreviewsAvailable = !!available;
     linkPreviewAutoEnabled = !!available && !!auto;

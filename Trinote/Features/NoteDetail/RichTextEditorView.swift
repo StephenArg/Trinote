@@ -31,6 +31,8 @@ enum RichTextEditorBridgeRequest: Equatable {
     case linkPreview(requestId: String, url: String, explicit: Bool)
     /// "Open Link" in a link preview's menu. Only http(s) URLs are sent.
     case openExternalURL(URL)
+    /// Edit States in a to-do item's state menu.
+    case editTaskStates
 }
 
 /// Pending toolbar-style attachment chip to insert once the TipTap bridge is ready.
@@ -78,6 +80,8 @@ struct RichTextEditorView: UIViewRepresentable {
     /// What the editor may do with Trilium link previews; it sends `.linkPreview` requests through
     /// `onEditorBridgeRequest`.
     var linkPreviews: LinkPreviewSupport = .none
+    /// The to-do task states the editor draws and offers, and what a tap sets.
+    var taskStates: TaskStateWebConfig = .plain
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -94,7 +98,8 @@ struct RichTextEditorView: UIViewRepresentable {
             insertToolsAtTop: insertToolsAtTop,
             onContentLoaded: onContentLoaded,
             hidesSaveButton: hidesSaveButton,
-            linkPreviews: linkPreviews
+            linkPreviews: linkPreviews,
+            taskStates: taskStates
         )
     }
 
@@ -182,6 +187,7 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.onContentLoaded = onContentLoaded
         coordinator.syncSaveButtonHidden(hidesSaveButton)
         coordinator.syncLinkPreviews(linkPreviews)
+        coordinator.syncTaskStates(taskStates)
         Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
@@ -299,6 +305,8 @@ struct RichTextEditorView: UIViewRepresentable {
         private var appliedHidesSaveButton: Bool?
         private var linkPreviews = LinkPreviewSupport.none
         private var appliedLinkPreviews: LinkPreviewSupport?
+        private var taskStates = TaskStateWebConfig.plain
+        private var appliedTaskStates: TaskStateWebConfig?
 
         /// Visual gap between HTML formatting toolbar and keyboard (CSS px ≈ points in WKWebView).
         private static let keyboardToolbarGapPoints: CGFloat = 10
@@ -319,7 +327,8 @@ struct RichTextEditorView: UIViewRepresentable {
             insertToolsAtTop: Bool = false,
             onContentLoaded: ((String) -> Void)? = nil,
             hidesSaveButton: Bool = false,
-            linkPreviews: LinkPreviewSupport = .none
+            linkPreviews: LinkPreviewSupport = .none,
+            taskStates: TaskStateWebConfig = .plain
         ) {
             self.initialHTML = initialHTML
             self.onContentChanged = onContentChanged
@@ -335,6 +344,7 @@ struct RichTextEditorView: UIViewRepresentable {
             self.onContentLoaded = onContentLoaded
             self.hidesSaveButton = hidesSaveButton
             self.linkPreviews = linkPreviews
+            self.taskStates = taskStates
         }
 
         func syncInsertToolsAtTop(_ atTop: Bool) {
@@ -353,6 +363,12 @@ struct RichTextEditorView: UIViewRepresentable {
             linkPreviews = support
             guard appliedLinkPreviews != support else { return }
             setLinkPreviews(support)
+        }
+
+        func syncTaskStates(_ config: TaskStateWebConfig) {
+            taskStates = config
+            guard appliedTaskStates != config else { return }
+            setTaskStates(config)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -382,6 +398,7 @@ struct RichTextEditorView: UIViewRepresentable {
                 setInsertToolsAtTop(insertToolsAtTop)
                 setSaveButtonHidden(hidesSaveButton)
                 setLinkPreviews(linkPreviews)
+                setTaskStates(taskStates)
                 // A share-import attachment or photo inserted on load is an edit, so it mustn't end up in the
                 // baseline; nor may edits restored into a reloaded page.
                 let reportsBaseline = recovering
@@ -555,6 +572,10 @@ struct RichTextEditorView: UIViewRepresentable {
                         DispatchQueue.main.async {
                             callback?(.renameAttachment(attachmentId: aid, noteId: nid, title: title, pos: pos))
                         }
+                    }
+                case "editTaskStates":
+                    DispatchQueue.main.async {
+                        callback?(.editTaskStates)
                     }
                 case "linkPreview":
                     if let requestId = dict["requestId"] as? String, !requestId.isEmpty,
@@ -794,6 +815,17 @@ struct RichTextEditorView: UIViewRepresentable {
             appliedHidesSaveButton = hidden
             webView.evaluateJavaScript("window.editorBridge.setSaveButtonHidden(\(hidden ? "true" : "false"))") { _, error in
                 if let error { Log.api.error("setSaveButtonHidden failed: \(error)") }
+            }
+        }
+
+        private func setTaskStates(_ config: TaskStateWebConfig) {
+            guard editorReady, let webView,
+                  let cssLiteral = try? JSONEncoder().encode(config.css),
+                  let css = String(data: cssLiteral, encoding: .utf8)
+            else { return }
+            appliedTaskStates = config
+            webView.evaluateJavaScript("window.editorBridge.setTaskStates(\(config.json), \(css))") { _, error in
+                if let error { Log.api.error("setTaskStates failed: \(error)") }
             }
         }
 

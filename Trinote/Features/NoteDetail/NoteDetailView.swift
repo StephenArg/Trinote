@@ -141,6 +141,8 @@ struct NoteDetailView: View {
     @State private var imageToInsert: String?
     @State private var attachmentToInsert: EditorAttachmentInsert?
     @State private var attachmentRenameContext: EditorAttachmentRenameContext?
+    /// Edit States from a to-do item's state menu.
+    @State private var showTaskStatesSettings = false
     @State private var attachmentRenameBasename = ""
     @State private var pendingAttachmentUpload: PendingAttachmentUpload?
     @State private var pendingAttachmentUploadBasename = ""
@@ -632,7 +634,9 @@ struct NoteDetailView: View {
                 guard noteEditorLongPressToEdit,
                       note.isContentEditable,
                       !vm.needsProtectedSession,
-                      !vm.isEditing
+                      !vm.isEditing,
+                      // The same hold opened a to-do item's state menu.
+                      Date.now.timeIntervalSince(vm.taskStateMenuShownAt ?? .distantPast) > 2
                 else { return }
                 let generator = UIImpactFeedbackGenerator(style: .medium)
                 generator.impactOccurred()
@@ -2287,6 +2291,12 @@ struct NoteDetailView: View {
                 NoteAttributesSheet(viewModel: vm, startAdding: attributesStartAdding)
                     .environment(appState)
             }
+            .sheet(isPresented: $showTaskStatesSettings) {
+                NavigationStack {
+                    TaskStatesSettingsView(showsDoneButton: true)
+                }
+                .environment(appState)
+            }
             .sheet(isPresented: $showCalendarJournalSettings) {
                 CalendarJournalSettingsSheet()
                     .presentationDetents([.medium])
@@ -2773,8 +2783,14 @@ struct NoteDetailView: View {
                 onNoteLinkTapped: { linkedNoteId in
                     navigateToNoteId = linkedNoteId
                 },
-                onCheckboxToggled: { index, checked in
-                    vm.toggleCheckbox(index: index, checked: checked)
+                onTaskStateSet: { index, stateName in
+                    vm.setTaskState(index: index, stateName: stateName)
+                },
+                onEditTaskStates: {
+                    showTaskStatesSettings = true
+                },
+                onTaskStateMenuShown: {
+                    vm.taskStateMenuShownAt = .now
                 },
                 onCheckboxReordered: { fromIndex, beforeIndex in
                     vm.reorderListItem(fromIndex: fromIndex, beforeIndex: beforeIndex)
@@ -2795,6 +2811,7 @@ struct NoteDetailView: View {
                     await vm.loadImageBytes(routeType: routeType, entityId: entityId)
                 },
                 findControl: findControl,
+                taskStates: TaskStateWebConfig.forNote(store: appState.taskStates, isMarkdown: false),
                 layoutCacheKey: vm.serverProfileId.map { "\($0)/\(note.noteId)" }
             ))
         case .mermaid:
@@ -2819,9 +2836,16 @@ struct NoteDetailView: View {
                 onMimeSelected: { mime in
                     Task { await vm.updateCodeNoteMime(mime) }
                 },
-                onTaskStateCycled: { index in
-                    vm.cycleMarkdownTaskState(index: index)
+                onTaskStateSet: { index, stateName in
+                    vm.setMarkdownTaskState(index: index, stateName: stateName)
                 },
+                onEditTaskStates: {
+                    showTaskStatesSettings = true
+                },
+                onTaskStateMenuShown: {
+                    vm.taskStateMenuShownAt = .now
+                },
+                taskStates: TaskStateWebConfig.forNote(store: appState.taskStates, isMarkdown: true),
                 checkboxOnlyRevision: vm.checkboxOnlyContentRevision
             ))
         case .image:
@@ -3163,6 +3187,8 @@ struct NoteDetailView: View {
                         }
                     case .openExternalURL(let url):
                         UIApplication.shared.open(url)
+                    case .editTaskStates:
+                        showTaskStatesSettings = true
                     case .renameAttachment(let attachmentId, _, let title, let pos):
                         let split = AttachmentFilename.split(title)
                         attachmentRenameBasename = split.basename
@@ -3187,7 +3213,8 @@ struct NoteDetailView: View {
                 onInsertToolsAtTopChanged: { noteEditorInsertToolsAtTop = $0 },
                 onContentLoaded: { vm.setAutosaveBaselineFromEditor($0) },
                 hidesSaveButton: !showsEditorSaveButton(vm),
-                linkPreviews: vm.linkPreviewSupport
+                linkPreviews: vm.linkPreviewSupport,
+                taskStates: TaskStateWebConfig.forNote(store: appState.taskStates, isMarkdown: false)
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
             // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).

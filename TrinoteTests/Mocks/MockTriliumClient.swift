@@ -327,8 +327,16 @@ actor MockTriliumClient: TriliumClientProtocol {
     var fullSyncFetchTreeBatchCalls: [[String]] = []
     var fullSyncFetchTreeBatchCachedStates: [[String: FullSyncCachedNoteState]] = []
 
+    /// Whole `tree/load` answers keyed by the comma-joined note ids, ahead of the ones built from `noteResults`.
+    var batchTreeLoadResponses: [String: TreeLoadResponse] = [:]
+
+    func setBatchTreeLoadResponse(_ response: TreeLoadResponse, for noteIds: [String]) {
+        batchTreeLoadResponses[noteIds.joined(separator: ",")] = response
+    }
+
     func batchTreeLoad(noteIds: [String]) async throws -> TreeLoadResponse {
         batchTreeLoadCalls.append(noteIds)
+        if let response = batchTreeLoadResponses[noteIds.joined(separator: ",")] { return response }
         var notes: [TreeLoadNoteRow] = []
         notes.reserveCapacity(noteIds.count)
         for id in noteIds {
@@ -570,9 +578,10 @@ actor MockTriliumClient: TriliumClientProtocol {
         return TestFixtures.branchResponse(branchId: branchId)
     }
 
+    var placeBranchInSiblingOrderCalls: [(branchId: String, ordered: [String])] = []
+
     func placeBranchInSiblingOrder(_ branchId: String, orderedSiblingBranchIds: [String]) async throws {
-        _ = branchId
-        _ = orderedSiblingBranchIds
+        placeBranchInSiblingOrderCalls.append((branchId, orderedSiblingBranchIds))
     }
 
     var searchNoteIdsValue: [String] = []

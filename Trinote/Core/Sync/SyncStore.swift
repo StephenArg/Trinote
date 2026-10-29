@@ -285,6 +285,8 @@ actor SyncStore {
         /// Protected notes this batch wrote. Sync rows carry their titles encrypted, so the cache kept the title it
         /// had; while the protected session is open the caller fetches the readable ones.
         var protectedNoteIds: Set<String> = []
+        /// The batch changed a to-do task state definition (`_taskStates`), which the app reads separately.
+        var touchesTaskStates = false
     }
 
     /// Applies one pulled batch of entity changes (notes, branches, attributes, blobs, reorderings, erasures) and
@@ -306,8 +308,19 @@ actor SyncStore {
         let branchIndex = Self.indexEntities(pull.branches, idKey: "branchId")
         let attrIndex = Self.indexEntities(pull.attributes, idKey: "attributeId")
         let blobIndex = Self.indexEntities(pull.blobs, idKey: "blobId")
+        let taskStateSignal = TaskStateSyncSignal(knownNoteIds: TaskStateStore.rememberedNoteIds(profileId: profileId))
 
         for ec in pull.entityChanges {
+            if !result.touchesTaskStates {
+                let row: [String: Any]?
+                switch ec.entityName {
+                case "notes": row = noteIndex[ec.entityId]
+                case "branches": row = branchIndex[ec.entityId]
+                case "attributes": row = attrIndex[ec.entityId]
+                default: row = nil
+                }
+                result.touchesTaskStates = taskStateSignal.touches(entityName: ec.entityName, entityId: ec.entityId, row: row)
+            }
             if ec.isErased {
                 try applyErasedEntity(entityName: ec.entityName, entityId: ec.entityId, context: context, result: &result)
                 result.deletionCount += 1
