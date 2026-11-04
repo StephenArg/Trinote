@@ -51,7 +51,7 @@ struct IncludeNoteResolver {
         let openTag: String
     }
 
-    private static func findNextIncludeBlock(in html: String) -> IncludeBlock? {
+    nonisolated private static func findNextIncludeBlock(in html: String) -> IncludeBlock? {
         let lowered = html.lowercased()
         var searchStart = lowered.startIndex
         while searchStart < lowered.endIndex,
@@ -71,7 +71,7 @@ struct IncludeNoteResolver {
         return nil
     }
 
-    private static func closingSectionRange(html: String, scanFrom: String.Index) -> Range<String.Index>? {
+    nonisolated private static func closingSectionRange(html: String, scanFrom: String.Index) -> Range<String.Index>? {
         let pattern = try! NSRegularExpression(
             pattern: #"(?i)<section\b[^>]*>|</section>"#,
             options: []
@@ -158,88 +158,209 @@ struct IncludeNoteResolver {
 
         let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nid : item.title
         let typeStr = item.type.rawValue
-
-        if item.isProtected, !protectedSessionActive {
-            let locked = Self.escapeHTML(String(localized: "Protected — open to view.", comment: "Include note protected locked"))
-            return Self.wrapCard(noteId: nid, boxSize: boxSize, noteType: typeStr, title: title, bodyHTML: locked)
-        }
-
+        var options = PreviewOptions()
+        options.seenNoteIds = seenNoteIds
+        options.nestingLevel = nestingLevel
+        options.maxNesting = maxNesting
         let bodyHTML: String
+        switch await previewBody(for: item, options: options) {
+        case .html(_, let html):
+            bodyHTML = html
+        case .protected:
+            bodyHTML = Self.escapeHTML(String(localized: "Protected — open to view.", comment: "Include note protected locked"))
+        case .unavailable, .tooLarge:
+            bodyHTML = Self.escapeHTML(Self.couldNotLoadMessage(for: item.type))
+        case .noPreview:
+            bodyHTML = Self.fallbackPreviewHTML(type: item.type)
+        }
+        return Self.wrapCard(noteId: nid, boxSize: boxSize, noteType: typeStr, title: title, bodyHTML: bodyHTML)
+    }
+
+    // MARK: - Previews
+
+    /// How a note's content is drawn: as an include card (the defaults) or as a collection preview (grid card,
+    /// list row, dashboard widget), which mirrors Trilium's `getRenderedContent` options.
+    struct PreviewOptions: Sendable {
+        /// Trilium's `trim`: `<style>` and embedded includes are dropped from text.
+        var trim = false
+        /// An empty text or book note stays empty instead of listing its children.
+        var noChildrenList = false
+        /// Archived children appear in the children list.
+        var includeArchived = false
+        /// Bodies larger than this are not downloaded; `nil` downloads any size.
+        var maxBytes: Int? = nil
+        /// Bodies already in hand (fetched together for a page), read before the cache and the server.
+        var bodies: [String: Data] = [:]
+        /// Notes whose body was already found too large.
+        var tooLargeNoteIds: Set<String> = []
+        /// Mermaid as an inline `<div class="mermaid">` the page draws itself, instead of a pre-rendered SVG.
+        var inlineMermaid = false
+        var seenNoteIds: Set<String> = []
+        var nestingLevel = 0
+        var maxNesting = 3
+    }
+
+    enum PreviewResult: Sendable, Equatable {
+        /// Rendered content; `kind` is Trilium's rendering type (`text`, `code`, `image`, …).
+        case html(kind: String, html: String)
+        /// A protected note while the session is locked.
+        case protected
+        /// Larger than `maxBytes`.
+        case tooLarge
+        /// The body couldn't be read: offline and not cached, or the request failed.
+        case unavailable
+        /// A type with no preview.
+        case noPreview
+    }
+
+    /// The preview of `item`'s content, per note type, as Trilium's `getRenderedContent` builds it.
+    func previewBody(for item: NoteItem, options: PreviewOptions) async -> PreviewResult {
+        let nid = item.noteId
+        if item.isProtected, !protectedSessionActive { return .protected }
+
         switch item.type {
         case .text:
-            if let innerHTML = await loadRawBodyString(noteId: nid) {
-                var expanded = innerHTML
+            switch await loadRawBodyResult(noteId: nid, options: options) {
+            case .tooLarge: return .tooLarge
+            case .unavailable: return .unavailable
+            case .data(let data):
+                var expanded = String(decoding: data, as: UTF8.self)
+                if options.trim {
+                    expanded = Self.stripIncludeSections(Self.stripStyleTags(expanded))
+                }
+                if Self.isHTMLEmpty(expanded) {
+                    if options.noChildrenList { return .html(kind: "text", html: "") }
+                    let list = await childListHTML(parent: item, includeArchived: options.includeArchived)
+                    return .html(kind: "text", html: list)
+                }
                 if expanded.range(of: #"(?i)api/(attachments|images)/"#, options: .regularExpression) != nil
                     || expanded.range(of: #"(?i)<img\b"#, options: .regularExpression) != nil {
                     expanded = await inlineAttachmentImages(expanded)
                 }
-                let childSeen = seenNoteIds.union([nid])
-                let nextLevel = nestingLevel + 1
-                if nextLevel <= maxNesting {
-                    expanded = await Self(
-                        client: client,
-                        persistence: persistence,
-                        profileId: profileId,
-                        protectedSessionActive: protectedSessionActive,
-                        isOnline: isOnline,
-                        inlineAttachmentImages: inlineAttachmentImages
-                    ).resolve(html: expanded, seenNoteIds: childSeen, nestingLevel: nextLevel, maxNesting: maxNesting)
-                } else {
-                    expanded = Self.replaceIncludeSectionsWithLinks(html: expanded)
+                if !options.trim {
+                    let childSeen = options.seenNoteIds.union([nid])
+                    let nextLevel = options.nestingLevel + 1
+                    if nextLevel <= options.maxNesting {
+                        expanded = await Self(
+                            client: client,
+                            persistence: persistence,
+                            profileId: profileId,
+                            protectedSessionActive: protectedSessionActive,
+                            isOnline: isOnline,
+                            inlineAttachmentImages: inlineAttachmentImages
+                        ).resolve(html: expanded, seenNoteIds: childSeen, nestingLevel: nextLevel, maxNesting: options.maxNesting)
+                    } else {
+                        expanded = Self.replaceIncludeSectionsWithLinks(html: expanded)
+                    }
                 }
-                bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--text\">\(expanded)</div>"
-            } else {
-                bodyHTML = Self.escapeHTML(String(localized: "Could not load note content.", comment: "Include note empty body"))
+                return .html(kind: "text", html: "<div class=\"trinote-include__inner trinote-include__inner--text\">\(expanded)</div>")
             }
         case .image:
             if let imgTag = await imagePreviewTag(noteId: nid) {
-                bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--image\">\(imgTag)</div>"
-            } else {
-                bodyHTML = Self.escapeHTML(String(localized: "Could not load image.", comment: "Include image failed"))
+                return .html(kind: "image", html: "<div class=\"trinote-include__inner trinote-include__inner--image\">\(imgTag)</div>")
             }
+            return .unavailable
         case .code, .markdown:
-            if let src = await loadRawBodyString(noteId: nid) {
+            switch await loadRawBodyResult(noteId: nid, options: options) {
+            case .tooLarge: return .tooLarge
+            case .unavailable: return .unavailable
+            case .data(let data):
+                let src = String(decoding: data, as: UTF8.self)
                 let langClass = mimeToLanguageClass(item.mime)
-                bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--code\"><pre><code class=\"\(langClass)\">\(Self.escapeHTML(src))</code></pre></div>"
-            } else {
-                bodyHTML = Self.escapeHTML(String(localized: "Could not load code.", comment: "Include code failed"))
+                return .html(kind: "code", html: "<div class=\"trinote-include__inner trinote-include__inner--code\"><pre><code class=\"\(langClass)\">\(Self.escapeHTML(src))</code></pre></div>")
             }
         case .mermaid:
-            if let src = await loadRawBodyString(noteId: nid) {
-                let diagram = Self.normalizedMermaidSource(src)
-                if let svg = await MermaidRenderer.shared.render(source: diagram) {
-                    bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--mermaid\">\(svg)</div>"
-                } else {
-                    Log.ui.error("[MMD] IncludeNoteResolver.mermaid noteId=\(nid, privacy: .public) render returned nil — FALLBACK to inline .mermaid block (HTMLNoteView snippet will render it)")
-                    let esc = Self.escapeHTML(diagram)
-                    bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--mermaid\"><div class=\"mermaid\">\(esc)</div></div>"
+            switch await loadRawBodyResult(noteId: nid, options: options) {
+            case .tooLarge: return .tooLarge
+            case .unavailable:
+                Log.ui.error("[MMD] IncludeNoteResolver.mermaid noteId=\(nid, privacy: .public) body unavailable")
+                return .unavailable
+            case .data(let data):
+                let diagram = Self.normalizedMermaidSource(String(decoding: data, as: UTF8.self))
+                if !options.inlineMermaid, let svg = await MermaidRenderer.shared.render(source: diagram) {
+                    return .html(kind: "mermaid", html: "<div class=\"trinote-include__inner trinote-include__inner--mermaid\">\(svg)</div>")
                 }
-            } else {
-                Log.ui.error("[MMD] IncludeNoteResolver.mermaid noteId=\(nid, privacy: .public) loadRawBodyString nil")
-                bodyHTML = Self.escapeHTML(String(localized: "Could not load diagram.", comment: "Include mermaid failed"))
+                if !options.inlineMermaid {
+                    Log.ui.error("[MMD] IncludeNoteResolver.mermaid noteId=\(nid, privacy: .public) render returned nil — FALLBACK to inline .mermaid block (HTMLNoteView snippet will render it)")
+                }
+                let esc = Self.escapeHTML(diagram)
+                return .html(kind: "mermaid", html: "<div class=\"trinote-include__inner trinote-include__inner--mermaid\"><div class=\"mermaid\">\(esc)</div></div>")
             }
         case .book, .collection, .noteMap:
-            bodyHTML = await childListHTML(parent: item)
+            if options.noChildrenList { return .html(kind: "text", html: "") }
+            return .html(kind: "text", html: await childListHTML(parent: item, includeArchived: options.includeArchived))
         case .file:
-            bodyHTML = fileCardHTML(note: item)
+            return .html(kind: "file", html: fileCardHTML(note: item))
         case .canvas:
             if let imgTag = await canvasExportSVGPreviewTag(noteId: nid) {
-                bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--image\">\(imgTag)</div>"
-            } else {
-                Log.ui.warning("[INCLUDE] resolver.canvas NO SVG noteId=\(nid, privacy: .public) online=\(self.isOnline)")
-                bodyHTML = Self.fallbackPreviewHTML(type: item.type)
+                return .html(kind: "canvas", html: "<div class=\"trinote-include__inner trinote-include__inner--image\">\(imgTag)</div>")
             }
+            Log.ui.warning("[INCLUDE] resolver.canvas NO SVG noteId=\(nid, privacy: .public) online=\(self.isOnline)")
+            return .noPreview
         case .mindMap:
-            let raw = await loadRawBodyString(noteId: nid)
-            if let src = raw, let tree = Self.mindMapTreePreview(json: src) {
-                bodyHTML = "<div class=\"trinote-include__inner trinote-include__inner--mindmap\">\(tree)</div>"
-            } else {
-                bodyHTML = Self.fallbackPreviewHTML(type: item.type)
+            if case .data(let data) = await loadRawBodyResult(noteId: nid, options: options),
+               let tree = Self.mindMapTreePreview(json: String(decoding: data, as: UTF8.self)) {
+                return .html(kind: "mindMap", html: "<div class=\"trinote-include__inner trinote-include__inner--mindmap\">\(tree)</div>")
             }
-        case .geoMap, .relationMap, .webView, .render, .shortcut, .launcher, .doc, .contentWidget, .search, .calendar, .spreadsheet, .kanban, .presentation, .llmChat:
-            bodyHTML = Self.fallbackPreviewHTML(type: item.type)
+            return .noPreview
+        case .webView:
+            // Trilium shows the page in an iframe; here the widget links to it (external links open in Safari).
+            if let src = item.attributes.first(where: { $0.type == .label && $0.name == "webViewSrc" })?.value
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               let url = URL(string: src), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+                let caption = Self.escapeHTML(url.host ?? src)
+                return .html(kind: "webView", html: "<div class=\"no-preview\"><span class=\"tn-icon bx bx-globe-alt\"></span><a class=\"no-preview-caption\" href=\"\(Self.escapeHTML(src))\">\(caption)</a></div>")
+            }
+            return .noPreview
+        case .geoMap, .relationMap, .render, .shortcut, .launcher, .doc, .contentWidget, .search, .calendar, .spreadsheet, .kanban, .presentation, .llmChat:
+            return .noPreview
         }
-        return Self.wrapCard(noteId: nid, boxSize: boxSize, noteType: typeStr, title: title, bodyHTML: bodyHTML)
+    }
+
+    private static func couldNotLoadMessage(for type: NoteType) -> String {
+        switch type {
+        case .image: return String(localized: "Could not load image.", comment: "Include image failed")
+        case .code, .markdown: return String(localized: "Could not load code.", comment: "Include code failed")
+        case .mermaid: return String(localized: "Could not load diagram.", comment: "Include mermaid failed")
+        default: return String(localized: "Could not load note content.", comment: "Include note empty body")
+        }
+    }
+
+    /// Trilium's `isHtmlEmpty`: an image, section, include or link mention is content; otherwise the text must be blank.
+    nonisolated static func isHTMLEmpty(_ html: String) -> Bool {
+        let lower = html.lowercased()
+        if lower.contains("<img") || lower.contains("<section") || lower.contains("include-note") || lower.contains("link-mention") {
+            return false
+        }
+        let text = html
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Removes `<style>` blocks, except inside inline SVG where they style the drawing.
+    nonisolated static func stripStyleTags(_ html: String) -> String {
+        guard html.range(of: "<style", options: .caseInsensitive) != nil else { return html }
+        let svgPattern = try! NSRegularExpression(pattern: #"(?is)<svg\b.*?</svg>"#)
+        let stylePattern = try! NSRegularExpression(pattern: #"(?is)<style\b[^>]*>.*?</style>"#)
+        let ns = html as NSString
+        let svgRanges = svgPattern.matches(in: html, range: NSRange(location: 0, length: ns.length)).map(\.range)
+        var result = html
+        for match in stylePattern.matches(in: html, range: NSRange(location: 0, length: ns.length)).reversed() {
+            if svgRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) { continue }
+            guard let range = Range(match.range, in: result) else { continue }
+            result.removeSubrange(range)
+        }
+        return result
+    }
+
+    /// Removes embedded include-note sections outright (Trilium's `noContentEmbeds` for previews).
+    nonisolated static func stripIncludeSections(_ html: String) -> String {
+        var result = html
+        while let block = findNextIncludeBlock(in: result) {
+            result.removeSubrange(block.fullRange)
+        }
+        return result
     }
 
     /// When nesting limit is hit, turn remaining include placeholders into simple internal links (no fetch).
@@ -323,17 +444,40 @@ struct IncludeNoteResolver {
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func childListHTML(parent: NoteItem) async -> String {
+    /// An empty text or book note's first ten children as icon links (Trilium's `renderChildrenList`), in branch
+    /// order; archived ones are skipped unless the collection shows them.
+    private func childListHTML(parent: NoteItem, includeArchived: Bool) async -> String {
+        var ids = (try? persistence.fetchChildNoteIdsOrderedFromBranches(parentNoteId: parent.noteId, serverProfileId: profileId)) ?? []
+        if ids.isEmpty { ids = parent.childNoteIds }
+        let shown = Array(ids.filter { !TriliumSharing.hiddenSystemChildNoteIds.contains($0) }.prefix(10))
+        guard !shown.isEmpty else { return "" }
+        var cached = (try? persistence.fetchCachedNotes(ids: shown, serverProfileId: profileId)) ?? [:]
+        let missing = shown.filter { cached[$0] == nil }
+        if !missing.isEmpty, isOnline, let client,
+           let entries = try? await client.fullSyncFetchTreeBatch(noteIds: missing) {
+            let policy = CacheExclusionPolicy()
+            for entry in entries where !entry.note.isDeleted {
+                try? persistence.cacheNoteIfAllowed(from: entry.note, serverProfileId: profileId, policy: policy)
+            }
+            try? persistence.commitBatch()
+            cached = (try? persistence.fetchCachedNotes(ids: shown, serverProfileId: profileId)) ?? cached
+        }
         var rows = ""
-        for cid in parent.childNoteIds.prefix(15) {
-            let childTitle = Self.cachedTitle(noteId: cid, persistence: persistence, profileId: profileId) ?? cid
-            let esc = Self.escapeHTML(childTitle)
-            rows += "<li><a href=\"#/\(cid)\">\(esc)</a></li>"
+        for cid in shown {
+            let note = cached[cid]
+            let attrs = (try? persistence.fetchCachedAttributes(noteId: cid, serverProfileId: profileId)) ?? []
+            if !includeArchived, attrs.contains(where: { $0.type == "label" && $0.name == "archived" }) { continue }
+            let type = NoteType(rawValue: note?.noteType ?? "") ?? .text
+            let hasChildren = !(note?.childBranchIds.isEmpty ?? true)
+            let icon = BoxiconsResolver.usableIconClass(from: persistence.cachedEffectiveNoteIconClass(noteId: cid, serverProfileId: profileId))
+                ?? CollectionNoteModels.defaultIconClass(type: type, hasChildren: hasChildren)
+            var title = note.map {
+                NoteItem.maskedStoredTitle($0.title, isProtected: $0.isProtected, protectedSessionActive: protectedSessionActive)
+            } ?? cid
+            if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { title = cid }
+            rows += "<a href=\"#/\(cid)\"><span class=\"tn-icon \(Self.escapeHTML(icon))\"></span>\(Self.escapeHTML(title))</a><br>"
         }
-        if parent.childNoteIds.count > 15 {
-            rows += "<li>…</li>"
-        }
-        return "<div class=\"trinote-include__inner trinote-include__inner--children\"><ul class=\"trinote-include__children\">\(rows)</ul></div>"
+        return "<div class=\"trinote-include__inner trinote-include__inner--children text-with-ellipsis\">\(rows)</div>"
     }
 
     private func imagePreviewTag(noteId: String) async -> String? {
@@ -398,21 +542,36 @@ struct IncludeNoteResolver {
         }
     }
 
-    private func loadRawBodyString(noteId: String) async -> String? {
-        guard let d = await loadRawBody(noteId: noteId) else { return nil }
-        return String(data: d, encoding: .utf8)
+    enum RawBody {
+        case data(Data)
+        case tooLarge
+        case unavailable
     }
 
     private func loadRawBody(noteId: String) async -> Data? {
-        if let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId),
-           let c = cached.content, !c.isEmpty {
-            return c
+        if case .data(let data) = await loadRawBodyResult(noteId: noteId, options: PreviewOptions()) { return data }
+        return nil
+    }
+
+    /// A note's body: one handed in with the options, else the cache, else the server (within `maxBytes`).
+    private func loadRawBodyResult(noteId: String, options: PreviewOptions) async -> RawBody {
+        if let body = options.bodies[noteId] { return .data(body) }
+        if options.tooLargeNoteIds.contains(noteId) { return .tooLarge }
+        let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId)
+        if let cached, let content = cached.content, !content.isEmpty || cached.contentFetchedAt != nil {
+            return .data(content)
         }
-        guard isOnline, let client else { return nil }
+        guard isOnline, let client else { return .unavailable }
         let policy = CacheExclusionPolicy()
-        let parentNoteIds = (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
+        let parentNoteIds = cached?.parentNoteIds ?? []
         do {
-            let data = try await client.getNoteContent(noteId)
+            let data: Data?
+            if let maxBytes = options.maxBytes {
+                data = try await client.getNoteContent(noteId, maxBytes: maxBytes)
+            } else {
+                data = try await client.getNoteContent(noteId)
+            }
+            guard let data else { return .tooLarge }
             try? persistence.cacheNoteContentIfAllowed(
                 noteId,
                 content: data,
@@ -421,10 +580,10 @@ struct IncludeNoteResolver {
                 utcDateModified: nil,
                 policy: policy
             )
-            return data
+            return .data(data)
         } catch {
             Log.api.debug("IncludeNoteResolver: getNoteContent failed for \(noteId): \(error)")
-            return nil
+            return .unavailable
         }
     }
 
@@ -494,7 +653,7 @@ struct IncludeNoteResolver {
         return "language-plaintext"
     }
 
-    private static func escapeHTML(_ s: String) -> String {
+    nonisolated static func escapeHTML(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")

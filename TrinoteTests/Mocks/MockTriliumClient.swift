@@ -288,8 +288,18 @@ actor MockTriliumClient: TriliumClientProtocol {
         syncPullResult = result
     }
 
+    /// Seconds every note read waits before answering (a slow server, for reads that end after a write).
+    var noteDelaySeconds: TimeInterval = 0
+
+    func setNoteDelaySeconds(_ seconds: TimeInterval) {
+        noteDelaySeconds = seconds
+    }
+
     func getNoteWithBranches(_ noteId: String) async throws -> (NoteResponse, [BranchResponse]) {
         getNoteCalls.append(noteId)
+        if noteDelaySeconds > 0 {
+            try await Task.sleep(nanoseconds: UInt64(noteDelaySeconds * 1_000_000_000))
+        }
         let note: NoteResponse
         if let result = noteResults[noteId] {
             note = try result.get()

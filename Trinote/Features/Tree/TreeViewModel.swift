@@ -872,13 +872,18 @@ final class TreeViewModel {
     }
 
     func createChildNote(parentNoteId: String, title: String, type: NoteType = .text) async -> String? {
+        await createChildNote(parentNoteId: parentNoteId, title: title, kind: .type(type))
+    }
+
+    /// Queues a new note of `kind` (a type, or a collection in one of its views) under `parentNoteId`.
+    func createChildNote(parentNoteId: String, title: String, kind: NewNoteKind) async -> String? {
         let resolvedTitle = NoteCreationTitle.resolved(from: title)
         guard let profileId = serverProfileId, appState.isAuthenticated else { return nil }
 
-        let mime = type.creationMime
-        let initial = type.creationInitialContent
-        let storageType = type.triliumStorageType
-        let attrs = type.creationInitialAttributes
+        let mime = kind.creationMime
+        let initial = kind.creationInitialContent
+        let storageType = kind.triliumStorageType
+        let attrs = kind.creationInitialAttributes
 
         do {
             let (noteId, _) = try persistence.createOfflineChildNote(

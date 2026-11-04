@@ -89,12 +89,34 @@ final class TriliumLabelResolver {
 enum TriliumBuiltinTemplateLabels {
     /// `#subtreeHidden` ("Hide child notes in tree") on the built-in templates. Calendar, table and geo map show
     /// their children (`false`); the board shows them only up to Trilium v0.105 and hides them from v0.106, since
-    /// its cards would repeat in the tree.
+    /// its cards would repeat in the tree. `#viewType` is the view each template gives its collections.
     static func value(of name: String, templateNoteId: String, boardHidesChildren: Bool) -> String? {
-        guard name == "subtreeHidden" else { return nil }
+        switch name {
+        case "subtreeHidden":
+            switch templateNoteId {
+            case "_template_board": return boardHidesChildren ? "" : "false"
+            case "_template_calendar", "_template_table", "_template_geo_map": return "false"
+            default: return nil
+            }
+        case "viewType":
+            return viewType(ofTemplate: templateNoteId)
+        default:
+            return nil
+        }
+    }
+
+    /// The `#viewType` label a built-in collection template carries (`hidden_subtree_templates.ts`), so a
+    /// collection made from one shows the right view even though the label sits on the uncached template.
+    static func viewType(ofTemplate templateNoteId: String) -> String? {
         switch templateNoteId {
-        case "_template_board": return boardHidesChildren ? "" : "false"
-        case "_template_calendar", "_template_table", "_template_geo_map": return "false"
+        case "_template_list_view": return "list"
+        case "_template_grid_view": return "grid"
+        case "_template_dashboard": return "dashboard"
+        case "_template_table": return "table"
+        case "_template_calendar": return "calendar"
+        case "_template_board": return "board"
+        case "_template_presentation": return "presentation"
+        case "_template_geo_map": return "geoMap"
         default: return nil
         }
     }

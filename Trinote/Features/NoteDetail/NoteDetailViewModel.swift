@@ -108,7 +108,8 @@ final class NoteDetailViewModel {
     // Create child
     var showCreateChild = false
     var newNoteTitle = ""
-    var newNoteType: NoteType = .text
+    /// What the New Note sheet makes: a type, or a collection in one of its views.
+    var newNoteKind: NewNoteKind = .text
 
     // Delete
     var showDeleteConfirm = false
@@ -127,7 +128,12 @@ final class NoteDetailViewModel {
     var isUnlockingProtected = false
 
     // Child notes
-    var childNotes: [ChildNoteSummary] = []
+    /// Bumped whenever the sub-notes reload, so a collection view drawing them loads again (pull-to-refresh, sync, a
+    /// created or moved child).
+    private(set) var childrenRevision = 0
+    var childNotes: [ChildNoteSummary] = [] {
+        didSet { childrenRevision &+= 1 }
+    }
     var isLoadingChildren = false
     /// Other notes last edited on this journal day (`#dateNote`). Empty when this is not a day note.
     var notesEditedOnDay: [NoteIdTitle] = []
@@ -138,11 +144,11 @@ final class NoteDetailViewModel {
     /// (`.trinoteOfflineNoteIdReplaced`) without being torn down and rebuilt.
     /// See `migrateAfterOfflineIdReplacement(to:)`.
     private(set) var noteId: String
-    private let appState: AppState
+    let appState: AppState
     /// From the tree when opening a note whose children are in memory but not (yet) in SwiftData — critical offline.
     @ObservationIgnored private let seedChildSummaries: [ChildNoteSummary]?
-    private let persistence = PersistenceManager.shared
-    private let cacheExclusion = CacheExclusionPolicy()
+    let persistence = PersistenceManager.shared
+    let cacheExclusion = CacheExclusionPolicy()
     private var draftAutoSaveTask: Task<Void, Never>?
     private var serverContentHash: Int?
     /// The server's utcDateModified for the current note, set during metadata fetch.
@@ -150,6 +156,10 @@ final class NoteDetailViewModel {
     /// Shared, memoized task for the background metadata refresh so `load()` and `loadContent()`
     /// coordinate on a single `getNote` and both see a populated `serverUtcDateModified`.
     @ObservationIgnored private var metadataRefreshTask: Task<Void, Never>?
+    /// Counts the server answers this screen took as the newest after its own writes (a label, the title, the
+    /// type). A read that began before one of them is older than what's shown and is dropped, so a children refetch
+    /// or a refresh under way during a view switch can't put the old `#viewType` back.
+    @ObservationIgnored private(set) var noteMetadataGeneration = 0
     /// `board.json` as last loaded, for choices made later on the same board (the card template).
     @ObservationIgnored private var lastKanbanConfig: KanbanBoardModels.BoardConfig?
     /// Blob id from the latest `getNote` response (used to skip redundant `getNoteContent` for empty notes).
@@ -224,7 +234,7 @@ final class NoteDetailViewModel {
         return (try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId))?.parentNoteIds ?? []
     }
 
-    private func persistNoteResponse(_ response: NoteResponse, profileId: String) {
+    func persistNoteResponse(_ response: NoteResponse, profileId: String) {
         try? persistence.cacheNoteIfAllowed(from: response, serverProfileId: profileId, policy: cacheExclusion)
         for attr in response.attributes {
             try? persistence.cacheAttributeBatchIfAllowed(
@@ -236,7 +246,7 @@ final class NoteDetailViewModel {
         }
     }
 
-    private func cacheNoteContentIfAllowed(
+    func cacheNoteContentIfAllowed(
         _ noteId: String,
         content: Data,
         profileId: String,
@@ -440,11 +450,14 @@ final class NoteDetailViewModel {
         defer { if !hadCachedNote { isLoading = false } }
 
         do {
+            let generation = noteMetadataGeneration
             let response = try await client.getNote(nid)
             if response.isDeleted {
                 handleServerDeletedNote(noteId: nid)
                 return
             }
+            // A write on this screen took a newer answer meanwhile.
+            guard generation == noteMetadataGeneration else { return }
             let fresh = NoteItem(from: response)
             self.note = fresh
             self.serverUtcDateModified = response.utcDateModified
@@ -1446,6 +1459,7 @@ final class NoteDetailViewModel {
         guard let client else { return }
         let nid = self.noteId
         let profileId = self.serverProfileId ?? ""
+        let generation = noteMetadataGeneration
 
         // 1) Fetch metadata into local vars (no @Observable writes yet)
         var metaResponse: NoteResponse?
@@ -1485,7 +1499,7 @@ final class NoteDetailViewModel {
         )
 
         if !force, !serverIsNewer, hasUsableBody || bodyConfirmedEmpty {
-            if let response = metaResponse {
+            if let response = metaResponse, generation == noteMetadataGeneration {
                 self.note = NoteItem(from: response)
                 self.serverUtcDateModified = serverDate
                 self.serverVerified = true
@@ -1530,7 +1544,7 @@ final class NoteDetailViewModel {
 
         // 4) All network done — apply everything to @Observable state
         if let response = metaResponse {
-            if !skipApplyingStaleMetaNote {
+            if !skipApplyingStaleMetaNote, generation == noteMetadataGeneration {
                 self.note = NoteItem(from: response)
                 self.serverUtcDateModified = serverDate
                 self.serverVerified = true
@@ -2454,6 +2468,7 @@ final class NoteDetailViewModel {
             do {
                 let updated = try await client.updateNote(nid, request: UpdateNoteRequest(title: trimmed, type: nil, mime: nil))
                 self.note = NoteItem(from: updated)
+                noteMetadataGeneration &+= 1
                 self.editingTitle = false
                 if updated.isProtected {
                     appState.recordProtectedNoteActivity()
@@ -2548,6 +2563,7 @@ final class NoteDetailViewModel {
                 }
                 let updated = try await client.getNote(nid)
                 self.note = NoteItem(from: updated)
+                noteMetadataGeneration &+= 1
                 if let profileId = serverProfileId {
                     persistNoteResponse(updated, profileId: profileId)
                     try? persistence.commitBatch()
@@ -2614,6 +2630,7 @@ final class NoteDetailViewModel {
                 }
                 let updated = try await client.getNote(nid)
                 self.note = NoteItem(from: updated)
+                noteMetadataGeneration &+= 1
                 if let profileId = serverProfileId {
                     persistNoteResponse(updated, profileId: profileId)
                     try? persistence.commitBatch()
@@ -2665,6 +2682,7 @@ final class NoteDetailViewModel {
                     request: UpdateNoteRequest(title: nil, type: "code", mime: trimmed)
                 )
                 self.note = NoteItem(from: updated)
+                noteMetadataGeneration &+= 1
                 if let profileId = serverProfileId {
                     persistNoteResponse(updated, profileId: profileId)
                     try? persistence.commitBatch()
@@ -2709,6 +2727,7 @@ final class NoteDetailViewModel {
         let previous = note
         let updated = NoteItem(from: response)
         note = updated
+        noteMetadataGeneration &+= 1
         persistNoteResponse(response, profileId: profileId)
         try? persistence.pruneCachedAttributes(
             noteId: response.noteId,
@@ -3262,10 +3281,10 @@ final class NoteDetailViewModel {
         self.isSaving = true
         defer { self.isSaving = false }
 
-        let mime = self.newNoteType.creationMime
-        let initial = self.newNoteType.creationInitialContent
-        let storageType = self.newNoteType.triliumStorageType
-        let attrs = self.newNoteType.creationInitialAttributes
+        let mime = self.newNoteKind.creationMime
+        let initial = self.newNoteKind.creationInitialContent
+        let storageType = self.newNoteKind.triliumStorageType
+        let attrs = self.newNoteKind.creationInitialAttributes
 
         do {
             let (newId, _) = try persistence.createOfflineChildNote(
@@ -3884,7 +3903,7 @@ final class NoteDetailViewModel {
     // MARK: - Child Notes
 
     /// Canonical child list: `CachedBranch` rows under this note only (not stale `CachedNote.childNoteIds`).
-    private func resolvedChildNoteIdsForDetail() -> [String] {
+    func resolvedChildNoteIdsForDetail() -> [String] {
         guard let profileId = serverProfileId else { return [] }
         let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
         let fromBranches = (try? persistence.fetchChildNoteIdsOrderedFromBranches(
@@ -4002,13 +4021,18 @@ final class NoteDetailViewModel {
         defer { if showSpinner { isLoadingChildren = false } }
 
         do {
+            let generation = noteMetadataGeneration
             let (parentResp, liveBranches) = try await client.getNoteWithBranches(noteId)
             if parentResp.isDeleted {
                 handleServerDeletedNote(noteId: noteId)
                 return
             }
-            persistNoteResponse(parentResp, profileId: profileId)
-            note = NoteItem(from: parentResp)
+            // A write on this screen took a newer answer while this one was on its way: the children are still
+            // wanted, the parent as read then isn't.
+            if generation == noteMetadataGeneration {
+                persistNoteResponse(parentResp, profileId: profileId)
+                note = NoteItem(from: parentResp)
+            }
 
             let liveBranchIds = Set(liveBranches.map(\.branchId))
             try? persistence.pruneStaleBranchesUnderParent(
@@ -5232,7 +5256,7 @@ final class NoteDetailViewModel {
     }
 
     /// Batched `tree/load` entries (note plus its child branches) keyed by note id, 100 notes per request.
-    private func fetchTreeEntriesBatched(_ noteIds: [String], client: any TriliumClientProtocol) async throws -> [String: FullSyncTreeBatchEntry] {
+    func fetchTreeEntriesBatched(_ noteIds: [String], client: any TriliumClientProtocol) async throws -> [String: FullSyncTreeBatchEntry] {
         var entries: [String: FullSyncTreeBatchEntry] = [:]
         for chunk in noteIds.chunked(into: Self.noteBatchSize) {
             for entry in try await client.fullSyncFetchTreeBatch(noteIds: chunk) {
@@ -5243,7 +5267,7 @@ final class NoteDetailViewModel {
     }
 
     /// Note bodies, a few requests at a time; a body that fails is left out.
-    private func fetchBodies(_ noteIds: [String], client: any TriliumClientProtocol) async -> [String: Data] {
+    func fetchBodies(_ noteIds: [String], client: any TriliumClientProtocol) async -> [String: Data] {
         await withTaskGroup(of: (String, Data?).self) { group in
             var bodies: [String: Data] = [:]
             var next = 0
@@ -5339,20 +5363,7 @@ final class NoteDetailViewModel {
             for existing in item.attributes where existing.type == .label && existing.name.caseInsensitiveCompare(name) == .orderedSame {
                 try await client.deleteAttribute(noteId: targetNoteId, attributeId: existing.attributeId)
             }
-            if let profileId = serverProfileId {
-                let fresh = try await client.getNote(targetNoteId)
-                persistNoteResponse(fresh, profileId: profileId)
-                // The label just deleted would otherwise stay cached until the next sync.
-                try? persistence.pruneCachedAttributes(
-                    noteId: targetNoteId,
-                    keeping: Set(fresh.attributes.map(\.attributeId)),
-                    serverProfileId: profileId
-                )
-                try? persistence.commitBatch()
-            }
-            if targetNoteId == noteId {
-                await load()
-            }
+            await applyNoteAfterLabelWrite(try await client.getNote(targetNoteId))
             return true
         } catch {
             saveError = APIError.from(error).localizedDescription
@@ -5361,7 +5372,9 @@ final class NoteDetailViewModel {
         }
     }
 
-    /// Sets or replaces a label on a note (delete + create). Online-only.
+    /// Sets a label on a note: the value of its existing label changes in place (Trilium's own `setLabel`), so no
+    /// read under way elsewhere (a sync's children refetch, the tree, another device) ever sees the note without it;
+    /// a note without the label gets one. Online-only.
     @discardableResult
     func setNoteLabel(noteId targetNoteId: String, name: String, value: String) async -> Bool {
         guard let client, isOnline else {
@@ -5370,37 +5383,55 @@ final class NoteDetailViewModel {
             return false
         }
         do {
-            let noteResp = try await client.getNote(targetNoteId)
-            let item = NoteItem(from: noteResp)
-            if let existing = item.attributes.first(where: {
+            let item = NoteItem(from: try await client.getNote(targetNoteId))
+            let existing = item.attributes.filter {
                 $0.type == .label && $0.name.caseInsensitiveCompare(name) == .orderedSame
-            }) {
-                try await client.deleteAttribute(noteId: targetNoteId, attributeId: existing.attributeId)
             }
-            try await client.createAttribute(CreateAttributeRequest(
-                noteId: targetNoteId, type: "label", name: name,
-                value: value, isInheritable: nil, position: nil
-            ))
-            if let profileId = serverProfileId {
-                let fresh = try await client.getNote(targetNoteId)
-                persistNoteResponse(fresh, profileId: profileId)
-                // The label just deleted would otherwise stay cached until the next sync.
-                try? persistence.pruneCachedAttributes(
-                    noteId: targetNoteId,
-                    keeping: Set(fresh.attributes.map(\.attributeId)),
-                    serverProfileId: profileId
-                )
-                try? persistence.commitBatch()
+            if let first = existing.first {
+                _ = try await client.updateNoteAttribute(UpdateNoteAttributeRequest(
+                    noteId: targetNoteId, attributeId: first.attributeId, type: "label", name: first.name, value: value
+                ))
+                // Trilium reads the first label of a name; copies would keep answering for it.
+                for duplicate in existing.dropFirst() {
+                    try await client.deleteAttribute(noteId: targetNoteId, attributeId: duplicate.attributeId)
+                }
+            } else {
+                try await client.createAttribute(CreateAttributeRequest(
+                    noteId: targetNoteId, type: "label", name: name,
+                    value: value, isInheritable: nil, position: nil
+                ))
             }
-            if targetNoteId == noteId {
-                await load()
-            }
+            await applyNoteAfterLabelWrite(try await client.getNote(targetNoteId))
             return true
         } catch {
             saveError = APIError.from(error).localizedDescription
             showSaveError = true
             return false
         }
+    }
+
+    /// After a label write: the note on screen takes the server's answer at once, as the newest state (a refresh
+    /// or children refetch that began earlier can't put the old labels back); another note just updates the cache.
+    private func applyNoteAfterLabelWrite(_ fresh: NoteResponse) async {
+        guard let profileId = serverProfileId else {
+            if fresh.noteId == noteId {
+                note = NoteItem(from: fresh)
+                noteMetadataGeneration &+= 1
+            }
+            return
+        }
+        if fresh.noteId == noteId {
+            await applyServerNoteUpdate(fresh, profileId: profileId)
+            return
+        }
+        persistNoteResponse(fresh, profileId: profileId)
+        // A label just deleted would otherwise stay cached until the next sync.
+        try? persistence.pruneCachedAttributes(
+            noteId: fresh.noteId,
+            keeping: Set(fresh.attributes.map(\.attributeId)),
+            serverProfileId: profileId
+        )
+        try? persistence.commitBatch()
     }
 
     // MARK: - Cache Fallback

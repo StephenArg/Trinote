@@ -19,6 +19,9 @@ final class NoteTypeChangeTests: XCTestCase {
         XCTAssertFalse(NoteTypeChange.collectionViews(serverInfo: info("0.105.0")).contains(.dashboard))
         XCTAssertTrue(NoteTypeChange.collectionViews(serverInfo: info("0.106.0")).contains(.dashboard))
         XCTAssertFalse(NoteTypeChange.collectionViews(serverInfo: info("0.97.0")).contains(.board))
+        XCTAssertFalse(NoteTypeChange.collectionViews(serverInfo: info("0.106.0")).contains(.calendar), "a calendar collection isn't drawn here")
+        XCTAssertEqual(NoteTypeChange.switcherCollectionViews(serverInfo: info("0.106.0")), [.grid, .list, .table, .dashboard])
+        XCTAssertEqual(NoteTypeChange.switcherCollectionViews(serverInfo: info("0.105.0")), [.grid, .list, .table])
     }
 
     func testAIChatEntryNeedsAIOnAndTriliumV105() {

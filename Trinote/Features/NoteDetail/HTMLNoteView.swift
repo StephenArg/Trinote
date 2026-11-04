@@ -39,9 +39,24 @@ struct HTMLNoteView: View {
     /// Identifies the note (with its server profile) so its laid-out height is remembered and the body opens at
     /// that height next time (see `NoteBodyLayoutCache`). Nil keeps the placeholder height until the page reports.
     var layoutCacheKey: String? = nil
+    /// Bumped together with `html` when the page already shows the change (a collection list row opened or closed
+    /// in place): the body is taken as the page's without reloading it, like `checkboxOnlyRevision`.
+    var inPlaceRevision: Int = 0
+    /// A collection list row is opened for the first time: returns the HTML to insert under its title, nil on failure.
+    var collectionRowExpand: ((String) async -> String?)? = nil
+    /// A collection list row was opened or closed in the page.
+    var onCollectionRowToggled: ((_ noteId: String, _ expanded: Bool) -> Void)? = nil
 
     /// Height the body starts at until the page reports its own, when no remembered height fits.
     static let placeholderHeight: CGFloat = 200
+
+    /// The page the read-only web view loads for `body`, for tests of what the wrapper injects.
+    @MainActor static func pageForTesting(_ body: String) -> String {
+        HTMLNoteWebView.wrapHTML(
+            body,
+            theme: HTMLThemeColors(lightText: "#1c1c1e", darkText: "#aaaaaa", lightLink: "#007aff", darkLink: "#0a84ff")
+        )
+    }
 
     /// Height the page last reported; nil until it does.
     @State private var reportedHeight: CGFloat?
@@ -104,7 +119,10 @@ struct HTMLNoteView: View {
             reportedHeight: reportedHeight,
             layoutCacheKey: layoutCacheKey,
             onHeightChanged: { reportedHeight = $0 },
-            onImagePreview: { payload in fullScreenImage = payload }
+            onImagePreview: { payload in fullScreenImage = payload },
+            inPlaceRevision: inPlaceRevision,
+            collectionRowExpand: collectionRowExpand,
+            onCollectionRowToggled: onCollectionRowToggled
         )
         .fullScreenCover(item: $fullScreenImage) { payload in
             FullScreenImageViewer(image: payload.image, title: payload.title) {
@@ -175,6 +193,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     var layoutCacheKey: String?
     var onHeightChanged: ((CGFloat) -> Void)?
     var onImagePreview: ((FullScreenImagePayload) -> Void)?
+    var inPlaceRevision: Int = 0
+    var collectionRowExpand: ((String) async -> String?)?
+    var onCollectionRowToggled: ((_ noteId: String, _ expanded: Bool) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -207,6 +228,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         contentController.add(handler, name: "collapsibleToggle")
         contentController.add(handler, name: "debugLog")
         contentController.add(handler, name: "imagePreview")
+        contentController.add(handler, name: "collectionRow")
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
@@ -246,6 +268,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         handler.listInteractionEnabled = listInteractionEnabled
         handler.taskStates = taskStates
         handler.checkboxOnlyRevision = checkboxOnlyRevision
+        handler.inPlaceRevision = inPlaceRevision
+        handler.collectionRowExpand = collectionRowExpand
+        handler.onCollectionRowToggled = onCollectionRowToggled
         handler.findControl = findControl
         handler.lastAppliedColorScheme = colorScheme
         webView.applyTrinoteAppearanceMode()
@@ -289,6 +314,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.imageBytes = imageBytes
         coordinator.onHeightChanged = onHeightChanged
         coordinator.onImagePreview = onImagePreview
+        coordinator.collectionRowExpand = collectionRowExpand
+        coordinator.onCollectionRowToggled = onCollectionRowToggled
         if coordinator.lastSizedReportedHeight != reportedHeight {
             coordinator.lastSizedReportedHeight = reportedHeight
             container.invalidateIntrinsicContentSize()
@@ -320,6 +347,34 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 CheckboxPerf.log(
                     "updateUIView noop compareMs=\(compareMs) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs()) lastToggle=#\(CheckboxPerf.lastToggleID)"
                 )
+            }
+            return
+        }
+
+        // A collection list row opened or closed in the page: the page already shows `html`, so take it as
+        // loaded (theme changes and process recovery then reload the rows as they are) without reloading now.
+        if htmlChanged, !themeChanged, !reorderChanged, !listInteractionChanged, !cycleChanged,
+           inPlaceRevision != coordinator.inPlaceRevision {
+            coordinator.loadedHTML = html
+            coordinator.inPlaceRevision = inPlaceRevision
+            coordinator.checkboxOnlyRevision = checkboxOnlyRevision
+            if coordinator.layoutCacheKey != nil {
+                let theme = themeColors
+                let options = (checkboxReorderEnabled, listInteractionEnabled, taskStates,
+                               collapsibleReorderEnabled, collapsibleTogglePersistEnabled)
+                DispatchQueue.main.async { [weak coordinator] in
+                    guard let coordinator, coordinator.loadedHTML == html else { return }
+                    let page = Self.wrapHTML(
+                        html,
+                        theme: theme,
+                        checkboxReorderEnabled: options.0,
+                        listInteractionEnabled: options.1,
+                        taskStates: options.2,
+                        collapsibleReorderEnabled: options.3,
+                        collapsibleTogglePersistEnabled: options.4
+                    )
+                    coordinator.pageChangedInPlace(page)
+                }
             }
             return
         }
@@ -370,6 +425,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.listInteractionEnabled = listInteractionEnabled
         coordinator.taskStates = taskStates
         coordinator.checkboxOnlyRevision = checkboxOnlyRevision
+        coordinator.inPlaceRevision = inPlaceRevision
         let wrapped = Self.wrapHTMLTimed(
             TriliumServerAssetURLs.resolving(in: html, serverBase: baseURL),
             theme: themeColors,
@@ -432,6 +488,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "collapsibleToggle")
         uc.removeScriptMessageHandler(forName: "debugLog")
         uc.removeScriptMessageHandler(forName: "imagePreview")
+        uc.removeScriptMessageHandler(forName: "collectionRow")
     }
 
     /// Guards the revision signal: setting one item's state changes its `checked` and the `<li>`'s state attribute and
@@ -485,6 +542,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         :root { color-scheme: light dark; }
         * { -webkit-text-size-adjust: 100%; }
         \(TriliumInlineIconStyles.css(forHTML: body))
+        \(CollectionNoteWebStyles.css(forHTML: body))
         \(theme.headingColor.map { "h1, h2, h3, h4, h5, h6 { color: \($0); }" } ?? "")
         body {
             font: -apple-system-body;
@@ -913,6 +971,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
         .trinote-include img, .trinote-include svg { pointer-events: none; }
         .trinote-include__children { margin: 0; padding-left: 1.2em; }
+        .text-with-ellipsis a { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+        .text-with-ellipsis .tn-icon { margin-inline-end: 4px; }
         .trinote-include__mindmap-root {
           font-weight: 600; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
           background: rgba(128,128,128,0.08); display: inline-block; max-width: 100%;
@@ -945,6 +1005,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         <body>
         \(body)
         \(LinkPreviewHTML.readingViewSnippet(forBody: body))
+        \(CollectionNoteWebStyles.script(forHTML: body))
         \(TaskStateWebConfig.bundledScript.map { "<script>\n\($0)\ntrinoteTaskStates.configure(\(taskStates.json));\n</script>" } ?? "")
         <script>
         window.__trinoteFind = (function() {
@@ -2116,6 +2177,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var listInteractionEnabled: Bool = true
         var taskStates: TaskStateWebConfig = .plain
         var checkboxOnlyRevision: Int = 0
+        var inPlaceRevision: Int = 0
+        var collectionRowExpand: ((String) async -> String?)?
+        var onCollectionRowToggled: ((_ noteId: String, _ expanded: Bool) -> Void)?
         weak var findControl: FindOnPageControl?
         var lastAppliedColorScheme: ColorScheme?
         var onNoteLinkTapped: ((String) -> Void)?
@@ -2295,6 +2359,26 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             case "noteLink":
                 if let noteId = message.body as? String {
                     onNoteLinkTapped?(noteId)
+                }
+            case "collectionRow":
+                guard let body = message.body as? [String: Any],
+                      let noteId = body["noteId"] as? String, !noteId.isEmpty,
+                      let action = body["action"] as? String else { return }
+                if action == "toggle" {
+                    onCollectionRowToggled?(noteId, body["expanded"] as? Bool ?? false)
+                } else if action == "expand", let expand = collectionRowExpand {
+                    Task { @MainActor [weak self] in
+                        let html = await expand(noteId)
+                        guard let self, let webView = self.webView,
+                              let idLiteral = try? JSONEncoder().encode(noteId),
+                              let idJS = String(data: idLiteral, encoding: .utf8) else { return }
+                        if let html, let htmlLiteral = try? JSONEncoder().encode(html),
+                           let htmlJS = String(data: htmlLiteral, encoding: .utf8) {
+                            webView.evaluateJavaScript("window.trinoteCollection && window.trinoteCollection.hydrate(\(idJS), \(htmlJS));", completionHandler: nil)
+                        } else {
+                            webView.evaluateJavaScript("window.trinoteCollection && window.trinoteCollection.hydrateFailed(\(idJS));", completionHandler: nil)
+                        }
+                    }
                 }
             case "attachmentLink":
                 if let attachmentId = message.body as? String, !attachmentId.isEmpty {

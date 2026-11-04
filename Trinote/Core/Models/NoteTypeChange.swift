@@ -177,15 +177,18 @@ enum NoteTypeChange {
         /// The views this app draws itself; the rest show as a plain collection here.
         var isShownInApp: Bool {
             switch self {
-            case .geoMap, .board, .presentation: return true
-            default: return false
+            case .grid, .list, .table, .dashboard, .geoMap, .board, .presentation: return true
+            case .calendar: return false
             }
         }
     }
 
+    /// The views the Note Type sheet's Collection page offers. Calendar is left out: a collection switched to it
+    /// isn't drawn here (journal calendars have their own view).
     static func collectionViews(serverInfo: AppInfoResponse?) -> [CollectionView] {
         CollectionView.allCases.filter { view in
             switch view {
+            case .calendar: return false
             case .board: return TriliumServerCompatibility.supportsKanbanNotes(serverInfo)
             case .presentation: return TriliumServerCompatibility.supportsPresentationNotes(serverInfo)
             case .dashboard: return TriliumServerCompatibility.supportsDashboardView(serverInfo)
@@ -194,9 +197,21 @@ enum NoteTypeChange {
         }
     }
 
+    /// The views the collection bar's switcher swaps between: the ones drawn as documents here. Maps, boards and
+    /// presentations are reached from the Note Type sheet instead.
+    static func switcherCollectionViews(serverInfo: AppInfoResponse?) -> [CollectionView] {
+        NewNoteKind.collectionViews(supportsDashboard: TriliumServerCompatibility.supportsDashboardView(serverInfo))
+    }
+
     /// The view a collection shows: its `#viewType`, or Grid without one.
     static func currentView(viewTypeLabel: String?) -> CollectionView {
         viewTypeLabel.flatMap(CollectionView.init(rawValue:)) ?? .grid
+    }
+
+    /// The view `note` shows, from the `#viewType` Trilium would read for it (own, inherited or its built-in
+    /// template's). An unknown value, such as a search note's `searchPreview`, shows as Grid like on desktop.
+    static func currentView(for note: NoteItem) -> CollectionView {
+        currentView(viewTypeLabel: note.resolvedViewTypeLabelValue)
     }
 
     // MARK: Asking first

@@ -41,9 +41,8 @@ struct NoteTypePickerSheet: View {
     private var mime: String { viewModel.note?.mime ?? "" }
     private var currentEntry: NoteTypeChange.Entry? { NoteTypeChange.currentEntry(serverType: serverType, mime: mime) }
     private var currentView: NoteTypeChange.CollectionView? {
-        guard currentEntry == .collection else { return nil }
-        let label = viewModel.note?.attributes.first { $0.type == .label && $0.name == "viewType" }?.value
-        return NoteTypeChange.currentView(viewTypeLabel: label)
+        guard currentEntry == .collection, let note = viewModel.note else { return nil }
+        return NoteTypeChange.currentView(for: note)
     }
 
     var body: some View {

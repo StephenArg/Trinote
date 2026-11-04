@@ -1898,7 +1898,7 @@ private struct CreateChildNoteFromTreeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
     @State private var newNoteTitle = ""
-    @State private var newNoteType: NoteType = .text
+    @State private var newNoteKind: NewNoteKind = .text
     @State private var isCreating = false
     @State private var templateChoice = NewNoteTemplateChoice()
 
@@ -1925,11 +1925,12 @@ private struct CreateChildNoteFromTreeSheet: View {
 
                 if templateChoice.template == nil {
                     NewNoteTypePicker(
-                        selection: $newNoteType,
+                        selection: $newNoteKind,
                         supportsSpreadsheet: supportsSpreadsheetNoteType,
                         supportsKanban: supportsKanbanNoteType,
                         supportsPresentation: supportsPresentationNoteType,
-                        supportsAIChat: appState.showsAIEntryPoints
+                        supportsAIChat: appState.showsAIEntryPoints,
+                        supportsDashboard: TriliumServerCompatibility.supportsDashboardView(appState.serverAppInfo)
                     )
                 }
 
@@ -1976,7 +1977,7 @@ private struct CreateChildNoteFromTreeSheet: View {
             noteId = await viewModel.createChildNote(
                 parentNoteId: parentNote.noteId,
                 title: title,
-                type: newNoteType
+                kind: newNoteKind
             )
         }
         onDismiss()

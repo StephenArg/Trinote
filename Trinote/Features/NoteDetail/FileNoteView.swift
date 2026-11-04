@@ -347,7 +347,7 @@ private final class FitToPagePDFView: PDFView {
     }
 }
 
-/// Thin inline notice for Trilium Collection notes (table, Kanban, grid, etc. are not rendered natively).
+/// Thin inline notice for the Trilium Collection views the app doesn't draw (table, calendar).
 struct CollectionNoteLimitedSupportBanner: View {
     let noteId: String
     let serverURL: String?
@@ -384,33 +384,6 @@ struct CollectionNoteLimitedSupportBanner: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground))
-    }
-}
-
-struct BookNoteView: View {
-    let note: NoteItem
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "book.fill")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-
-            Text("Book Note")
-                .font(.headline)
-
-            Text("Contains \(note.childNoteIds.count) child notes")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            Text("Open child notes from the tree to read their content.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
     }
 }
 

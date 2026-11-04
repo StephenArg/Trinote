@@ -1929,7 +1929,10 @@ struct NoteDetailView: View {
                     Divider()
                     notesEditedOnDaySection(vm)
                     noteBody(vm, note: note, findControl: findControl)
-                    childNotesSection(vm)
+                    // A grid, list or dashboard draws the children itself.
+                    if collectionViewToRender(note, vm: vm) == nil {
+                        childNotesSection(vm)
+                    }
 
                     if vm.showDetails, !usesNoteInspector {
                         attachmentsSection(vm)
@@ -2897,13 +2900,16 @@ struct NoteDetailView: View {
             } else if isKanbanNote(note) {
                 return AnyView(KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
                     .frame(minHeight: 420))
-            } else if note.isTriliumCollectionNote || note.type == .collection {
+            } else if let view = collectionViewToRender(note, vm: vm) {
+                return AnyView(CollectionNoteView(viewModel: vm, note: note, view: view, findControl: findControl) {
+                    navigateToNoteId = $0
+                })
+            } else {
+                // Calendar collections (journal calendars are routed above).
                 return AnyView(CollectionNoteLimitedSupportBanner(
                     noteId: note.noteId,
                     serverURL: appState.activeProfile?.normalizedBaseURL
                 ))
-            } else {
-                return AnyView(BookNoteView(note: note))
             }
         default:
             return AnyView(UnsupportedNoteView(note: note, serverURL: appState.activeProfile?.normalizedBaseURL))
@@ -3748,6 +3754,21 @@ struct NoteDetailView: View {
         return note.isSemanticKanban
     }
 
+    /// The Grid, List, Table or Dashboard view a book shows here (Trilium's default for a book is Grid), or nil for
+    /// notes with a view of their own (maps, boards, presentations, journal calendars) and for calendar collections.
+    private func collectionViewToRender(_ note: NoteItem, vm: NoteDetailViewModel) -> NoteTypeChange.CollectionView? {
+        guard note.type == .book || note.type == .collection else { return nil }
+        if note.isCalendarRoot || isGeoMapNote(note, contentString: vm.contentString, vm: vm)
+            || isPresentationNote(note) || isKanbanNote(note) {
+            return nil
+        }
+        let view = NoteTypeChange.currentView(for: note)
+        switch view {
+        case .grid, .list, .table, .dashboard: return view
+        case .calendar, .geoMap, .board, .presentation: return nil
+        }
+    }
+
     @ViewBuilder
     /// An AI chat fills the note area like it does in Trilium: the transcript scrolls by itself and the reply box
     /// stays pinned at the bottom (and above the keyboard). Inside the read-only scroll view it sat below the fold.
@@ -4494,6 +4515,11 @@ struct NoteDetailView: View {
         if note.isCalendarRoot { return false }
         if note.isSemanticGeoMap { return true }
         guard note.type == .book || note.type == .collection else { return false }
+        // Trilium reads `#viewType` only: a collection that says Grid, List or Board is never a map, whatever its
+        // body or children look like. The checks below are for maps whose label this device doesn't have.
+        if let resolved = note.resolvedViewTypeLabelValue {
+            return resolved.caseInsensitiveCompare("geoMap") == .orderedSame
+        }
         if geoMapViewportJSONMatches(contentString) { return true }
         if let vm, vm.cachedAnyChildHasGeolocationLabel() { return true }
         return false
@@ -5532,58 +5558,89 @@ struct NoteDetailView: View {
 
 // MARK: - Create Child Sheet
 
-/// Note types offered when creating a child note. Spreadsheet / Kanban / Presentation are gated by server version.
+/// Note types offered when creating a child note: the types, then a Collection submenu with the views a collection
+/// can show (as desktop's chooser). Spreadsheet / Kanban / Presentation / Dashboard are gated by server version.
 struct NewNoteTypePicker: View {
-    @Binding var selection: NoteType
+    @Binding var selection: NewNoteKind
     var supportsSpreadsheet: Bool
     var supportsKanban: Bool = true
     var supportsPresentation: Bool = true
     /// Trilium 0.105+ with its AI switch on.
     var supportsAIChat: Bool = false
+    /// Trilium 0.106+: the Dashboard collection view.
+    var supportsDashboard: Bool = false
     /// When `false`, the picker stays on Text and cannot be changed (share-import flow).
     var isEnabled: Bool = true
 
     var body: some View {
-        Picker(String(localized: "Type", comment: "New note type"), selection: $selection) {
-            Text(String(localized: "Text", comment: "Note type")).tag(NoteType.text)
-            Text(String(localized: "Code", comment: "Note type")).tag(NoteType.code)
-            Text(String(localized: "Markdown", comment: "Note type: code note with Markdown MIME")).tag(NoteType.markdown)
-            Text(String(localized: "Canvas", comment: "Note type")).tag(NoteType.canvas)
-            Text(String(localized: "Mermaid", comment: "Note type")).tag(NoteType.mermaid)
-            Text(String(localized: "Mind Map", comment: "Note type")).tag(NoteType.mindMap)
-            if supportsSpreadsheet {
-                Text(String(localized: "Spreadsheet", comment: "Note type")).tag(NoteType.spreadsheet)
+        LabeledContent(String(localized: "Type", comment: "New note type")) {
+            Menu {
+                Picker(String(localized: "Type", comment: "New note type"), selection: $selection) {
+                    typeRow(.text)
+                    typeRow(.code)
+                    typeRow(.markdown)
+                    typeRow(.canvas)
+                    typeRow(.mermaid)
+                    typeRow(.mindMap)
+                    if supportsSpreadsheet {
+                        typeRow(.spreadsheet)
+                    }
+                    typeRow(.geoMap)
+                    typeRow(.calendar)
+                    if supportsKanban {
+                        typeRow(.kanban)
+                    }
+                    if supportsPresentation {
+                        typeRow(.presentation)
+                    }
+                    if supportsAIChat {
+                        typeRow(.llmChat)
+                    }
+                }
+                .pickerStyle(.inline)
+                Menu {
+                    Picker(String(localized: "Collection", comment: "Note type"), selection: $selection) {
+                        ForEach(NewNoteKind.collectionViews(supportsDashboard: supportsDashboard)) { view in
+                            Text(view.title).tag(NewNoteKind.collection(view))
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Text(String(localized: "Collection", comment: "Note type"))
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(selection.title)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(.secondary)
             }
-            Text(String(localized: "Geo Map", comment: "Note type")).tag(NoteType.geoMap)
-            Text(String(localized: "Calendar", comment: "Note type: Trilium journal / calendar root")).tag(NoteType.calendar)
-            if supportsKanban {
-                Text(String(localized: "Kanban Board", comment: "Note type")).tag(NoteType.kanban)
-            }
-            if supportsPresentation {
-                Text(String(localized: "Presentation", comment: "Note type")).tag(NoteType.presentation)
-            }
-            if supportsAIChat {
-                Text(String(localized: "AI Chat", comment: "Note type")).tag(NoteType.llmChat)
-            }
+            .menuOrder(.fixed)
         }
         .disabled(!isEnabled)
         .onChange(of: supportsSpreadsheet) { _, supported in
-            if !supported, selection == .spreadsheet {
+            if !supported, selection == .type(.spreadsheet) {
                 selection = .text
             }
         }
         .onChange(of: supportsKanban) { _, supported in
-            if !supported, selection == .kanban {
+            if !supported, selection == .type(.kanban) {
                 selection = .text
             }
         }
         .onChange(of: supportsPresentation) { _, supported in
-            if !supported, selection == .presentation {
+            if !supported, selection == .type(.presentation) {
                 selection = .text
             }
         }
         .onChange(of: supportsAIChat) { _, supported in
-            if !supported, selection == .llmChat {
+            if !supported, selection == .type(.llmChat) {
+                selection = .text
+            }
+        }
+        .onChange(of: supportsDashboard) { _, supported in
+            if !supported, selection == .collection(.dashboard) {
                 selection = .text
             }
         }
@@ -5592,6 +5649,10 @@ struct NewNoteTypePicker: View {
                 selection = .text
             }
         }
+    }
+
+    private func typeRow(_ type: NoteType) -> some View {
+        Text(NewNoteKind.title(of: type)).tag(NewNoteKind.type(type))
     }
 }
 
@@ -5625,11 +5686,12 @@ struct CreateChildNoteSheet: View {
 
                 if templateChoice.template == nil {
                     NewNoteTypePicker(
-                        selection: $viewModel.newNoteType,
+                        selection: $viewModel.newNoteKind,
                         supportsSpreadsheet: supportsSpreadsheetNoteType,
                         supportsKanban: supportsKanbanNoteType,
                         supportsPresentation: supportsPresentationNoteType,
-                        supportsAIChat: appState.showsAIEntryPoints
+                        supportsAIChat: appState.showsAIEntryPoints,
+                        supportsDashboard: TriliumServerCompatibility.supportsDashboardView(appState.serverAppInfo)
                     )
                 }
 

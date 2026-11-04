@@ -195,7 +195,7 @@ private struct ShareImportCreateNoteSheet: View {
                 .textInputAutocapitalization(.sentences)
 
                 NewNoteTypePicker(
-                    selection: $noteType,
+                    selection: .constant(.text),
                     supportsSpreadsheet: false,
                     isEnabled: false
                 )

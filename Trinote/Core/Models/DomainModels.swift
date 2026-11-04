@@ -85,6 +85,20 @@ struct NoteItem: Identifiable, Hashable, Sendable {
         return t.isEmpty ? nil : t
     }
 
+    /// The `#viewType` Trilium reads for this note: its own label, else one it inherits (ancestors and templates,
+    /// known for the note on screen), else the label its built-in `~template` carries, since the hidden templates
+    /// are never cached.
+    var resolvedViewTypeLabelValue: String? {
+        if let own = viewTypeLabelValue { return own }
+        if let inherited = inheritedAttributes.first(where: {
+            $0.type == .label && $0.name.caseInsensitiveCompare("viewType") == .orderedSame
+        })?.value.trimmingCharacters(in: .whitespacesAndNewlines), !inherited.isEmpty {
+            return inherited
+        }
+        guard let template = templateRelationValue else { return nil }
+        return TriliumBuiltinTemplateLabels.viewType(ofTemplate: template)
+    }
+
     /// Target of `~template` relation (note id or title), if present.
     var templateRelationValue: String? {
         guard let raw = attributes.first(where: {
@@ -144,12 +158,13 @@ struct NoteItem: Identifiable, Hashable, Sendable {
     ///   `~template=_template_geo_map`
     ///
     /// A note changed from a geo map to a type with its own view (text, code, canvas, …) keeps the template relation
-    /// but shows as that type, as on desktop.
+    /// but shows as that type, as on desktop. `#viewType` is authoritative, as for boards and presentations: a map
+    /// made from the template and switched to Grid or List shows as that.
     var isSemanticGeoMap: Bool {
         if type == .geoMap { return true }
         if isCalendarRoot { return false }
-        if (type == .book || type == .collection), let v = viewTypeLabelValue, v.caseInsensitiveCompare("geoMap") == .orderedSame {
-            return true
+        if (type == .book || type == .collection), let v = viewTypeLabelValue {
+            return v.caseInsensitiveCompare("geoMap") == .orderedSame
         }
         guard type == .book || type == .collection || type == .file else { return false }
         return hasGeoMapTemplateRelation
