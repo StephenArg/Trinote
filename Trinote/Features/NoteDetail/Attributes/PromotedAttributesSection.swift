@@ -30,6 +30,9 @@ struct PromotedAttributesSection: View {
                             .foregroundStyle(.secondary)
                         }
                     }
+                    // Full width, or a stack of unset fields (a "Set" button, a picker: nothing greedy) is only as
+                    // wide as its widest field and sits centred.
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 8)
                 } label: {
                     Text(String(localized: "Promoted Attributes", comment: "Note section with promoted attribute fields, as in Trilium"))
@@ -74,6 +77,7 @@ private struct PromotedFieldRow: View {
                         .foregroundStyle(.secondary)
                     field
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .disabled(!canEdit)

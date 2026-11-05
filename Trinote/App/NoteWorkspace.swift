@@ -169,6 +169,9 @@ final class NoteWorkspace {
 extension EnvironmentValues {
     /// Set only inside the iPad split layout; see `NoteWorkspace`.
     @Entry var noteWorkspace: NoteWorkspace? = nil
+    /// Set on a tab's fixed root (Pinned Note, Calendar): notes opened from it show on the Notes tab, so the tab
+    /// keeps showing its own note.
+    @Entry var opensNotesOnNotesTab: Bool = false
 }
 
 extension FocusedValues {

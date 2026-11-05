@@ -13,6 +13,13 @@ struct ParentPickerSheet: View {
     let onPick: (String, String, String) -> Void
     /// A one-tap destination above the tree (share import's "Add to Inbox").
     var quickDestination: QuickDestination? = nil
+    /// A switch under the instruction to keep the pick for next time (the Add Note tab's default).
+    var rememberToggle: RememberToggle? = nil
+
+    struct RememberToggle {
+        let title: String
+        let isOn: Binding<Bool>
+    }
 
     struct QuickDestination {
         let title: String
@@ -33,6 +40,12 @@ struct ParentPickerSheet: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding()
+
+                if let remember = rememberToggle {
+                    Toggle(remember.title, isOn: remember.isOn)
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
+                }
 
                 if let quick = quickDestination {
                     Button(action: quick.action) {

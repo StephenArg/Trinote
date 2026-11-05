@@ -94,6 +94,7 @@ struct ShareImportHostModifier: ViewModifier {
                     noteTypeChoices: appState.shareImport.noteTypeChoices,
                     initialNoteType: appState.shareImport.preferredNoteType,
                     isOnline: appState.isOnline,
+                    createsRootNote: appState.shareImport.selectedParentNoteId == TriliumTreeConstants.rootNoteId,
                     onCancel: {
                         appState.shareImport.createNoteSheetWasDismissedWithoutCreating()
                     },
@@ -184,6 +185,8 @@ private struct ShareImportCreateNoteSheet: View {
     let noteTypeChoices: [NoteType]
     let initialNoteType: NoteType
     let isOnline: Bool
+    /// The share was placed at the top of the tree, so the sheet says the note will be a root note.
+    let createsRootNote: Bool
     let onCancel: () -> Void
     let onBeginCreate: () -> Void
     let onCreate: (String, NoteType) async -> Void
@@ -196,6 +199,10 @@ private struct ShareImportCreateNoteSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                if createsRootNote {
+                    RootNoteNotice()
+                }
+
                 TextField(
                     String(localized: "Note Title (leave blank for default)", comment: "Share import new note"),
                     text: $noteTitle,

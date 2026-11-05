@@ -127,6 +127,7 @@ struct NoteDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.noteWorkspace) private var noteWorkspace
+    @Environment(\.opensNotesOnNotesTab) private var opensNotesOnNotesTab
     @State private var activeNoteId: String
     @State private var viewModel: NoteDetailViewModel?
     @State private var navigateToNoteId: String?
@@ -1094,7 +1095,8 @@ struct NoteDetailView: View {
                 NoteDetailView(noteId: target.noteId, title: target.title, startInEditMode: true)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if noteWorkspace == nil, showNoteTabsBar, openNoteTabListNonEmpty, viewModel?.isEditing != true {
+                // Not on a tab that keeps one note (Pinned Note, Calendar, Today): open tabs belong to Notes there.
+                if noteWorkspace == nil, !opensNotesOnNotesTab, showNoteTabsBar, openNoteTabListNonEmpty, viewModel?.isEditing != true {
                     NoteTabsBar(
                         currentOpenTabId: activeOpenTabId,
                         onSelect: { selectOpenNoteTab($0) },
@@ -1651,6 +1653,25 @@ struct NoteDetailView: View {
         lastAppliedReadScrollTabId = tabId
     }
 
+    /// Opens a note from this screen: pushed here, or on the Notes tab when this screen is a tab's fixed root
+    /// (Pinned Note, Calendar), so that tab keeps showing its own note.
+    private func openLinkedNote(_ noteId: String) {
+        if opensNotesOnNotesTab {
+            appState.pendingExternalOpen = .note(NoteNavItem(noteId: noteId, title: ""))
+        } else {
+            navigateToNoteId = noteId
+        }
+    }
+
+    /// Opens a note this screen just created in the editor (same routing as `openLinkedNote`).
+    private func openCreatedNoteForEdit(noteId: String, title: String) {
+        if opensNotesOnNotesTab {
+            appState.pendingExternalOpen = .edit(NoteNavItem(noteId: noteId, title: title))
+        } else {
+            navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
+        }
+    }
+
     /// A tab's saved position belongs to the note it shows. Opening a note from the tree keeps the last active
     /// tab selected while it still shows the previous note, so its position must neither be applied to this
     /// note nor overwritten by it.
@@ -1715,6 +1736,11 @@ struct NoteDetailView: View {
 
     private func selectOpenNoteTab(_ tab: OpenNoteTabItem) {
         guard appState.activeProfile?.id == tab.serverProfileId else { return }
+        // A tab's fixed root keeps its note: the open tab shows on the Notes tab instead of swapping in here.
+        if opensNotesOnNotesTab, tab.noteId != activeNoteId {
+            appState.pendingExternalOpen = .note(NoteNavItem(noteId: tab.noteId, title: tab.title, openTabId: tab.id))
+            return
+        }
         if let prev = activeOpenTabId, prev != tab.id {
             if openTab(prev, shows: activeNoteId) {
                 persistReadScrollPosition(for: prev)
@@ -2241,7 +2267,7 @@ struct NoteDetailView: View {
             noteContentBase(vm, note: note)
             .sheet(isPresented: $vm.showCreateChild) {
                 CreateChildNoteSheet(viewModel: vm) { noteId, title in
-                    navigateToNoteForEdit = NoteEditTarget(noteId: noteId, title: title)
+                    openCreatedNoteForEdit(noteId: noteId, title: title)
                 }
             }
             .sheet(isPresented: $showAppearancePicker) {
@@ -2266,7 +2292,7 @@ struct NoteDetailView: View {
                         Task { @MainActor in
                             // After the sheet has gone, so the push isn't swallowed by its dismissal.
                             try? await Task.sleep(for: .milliseconds(350))
-                            if noteId != vm.noteId { navigateToNoteId = noteId }
+                            if noteId != vm.noteId { openLinkedNote(noteId) }
                         }
                     }
                     .environment(appState)
@@ -2764,7 +2790,7 @@ struct NoteDetailView: View {
                 baseURL: vm.serverBaseURL,
                 checkboxOnlyRevision: vm.checkboxOnlyContentRevision,
                 onNoteLinkTapped: { linkedNoteId in
-                    navigateToNoteId = linkedNoteId
+                    openLinkedNote(linkedNoteId)
                 },
                 onTaskStateSet: { index, stateName in
                     vm.setTaskState(index: index, stateName: stateName)
@@ -2808,7 +2834,7 @@ struct NoteDetailView: View {
                 baseURL: vm.serverBaseURL,
                 findControl: findControl,
                 onNoteLinkTapped: { linkedNoteId in
-                    navigateToNoteId = linkedNoteId
+                    openLinkedNote(linkedNoteId)
                 },
                 loadAttachmentPreview: { attachmentId in
                     if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
@@ -2836,7 +2862,7 @@ struct NoteDetailView: View {
             return AnyView(ImageNoteView(data: data, title: uiTitle(for: note)))
         case .file:
             return AnyView(FileNoteView(note: note, attachments: vm.attachments, viewModel: vm) { noteId, _ in
-                navigateToNoteId = noteId
+                openLinkedNote(noteId)
             })
         case .canvas:
             return AnyView(CanvasNoteView(
@@ -2862,27 +2888,27 @@ struct NoteDetailView: View {
                 }
             ))
         case .llmChat:
-            return AnyView(LlmChatNoteView(viewModel: vm, note: note, onOpenNote: { navigateToNoteId = $0 }))
+            return AnyView(LlmChatNoteView(viewModel: vm, note: note, onOpenNote: { openLinkedNote($0) }))
         case .geoMap:
             return AnyView(geoMapReadingView(vm, note: note))
         case .kanban:
-            return AnyView(KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+            return AnyView(KanbanBoardView(viewModel: vm, note: note) { openLinkedNote($0) }
                 .frame(minHeight: 420))
         case .presentation:
-            return AnyView(PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+            return AnyView(PresentationNoteView(viewModel: vm, note: note) { openLinkedNote($0) }
                 .frame(minHeight: 420))
         case .book, .collection:
             if isGeoMapNote(note, contentString: vm.contentString, vm: vm) {
                 return AnyView(geoMapReadingView(vm, note: note))
             } else if isPresentationNote(note) {
-                return AnyView(PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                return AnyView(PresentationNoteView(viewModel: vm, note: note) { openLinkedNote($0) }
                     .frame(minHeight: 420))
             } else if isKanbanNote(note) {
-                return AnyView(KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+                return AnyView(KanbanBoardView(viewModel: vm, note: note) { openLinkedNote($0) }
                     .frame(minHeight: 420))
             } else if let view = collectionViewToRender(note, vm: vm) {
                 return AnyView(CollectionNoteView(viewModel: vm, note: note, view: view, findControl: findControl) {
-                    navigateToNoteId = $0
+                    openLinkedNote($0)
                 })
             } else {
                 // Calendar collections (journal calendars are routed above).
@@ -2906,7 +2932,7 @@ struct NoteDetailView: View {
             tracks: geoMapTracks,
             shapes: geoMapShapes,
             settingsJSON: geoMapCachedSettingsJSON,
-            onOpenPinNote: { navigateToNoteId = $0 }
+            onOpenPinNote: { openLinkedNote($0) }
         )
         .onAppear { loadGeoMapData(vm: vm, note: note) }
     }
@@ -2956,7 +2982,7 @@ struct NoteDetailView: View {
                         HStack(spacing: 8) {
                             ForEach(vm.notesEditedOnDay) { edited in
                                 Button {
-                                    navigateToNoteId = edited.noteId
+                                    openLinkedNote(edited.noteId)
                                 } label: {
                                     Text(
                                         NoteItem.maskedStoredTitle(
@@ -3019,7 +3045,7 @@ struct NoteDetailView: View {
                     let feature = mapFeature?(child.noteId)
                     HStack(spacing: 0) {
                         Button {
-                            navigateToNoteId = child.noteId
+                            openLinkedNote(child.noteId)
                         } label: {
                             HStack(spacing: 10) {
                                 NoteIconView(
@@ -3158,7 +3184,7 @@ struct NoteDetailView: View {
                             Self.pushIncludeNoteTitleToEditor(webView: editorWebView, noteId: nid, title: t)
                         }
                     case .openNote(let nid):
-                        navigateToNoteId = nid
+                        openLinkedNote(nid)
                     case .includePreview(let previewId, let nid, let box):
                         Task { @MainActor in
                             let html = await vm.resolvedIncludePreviewHTML(noteId: nid, boxSize: box)
@@ -3762,7 +3788,7 @@ struct NoteDetailView: View {
                 ProgressView(String(localized: "Loading content…", comment: "Note body loading"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                LlmChatNoteView(viewModel: vm, note: note, onOpenNote: { navigateToNoteId = $0 })
+                LlmChatNoteView(viewModel: vm, note: note, onOpenNote: { openLinkedNote($0) })
                     .frame(maxWidth: contentWidthLimit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -3777,7 +3803,7 @@ struct NoteDetailView: View {
             breadcrumbsBar(vm)
             titleSection(vm, note: note)
             Divider()
-            KanbanBoardView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+            KanbanBoardView(viewModel: vm, note: note) { openLinkedNote($0) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -3799,7 +3825,7 @@ struct NoteDetailView: View {
             breadcrumbsBar(vm)
             titleSection(vm, note: note)
             Divider()
-            PresentationNoteView(viewModel: vm, note: note) { navigateToNoteId = $0 }
+            PresentationNoteView(viewModel: vm, note: note) { openLinkedNote($0) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -3856,7 +3882,7 @@ struct NoteDetailView: View {
                     }
                 },
                 onOpenPinNote: { pinNoteId in
-                    navigateToNoteId = pinNoteId
+                    openLinkedNote(pinNoteId)
                 },
                 onFeatureSelected: { noteId, kind, markFocus in
                     geoMapLastFeatureSelectTime = Date()
@@ -4066,7 +4092,7 @@ struct NoteDetailView: View {
                             pinHTML: geoMapDetailHTML,
                             gpxStats: geoMapDetailGPXStats,
                             onClose: { clearGeoMapSelection() },
-                            onOpenNote: { navigateToNoteId = selection.noteId },
+                            onOpenNote: { openLinkedNote(selection.noteId) },
                             onMovePin: selection.kind == .pin ? {
                                 geoMapEditorBridge.beginMovePin(noteId: selection.noteId)
                             } : nil,
@@ -4077,7 +4103,7 @@ struct NoteDetailView: View {
                                     handleGeoMapRemoveTrack(vm: vm, noteId: selection.noteId, mapParentNote: mapParentNote)
                                 }
                             },
-                            onNoteLinkTapped: { navigateToNoteId = $0 },
+                            onNoteLinkTapped: { openLinkedNote($0) },
                             onFocusMark: { focus in
                                 geoMapFocusedMarkId = focus.markId
                                 geoMapEditorBridge.focusTrackMark(focus)
@@ -4656,7 +4682,7 @@ struct NoteDetailView: View {
             } else {
                 ForEach(vm.attachments) { attachment in
                     AttachmentRow(attachment: attachment, viewModel: vm) { noteId, _ in
-                        navigateToNoteId = noteId
+                        openLinkedNote(noteId)
                     }
                 }
             }
@@ -5008,7 +5034,7 @@ struct NoteDetailView: View {
                 dismissNoteOverflow()
                 Task {
                     if let dup = await vm.duplicateNote() {
-                        navigateToNoteId = dup.noteId
+                        openLinkedNote(dup.noteId)
                     }
                 }
             } label: {
@@ -5441,7 +5467,7 @@ struct NoteDetailView: View {
         case .duplicate:
             Task {
                 if let dup = await vm.duplicateNote() {
-                    navigateToNoteId = dup.noteId
+                    openLinkedNote(dup.noteId)
                 }
             }
         case .findOnPage:

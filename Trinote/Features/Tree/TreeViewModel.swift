@@ -588,8 +588,11 @@ final class TreeViewModel {
         await toggleExpand(node)
     }
 
+    /// Whether the Collapse All button has anything to do.
+    var hasExpandedBranches: Bool { !expandedBranches.isEmpty }
+
     /// Collapses every expanded branch on this tree page.
-    private func collapseAllExpanded() {
+    func collapseAllExpanded() {
         guard !expandedBranches.isEmpty else { return }
         expandedBranches = []
         rootChildren = rootChildren.map {

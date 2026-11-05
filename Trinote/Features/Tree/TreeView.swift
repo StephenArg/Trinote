@@ -130,6 +130,12 @@ struct TreeView: View {
     @State private var showSwitchUserSheet = false
     /// The AI Chats screen (iPhone; the iPad rail has its own section).
     @State private var showAIChats = false
+    /// Settings pushed from the … menu (iPhone; the iPad split layout opens its sheet instead).
+    @State private var showSettings = false
+    /// A tab location pushed from the … menu's Go to submenu (iPhone), whether or not it is in the bar.
+    @State private var goToTab: MainTab?
+    @AppStorage(MainTabPreferences.shownTabsKey) private var mainTabsRaw: String = ""
+    @AppStorage(MainTabPreferences.customIconsKey) private var mainTabIconsRaw: String = ""
     @State private var treeShareSheetPayload: TreeShareSheetPayload?
     @State private var shareLocallySheetContext: ShareLocallySheetContext?
     @State private var copyToInstanceSheetContext: CopyToInstanceSheetContext?
@@ -155,6 +161,9 @@ struct TreeView: View {
     @State private var isBulkDeleting = false
     @State private var bulkDeleteError: String?
 
+    /// Settings → Tree View → Show Collapse All Button (on by default).
+    static let showCollapseAllButtonKey = "treeShowCollapseAllButton"
+    @AppStorage(TreeView.showCollapseAllButtonKey) private var showCollapseAllButton = true
     @AppStorage("showNoteTabsBar") private var showNoteTabsBarCompact: Bool = false
     /// The iPad split layout has its own setting, on by default: Trilium desktop always shows tabs.
     @AppStorage("showNoteTabsBarPad") private var showNoteTabsBarPad: Bool = true
@@ -395,6 +404,55 @@ struct TreeView: View {
                     }
                 }
             )
+    }
+
+    // MARK: - Go to (the other tab locations, with or without their tabs)
+
+    /// The list locations, in the order Settings lists them; AI Chat only while the server offers it. Pinned Note,
+    /// Today and New Note are left out: the first two are single notes, and the menu already opens today's note.
+    private var goToTabs: [MainTab] {
+        [.favorites, .search, .recents, .aiChat, .calendar]
+            .filter { $0 != .aiChat || appState.showsAIEntryPoints }
+    }
+
+    private var goToMenu: some View {
+        let icons = MainTabPreferences.customIcons(fromStored: mainTabIconsRaw)
+        return Menu {
+            ForEach(goToTabs) { tab in
+                Button {
+                    if tab == .aiChat {
+                        showAIChats = true
+                    } else {
+                        goToTab = tab
+                    }
+                } label: {
+                    Label(tab.title, systemImage: MainTabPreferences.icon(for: tab, customIcons: icons))
+                }
+            }
+        } label: {
+            Label(String(localized: "Go to", comment: "Tree menu: submenu of the other tab locations"), systemImage: "arrow.right.circle")
+        }
+    }
+
+    /// The location's screen, pushed on this stack (so its links push here too).
+    @ViewBuilder
+    private func goToScreen(for tab: MainTab) -> some View {
+        switch tab {
+        case .favorites:
+            FavoritesView(onNoteDeleted: {
+                Task { await appState.refreshSessionThenIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false) }
+            })
+        case .search:
+            SearchView()
+        case .recents:
+            RecentsView()
+        case .calendar:
+            JournalCalendarTabView()
+        case .aiChat:
+            AIChatsView()
+        case .notes, .settings, .addNote, .pinnedNote, .todaysJournal:
+            EmptyView()
+        }
     }
 
     private func openTodaysJournalNote() {
@@ -671,6 +729,8 @@ struct TreeView: View {
         .navigationDestination(item: $navigateToNoteForEdit, destination: noteEditDestination)
         .navigationDestination(item: $drillDownTarget, destination: subtreeDestination)
         .navigationDestination(isPresented: $showAIChats) { AIChatsView() }
+        .navigationDestination(isPresented: $showSettings) { SettingsView() }
+        .navigationDestination(item: $goToTab) { tab in goToScreen(for: tab) }
         .navigationDestination(item: $tabsBarNav) { item in
             NoteDetailView(noteId: item.noteId, title: item.title, openTabId: item.openTabId)
         }
@@ -763,7 +823,9 @@ struct TreeView: View {
                         : String(localized: "Refresh tree", comment: "Toolbar sync tree")
                 )
 
-                if noteWorkspace == nil, appState.showsAIEntryPoints {
+                // Not while AI Chat has its own tab in the bar.
+                if noteWorkspace == nil, appState.showsAIEntryPoints,
+                   !MainTabPreferences.tabs(fromStored: mainTabsRaw).contains(.aiChat) {
                     Button {
                         showAIChats = true
                     } label: {
@@ -842,6 +904,22 @@ struct TreeView: View {
                                 String(localized: "Show tab bar", comment: "Root tree menu: show open-note tab strip"),
                                 systemImage: "rectangle.split.1x2"
                             )
+                        }
+                    }
+
+                    if onPickParent == nil {
+                        Divider()
+                        if noteWorkspace == nil {
+                            goToMenu
+                        }
+                        Button {
+                            if let noteWorkspace {
+                                noteWorkspace.showSettings = true
+                            } else {
+                                showSettings = true
+                            }
+                        } label: {
+                            Label(String(localized: "Settings", comment: "Tree menu: open Settings"), systemImage: "gearshape")
                         }
                     }
                 } label: {
@@ -1187,6 +1265,9 @@ struct TreeView: View {
         noteToDelete = nil
         showSharedNotesManagement = false
         showSwitchUserSheet = false
+        showSettings = false
+        showAIChats = false
+        goToTab = nil
         exitSelectMode()
         appState.localTransfer.cancelStagedIncomingOffer()
         appState.localTransfer.setReceiveMode(false)
@@ -1372,6 +1453,17 @@ struct TreeView: View {
                 }
                 .buttonStyle(.borderless)
             } else if !isSelectMode {
+                if showCollapseAllButton {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { vm.collapseAllExpanded() }
+                    } label: {
+                        CollapseAllIcon()
+                            .foregroundStyle(vm.hasExpandedBranches ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!vm.hasExpandedBranches)
+                    .accessibilityLabel(String(localized: "Collapse All", comment: "Tree: close every open branch"))
+                }
                 Button {
                     createSheetContext = CreateNoteSheetContext(parentNote: syntheticRootNoteItem(), viewModel: vm)
                 } label: {
@@ -1938,6 +2030,11 @@ private struct CreateChildNoteFromTreeSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                // A template may send the note elsewhere, so the notice follows where it really goes.
+                if templateChoice.parentNoteId(defaultParentNoteId: parentNote.noteId) == TriliumTreeConstants.rootNoteId {
+                    RootNoteNotice()
+                }
+
                 TextField(
                     String(localized: "Note Title (leave blank for default)", comment: "New note from tree"),
                     text: $newNoteTitle
@@ -2145,5 +2242,19 @@ private struct TreeSyncStatusRows: View {
         case .cleaningUp:        String(localized: "Finishing up…", comment: "Full sync phase")
         default:                 String(localized: "Syncing…", comment: "Full sync phase")
         }
+    }
+}
+
+/// Two chevrons pointing at each other (SF Symbols has none), sized to sit beside the root header's "+".
+private struct CollapseAllIcon: View {
+    var body: some View {
+        VStack(spacing: 5) {
+            Image(systemName: "chevron.down")
+            Image(systemName: "chevron.up")
+        }
+        .font(.system(size: 11, weight: .bold))
+        .frame(width: 22)
+        // Non-text views align by their bottom in a baseline stack; lift it to sit level with the "+".
+        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
     }
 }

@@ -29,6 +29,7 @@ struct SettingsView: View {
     @AppStorage(NoteEditorSaving.hideSaveButtonKey) private var noteEditorHideSaveButton = false
     @AppStorage(NoteEditorSaving.backButtonSavesKey) private var noteEditorBackButtonSaves = false
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
+    @AppStorage(TreeView.showCollapseAllButtonKey) private var showCollapseAllButton = true
     @AppStorage(NoteContentWidth.storageKey) private var noteMaxContentWidth: Int = 0
     /// The iPad split layout's own tab strip setting (see `NoteDetailView.showNoteTabsBar`).
     @AppStorage("showNoteTabsBarPad") private var showNoteTabsBarPad: Bool = true
@@ -225,6 +226,15 @@ struct SettingsView: View {
                     AppDelegate.applyUserOrientationPreference()
                 }
             }
+
+            // The iPad split layout has a launcher rail instead of a tab bar.
+            if noteWorkspace == nil {
+                NavigationLink {
+                    MainTabsSettingsView()
+                } label: {
+                    Text(String(localized: "Navigation Tabs", comment: "Settings: tab bar tabs screen title"))
+                }
+            }
         }
         .alert(String(localized: "Reset Colors to Default?", comment: "Settings alert title"), isPresented: $showResetColorsConfirm) {
             Button(String(localized: "Cancel", comment: "Alert dismiss"), role: .cancel) {}
@@ -255,6 +265,11 @@ struct SettingsView: View {
             Toggle(
                 String(localized: "Show tab bar", comment: "Settings: show open-note tab strip at bottom of tree"),
                 isOn: noteWorkspace != nil ? $showNoteTabsBarPad : $showNoteTabsBar
+            )
+
+            Toggle(
+                String(localized: "Show Collapse All Button", comment: "Settings: the button beside + on the Notes screen that closes every open branch"),
+                isOn: $showCollapseAllButton
             )
 
             Toggle(

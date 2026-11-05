@@ -81,6 +81,11 @@ struct TrinoteApp: App {
     @AppStorage("appearanceMode") private var appearanceMode: String = AppearanceMode.device.rawValue
     @AppStorage("colorTheme") private var colorTheme: String = ColorTheme.default.rawValue
 
+    init() {
+        // Before any view reads the saved tabs: a device coming from an earlier build gets the new default bar.
+        MainTabPreferences.migrateIfNeeded()
+    }
+
     private var resolvedColorScheme: ColorScheme? {
         AppearanceMode(rawValue: appearanceMode)?.colorScheme
     }

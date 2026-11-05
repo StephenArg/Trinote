@@ -58,6 +58,8 @@ extension Notification.Name {
     static let trinoteTaskStatesChanged = Notification.Name("TrinoteTaskStatesChanged")
     /// Posted when an offline-created note receives a server id after sync. `userInfo["from"]` / `["to"]` are note ids.
     static let trinoteOfflineNoteIdReplaced = Notification.Name("TrinoteOfflineNoteIdReplaced")
+    /// Posted after Settings changed the Add Note tab's default place or the pinned note, so the tab bar reloads them.
+    static let trinoteTabNotePreferencesChanged = Notification.Name("TrinoteTabNotePreferencesChanged")
     /// Posted when the open-note tab strip is updated (add/remove / prune) so visible bars can reload.
     static let openNoteTabsChanged = Notification.Name("TrinoteOpenNoteTabsChanged")
     /// Posted on the main thread when a favorite was removed because its note was deleted (by sync, on another device).

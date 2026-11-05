@@ -1977,6 +1977,77 @@
         }
       }
     },
+    "Add %@" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إضافة %@"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidat %@"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ जोड़ें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ hozzáadása"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiungi %@"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaj %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить %@"
+          }
+        }
+      }
+    },
     "Add ${text} to today's journal" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2186,6 +2257,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Добавьте провайдера в Trilium в разделе Параметры → ИИ, чтобы начать общение."
+          }
+        }
+      }
+    },
+    "Add as root note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إضافة كملاحظة جذرية"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidat jako kořenovou poznámku"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Als Wurzelnotiz hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add as root note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir como nota raíz"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter comme note racine"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "रूट नोट के रूप में जोड़ें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hozzáadás gyökérjegyzetként"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiungi come nota radice"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaj jako notatkę główną"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить как корневую заметку"
           }
         }
       }
@@ -2541,6 +2683,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Добавить столбец"
+          }
+        }
+      }
+    },
+    "Add Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إضافة ملاحظة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přidat poznámku"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiz hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir nota"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter une note"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नोट जोड़ें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jegyzet hozzáadása"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggiungi nota"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dodaj notatkę"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить заметку"
           }
         }
       }
@@ -4675,6 +4888,77 @@
         }
       }
     },
+    "Any SF Symbol name works, as in Apple's SF Symbols app." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يعمل أي اسم من SF Symbols كما في تطبيق SF Symbols من Apple."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Funguje jakýkoli název SF Symbol, jako v aplikaci SF Symbols od Apple."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jeder SF-Symbol-Name geht, wie in Apples App „SF Symbols“."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Any SF Symbol name works, as in Apple's SF Symbols app."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vale cualquier nombre de SF Symbol, como en la app SF Symbols de Apple."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tout nom de SF Symbol convient, comme dans l’app SF Symbols d’Apple."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple के SF Symbols ऐप की तरह कोई भी SF Symbol नाम चलेगा।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bármely SF Symbol név megfelel, ahogy az Apple SF Symbols appjában."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Va bene qualsiasi nome di SF Symbol, come nell’app SF Symbols di Apple."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Działa każda nazwa SF Symbol, jak w aplikacji SF Symbols firmy Apple."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подходит любое имя SF Symbol, как в приложении Apple SF Symbols."
+          }
+        }
+      }
+    },
     "API error (HTTP %lld)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5527,6 +5811,77 @@
         }
       }
     },
+    "Ask every time" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "السؤال في كل مرة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vždy se zeptat"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jedes Mal fragen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ask every time"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preguntar cada vez"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demander à chaque fois"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर बार पूछें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mindig kérdezzen"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chiedi ogni volta"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pytaj za każdym razem"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Спрашивать каждый раз"
+          }
+        }
+      }
+    },
     "Ask the AI about your notes, or anything else." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6375,6 +6730,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Автосохранение сохраняет изменения через несколько секунд после того, как вы перестали печатать, и при выходе из заметки, не закрывая редактор."
+          }
+        }
+      }
+    },
+    "Available" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "متاحة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dostupné"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verfügbar"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Available"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disponibles"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disponibles"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "उपलब्ध"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elérhető"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disponibili"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dostępne"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доступны"
           }
         }
       }
@@ -9858,6 +10284,77 @@
         }
       }
     },
+    "Choose a note in Settings → Navigation Tabs." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اختر ملاحظة من الإعدادات ← علامات تبويب التنقل."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vyberte poznámku v Nastavení → Navigační karty."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle eine Notiz unter Einstellungen → Navigationstabs."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a note in Settings → Navigation Tabs."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige una nota en Ajustes → Pestañas de navegación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez une note dans Réglages → Onglets de navigation."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सेटिंग्स → नेविगेशन टैब में एक नोट चुनें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Válassz jegyzetet a Beállítások → Navigációs fülek alatt."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli una nota in Impostazioni → Schede di navigazione."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wybierz notatkę w Ustawienia → Karty nawigacji."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите заметку в Настройки → Вкладки навигации."
+          }
+        }
+      }
+    },
     "Choose a Note…" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -10284,6 +10781,148 @@
         }
       }
     },
+    "Choose where the Add Note tab creates notes." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اختر مكان إنشاء الملاحظات من علامة تبويب إضافة ملاحظة."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vyberte, kde má karta Přidat poznámku vytvářet poznámky."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle, wo der Tab „Notiz hinzufügen“ Notizen erstellt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose where the Add Note tab creates notes."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige dónde crea las notas la pestaña Añadir nota."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez où l’onglet Ajouter une note crée les notes."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "चुनें कि नोट जोड़ें टैब नोट कहाँ बनाए।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Válaszd ki, hol hozza létre a jegyzeteket a Jegyzet hozzáadása fül."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli dove la scheda Aggiungi nota crea le note."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wybierz, gdzie karta Dodaj notatkę ma tworzyć notatki."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите, где вкладка «Добавить заметку» создаёт заметки."
+          }
+        }
+      }
+    },
+    "Choose where to create the new note." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اختر مكان إنشاء الملاحظة الجديدة."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vyberte, kde se má nová poznámka vytvořit."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle, wo die neue Notiz erstellt wird."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose where to create the new note."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige dónde crear la nueva nota."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez où créer la nouvelle note."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "चुनें कि नई नोट कहाँ बनाई जाए।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Válaszd ki, hol jöjjön létre az új jegyzet."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli dove creare la nuova nota."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wybierz, gdzie utworzyć nową notatkę."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите, где создать новую заметку."
+          }
+        }
+      }
+    },
     "Choose where to move the note. Open folders, then tap a note to select it as the new parent." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -10422,6 +11061,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Выберите, куда поместить копии. Откройте папки в дереве и нажмите заметку как родителя."
+          }
+        }
+      }
+    },
+    "Choose…" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اختيار…"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vybrat…"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auswählen…"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisir…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "चुनें…"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Választás…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli…"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wybierz…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбрать…"
           }
         }
       }
@@ -14473,6 +15183,77 @@
         }
       }
     },
+    "Couldn't Create Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعذّر إنشاء الملاحظة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Poznámku se nepodařilo vytvořit"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiz konnte nicht erstellt werden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Create Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo crear la nota"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de créer la note"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नोट नहीं बनाई जा सकी"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A jegyzet nem hozható létre"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile creare la nota"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nie udało się utworzyć notatki"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось создать заметку"
+          }
+        }
+      }
+    },
     "Couldn’t list your notebooks. Check the connection and try again." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -15396,6 +16177,77 @@
         }
       }
     },
+    "Create" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إنشاء"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vytvořit"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erstellen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crear"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Créer"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बनाएँ"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Létrehozás"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crea"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utwórz"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Создать"
+          }
+        }
+      }
+    },
     "Create %lld duplicate(s) under “%@”?" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -15534,6 +16386,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Создать ${noteTitle} в: ${destination}"
+          }
+        }
+      }
+    },
+    "Create a Calendar note in Trilium and sync; it appears here." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أنشئ ملاحظة تقويم في Trilium وزامن؛ ستظهر هنا."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vytvořte v Triliu poznámku Kalendář a synchronizujte; objeví se zde."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erstelle in Trilium eine Kalender-Notiz und synchronisiere; sie erscheint hier."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create a Calendar note in Trilium and sync; it appears here."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crea una nota de calendario en Trilium y sincroniza; aparecerá aquí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Créez une note Calendrier dans Trilium et synchronisez ; elle apparaîtra ici."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trilium में कैलेंडर नोट बनाएँ और सिंक करें; वह यहाँ दिखेगी।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hozz létre egy Naptár jegyzetet a Triliumban és szinkronizálj; itt jelenik meg."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crea una nota Calendario in Trilium e sincronizza; apparirà qui."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utwórz notatkę Kalendarz w Trilium i zsynchronizuj; pojawi się tutaj."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Создайте заметку-календарь в Trilium и синхронизируйте; она появится здесь."
           }
         }
       }
@@ -16031,6 +16954,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Текущий"
+          }
+        }
+      }
+    },
+    "Custom" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "مخصص"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vlastní"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eigenes"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Custom"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personalizado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personnalisé"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कस्टम"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Egyéni"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personalizzato"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Własna"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Своя"
           }
         }
       }
@@ -17167,6 +18161,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "По умолчанию (%@)"
+          }
+        }
+      }
+    },
+    "Default Location" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الموقع الافتراضي"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Výchozí umístění"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standardort"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default Location"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ubicación predeterminada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emplacement par défaut"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "डिफ़ॉल्ट स्थान"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alapértelmezett hely"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posizione predefinita"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Domyślna lokalizacja"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Место по умолчанию"
           }
         }
       }
@@ -18587,6 +19652,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Устройство"
+          }
+        }
+      }
+    },
+    "Devices & Media" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الأجهزة والوسائط"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zařízení a média"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geräte und Medien"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Devices & Media"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dispositivos y multimedia"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appareils et médias"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "डिवाइस और मीडिया"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eszközök és média"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dispositivi e media"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Urządzenia i multimedia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Устройства и медиа"
           }
         }
       }
@@ -23490,6 +24626,77 @@
         }
       }
     },
+    "Go to" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الانتقال إلى"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Přejít na"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gehe zu"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Go to"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ir a"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aller à"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "यहाँ जाएँ"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ugrás"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vai a"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Przejdź do"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перейти"
+          }
+        }
+      }
+    },
     "Grid" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -23770,6 +24977,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Группировать по метке"
+          }
+        }
+      }
+    },
+    "Health & Activity" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الصحة والنشاط"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zdraví a aktivita"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gesundheit und Aktivität"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Health & Activity"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salud y actividad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Santé et activité"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्वास्थ्य और गतिविधि"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Egészség és aktivitás"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salute e attività"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zdrowie i aktywność"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Здоровье и активность"
           }
         }
       }
@@ -28890,6 +30168,77 @@
         }
       }
     },
+    "Matches" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "النتائج"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shody"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Treffer"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Matches"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coincidencias"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Résultats"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मिलान"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Találatok"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corrispondenze"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dopasowania"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Совпадения"
+          }
+        }
+      }
+    },
     "Max" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -30736,6 +32085,148 @@
         }
       }
     },
+    "Nature & Weather" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الطبيعة والطقس"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Příroda a počasí"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Natur und Wetter"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nature & Weather"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Naturaleza y clima"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nature et météo"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रकृति और मौसम"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Természet és időjárás"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Natura e meteo"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Natura i pogoda"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Природа и погода"
+          }
+        }
+      }
+    },
+    "Navigation Tabs" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "علامات تبويب التنقل"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Navigační karty"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Navigationstabs"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Navigation Tabs"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pestañas de navegación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Onglets de navigation"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नेविगेशन टैब"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Navigációs fülek"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schede di navigazione"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karty nawigacji"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вкладки навигации"
+          }
+        }
+      }
+    },
     "Network" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -31087,6 +32578,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Новая заметка"
+          }
+        }
+      }
+    },
+    "New Note…" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ملاحظة جديدة…"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nová poznámka…"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neue Notiz…"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Note…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nueva nota…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nouvelle note…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नई नोट…"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Új jegyzet…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nuova nota…"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nowa notatka…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Новая заметка…"
           }
         }
       }
@@ -32156,6 +33718,77 @@
         }
       }
     },
+    "No Journal" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لا توجد يوميات"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Žádný deník"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein Journal"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Journal"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin diario"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun journal"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कोई जर्नल नहीं"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nincs napló"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessun diario"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brak dziennika"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет журнала"
+          }
+        }
+      }
+    },
     "No matching lines in the loaded text (previews use plain text; very long notes may differ slightly from in-page find)." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -32507,6 +34140,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Нет заметок"
+          }
+        }
+      }
+    },
+    "No Pinned Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لا توجد ملاحظة مثبتة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Žádná připnutá poznámka"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine angeheftete Notiz"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Pinned Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin nota fijada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune note épinglée"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कोई पिन की गई नोट नहीं"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nincs rögzített jegyzet"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessuna nota fissata"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brak przypiętej notatki"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет закреплённой заметки"
           }
         }
       }
@@ -32933,6 +34637,148 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Нет общих заметок"
+          }
+        }
+      }
+    },
+    "No symbol with this name." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لا يوجد رمز بهذا الاسم."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Symbol s tímto názvem neexistuje."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein Symbol mit diesem Namen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No symbol with this name."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay ningún símbolo con ese nombre."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun symbole de ce nom."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस नाम का कोई प्रतीक नहीं है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nincs ilyen nevű szimbólum."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessun simbolo con questo nome."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brak symbolu o tej nazwie."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Символа с таким именем нет."
+          }
+        }
+      }
+    },
+    "No symbols match." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لا توجد رموز مطابقة."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Žádný symbol neodpovídá."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein Symbol passt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No symbols match."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ningún símbolo coincide."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun symbole ne correspond."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कोई प्रतीक मेल नहीं खाता।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nincs egyező szimbólum."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessun simbolo corrisponde."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brak pasujących symboli."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет подходящих символов."
           }
         }
       }
@@ -33434,6 +35280,77 @@
         }
       }
     },
+    "Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ملاحظة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Poznámka"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiz"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नोट"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jegyzet"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notatka"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заметка"
+          }
+        }
+      }
+    },
     "Note (ios-sync-conflict)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -33714,6 +35631,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ID заметки"
+          }
+        }
+      }
+    },
+    "Note Title (leave blank for default)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "عنوان الملاحظة (اتركه فارغًا للافتراضي)"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Název poznámky (prázdné = výchozí)"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiztitel (leer für Standard)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note Title (leave blank for default)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Título de la nota (vacío para el predeterminado)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titre de la note (vide pour la valeur par défaut)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नोट शीर्षक (डिफ़ॉल्ट के लिए खाली छोड़ें)"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jegyzet címe (üresen az alapértelmezett)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titolo nota (vuoto per predefinito)"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tytuł notatki (puste = domyślny)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заголовок заметки (пусто — по умолчанию)"
           }
         }
       }
@@ -34140,6 +36128,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Заметки"
+          }
+        }
+      }
+    },
+    "Notes & Documents" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الملاحظات والمستندات"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Poznámky a dokumenty"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen und Dokumente"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes & Documents"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notas y documentos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes et documents"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नोट्स और दस्तावेज़"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jegyzetek és dokumentumok"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note e documenti"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notatki i dokumenty"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заметки и документы"
           }
         }
       }
@@ -35990,6 +38049,77 @@
         }
       }
     },
+    "Organize" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "التنظيم"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organizace"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organisieren"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organize"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organizar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organiser"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "व्यवस्थित करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rendszerezés"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organizza"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organizacja"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Организация"
+          }
+        }
+      }
+    },
     "Other" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -36487,6 +38617,77 @@
         }
       }
     },
+    "People & Talk" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الأشخاص والمحادثة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lidé a konverzace"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personen und Gespräche"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "People & Talk"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personas y conversación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personnes et échanges"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "लोग और बातचीत"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emberek és beszélgetés"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persone e conversazioni"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ludzie i rozmowy"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Люди и общение"
+          }
+        }
+      }
+    },
     "Permanently delete %lld note(s) and all of their sub-notes? This cannot be undone easily." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -36700,6 +38901,148 @@
         }
       }
     },
+    "Pin a Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تثبيت ملاحظة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Připnout poznámku"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiz anheften"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pin a Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fijar una nota"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Épingler une note"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नोट पिन करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jegyzet rögzítése"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fissa una nota"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Przypnij notatkę"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Закрепить заметку"
+          }
+        }
+      }
+    },
+    "Pinned Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ملاحظة مثبتة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Připnutá poznámka"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Angeheftete Notiz"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pinned Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota fijada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note épinglée"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पिन की गई नोट"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rögzített jegyzet"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota fissata"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Przypięta notatka"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Закреплённая заметка"
+          }
+        }
+      }
+    },
     "Place search isn't available right now. Check your connection and try again." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -36767,6 +39110,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Поиск мест сейчас недоступен. Проверьте подключение и повторите попытку."
+          }
+        }
+      }
+    },
+    "Places & Travel" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الأماكن والسفر"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Místa a cestování"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Orte und Reisen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Places & Travel"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lugares y viajes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lieux et voyages"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्थान और यात्रा"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Helyek és utazás"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Luoghi e viaggi"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Miejsca i podróże"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Места и путешествия"
           }
         }
       }
@@ -38834,6 +41248,77 @@
         }
       }
     },
+    "Remember this choice" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تذكّر هذا الاختيار"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zapamatovat tuto volbu"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Wahl merken"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remember this choice"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recordar esta elección"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mémoriser ce choix"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "यह चुनाव याद रखें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Választás megjegyzése"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricorda questa scelta"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zapamiętaj ten wybór"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Запомнить выбор"
+          }
+        }
+      }
+    },
     "Remove" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -39043,6 +41528,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Убрать %lld заметок из избранного? На сервере они не удаляются."
+          }
+        }
+      }
+    },
+    "Remove Default" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إزالة الافتراضي"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Odebrat výchozí"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standard entfernen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove Default"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitar predeterminado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer la valeur par défaut"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "डिफ़ॉल्ट हटाएँ"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alapértelmezés törlése"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rimuovi predefinito"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usuń domyślne"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Убрать значение по умолчанию"
           }
         }
       }
@@ -42100,6 +44656,77 @@
         }
       }
     },
+    "Search symbols" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "البحث في الرموز"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hledat symboly"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Symbole suchen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search symbols"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscar símbolos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rechercher des symboles"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रतीक खोजें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Szimbólumok keresése"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cerca simboli"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Szukaj symboli"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поиск символов"
+          }
+        }
+      }
+    },
     "Search the internet and cite sources." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -43875,6 +46502,77 @@
         }
       }
     },
+    "Shapes & Symbols" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الأشكال والرموز"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tvary a symboly"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Formen und Symbole"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shapes & Symbols"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Formas y símbolos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Formes et symboles"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आकृतियाँ और प्रतीक"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alakzatok és szimbólumok"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forme e simboli"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kształty i symbole"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фигуры и символы"
+          }
+        }
+      }
+    },
     "Share" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -44798,6 +47496,77 @@
         }
       }
     },
+    "Show Collapse All Button" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إظهار زر طي الكل"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zobrazit tlačítko Sbalit vše"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Button „Alle einklappen“ anzeigen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Collapse All Button"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar botón Contraer todo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher le bouton Tout réduire"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सभी समेटें बटन दिखाएँ"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Összes összecsukása gomb"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra pulsante Comprimi tutto"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pokaż przycisk Zwiń wszystko"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показывать кнопку «Свернуть всё»"
+          }
+        }
+      }
+    },
     "Show details" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -45149,6 +47918,148 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Показаны результаты с этого устройства"
+          }
+        }
+      }
+    },
+    "Showing the first matches. Type more of the name to narrow them." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تُعرض النتائج الأولى. اكتب المزيد من الاسم لتضييقها."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zobrazeny první shody. Zadejte více z názvu pro zúžení."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die ersten Treffer werden angezeigt. Gib mehr vom Namen ein, um sie einzugrenzen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Showing the first matches. Type more of the name to narrow them."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se muestran las primeras coincidencias. Escribe más del nombre para acotarlas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Premiers résultats affichés. Saisissez davantage du nom pour les affiner."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहले मिलान दिखाए गए हैं। सीमित करने के लिए नाम का और हिस्सा लिखें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Az első találatok láthatók. Írj be többet a névből a szűkítéshez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrate le prime corrispondenze. Scrivi altro del nome per restringerle."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pokazano pierwsze dopasowania. Wpisz więcej nazwy, aby je zawęzić."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показаны первые совпадения. Введите больше букв имени, чтобы сузить список."
+          }
+        }
+      }
+    },
+    "Shown" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "معروضة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zobrazené"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Angezeigt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shown"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostradas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Affichés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "दिखाए गए"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Megjelenítve"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrate"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wyświetlane"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показаны"
           }
         }
       }
@@ -47638,6 +50549,148 @@
         }
       }
     },
+    "Symbol Name" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اسم الرمز"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Název symbolu"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Symbolname"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Symbol Name"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre del símbolo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom du symbole"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रतीक का नाम"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Szimbólum neve"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome simbolo"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nazwa symbolu"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Имя символа"
+          }
+        }
+      }
+    },
+    "Symbols" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الرموز"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Symboly"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Symbole"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Symbols"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Símbolos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Symboles"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रतीक"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Szimbólumok"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simboli"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Symbole"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Символы"
+          }
+        }
+      }
+    },
     "Syncing %lld/%lld changes…" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -47993,6 +51046,77 @@
         }
       }
     },
+    "Tab Icon" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أيقونة علامة التبويب"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ikona karty"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tab-Symbol"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tab Icon"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Icono de pestaña"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Icône de l’onglet"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "टैब आइकन"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fül ikonja"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Icona scheda"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ikona karty"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Значок вкладки"
+          }
+        }
+      }
+    },
     "Table" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -48131,6 +51255,219 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Сделать фото"
+          }
+        }
+      }
+    },
+    "Tap a tab to choose its icon." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اضغط على علامة تبويب لاختيار أيقونتها."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Klepnutím na kartu vyberete její ikonu."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tippe auf einen Tab, um sein Symbol zu wählen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap a tab to choose its icon."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toca una pestaña para elegir su icono."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Touchez un onglet pour choisir son icône."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "टैब का आइकन चुनने के लिए उस पर टैप करें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Koppints egy fülre az ikonja kiválasztásához."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tocca una scheda per sceglierne l’icona."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stuknij kartę, aby wybrać jej ikonę."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нажмите на вкладку, чтобы выбрать её значок."
+          }
+        }
+      }
+    },
+    "Tap Edit to reorder or remove. Notes stays; the bar holds up to five tabs. Settings is also in the … menu on the Notes screen." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اضغط على تحرير لإعادة الترتيب أو الإزالة. تبقى الملاحظات؛ يتسع الشريط لخمس علامات تبويب. الإعدادات موجودة أيضًا في قائمة … على شاشة الملاحظات."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Klepnutím na Upravit změníte pořadí nebo odeberete. Poznámky zůstávají; lišta pojme až pět karet. Nastavení je také v nabídce … na obrazovce Poznámky."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tippe auf Bearbeiten, um zu sortieren oder zu entfernen. Notizen bleibt; die Leiste fasst bis zu fünf Tabs. Einstellungen ist auch im …-Menü des Notizen-Bildschirms."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap Edit to reorder or remove. Notes stays; the bar holds up to five tabs. Settings is also in the … menu on the Notes screen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toca Editar para reordenar o quitar. Notas se mantiene; la barra admite hasta cinco pestañas. Ajustes también está en el menú … de la pantalla Notas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Touchez Modifier pour réorganiser ou retirer. Notes reste ; la barre contient jusqu’à cinq onglets. Réglages est aussi dans le menu … de l’écran Notes."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "क्रम बदलने या हटाने के लिए संपादित करें पर टैप करें। नोट्स बना रहता है; बार में अधिकतम पाँच टैब होते हैं। सेटिंग्स नोट्स स्क्रीन के … मेनू में भी हैं।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Koppints a Szerkesztés gombra az átrendezéshez vagy eltávolításhoz. A Jegyzetek marad; a sávon legfeljebb öt fül fér el. A Beállítások a Jegyzetek képernyő … menüjében is elérhető."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tocca Modifica per riordinare o rimuovere. Note resta; la barra contiene fino a cinque schede. Impostazioni è anche nel menu … della schermata Note."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stuknij Edytuj, aby zmienić kolejność lub usunąć. Notatki zostają; pasek mieści do pięciu kart. Ustawienia są też w menu … na ekranie Notatki."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нажмите «Править», чтобы изменить порядок или убрать. Заметки остаются; в панели до пяти вкладок. Настройки есть и в меню … на экране Заметки."
+          }
+        }
+      }
+    },
+    "Tap Edit to reorder or remove. Notes stays. With more than five tabs, iPhone keeps the rest under a More tab. Every location is also in the Go to menu on the Notes screen." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اضغط على تحرير لإعادة الترتيب أو الإزالة. تبقى الملاحظات. مع أكثر من خمس علامات تبويب يضع iPhone الباقي تحت علامة تبويب المزيد. كل المواقع موجودة أيضًا في قائمة الانتقال إلى على شاشة الملاحظات."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Klepnutím na Upravit změníte pořadí nebo odeberete. Poznámky zůstávají. Při více než pěti kartách dá iPhone zbytek pod kartu Další. Každé místo je také v nabídce Přejít na na obrazovce Poznámky."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tippe auf Bearbeiten, um zu sortieren oder zu entfernen. Notizen bleibt. Bei mehr als fünf Tabs legt das iPhone den Rest unter einen Tab „Mehr“. Jeder Ort ist auch im Menü „Gehe zu“ des Notizen-Bildschirms."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap Edit to reorder or remove. Notes stays. With more than five tabs, iPhone keeps the rest under a More tab. Every location is also in the Go to menu on the Notes screen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toca Editar para reordenar o quitar. Notas se mantiene. Con más de cinco pestañas, el iPhone deja el resto en una pestaña Más. Todas las ubicaciones están también en el menú Ir a de la pantalla Notas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Touchez Modifier pour réorganiser ou retirer. Notes reste. Au-delà de cinq onglets, l’iPhone place le reste dans un onglet Plus. Chaque emplacement figure aussi dans le menu Aller à de l’écran Notes."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "क्रम बदलने या हटाने के लिए संपादित करें पर टैप करें। नोट्स बना रहता है। पाँच से अधिक टैब होने पर iPhone बाकी को «अधिक» टैब में रखता है। हर स्थान नोट्स स्क्रीन के «यहाँ जाएँ» मेनू में भी है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Koppints a Szerkesztés gombra az átrendezéshez vagy eltávolításhoz. A Jegyzetek marad. Ötnél több fül esetén az iPhone a többit a Továbbiak fül alá teszi. Minden hely elérhető a Jegyzetek képernyő Ugrás menüjében is."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tocca Modifica per riordinare o rimuovere. Note resta. Con più di cinque schede, iPhone mette le altre in una scheda Altro. Ogni posizione è anche nel menu Vai a della schermata Note."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stuknij Edytuj, aby zmienić kolejność lub usunąć. Notatki zostają. Przy więcej niż pięciu kartach iPhone umieszcza resztę w karcie Więcej. Każde miejsce jest też w menu Przejdź do na ekranie Notatki."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нажмите «Править», чтобы изменить порядок или убрать. Заметки остаются. Если вкладок больше пяти, iPhone убирает остальные во вкладку «Ещё». Все разделы есть и в меню «Перейти» на экране Заметки."
           }
         }
       }
@@ -48628,6 +51965,148 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Текстовая заметка"
+          }
+        }
+      }
+    },
+    "The Add Note tab then makes this kind of note without asking. Change it in Settings → Navigation Tabs." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ستنشئ علامة تبويب إضافة ملاحظة هذا النوع من الملاحظات دون سؤال. غيّره من الإعدادات ← علامات تبويب التنقل."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karta Přidat poznámku pak vytvoří tento druh poznámky bez ptaní. Změníte to v Nastavení → Navigační karty."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Tab „Notiz hinzufügen“ erstellt dann diese Art Notiz ohne Nachfrage. Ändere es unter Einstellungen → Navigationstabs."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Add Note tab then makes this kind of note without asking. Change it in Settings → Navigation Tabs."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La pestaña Añadir nota creará entonces este tipo de nota sin preguntar. Cámbialo en Ajustes → Pestañas de navegación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’onglet Ajouter une note créera ensuite ce type de note sans demander. Modifiez-le dans Réglages → Onglets de navigation."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फिर नोट जोड़ें टैब बिना पूछे इसी प्रकार की नोट बनाएगा। इसे सेटिंग्स → नेविगेशन टैब में बदलें।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Jegyzet hozzáadása fül ezután kérdés nélkül ilyen jegyzetet készít. Módosítás: Beállítások → Navigációs fülek."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La scheda Aggiungi nota creerà poi questo tipo di nota senza chiedere. Modificalo in Impostazioni → Schede di navigazione."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karta Dodaj notatkę będzie wtedy tworzyć ten rodzaj notatki bez pytania. Zmień to w Ustawienia → Karty nawigacji."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вкладка «Добавить заметку» будет создавать заметки этого вида без вопроса. Изменить: Настройки → Вкладки навигации."
+          }
+        }
+      }
+    },
+    "The bar is full. Remove a tab to add another." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الشريط ممتلئ. أزل علامة تبويب لإضافة أخرى."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lišta je plná. Odeberte kartu, abyste mohli přidat jinou."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Leiste ist voll. Entferne einen Tab, um einen anderen hinzuzufügen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The bar is full. Remove a tab to add another."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La barra está llena. Quita una pestaña para añadir otra."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La barre est pleine. Retirez un onglet pour en ajouter un autre."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बार भर गया है। दूसरा जोड़ने के लिए एक टैब हटाएँ।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A sáv megtelt. Távolíts el egy fület, hogy másikat adhass hozzá."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La barra è piena. Rimuovi una scheda per aggiungerne un’altra."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasek jest pełny. Usuń kartę, aby dodać inną."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Панель заполнена. Уберите вкладку, чтобы добавить другую."
           }
         }
       }
@@ -50194,6 +53673,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Изображение помещается в новую текстовую заметку, где вокруг него можно писать."
+          }
+        }
+      }
+    },
+    "The Pinned Note tab shows this note. Its title is the tab's name." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعرض علامة تبويب الملاحظة المثبتة هذه الملاحظة. عنوانها هو اسم علامة التبويب."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karta Připnutá poznámka zobrazuje tuto poznámku. Její název je názvem karty."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Tab „Angeheftete Notiz“ zeigt diese Notiz. Ihr Titel ist der Name des Tabs."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Pinned Note tab shows this note. Its title is the tab's name."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La pestaña Nota fijada muestra esta nota. Su título es el nombre de la pestaña."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’onglet Note épinglée affiche cette note. Son titre est le nom de l’onglet."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पिन की गई नोट टैब यह नोट दिखाता है। इसका शीर्षक टैब का नाम है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Rögzített jegyzet fül ezt a jegyzetet mutatja. A címe a fül neve."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La scheda Nota fissata mostra questa nota. Il suo titolo è il nome della scheda."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karta Przypięta notatka pokazuje tę notatkę. Jej tytuł jest nazwą karty."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вкладка «Закреплённая заметка» показывает эту заметку. Её заголовок — имя вкладки."
           }
         }
       }
@@ -52403,6 +55953,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Восстанавливает тему акцента по умолчанию, отключает пользовательские цвета и сбрасывает все цвета."
+          }
+        }
+      }
+    },
+    "This will be a root note, at the top of the tree." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ستكون هذه ملاحظة جذرية في أعلى الشجرة."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bude to kořenová poznámka na vrcholu stromu."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dies wird eine Wurzelnotiz ganz oben im Baum."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This will be a root note, at the top of the tree."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Será una nota raíz, en la parte superior del árbol."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce sera une note racine, en haut de l’arborescence."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "यह एक रूट नोट होगी, ट्री के सबसे ऊपर।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ez gyökérjegyzet lesz, a fa tetején."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sarà una nota radice, in cima all’albero."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To będzie notatka główna, na szczycie drzewa."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это будет корневая заметка, на верхнем уровне дерева."
           }
         }
       }
@@ -56174,6 +59795,77 @@
         }
       }
     },
+    "Use Default Icon" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "استخدام الأيقونة الافتراضية"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Použít výchozí ikonu"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standardsymbol verwenden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use Default Icon"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar icono predeterminado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Icône par défaut"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "डिफ़ॉल्ट आइकन उपयोग करें"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alapértelmezett ikon"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usa icona predefinita"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Użyj domyślnej ikony"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Значок по умолчанию"
+          }
+        }
+      }
+    },
     "Use Trilium Note Colors" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -57590,6 +61282,290 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Белая (высокий контраст)"
+          }
+        }
+      }
+    },
+    "With a default, the Add Note tab makes the note there right away. Without one it asks each time, and the picker can remember your choice." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "مع وجود افتراضي، تنشئ علامة تبويب إضافة ملاحظة الملاحظة هناك فورًا. بدونه تسأل في كل مرة، ويمكن للمنتقي تذكّر اختيارك."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "S výchozím umístěním vytvoří karta Přidat poznámku poznámku rovnou tam. Bez něj se pokaždé zeptá a výběr si může vaši volbu zapamatovat."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit einem Standard erstellt der Tab „Notiz hinzufügen“ die Notiz sofort dort. Ohne fragt er jedes Mal, und die Auswahl kann sich deine Wahl merken."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "With a default, the Add Note tab makes the note there right away. Without one it asks each time, and the picker can remember your choice."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con un valor predeterminado, la pestaña Añadir nota crea la nota ahí directamente. Sin él, pregunta cada vez, y el selector puede recordar tu elección."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avec une valeur par défaut, l’onglet Ajouter une note crée la note directement à cet endroit. Sans, il demande à chaque fois, et le sélecteur peut mémoriser votre choix."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "डिफ़ॉल्ट होने पर नोट जोड़ें टैब तुरंत वहीं नोट बनाता है। न होने पर हर बार पूछता है, और चयनकर्ता आपका चुनाव याद रख सकता है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alapértelmezett hellyel a Jegyzet hozzáadása fül azonnal ott hozza létre a jegyzetet. Nélküle minden alkalommal kérdez, és a választó megjegyezheti a döntésed."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con un valore predefinito, la scheda Aggiungi nota crea subito la nota lì. Senza, chiede ogni volta e il selettore può ricordare la scelta."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Z domyślną lokalizacją karta Dodaj notatkę od razu tworzy tam notatkę. Bez niej pyta za każdym razem, a wybór można zapamiętać."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "С местом по умолчанию вкладка «Добавить заметку» сразу создаёт заметку там. Без него она спрашивает каждый раз, а выбор можно запомнить."
+          }
+        }
+      }
+    },
+    "With defaults, the Add Note tab makes the note there, of that kind, right away. Set to Ask every time, it asks, and each picker can remember your choice." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "مع الافتراضيات، تنشئ علامة تبويب إضافة ملاحظة الملاحظة هناك ومن ذلك النوع فورًا. مع «السؤال في كل مرة» تسأل، ويمكن لكل منتقٍ تذكّر اختيارك."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "S výchozími hodnotami vytvoří karta Přidat poznámku poznámku rovnou tam a tohoto druhu. Při „Vždy se zeptat“ se zeptá a každý výběr si může vaši volbu zapamatovat."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit Standards erstellt der Tab „Notiz hinzufügen“ die Notiz sofort dort und in dieser Art. Bei „Jedes Mal fragen“ fragt er, und jede Auswahl kann sich deine Wahl merken."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "With defaults, the Add Note tab makes the note there, of that kind, right away. Set to Ask every time, it asks, and each picker can remember your choice."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con valores predeterminados, la pestaña Añadir nota crea la nota ahí, de ese tipo, directamente. Con «Preguntar cada vez» pregunta, y cada selector puede recordar tu elección."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avec des valeurs par défaut, l’onglet Ajouter une note crée directement la note à cet endroit, de ce type. Avec « Demander à chaque fois », il demande, et chaque sélecteur peut mémoriser votre choix."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "डिफ़ॉल्ट होने पर नोट जोड़ें टैब तुरंत वहीं उसी प्रकार की नोट बनाता है। «हर बार पूछें» पर यह पूछता है, और हर चयनकर्ता आपका चुनाव याद रख सकता है।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alapértelmezésekkel a Jegyzet hozzáadása fül azonnal ott és olyan fajta jegyzetet készít. „Mindig kérdezzen” esetén kérdez, és minden választó megjegyezheti a döntésed."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con i valori predefiniti, la scheda Aggiungi nota crea subito la nota lì, di quel tipo. Con «Chiedi ogni volta» chiede, e ogni selettore può ricordare la scelta."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Z domyślnymi karta Dodaj notatkę od razu tworzy tam notatkę tego rodzaju. Przy „Pytaj za każdym razem” pyta, a każdy wybór można zapamiętać."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "С значениями по умолчанию вкладка «Добавить заметку» сразу создаёт заметку там и такого вида. При «Спрашивать каждый раз» она спрашивает, и каждый выбор можно запомнить."
+          }
+        }
+      }
+    },
+    "With only Notes shown, the tab bar is hidden. Settings is in the … menu on the Notes screen." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "عند عرض الملاحظات فقط، يُخفى شريط علامات التبويب. الإعدادات في قائمة … على شاشة الملاحظات."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pokud je zobrazeno jen Poznámky, lišta karet je skrytá. Nastavení najdete v nabídce … na obrazovce Poznámky."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wird nur Notizen angezeigt, ist die Tableiste ausgeblendet. Einstellungen findest du im …-Menü des Notizen-Bildschirms."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "With only Notes shown, the tab bar is hidden. Settings is in the … menu on the Notes screen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si solo se muestra Notas, la barra de pestañas se oculta. Ajustes está en el menú … de la pantalla Notas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si seul Notes est affiché, la barre d’onglets est masquée. Réglages se trouve dans le menu … de l’écran Notes."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "केवल नोट्स दिखने पर टैब बार छिप जाता है। सेटिंग्स नोट्स स्क्रीन के … मेनू में हैं।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ha csak a Jegyzetek látható, a fülsáv rejtve van. A Beállítások a Jegyzetek képernyő … menüjében található."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con solo Note mostrate, la barra delle schede è nascosta. Impostazioni è nel menu … della schermata Note."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gdy wyświetlane są tylko Notatki, pasek kart jest ukryty. Ustawienia są w menu … na ekranie Notatki."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Если показана только вкладка Заметки, панель вкладок скрыта. Настройки находятся в меню … на экране Заметки."
+          }
+        }
+      }
+    },
+    "Work & Money" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "العمل والمال"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Práce a peníze"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arbeit und Geld"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Work & Money"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trabajo y dinero"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Travail et argent"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "काम और पैसा"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Munka és pénz"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lavoro e denaro"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Praca i pieniądze"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Работа и деньги"
           }
         }
       }
