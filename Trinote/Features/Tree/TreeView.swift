@@ -164,6 +164,9 @@ struct TreeView: View {
     /// Settings → Tree View → Show Collapse All Button (on by default).
     static let showCollapseAllButtonKey = "treeShowCollapseAllButton"
     @AppStorage(TreeView.showCollapseAllButtonKey) private var showCollapseAllButton = true
+    /// Settings → Tree View → Show + on Note Rows (on by default): a child-note button instead of the row chevron.
+    static let showRowAddButtonKey = "treeShowRowAddButton"
+    @AppStorage(TreeView.showRowAddButtonKey) private var showRowAddButton = true
     @AppStorage("showNoteTabsBar") private var showNoteTabsBarCompact: Bool = false
     /// The iPad split layout has its own setting, on by default: Trilium desktop always shows tabs.
     @AppStorage("showNoteTabsBarPad") private var showNoteTabsBarPad: Bool = true
@@ -1708,7 +1711,10 @@ struct TreeView: View {
             },
             onDrillDown: { noteId, title in
                 drillDownTarget = SubTreeTarget(noteId: noteId, title: title)
-            }
+            },
+            onNewChild: (onPickParent == nil && showRowAddButton) ? { note in
+                createSheetContext = CreateNoteSheetContext(parentNote: note, viewModel: vm)
+            } : nil
         )
     }
 
@@ -1840,6 +1846,12 @@ struct TreeNodeRow: View {
     var forceInlineExpand: Bool = false
     let onSelect: (NoteItem, String) -> Void
     let onDrillDown: (String, String) -> Void
+    /// Set to show a "+" at the row's trailing edge that makes a child of this note (Trilium's hover button);
+    /// nil keeps the plain chevron.
+    var onNewChild: ((NoteItem) -> Void)? = nil
+
+    /// iPad pointer over the row: the "+" shows only then, as on desktop.
+    @State private var isHovering = false
 
     private var isExpanded: Bool { node.children != nil }
     private var shouldDrillDown: Bool { !forceInlineExpand && depth >= TriliumTreeConstants.maxInlineDepth }
@@ -1861,6 +1873,34 @@ struct TreeNodeRow: View {
             expandChevron
 
             noteLabel
+
+            trailingAccessory
+        }
+        .onHover { isHovering = $0 }
+    }
+
+    /// The "+" that makes a child note: always on iPhone, on pointer hover on iPad (the chevron until then).
+    @ViewBuilder
+    private var trailingAccessory: some View {
+        if let onNewChild, !isSelectMode {
+            if UIDevice.current.userInterfaceIdiom != .pad || isHovering {
+                Button {
+                    onNewChild(node.note)
+                } label: {
+                    Image(systemName: "plus.circle")
+                        .font(.body)
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(String(localized: "New Note", comment: "Tree row: make a child note"))
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.quaternary)
+                    .frame(width: 32, height: 32)
+            }
         }
     }
 
@@ -1982,7 +2022,8 @@ struct TreeNodeRow: View {
                 }
                 .frame(width: Self.badgeTrayWidth, height: Self.badgeTrayHeight, alignment: .center)
 
-                if !isSelectMode {
+                // The chevron lives here only without the "+" (see `trailingAccessory`).
+                if !isSelectMode, onNewChild == nil {
                     Image(systemName: "chevron.right")
                         .font(.caption2)
                         .foregroundStyle(.quaternary)

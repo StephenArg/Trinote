@@ -30,6 +30,7 @@ struct SettingsView: View {
     @AppStorage(NoteEditorSaving.backButtonSavesKey) private var noteEditorBackButtonSaves = false
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @AppStorage(TreeView.showCollapseAllButtonKey) private var showCollapseAllButton = true
+    @AppStorage(TreeView.showRowAddButtonKey) private var showRowAddButton = true
     @AppStorage(NoteContentWidth.storageKey) private var noteMaxContentWidth: Int = 0
     /// The iPad split layout's own tab strip setting (see `NoteDetailView.showNoteTabsBar`).
     @AppStorage("showNoteTabsBarPad") private var showNoteTabsBarPad: Bool = true
@@ -270,6 +271,11 @@ struct SettingsView: View {
             Toggle(
                 String(localized: "Show Collapse All Button", comment: "Settings: the button beside + on the Notes screen that closes every open branch"),
                 isOn: $showCollapseAllButton
+            )
+
+            Toggle(
+                String(localized: "Show + on Note Rows", comment: "Settings: a button on each tree row that makes a child note, instead of the chevron"),
+                isOn: $showRowAddButton
             )
 
             Toggle(

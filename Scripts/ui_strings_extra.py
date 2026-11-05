@@ -768,6 +768,7 @@ _ROWS: list[tuple[str, tuple[str, str, str, str, str, str, str, str, str, str]]]
     ('Nature & Weather', ('Naturaleza y clima', 'Natura e meteo', 'Nature et météo', 'Natur und Wetter', 'Природа и погода', 'الطبيعة والطقس', 'प्रकृति और मौसम', 'Természet és időjárás', 'Příroda a počasí', 'Natura i pogoda')),
     ('Devices & Media', ('Dispositivos y multimedia', 'Dispositivi e media', 'Appareils et médias', 'Geräte und Medien', 'Устройства и медиа', 'الأجهزة والوسائط', 'डिवाइस और मीडिया', 'Eszközök és média', 'Zařízení a média', 'Urządzenia i multimedia')),
     ('Shapes & Symbols', ('Formas y símbolos', 'Forme e simboli', 'Formes et symboles', 'Formen und Symbole', 'Фигуры и символы', 'الأشكال والرموز', 'आकृतियाँ और प्रतीक', 'Alakzatok és szimbólumok', 'Tvary a symboly', 'Kształty i symbole')),
+    ('Show + on Note Rows', ('Mostrar + en las filas de notas', 'Mostra + sulle righe delle note', 'Afficher + sur les lignes de notes', '+ auf Notizzeilen anzeigen', 'Показывать + в строках заметок', 'إظهار + في صفوف الملاحظات', 'नोट पंक्तियों पर + दिखाएँ', '+ megjelenítése a jegyzetsorokon', 'Zobrazit + na řádcích poznámek', 'Pokaż + w wierszach notatek')),
 ]
 
 UI_EXTRA: dict[str, dict[str, str]] = {k: T(*v) for k, v in _ROWS}
