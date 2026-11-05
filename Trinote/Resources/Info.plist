@@ -54,6 +54,8 @@
 	<string>Trinote shows where you are on a geo map when you tap its location button.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Trinote uses the local network to send and receive notes with nearby devices running Trinote.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Trinote saves the images and videos you share from notes to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Trinote needs access to your photos to upload image attachments.</string>
 	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>

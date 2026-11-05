@@ -38,4 +38,18 @@ final class GeoMapPlaceSearchTests: XCTestCase {
         XCTAssertNil(GeoMapPlaceSearch.viewbox(nil))
         XCTAssertNil(GeoMapPlaceSearch.viewbox([1, 1, 1, 1]))
     }
+
+    /// A result with non-finite coordinates is dropped, and non-finite bounds are left out.
+    func testSkipsNonFiniteCoordinatesAndBounds() {
+        let json = #"""
+        [
+          {"osm_type":"node","osm_id":1,"lat":"nan","lon":"2","name":"Bad","display_name":"Bad"},
+          {"osm_type":"node","osm_id":2,"lat":"48.85","lon":"2.29","name":"Good","display_name":"Good",
+           "boundingbox":["48.8","inf","2.2","2.3"]}
+        ]
+        """#
+        let places = GeoMapPlaceSearch.places(from: Data(json.utf8))
+        XCTAssertEqual(places.map(\.id), ["node:2"])
+        XCTAssertNil(places.first?.bounds)
+    }
 }

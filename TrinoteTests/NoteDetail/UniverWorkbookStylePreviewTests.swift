@@ -60,6 +60,23 @@ final class UniverWorkbookStylePreviewTests: XCTestCase {
         XCTAssertFalse(UniverWorkbookStylePreview.isThemeAutomaticBorderColor("#FF0000"))
     }
 
+    /// `rgb()` values `Double` reads but `Int` can't hold ("nan", "inf", "1e400") are no color, not a trap;
+    /// out-of-range channels clamp like CSS.
+    func testRGBColorsWithNonFiniteOrOutOfRangeChannels() {
+        XCTAssertFalse(UniverWorkbookStylePreview.isThemeAutomaticBorderColor("rgb(nan,0,0)"))
+        XCTAssertFalse(UniverWorkbookStylePreview.isThemeAutomaticBorderColor("rgb(0,1e400,0)"))
+        XCTAssertFalse(UniverWorkbookStylePreview.isThemeAutomaticBorderColor("rgba(0,0,inf,1)"))
+        XCTAssertTrue(UniverWorkbookStylePreview.isThemeAutomaticBorderColor("rgb(-5,-5,-5)"))
+        XCTAssertTrue(UniverWorkbookStylePreview.isThemeAutomaticBorderColor("rgba(0,0,0,nan)"))
+        XCTAssertFalse(UniverWorkbookStylePreview.isThemeAutomaticBorderColor("rgb(1e30,0,0)"))
+
+        var appearance = UniverWorkbookStylePreview.CellAppearance.plain
+        appearance.backgroundHex = "rgb(nan, 1e400, -5)"
+        XCTAssertNil(appearance.background)
+        appearance.backgroundHex = "rgb(300, 20, 20)"
+        XCTAssertNotNil(appearance.background)
+    }
+
     func testWorkbookParseAppliesCellStyle() throws {
         let json = """
         {

@@ -15,69 +15,6 @@ enum Log {
     static let geoMap = Logger(subsystem: subsystem, category: "GeoMap")
     /// Verbose note read/create diagnostics (`getNote`, blob policy, offline queue, flush). Filter: category NoteDiag.
     static let noteDiag = Logger(subsystem: subsystem, category: "NoteDiag")
-    /// TEMP: interactive-pop / mind-map swipe-back. Filter Console: subsystem `com.trinote`, category `PopGesture`.
-    static let popGesture = Logger(subsystem: subsystem, category: "PopGesture")
-    /// TEMP: checkbox toggle lag on image-heavy notes. Filter Console: subsystem `com.trinote`, category `Checkbox`.
-    static let checkbox = Logger(subsystem: subsystem, category: "Checkbox")
-    /// TEMP: notes showing black for 1–3 s when opened. Filter Console: subsystem `com.trinote`, category `NoteOpen`.
-    static let noteOpen = Logger(subsystem: subsystem, category: "NoteOpen")
-}
-
-/// TEMP: timeline for `Log.noteOpen`. Every line carries the ms since the current note started opening.
-enum NoteOpenTrace {
-    static var openedAt: CFAbsoluteTime = 0
-    static var noteId = "-"
-
-    static func begin(noteId: String, _ message: String) {
-        openedAt = CFAbsoluteTimeGetCurrent()
-        self.noteId = noteId
-        log("OPEN \(message)")
-    }
-
-    static func log(_ message: String) {
-        let ms = openedAt > 0 ? CheckboxPerf.ms(openedAt) : "n/a"
-        Log.noteOpen.notice("[+\(ms, privacy: .public) ms] [\(noteId, privacy: .public)] \(message, privacy: .public)")
-    }
-}
-
-/// Timing helpers for `Log.checkbox`. Filter Console by category `Checkbox`.
-enum CheckboxPerf {
-    static var sequence: UInt64 = 0
-    static var lastToggleID: UInt64 = 0
-    static var lastToggleEndedAt: CFAbsoluteTime = 0
-
-    @discardableResult
-    static func nextID() -> UInt64 {
-        sequence += 1
-        lastToggleID = sequence
-        return sequence
-    }
-
-    static func ms(_ start: CFAbsoluteTime) -> String {
-        String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - start) * 1000)
-    }
-
-    static func sinceLastToggleMs() -> String {
-        guard lastToggleEndedAt > 0 else { return "n/a" }
-        return ms(lastToggleEndedAt)
-    }
-
-    /// Sizes and markers only — never the HTML itself (image-heavy notes are megabytes).
-    /// Each marker probe walks the whole body, so they are skipped past the point where measuring
-    /// would distort what is being measured.
-    static func bodyStats(_ html: String) -> String {
-        let utf16Count = html.utf16.count
-        guard utf16Count <= 1_000_000 else { return "utf16=\(utf16Count) markers=skipped" }
-        return "utf16=\(utf16Count) dataURI=\(html.containsASCII("data:image")) apiAtt=\(html.containsASCII("api/attachments")) apiImg=\(html.containsASCII("api/images"))"
-    }
-
-    static func log(_ message: String) {
-        Log.checkbox.info("\(message, privacy: .public)")
-    }
-
-    static func error(_ message: String) {
-        Log.checkbox.error("\(message, privacy: .public)")
-    }
 }
 
 // MARK: - Note diagnostics (Log.noteDiag)

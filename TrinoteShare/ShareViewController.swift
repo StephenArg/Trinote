@@ -238,7 +238,7 @@ final class ShareViewController: UIViewController {
                 defer {
                     if accessed { url.stopAccessingSecurityScopedResource() }
                 }
-                guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), !data.isEmpty else {
                     continuation.resume(returning: nil)
                     return
                 }
@@ -310,7 +310,7 @@ final class ShareViewController: UIViewController {
                     return
                 }
                 // Must copy before the completion handler returns — the temp file is deleted afterward.
-                guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), !data.isEmpty else {
                     continuation.resume(returning: nil)
                     return
                 }
@@ -366,7 +366,7 @@ final class ShareViewController: UIViewController {
                     defer {
                         if accessed { url.stopAccessingSecurityScopedResource() }
                     }
-                    if let data = try? Data(contentsOf: url) {
+                    if let data = try? Data(contentsOf: url, options: .mappedIfSafe) {
                         let filename = url.lastPathComponent
                         let uti = UTType(filenameExtension: url.pathExtension)?.identifier
                         continuation.resume(returning: ExtractedShare(

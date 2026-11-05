@@ -491,8 +491,15 @@ final class LocalNoteTransferService: NSObject {
                 return
             }
 
+            // The session ends when the peer leaves, and with no session the completion below would never run,
+            // leaving the transfer waiting forever.
+            guard let session else {
+                try? FileManager.default.removeItem(at: tempURL)
+                failTransfer(String(localized: "Lost connection to receiver.", comment: "Local transfer send failed"), recoverSession: true)
+                return
+            }
             let sendError: Error? = await withCheckedContinuation { continuation in
-                session?.sendResource(
+                session.sendResource(
                     at: tempURL,
                     withName: LocalNoteTransferConstants.resourceName(for: transferId),
                     toPeer: peer

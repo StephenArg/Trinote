@@ -555,6 +555,18 @@ final class KanbanPresentationModelTests: XCTestCase {
         XCTAssertNil(Models.CardTemplate(config: nil))
     }
 
+    // MARK: - Column limit
+
+    /// A limit stored as a non-finite or huge number is ignored or capped, not converted with a trap.
+    func testColumnLimitFromDoubleIsGuarded() {
+        XCTAssertEqual(Models.BoardColumn(value: "A", fields: ["limit": .double(3)]).limit, 3)
+        XCTAssertEqual(Models.BoardColumn(value: "A", fields: ["limit": .double(1e300)]).limit, 1_000_000)
+        XCTAssertNil(Models.BoardColumn(value: "A", fields: ["limit": .double(.infinity)]).limit)
+        XCTAssertNil(Models.BoardColumn(value: "A", fields: ["limit": .double(.nan)]).limit)
+        XCTAssertNil(Models.BoardColumn(value: "A", fields: ["limit": .double(-2)]).limit)
+        XCTAssertEqual(Models.BoardColumn(value: "A", fields: ["limit": .int(4)]).limit, 4)
+    }
+
     // MARK: - Template lookup query
 
     func testTemplateTitleSearchQueryTargetsTemplateNoteTitles() {

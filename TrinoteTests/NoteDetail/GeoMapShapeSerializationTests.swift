@@ -34,4 +34,16 @@ final class GeoMapShapeSerializationTests: XCTestCase {
         XCTAssertEqual(shape.kind, .polygon)
         XCTAssertEqual(shape.coordinates, [[2.29, 48.85], [2.3, 48.85], [2.3, 48.86]])
     }
+
+    /// `#geolocation` values `Double` reads as non-finite are no pin: they'd make the map's JSON raise.
+    func testGeolocationParserRejectsNonFiniteValues() throws {
+        XCTAssertNil(GeoMapCoordinateParser.parse("nan,1"))
+        XCTAssertNil(GeoMapCoordinateParser.parse("1,inf"))
+        XCTAssertNil(GeoMapCoordinateParser.parse("1e400,2"))
+        XCTAssertNil(GeoMapCoordinateParser.parse("48.2"))
+        XCTAssertNil(GeoMapCoordinateParser.parse("48.2,16.3,1"))
+        let parsed = try XCTUnwrap(GeoMapCoordinateParser.parse(" 48.2 , 16.3 "))
+        XCTAssertEqual(parsed.lat, 48.2)
+        XCTAssertEqual(parsed.lng, 16.3)
+    }
 }

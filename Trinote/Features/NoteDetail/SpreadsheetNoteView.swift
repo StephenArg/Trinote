@@ -190,14 +190,7 @@ private struct SpreadsheetGridPreview: View {
 
     /// Populated columns through the last used index, but never fewer than A–C.
     private func previewColumnCount(for sheet: UniverWorkbookPreview.Sheet) -> Int {
-        let lastPopulatedColumn = max(
-            sheet.rows.flatMap(\.values.keys).max() ?? -1,
-            sheet.cellImageReferences.keys.compactMap { key -> Int? in
-                let parts = key.split(separator: ":", maxSplits: 1)
-                return parts.count == 2 ? Int(parts[1]) : nil
-            }.max() ?? -1
-        )
-        return max(lastPopulatedColumn + 1, Self.minimumPreviewColumns)
+        UniverWorkbookPreview.previewColumnCount(for: sheet, minimum: Self.minimumPreviewColumns)
     }
 
     private func headerRow(columns: Int) -> some View {
@@ -339,6 +332,13 @@ private struct SpreadsheetPreviewImageTile: View {
 /// large and evolving; we deliberately parse only the cell text we can display, gracefully
 /// returning `nil` when shape diverges so the raw-JSON fallback kicks in.
 struct UniverWorkbookPreview {
+    /// The read-only grid builds a view per cell, so it shows at most this many columns (as many as the parser
+    /// keeps) and rows from the first used one: a stray cell far away would otherwise build millions of views.
+    static let maxPreviewColumns = 64
+    static let maxPreviewRows = 500
+    /// Cell keys past this (Excel stops at 1,048,576 rows) are malformed, and `index + 1` on one near `Int.max` traps.
+    static let maxCellIndex = 10_000_000
+
     /// One displayable cell: plain text plus optional hyperlink spans (Univer `customRanges`).
     struct CellDisplay: Equatable {
         struct LinkSpan: Equatable {
@@ -425,9 +425,9 @@ struct UniverWorkbookPreview {
     let sheets: [Sheet]
 
     /// Rows to render in the read-only grid: every index from the first populated row through
-    /// the last (including blank rows in between), plus trailing padding.
-    static func previewRows(for sheet: Sheet, extraPadding: Int) -> [Row] {
-        var rowsByIndex = Dictionary(uniqueKeysWithValues: sheet.rows.map { ($0.index, $0) })
+    /// the last (including blank rows in between), plus trailing padding; at most `maxRows` from the first.
+    static func previewRows(for sheet: Sheet, extraPadding: Int, maxRows: Int = maxPreviewRows) -> [Row] {
+        var rowsByIndex = Dictionary(sheet.rows.map { ($0.index, $0) }, uniquingKeysWith: { first, _ in first })
         var populatedIndices = Set(sheet.rows.map(\.index))
         for key in sheet.cellImageReferences.keys {
             let parts = key.split(separator: ":", maxSplits: 1)
@@ -437,11 +437,16 @@ struct UniverWorkbookPreview {
         }
 
         if let minIndex = populatedIndices.min(), let lastPopulated = populatedIndices.max() {
-            for index in minIndex...lastPopulated where rowsByIndex[index] == nil {
+            // Row keys come from the note's JSON and can be anything up to `Int.max`, so the arithmetic is checked.
+            let (cappedEnd, overflowed) = minIndex.addingReportingOverflow(max(maxRows, 1) - 1)
+            let lastShown = overflowed ? lastPopulated : min(lastPopulated, cappedEnd)
+            rowsByIndex = rowsByIndex.filter { $0.key <= lastShown }
+            for index in minIndex...lastShown where rowsByIndex[index] == nil {
                 rowsByIndex[index] = Row(index: index, values: [:])
             }
             for offset in 0..<extraPadding {
-                let index = lastPopulated + 1 + offset
+                let (index, overflowed) = lastShown.addingReportingOverflow(1 + offset)
+                if overflowed { break }
                 if rowsByIndex[index] == nil {
                     rowsByIndex[index] = Row(index: index, values: [:])
                 }
@@ -453,6 +458,19 @@ struct UniverWorkbookPreview {
         }
 
         return rowsByIndex.values.sorted { $0.index < $1.index }
+    }
+
+    /// Columns the read-only grid shows: through the last used one, at least `minimum`, at most `maxPreviewColumns`.
+    static func previewColumnCount(for sheet: Sheet, minimum: Int) -> Int {
+        let lastPopulatedColumn = max(
+            sheet.rows.flatMap(\.values.keys).max() ?? -1,
+            sheet.cellImageReferences.keys.compactMap { key -> Int? in
+                let parts = key.split(separator: ":", maxSplits: 1)
+                return parts.count == 2 ? Int(parts[1]) : nil
+            }.max() ?? -1
+        )
+        let used = min(lastPopulatedColumn, maxPreviewColumns - 1) + 1
+        return min(max(used, minimum), maxPreviewColumns)
     }
 
     /// Trilium v0.103 wraps the Univer `IWorkbookData` in `{ version: 1, workbook: {...} }`
@@ -488,10 +506,11 @@ struct UniverWorkbookPreview {
             var maxCol = -1
             if let cellData = sheetDict["cellData"] as? [String: Any] {
                 for (rowKey, rowVal) in cellData {
-                    guard let rowIdx = Int(rowKey), let rowCells = rowVal as? [String: Any] else { continue }
+                    guard let rowIdx = Int(rowKey), (0...maxCellIndex).contains(rowIdx),
+                          let rowCells = rowVal as? [String: Any] else { continue }
                     var thisRow: [Int: CellDisplay] = [:]
                     for (colKey, cellVal) in rowCells {
-                        guard let colIdx = Int(colKey) else { continue }
+                        guard let colIdx = Int(colKey), (0...maxCellIndex).contains(colIdx) else { continue }
                         if let ref = SpreadsheetWorkbookImageURLs.imageReference(in: sheetDict, row: rowIdx, col: colIdx) {
                             imageRefs["\(rowIdx):\(colIdx)"] = ref
                             maxCol = max(maxCol, colIdx)
@@ -520,7 +539,7 @@ struct UniverWorkbookPreview {
             parsedSheets.append(Sheet(
                 id: sheetId,
                 name: name,
-                columnCount: min(columnCount, 64),
+                columnCount: min(columnCount, maxPreviewColumns),
                 rows: rows,
                 cellImageReferences: imageRefs,
                 styleTable: styleTable,

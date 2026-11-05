@@ -213,7 +213,7 @@ struct SplitWorkspaceView: View {
         }
     }
 
-    private var openTabs: [OpenNoteTab] {
+    private var openTabs: [OpenNoteTabItem] {
         guard let profileId = appState.activeProfile?.id else { return [] }
         return (try? PersistenceManager.shared.fetchOpenNoteTabs(serverProfileId: profileId)) ?? []
     }
@@ -276,7 +276,7 @@ struct SplitWorkspaceView: View {
     }
 
     /// Shows `tab`'s note in the pane; the note restores that tab's scroll position.
-    private func selectOpenTab(_ tab: OpenNoteTab) {
+    private func selectOpenTab(_ tab: OpenNoteTabItem) {
         guard appState.activeProfile?.id == tab.serverProfileId else { return }
         let alreadyShowing = tab.id == activeOpenTabId && workspace.visibleNoteId == tab.noteId
         LastActiveOpenTabStore.set(tab.id, profileId: tab.serverProfileId)
@@ -287,7 +287,7 @@ struct SplitWorkspaceView: View {
 
     /// Closing the tab of the note on screen shows the most recently opened remaining tab, or no note.
     /// (If the note still has another tab, `NoteDetailView` switches to it in place.)
-    private func openTabRemoved(_ removed: OpenNoteTab) {
+    private func openTabRemoved(_ removed: OpenNoteTabItem) {
         OpenTabSessionStore.clearReadScrollState(for: removed.id)
         guard let profileId = appState.activeProfile?.id, removed.noteId == workspace.visibleNoteId else { return }
         let remaining = (try? PersistenceManager.shared.fetchOpenNoteTabs(serverProfileId: profileId)) ?? []

@@ -64,22 +64,6 @@ enum NavigationPopGestureSuppression {
     private static weak var previousContentDelegate: UIGestureRecognizerDelegate?
     private static let denyDelegate = PopGestureDenyDelegate()
 
-    // TEMP debug helpers — remove with PopGesture logs.
-    private static func gestureSnapshot(nav: UINavigationController?) -> String {
-        let edge = nav?.interactivePopGestureRecognizer
-        let edgeEn = edge.map { String($0.isEnabled) } ?? "nil"
-        let edgeDel = edge.flatMap { $0.delegate.map { String(describing: type(of: $0)) } } ?? "nil"
-        var contentEn = "n/a"
-        var contentDel = "n/a"
-        if #available(iOS 26.0, *), let content = nav?.interactiveContentPopGestureRecognizer {
-            contentEn = String(content.isEnabled)
-            contentDel = content.delegate.map { String(describing: type(of: $0)) } ?? "nil"
-        }
-        let stack = nav.map { $0.viewControllers.count } ?? -1
-        let navPtr = nav.map { String(describing: ObjectIdentifier($0)) } ?? "nil"
-        return "edgeEnabled=\(edgeEn) edgeDel=\(edgeDel) contentEnabled=\(contentEn) contentDel=\(contentDel) stack=\(stack) nav=\(navPtr) count=\(suppressCount)"
-    }
-
     private static func contentPopGesture(on nav: UINavigationController) -> UIGestureRecognizer? {
         if #available(iOS 26.0, *) {
             return nav.interactiveContentPopGestureRecognizer
@@ -122,61 +106,40 @@ enum NavigationPopGestureSuppression {
     /// Call when a host that needs blocking enters the hierarchy.
     /// - Returns: `true` when this call took a retain token (caller must later `release`).
     @discardableResult
-    static func retain(from view: UIView?, source: String = #function) -> Bool {
+    static func retain(from view: UIView?) -> Bool {
         guard let navigationController = NavigationControllerFinder.navigationController(from: view) else {
-            Log.popGesture.warning("retain FAIL source=\(source, privacy: .public) window=\(view?.window != nil) nav=false count=\(suppressCount)")
             return false
         }
         // Edge gesture is always present on a real UINavigationController; content gesture is iOS 26+.
         guard navigationController.interactivePopGestureRecognizer != nil
                 || contentPopGesture(on: navigationController) != nil else {
-            Log.popGesture.warning("retain FAIL source=\(source, privacy: .public) no pop gestures count=\(suppressCount)")
             return false
         }
 
-        let before = gestureSnapshot(nav: navigationController)
         if suppressCount == 0 {
             savedEdgePopEnabled = navigationController.interactivePopGestureRecognizer?.isEnabled
             if #available(iOS 26.0, *) {
                 savedContentPopEnabled = navigationController.interactiveContentPopGestureRecognizer?.isEnabled
             }
             Self.navigationController = navigationController
-            applyDisabled(navigationController)
-        } else {
-            let edgeOn = navigationController.interactivePopGestureRecognizer?.isEnabled == true
-            var contentOn = false
-            if #available(iOS 26.0, *) {
-                contentOn = navigationController.interactiveContentPopGestureRecognizer?.isEnabled == true
-            }
-            if edgeOn || contentOn {
-                Log.popGesture.error("retain: pop gesture RE-ENABLED while count=\(suppressCount) source=\(source, privacy: .public) before=\(before, privacy: .public)")
-            }
-            applyDisabled(navigationController)
         }
+        applyDisabled(navigationController)
         suppressCount += 1
-        Log.popGesture.info("retain OK source=\(source, privacy: .public) savedEdge=\(String(describing: savedEdgePopEnabled), privacy: .public) savedContent=\(String(describing: savedContentPopEnabled), privacy: .public) after=\(gestureSnapshot(nav: navigationController), privacy: .public)")
         return true
     }
 
     /// Call when that host leaves. Restores only when the last retainer exits.
-    static func release(from view: UIView?, source: String = #function) {
-        guard suppressCount > 0 else {
-            Log.popGesture.warning("release ignored (count already 0) source=\(source, privacy: .public)")
-            return
-        }
+    static func release(from view: UIView?) {
+        guard suppressCount > 0 else { return }
         suppressCount -= 1
         guard suppressCount == 0 else {
             navigationController.map { applyDisabled($0) }
-            Log.popGesture.debug("release partial source=\(source, privacy: .public) count=\(suppressCount)")
             return
         }
 
-        let nav = navigationController ?? NavigationControllerFinder.navigationController(from: view)
-        let before = gestureSnapshot(nav: nav)
-        if let nav {
+        if let nav = navigationController ?? NavigationControllerFinder.navigationController(from: view) {
             applyRestored(nav)
         }
-        Log.popGesture.info("release FINAL source=\(source, privacy: .public) before=\(before, privacy: .public) after=\(gestureSnapshot(nav: nav), privacy: .public)")
         savedEdgePopEnabled = nil
         savedContentPopEnabled = nil
         previousEdgeDelegate = nil
@@ -185,13 +148,9 @@ enum NavigationPopGestureSuppression {
     }
 
     /// Re-assert disabled while any retainer is active (SwiftUI / NavigationStack often flips it back on).
-    static func reassertIfNeeded(from view: UIView?, source: String = #function) {
+    static func reassertIfNeeded(from view: UIView?) {
         guard suppressCount > 0 else { return }
-        let nav = navigationController ?? NavigationControllerFinder.navigationController(from: view)
-        guard let nav else {
-            Log.popGesture.warning("reassert: no nav source=\(source, privacy: .public) count=\(suppressCount)")
-            return
-        }
+        guard let nav = navigationController ?? NavigationControllerFinder.navigationController(from: view) else { return }
         if navigationController == nil {
             navigationController = nav
             if savedEdgePopEnabled == nil {
@@ -214,25 +173,13 @@ enum NavigationPopGestureSuppression {
         }
 
         if edgeOn || contentOn || edgeDelStolen || contentDelStolen {
-            Log.popGesture.error("reassert: fixing source=\(source, privacy: .public) \(gestureSnapshot(nav: nav), privacy: .public)")
             applyDisabled(nav)
         }
     }
 
     private final class PopGestureDenyDelegate: NSObject, UIGestureRecognizerDelegate {
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            let kind: String
-            if #available(iOS 26.0, *),
-               let nav = navigationController,
-               gestureRecognizer === nav.interactiveContentPopGestureRecognizer {
-                kind = "contentPop"
-            } else if gestureRecognizer === navigationController?.interactivePopGestureRecognizer {
-                kind = "edgePop"
-            } else {
-                kind = "other"
-            }
-            Log.popGesture.error("pop shouldBegin kind=\(kind, privacy: .public) — returning false. enabled=\(gestureRecognizer.isEnabled) count=\(suppressCount)")
-            return false
+            false
         }
     }
 }
@@ -244,29 +191,20 @@ enum NavigationPopGestureSuppression {
 /// SwiftUI `NavigationStack`.
 struct NavigationPopGestureBlocker: UIViewControllerRepresentable {
     let blocked: Bool
-    /// TEMP: identify which host attached this blocker (e.g. "NoteDetail", "MindMapNote").
-    var label: String = "Blocker"
 
     func makeUIViewController(context: Context) -> Controller {
         let vc = Controller()
         vc.blocked = blocked
-        vc.label = label
-        Log.popGesture.info("Blocker[\(label, privacy: .public)] make blocked=\(blocked)")
         return vc
     }
 
     func updateUIViewController(_ uiViewController: Controller, context: Context) {
-        if uiViewController.blocked != blocked {
-            Log.popGesture.info("Blocker[\(uiViewController.label, privacy: .public)] blocked \(uiViewController.blocked) → \(blocked)")
-        }
         uiViewController.blocked = blocked
-        uiViewController.label = label
         uiViewController.syncSuppression()
     }
 
     final class Controller: UIViewController {
         var blocked = true
-        var label = "Blocker"
         private var isRetaining = false
 
         override func viewDidLoad() {
@@ -274,19 +212,17 @@ struct NavigationPopGestureBlocker: UIViewControllerRepresentable {
             view.isUserInteractionEnabled = false
             view.backgroundColor = .clear
             view.isOpaque = false
-            Log.popGesture.debug("Blocker[\(self.label, privacy: .public)] viewDidLoad frame=\(String(describing: self.view.frame), privacy: .public)")
         }
 
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            Log.popGesture.info("Blocker[\(self.label, privacy: .public)] viewDidAppear blocked=\(self.blocked) retaining=\(self.isRetaining) nav=\(self.navigationController != nil) frame=\(String(describing: self.view.bounds.size), privacy: .public)")
             syncSuppression()
         }
 
         override func viewDidLayoutSubviews() {
             super.viewDidLayoutSubviews()
             if isRetaining {
-                NavigationPopGestureSuppression.reassertIfNeeded(from: view, source: "Blocker[\(label)].layout")
+                NavigationPopGestureSuppression.reassertIfNeeded(from: view)
             } else {
                 syncSuppression()
             }
@@ -294,21 +230,19 @@ struct NavigationPopGestureBlocker: UIViewControllerRepresentable {
 
         override func viewDidDisappear(_ animated: Bool) {
             super.viewDidDisappear(animated)
-            Log.popGesture.info("Blocker[\(self.label, privacy: .public)] viewDidDisappear releasing=\(self.isRetaining)")
             releaseSuppression()
         }
 
         deinit {
             if isRetaining {
-                Log.popGesture.warning("Blocker[\(self.label, privacy: .public)] deinit still retaining — releasing")
-                NavigationPopGestureSuppression.release(from: nil, source: "Blocker[\(label)].deinit")
+                NavigationPopGestureSuppression.release(from: nil)
             }
         }
 
         func syncSuppression() {
             if blocked {
                 retainSuppression()
-                NavigationPopGestureSuppression.reassertIfNeeded(from: view, source: "Blocker[\(label)].sync")
+                NavigationPopGestureSuppression.reassertIfNeeded(from: view)
             } else {
                 releaseSuppression()
             }
@@ -316,15 +250,12 @@ struct NavigationPopGestureBlocker: UIViewControllerRepresentable {
 
         private func retainSuppression() {
             guard !isRetaining else { return }
-            isRetaining = NavigationPopGestureSuppression.retain(from: view, source: "Blocker[\(label)]")
-            if !isRetaining {
-                Log.popGesture.warning("Blocker[\(self.label, privacy: .public)] retain deferred (no nav yet)")
-            }
+            isRetaining = NavigationPopGestureSuppression.retain(from: view)
         }
 
         private func releaseSuppression() {
             guard isRetaining else { return }
-            NavigationPopGestureSuppression.release(from: view, source: "Blocker[\(label)]")
+            NavigationPopGestureSuppression.release(from: view)
             isRetaining = false
         }
     }
@@ -344,7 +275,6 @@ enum TabReorderNavigationPopSuppressor {
             savedContentPopEnabled = navigationController.interactiveContentPopGestureRecognizer?.isEnabled
             navigationController.interactiveContentPopGestureRecognizer?.isEnabled = false
         }
-        Log.popGesture.info("TabReorder suppress")
     }
 
     static func restore(from view: UIView?) {
@@ -361,6 +291,5 @@ enum TabReorderNavigationPopSuppressor {
         }
         savedEdgePopEnabled = nil
         savedContentPopEnabled = nil
-        Log.popGesture.info("TabReorder restore")
     }
 }

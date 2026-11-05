@@ -11,7 +11,7 @@ struct RecentsView: View {
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#F2F2F7"
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
-    @State private var recentNotes: [RecentNote] = []
+    @State private var recentNotes: [RecentNoteItem] = []
     /// Cached breadcrumb path per note (from SwiftData); empty string if unavailable.
     @State private var pathByNoteId: [String: String] = [:]
     /// Row title with protected-note masking (SwiftData may still hold decrypted titles after restart).
@@ -108,6 +108,7 @@ struct RecentsView: View {
         }
         .screenLargeTitle(String(localized: "Recents", comment: "Recents tab title"), background: treeChromeBackground)
         .task { loadRecents() }
+        .onReceive(NotificationCenter.default.publisher(for: .recentsChanged)) { _ in loadRecents() }
         .refreshable { loadRecents() }
         .onChange(of: appState.protectedSessionActive) { _, _ in loadRecents() }
         .navigationDestination(item: Binding(
@@ -130,7 +131,7 @@ struct RecentsView: View {
             var titlesOut: [String: String] = [:]
             var icons: [String: NoteRowIconContext] = [:]
             var colors: [String: String] = [:]
-            var visible: [RecentNote] = []
+            var visible: [RecentNoteItem] = []
             visible.reserveCapacity(raw.count)
             paths.reserveCapacity(raw.count)
             icons.reserveCapacity(raw.count)
@@ -192,7 +193,7 @@ struct RecentsView: View {
         }
     }
 
-    private func recentsRowIcon(for recent: RecentNote) -> NoteRowIconContext {
+    private func recentsRowIcon(for recent: RecentNoteItem) -> NoteRowIconContext {
         if let ctx = iconContextByNoteId[recent.noteId] { return ctx }
         return NoteRowIconContext(
             iconClass: nil,
@@ -202,7 +203,7 @@ struct RecentsView: View {
 
     /// Trilium `#color` label wins when the global setting is on and the value is recognized.
     /// Suppressed for protected notes while the session is locked (so masked rows keep their muted look).
-    private func triliumColor(for recent: RecentNote) -> Color? {
+    private func triliumColor(for recent: RecentNoteItem) -> Color? {
         guard useTriliumNoteColors else { return nil }
         if let profileId = appState.activeProfile?.id,
            let cached = try? PersistenceManager.shared.fetchCachedNote(id: recent.noteId, serverProfileId: profileId),
@@ -213,11 +214,11 @@ struct RecentsView: View {
         return TriliumNoteColorMapper.swiftUIColor(for: colorLabelByNoteId[recent.noteId])
     }
 
-    private func resolvedTitleColor(for recent: RecentNote) -> Color {
+    private func resolvedTitleColor(for recent: RecentNoteItem) -> Color {
         triliumColor(for: recent) ?? .primary
     }
 
-    private func resolvedIconColor(for recent: RecentNote) -> Color {
+    private func resolvedIconColor(for recent: RecentNoteItem) -> Color {
         triliumColor(for: recent) ?? .secondary
     }
 }

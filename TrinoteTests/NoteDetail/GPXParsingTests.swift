@@ -47,4 +47,18 @@ final class GPXParsingTests: XCTestCase {
         XCTAssertEqual(lines.count, names.count)
         XCTAssertEqual(names.first, "ASP QUARRY")
     }
+
+    /// Points whose coordinates `Double` reads as non-finite ("nan", "inf") are skipped, and so is a non-finite
+    /// elevation: the map's JSON can't hold them.
+    func testTrackPointsWithNonFiniteCoordinatesAreSkipped() {
+        let xml = """
+        <gpx><trk><name>T</name><trkseg>
+        <trkpt lat="nan" lon="1"></trkpt>
+        <trkpt lat="48.1" lon="16.1"><ele>inf</ele></trkpt>
+        <trkpt lat="48.2" lon="inf"></trkpt>
+        <trkpt lat="48.3" lon="16.3"><ele>200</ele></trkpt>
+        </trkseg></trk></gpx>
+        """
+        XCTAssertEqual(GeoMapGPXParser.readTrackLines(from: xml), [[[16.1, 48.1], [16.3, 48.3]]])
+    }
 }

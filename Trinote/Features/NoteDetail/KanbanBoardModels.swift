@@ -142,7 +142,8 @@ enum KanbanBoardModels {
         var limit: Int? {
             switch fields["limit"] {
             case .int(let value): return value > 0 ? value : nil
-            case .double(let value): return value > 0 ? Int(value) : nil
+            // `Int(_:)` traps past Int's range (a hand-edited 1e300), so a huge limit is capped.
+            case .double(let value): return value.isFinite && value > 0 ? Int(min(value, 1_000_000)) : nil
             default: return nil
             }
         }

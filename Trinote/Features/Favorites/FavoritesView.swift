@@ -10,7 +10,7 @@ private enum FavoritesSortOrder: String, CaseIterable {
 private struct FavoriteNotebookSection: Identifiable {
     let id: String
     let title: String
-    let items: [FavoriteNote]
+    let items: [FavoriteNoteItem]
 }
 
 struct FavoritesView: View {
@@ -24,7 +24,7 @@ struct FavoritesView: View {
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("treeLightBgColor") private var treeLightBgColor: String = "#F2F2F7"
     @AppStorage("treeDarkBgColor") private var treeDarkBgColor: String = "#1c1c1e"
-    @State private var favorites: [FavoriteNote] = []
+    @State private var favorites: [FavoriteNoteItem] = []
     /// Same row chrome as Recents: path from cache, tree “notebook” icon, last-open time when known.
     @State private var pathByNoteId: [String: String] = [:]
     @State private var displayTitleByNoteId: [String: String] = [:]
@@ -71,7 +71,7 @@ struct FavoritesView: View {
     private var groupedFavoriteSections: [FavoriteNotebookSection] {
         guard let profileId = appState.activeProfile?.id, !favorites.isEmpty else { return [] }
         let pm = PersistenceManager.shared
-        var buckets: [String: [FavoriteNote]] = [:]
+        var buckets: [String: [FavoriteNoteItem]] = [:]
         var titles: [String: String] = [:]
 
         for fav in favorites {
@@ -99,11 +99,11 @@ struct FavoritesView: View {
         }
 
         let session = appState.protectedSessionActive
-        let sortKey: (FavoriteNote) -> String = { fav in
+        let sortKey: (FavoriteNoteItem) -> String = { fav in
             let prot = (try? pm.fetchCachedNote(id: fav.noteId, serverProfileId: profileId))?.isProtected ?? false
             return NoteItem.maskedStoredTitle(fav.title, isProtected: prot, protectedSessionActive: session)
         }
-        let sortedItems: ([FavoriteNote]) -> [FavoriteNote] = { notes in
+        let sortedItems: ([FavoriteNoteItem]) -> [FavoriteNoteItem] = { notes in
             switch sortOrder {
             case .titleAscending:
                 notes.sorted { sortKey($0).localizedCaseInsensitiveCompare(sortKey($1)) == .orderedAscending }
@@ -127,8 +127,8 @@ struct FavoritesView: View {
         mainContent
             .screenLargeTitle(String(localized: "Favorites", comment: "Favorites tab title"), background: treeChromeBackground)
             .toolbar { toolbarContent }
-            .task { loadFavorites() }
             .onAppear { loadFavorites() }
+            .onReceive(NotificationCenter.default.publisher(for: .favoritesChanged)) { _ in loadFavorites() }
             .refreshable { loadFavorites() }
             .onChange(of: appState.protectedSessionActive) { _, _ in loadFavorites() }
             .onChange(of: appState.activeProfile?.id) { _, _ in loadFavorites() }
@@ -307,7 +307,7 @@ struct FavoritesView: View {
     }
 
     @ViewBuilder
-    private func favoriteListItem(_ fav: FavoriteNote) -> some View {
+    private func favoriteListItem(_ fav: FavoriteNoteItem) -> some View {
         Group {
             if isEditMode {
                 Button { toggleSelection(fav.noteId) } label: { favoriteRow(fav) }
@@ -329,7 +329,7 @@ struct FavoritesView: View {
     }
 
     @ViewBuilder
-    private func contextMenuContent(for fav: FavoriteNote) -> some View {
+    private func contextMenuContent(for fav: FavoriteNoteItem) -> some View {
         Button { sortOrder = .titleAscending } label: {
             Label(String(localized: "Sort by Title (A–Z)", comment: "Favorites context menu"), systemImage: "arrow.up")
         }
@@ -390,7 +390,7 @@ struct FavoritesView: View {
         }
     }
 
-    private func favoriteRow(_ fav: FavoriteNote) -> some View {
+    private func favoriteRow(_ fav: FavoriteNoteItem) -> some View {
         HStack(spacing: 12) {
             if isEditMode {
                 Image(systemName: selectedIds.contains(fav.noteId) ? "checkmark.circle.fill" : "circle")
@@ -443,7 +443,7 @@ struct FavoritesView: View {
         .contentShape(Rectangle())
     }
 
-    private func favoritesRowIcon(for fav: FavoriteNote) -> NoteRowIconContext {
+    private func favoritesRowIcon(for fav: FavoriteNoteItem) -> NoteRowIconContext {
         if let ctx = iconContextByNoteId[fav.noteId] { return ctx }
         return NoteRowIconContext(
             iconClass: nil,
@@ -451,12 +451,12 @@ struct FavoritesView: View {
         )
     }
 
-    private func favoritesAccessLabel(for fav: FavoriteNote) -> String? {
+    private func favoritesAccessLabel(for fav: FavoriteNoteItem) -> String? {
         guard let d = lastAccessByNoteId[fav.noteId] else { return nil }
         return d.relativeDisplay
     }
 
-    private func triliumColor(for fav: FavoriteNote) -> Color? {
+    private func triliumColor(for fav: FavoriteNoteItem) -> Color? {
         guard useTriliumNoteColors else { return nil }
         if let profileId = appState.activeProfile?.id,
            let cached = try? PersistenceManager.shared.fetchCachedNote(id: fav.noteId, serverProfileId: profileId),
@@ -467,11 +467,11 @@ struct FavoritesView: View {
         return TriliumNoteColorMapper.swiftUIColor(for: colorLabelByNoteId[fav.noteId])
     }
 
-    private func resolvedTitleColor(for fav: FavoriteNote) -> Color {
+    private func resolvedTitleColor(for fav: FavoriteNoteItem) -> Color {
         triliumColor(for: fav) ?? .primary
     }
 
-    private func resolvedIconColor(for fav: FavoriteNote) -> Color {
+    private func resolvedIconColor(for fav: FavoriteNoteItem) -> Color {
         triliumColor(for: fav) ?? .secondary
     }
 
@@ -501,7 +501,7 @@ struct FavoritesView: View {
             var icons: [String: NoteRowIconContext] = [:]
             var access: [String: Date] = [:]
             var colors: [String: String] = [:]
-            var visible: [FavoriteNote] = []
+            var visible: [FavoriteNoteItem] = []
             visible.reserveCapacity(raw.count)
 
             for fav in raw {
@@ -631,7 +631,7 @@ struct FavoritesView: View {
         onNoteDeleted?()
     }
 
-    private func removeFavorite(_ fav: FavoriteNote) {
+    private func removeFavorite(_ fav: FavoriteNoteItem) {
         guard let profileId = appState.activeProfile?.id else { return }
         do {
             try PersistenceManager.shared.removeFavorite(noteId: fav.noteId, serverProfileId: profileId)
@@ -641,11 +641,11 @@ struct FavoritesView: View {
         }
     }
 
-    private func deleteNote(_ fav: FavoriteNote) async {
+    private func deleteNote(_ fav: FavoriteNoteItem) async {
         await deleteFavoriteNoteOnServer(fav, postSync: true, eraseNotes: false)
     }
 
-    private func deleteFavoriteNoteOnServer(_ fav: FavoriteNote, postSync: Bool, eraseNotes: Bool) async {
+    private func deleteFavoriteNoteOnServer(_ fav: FavoriteNoteItem, postSync: Bool, eraseNotes: Bool) async {
         guard let client = appState.client, let profileId = appState.activeProfile?.id else {
             if postSync { deleteError = "Cannot delete while offline." }
             return

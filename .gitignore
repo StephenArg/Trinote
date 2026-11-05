@@ -19,3 +19,4 @@ local_notes
 .env.test.local
 .env.test.production
 .env.test.development
+__pycache__/

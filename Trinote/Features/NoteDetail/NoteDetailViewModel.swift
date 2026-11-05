@@ -1739,36 +1739,21 @@ final class NoteDetailViewModel {
         reorderListItem(fromIndex: fromIndex, beforeIndex: beforeIndex)
     }
 
-    private func saveNoteBodyChange(_ html: String) {
-        saveNoteBodyChange(html, toggleID: nil)
-    }
-
     /// - Parameter explicitMime: Overrides the note's MIME (the editors' saves fall back to JSON for canvas and spreadsheet).
     /// - Returns: Whether the body was written locally and queued for upload.
     @discardableResult
-    private func saveNoteBodyChange(_ html: String, toggleID: UInt64?, mime explicitMime: String? = nil) -> Bool {
-        let tag = toggleID.map { "#\($0) " } ?? ""
+    private func saveNoteBodyChange(_ html: String, mime explicitMime: String? = nil) -> Bool {
         let nid = self.noteId
-        let tUtf8 = CFAbsoluteTimeGetCurrent()
         let data = Data(html.utf8)
-        CheckboxPerf.log(
-            "save \(tag)utf8 ms=\(CheckboxPerf.ms(tUtf8)) bytes=\(data.count) [\(CheckboxPerf.bodyStats(html))]"
-        )
         let mime = explicitMime ?? note?.mime ?? "text/html"
-        guard let profileId = serverProfileId else {
-            CheckboxPerf.log("save \(tag)abort=no-profile")
-            return false
-        }
+        guard let profileId = serverProfileId else { return false }
 
         var saved = false
         do {
-            let tCache = CFAbsoluteTimeGetCurrent()
             cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
-            CheckboxPerf.log("save \(tag)cacheNoteContent ms=\(CheckboxPerf.ms(tCache))")
             // Pass nil so the upsert reads baseUtcDateModified from the cache for new rows.
             // The cache is kept current by the flush after each successful upload, preventing
             // false conflicts when rapid checkbox toggles create successive pending rows.
-            let tUpsert = CFAbsoluteTimeGetCurrent()
             try persistence.upsertPendingNoteBodyUpload(
                 noteId: nid,
                 body: data,
@@ -1776,7 +1761,6 @@ final class NoteDetailViewModel {
                 serverProfileId: profileId,
                 baseUtcDateModified: nil
             )
-            CheckboxPerf.log("save \(tag)upsertPendingUpload ms=\(CheckboxPerf.ms(tUpsert))")
             self.content = data
             saved = true
             if note?.isProtected == true {
@@ -1784,9 +1768,7 @@ final class NoteDetailViewModel {
             }
         } catch {
             Log.api.error("Failed to save note body change locally: \(error)")
-            CheckboxPerf.error("save \(tag)failed \(error.localizedDescription)")
         }
-        CheckboxPerf.log("save \(tag)kickoff backgroundSyncPendingChanges")
         appState.backgroundSyncPendingChanges()
         return saved
     }
@@ -1944,7 +1926,7 @@ final class NoteDetailViewModel {
               let original = editSessionOriginalBody, original != autosaveBaseline,
               let note, let profileId = serverProfileId, profileId == editSessionProfileId
         else { return }
-        guard saveNoteBodyChange(original, toggleID: nil, mime: Self.editorBodyMime(for: note)) else { return }
+        guard saveNoteBodyChange(original, mime: Self.editorBodyMime(for: note)) else { return }
         rawContentString = original
         // Autosave leaves `contentString` alone, but a cache reload during the edit (an offline note getting
         // its server id) may have replaced it.
@@ -2055,7 +2037,7 @@ final class NoteDetailViewModel {
             markEditsSaved()
             return false
         }
-        guard saveNoteBodyChange(body, toggleID: nil, mime: Self.editorBodyMime(for: note)) else { return false }
+        guard saveNoteBodyChange(body, mime: Self.editorBodyMime(for: note)) else { return false }
         rawContentString = body
         serverContentHash = body.hashValue
         editableContent = body
@@ -4115,7 +4097,8 @@ final class NoteDetailViewModel {
 
     private func applySeedChildMetadataMerge() {
         guard let seed = seedChildSummaries, !seed.isEmpty else { return }
-        let byId = Dictionary(uniqueKeysWithValues: seed.map { ($0.noteId, $0) })
+        // A cached child list can name a note twice; `uniqueKeysWithValues` would trap on it.
+        let byId = Dictionary(seed.map { ($0.noteId, $0) }, uniquingKeysWith: { first, _ in first })
         let placeholder = String(localized: "Sub-note", comment: "Child row title when this note is not in the local database yet (offline or not synced)")
         childNotes = childNotes.map { row in
             guard let s = byId[row.noteId] else { return row }
@@ -4173,11 +4156,8 @@ final class NoteDetailViewModel {
         for childId in resolvedChildNoteIdsForDetail() {
             guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
             let attrs = (try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
-            guard let geoVal = attrs.first(where: { $0.type == "label" && $0.name == "geolocation" })?.value else { continue }
-            let parts = geoVal.split(separator: ",")
-            guard parts.count == 2,
-                  let lat = Double(parts[0].trimmingCharacters(in: .whitespaces)),
-                  let lng = Double(parts[1].trimmingCharacters(in: .whitespaces)) else { continue }
+            guard let geoVal = attrs.first(where: { $0.type == "label" && $0.name == "geolocation" })?.value,
+                  let (lat, lng) = GeoMapCoordinateParser.parse(geoVal) else { continue }
             let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
             let title = trimmedTitle.isEmpty ? childId : trimmedTitle
             let iconClassLabel = attrs.first(where: { $0.type == "label" && $0.name == "iconClass" })?.value
@@ -4236,10 +4216,7 @@ final class NoteDetailViewModel {
                 shapes.append(shape)
             }
             if let geoAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == "geolocation" }) {
-                let parts = geoAttr.value.split(separator: ",")
-                if parts.count == 2,
-                   let lat = Double(parts[0].trimmingCharacters(in: .whitespaces)),
-                   let lng = Double(parts[1].trimmingCharacters(in: .whitespaces)) {
+                if let (lat, lng) = GeoMapCoordinateParser.parse(geoAttr.value) {
                     pins.append(GeoMapPin(
                         noteId: childId,
                         title: childItem.title,

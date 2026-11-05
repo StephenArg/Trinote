@@ -63,7 +63,6 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
         private var boundsObservation: NSKeyValueObservation?
         private var stabilityWorkItem: DispatchWorkItem?
         private var giveUpWorkItem: DispatchWorkItem?
-        private var applyCount = 0
 
         private static let stabilityWindow: TimeInterval = 0.28
         private static let maxWaitWindow: TimeInterval = 3.5
@@ -99,9 +98,7 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
             pendingOffset = offset
             let token = UUID()
             applyToken = token
-            applyCount = 0
             scheduledAt = CFAbsoluteTimeGetCurrent()
-            NoteOpenTrace.log("restore scheduleApply fraction=\(fraction) offset=\(offset.map { "\($0.offsetY)@\($0.layoutWidth)" } ?? "nil")")
 
             stabilityWorkItem?.cancel()
             stabilityWorkItem = nil
@@ -109,7 +106,6 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
             giveUpWorkItem?.cancel()
             let giveUp = DispatchWorkItem { [weak self] in
                 guard let self, self.applyToken == token else { return }
-                NoteOpenTrace.log("restore GAVE UP after \(Self.maxWaitWindow)s applies=\(self.applyCount)")
                 self.fireOnApplied()
             }
             giveUpWorkItem = giveUp
@@ -134,7 +130,6 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
                         self.attachAndApply(view: view, token: token, attempts: attempts + 1)
                     }
                 } else {
-                    NoteOpenTrace.log("restore no enclosing scroll view after 30 attempts")
                     fireOnApplied()
                 }
                 return
@@ -158,12 +153,6 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
             sv.layoutIfNeeded()
             if applyExactOffsetIfBodyHeightKnown(sv) { return }
             let maxOffset = max(sv.contentSize.height - sv.bounds.height, 0)
-            applyCount += 1
-            if applyCount <= 40 {
-                NoteOpenTrace.log(
-                    "restore apply #\(applyCount) contentH=\(sv.contentSize.height) boundsH=\(sv.bounds.height) offsetY=\(sv.contentOffset.y) target=\(maxOffset > 0 ? min(max(fraction * maxOffset, 0), maxOffset) : -1)"
-                )
-            }
             if maxOffset > 0 {
                 let y = min(max(fraction * maxOffset, 0), maxOffset)
                 if abs(sv.contentOffset.y - y) > Self.minOffsetReapplyDelta {
@@ -182,11 +171,9 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
                 if fraction > Self.fractionEpsilon, maxOffset <= 0 {
                     if CFAbsoluteTimeGetCurrent() - self.scheduledAt >= Self.nothingToScrollWindow,
                        !Self.containsLoadingWebView(sv) {
-                        NoteOpenTrace.log("restore: still nothing to scroll after \(Self.nothingToScrollWindow)s (contentH=\(sv.contentSize.height)), showing the note")
                         self.fireOnApplied()
                         return
                     }
-                    NoteOpenTrace.log("restore stability check: nothing to scroll yet (contentH=\(sv.contentSize.height)), retrying")
                     self.applyAndRestartStability()
                     return
                 }
@@ -198,12 +185,10 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
                     if fraction > Self.fractionEpsilon,
                        maxOffset > 0,
                        abs(sv.contentOffset.y - y) > Self.minOffsetReapplyDelta {
-                        NoteOpenTrace.log("restore stability check: offset \(sv.contentOffset.y) didn't stick at \(y), retrying")
                         self.applyAndRestartStability()
                         return
                     }
                 }
-                NoteOpenTrace.log("restore settled after applies=\(self.applyCount) offsetY=\(sv.contentOffset.y)")
                 self.fireOnApplied()
             }
             stabilityWorkItem = work
@@ -224,7 +209,6 @@ struct NoteDetailReadOnlyScrollRestoration: UIViewRepresentable {
             if abs(sv.contentOffset.y - y) > Self.minOffsetReapplyDelta {
                 sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
             }
-            NoteOpenTrace.log("restore applied exact offset \(y) at once (applies=\(applyCount))")
             fireOnApplied(immediate: true)
             return true
         }

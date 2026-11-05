@@ -63,4 +63,28 @@ final class FindOnPageControlTests: XCTestCase {
         XCTAssertFalse(control.consumeFocusOnPresent())
         XCTAssertTrue(control.consumeFocusOnPresent(), "later opens from the toolbar focus the field")
     }
+
+    /// Ranges come from the text itself. "İ" lowercases to two UTF-16 units, so ranges found in a lowercased copy
+    /// drifted one unit per "İ", and the last one ran past the end of the text.
+    func testCaseInsensitiveMatchRangesStayOnTheTextAfterDottedCapitalI() {
+        let text = "İstanbul needle İzmir NEEDLE"
+        let ns = text as NSString
+        let ranges = FindOnPageControl.caseInsensitiveMatchRanges(in: text, query: "Needle")
+        XCTAssertEqual(ranges.count, 2)
+        for range in ranges {
+            XCTAssertLessThanOrEqual(NSMaxRange(range), ns.length)
+            XCTAssertEqual(ns.substring(with: range).lowercased(), "needle")
+        }
+        XCTAssertEqual(FindOnPageControl.caseInsensitiveMatchRanges(in: text, query: ""), [])
+    }
+
+    func testCodeFindAfterDottedCapitalISelectsTheMatch() {
+        let text = "İİ needle"
+        let control = FindOnPageControl()
+        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        control.registerCodeTextView(textView, plainText: text, baseAttributedText: NSAttributedString(string: text))
+        control.prepareFindDeepLink(findQuery: "NEEDLE", matchIndex1Based: 1)
+        XCTAssertEqual(control.matchCount, 1)
+        XCTAssertEqual(textView.selectedRange, (text as NSString).range(of: "needle"))
+    }
 }

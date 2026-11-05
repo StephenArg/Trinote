@@ -17,19 +17,43 @@ struct PendingOpenSharedNote: Equatable, Sendable {
     /// When set, the editor inserts this attachment chip (same as toolbar file upload).
     let attachmentIdToInsert: String?
     let attachmentTitleToInsert: String?
-    /// Always open shared imports in the editor so the user can review and Save.
-    var startInEditMode: Bool { true }
+    /// A text note opens in the editor so the user can review and Save; an image or file note has nothing to edit,
+    /// so it opens to read.
+    let startInEditMode: Bool
 
     init(
         noteId: String,
         title: String,
         attachmentIdToInsert: String? = nil,
-        attachmentTitleToInsert: String? = nil
+        attachmentTitleToInsert: String? = nil,
+        startInEditMode: Bool = true
     ) {
         self.noteId = noteId
         self.title = title
         self.attachmentIdToInsert = attachmentIdToInsert
         self.attachmentTitleToInsert = attachmentTitleToInsert
+        self.startInEditMode = startInEditMode
+    }
+}
+
+/// The note type each kind of share became last time, chosen first the next time. Text until the user picks another.
+enum SharedImportNoteTypePreference {
+    static func key(for kind: SharedImportKind) -> String {
+        "shareImport.noteType.\(kind.rawValue)"
+    }
+
+    static func preferred(for kind: SharedImportKind, defaults: UserDefaults = .standard) -> NoteType {
+        let choices = SharedImportImporter.noteTypeChoices(for: kind)
+        guard let raw = defaults.string(forKey: key(for: kind)),
+              let type = NoteType(rawValue: raw),
+              choices.contains(type)
+        else { return .text }
+        return type
+    }
+
+    static func remember(_ type: NoteType, for kind: SharedImportKind, defaults: UserDefaults = .standard) {
+        guard SharedImportImporter.noteTypeChoices(for: kind).count > 1 else { return }
+        defaults.set(type.rawValue, forKey: key(for: kind))
     }
 }
 
@@ -55,6 +79,19 @@ final class ShareImportCoordinator {
     private(set) var isPlacingInInbox = false
     /// Bumped whenever UI-relevant share-import state changes (for reliable SwiftUI refresh).
     private(set) var activationToken: Int = 0
+
+    /// What the pending share is (a picture, a file, text), for the create sheet's choices and wording.
+    var pendingKind: SharedImportKind? { pendingPackage?.payload.kind }
+
+    /// The note types the pending share can become; the create sheet offers a choice when there's more than one.
+    var noteTypeChoices: [NoteType] {
+        pendingKind.map(SharedImportImporter.noteTypeChoices(for:)) ?? [.text]
+    }
+
+    /// The choice the create sheet starts on: what this kind of share became last time.
+    var preferredNoteType: NoteType {
+        pendingKind.map { SharedImportNoteTypePreference.preferred(for: $0) } ?? .text
+    }
 
     private weak var appState: AppState?
     private var retryTask: Task<Void, Never>?
@@ -166,8 +203,9 @@ final class ShareImportCoordinator {
         bumpActivation()
     }
 
-    /// Creates the text note under the selected parent with shared content applied, then opens it for editing.
-    func createNote(title rawTitle: String) async {
+    /// Creates the note under the selected parent with the shared content applied, then opens it: a text note in the
+    /// editor, an image or file note to read. `requestedType` is one of `noteTypeChoices`; anything else makes a text note.
+    func createNote(title rawTitle: String, as requestedType: NoteType = .text) async {
         // `beginCreateNote()` normally moves us to `.importing` first; allow a direct call too.
         if phase == .showCreateNote {
             beginCreateNote()
@@ -202,7 +240,9 @@ final class ShareImportCoordinator {
         do {
             // Same as tree/detail new-note: blank title → "Note dd-MM-yyyy HH:mm:ss".
             let title = NoteCreationTitle.resolved(from: rawTitle)
-            let needsAttachmentUpload = package.payload.kind == .file
+            let kind = package.payload.kind
+            let noteType = SharedImportImporter.noteTypeChoices(for: kind).contains(requestedType) ? requestedType : .text
+            let needsAttachmentUpload = kind == .file && noteType == .text
             if needsAttachmentUpload {
                 guard appState.networkMonitor.isConnected, appState.client != nil else {
                     phase = .failed(String(localized: "Cannot upload while offline.", comment: "Share import error"))
@@ -211,13 +251,32 @@ final class ShareImportCoordinator {
                 }
             }
 
+            // HEIC becomes JPEG first, off the main thread: re-encoding a large photo takes a moment.
+            let shared = await Task.detached(priority: .userInitiated) {
+                SharedImportImageConverter.convertingHEIC(package)
+            }.value
+
+            if noteType != .text {
+                try await createContentNote(
+                    shared,
+                    noteType: noteType,
+                    title: title,
+                    parentNoteId: parentNoteId,
+                    appState: appState,
+                    profileId: profileId
+                )
+                SharedImportNoteTypePreference.remember(noteType, for: kind)
+                return
+            }
+
             let result = try SharedImportImporter.importPackage(
-                package,
+                shared,
                 parentNoteId: parentNoteId,
                 persistence: PersistenceManager.shared,
                 serverProfileId: profileId,
                 titleOverride: title
             )
+            SharedImportNoteTypePreference.remember(.text, for: kind)
             SharedImportStore.clear()
             pendingPackage = nil
             selectedParentNoteId = nil
@@ -316,6 +375,50 @@ final class ShareImportCoordinator {
         }
     }
 
+    /// An image or file note: made on the server while online, otherwise on the device to go up later. A parent made
+    /// offline that hasn't reached the server yet means the device too, since the server can't place a note under it.
+    private func createContentNote(
+        _ package: SharedImportPackage,
+        noteType: NoteType,
+        title: String,
+        parentNoteId: String,
+        appState: AppState,
+        profileId: String
+    ) async throws {
+        let content = try SharedImportImporter.contentNote(for: package, noteType: noteType, title: title)
+        let result: SharedImportImporter.Result
+        if appState.isOnline, let client = appState.client, !parentNoteId.isOfflineLocalNoteId {
+            result = try await SharedImportImporter.createContentNoteOnServer(
+                content,
+                title: title,
+                parentNoteId: parentNoteId,
+                client: client,
+                persistence: PersistenceManager.shared,
+                serverProfileId: profileId
+            )
+        } else {
+            result = try SharedImportImporter.queueContentNote(
+                content,
+                title: title,
+                parentNoteId: parentNoteId,
+                persistence: PersistenceManager.shared,
+                serverProfileId: profileId
+            )
+        }
+        SharedImportStore.clear()
+        pendingPackage = nil
+        selectedParentNoteId = nil
+        suggestedNoteTitle = ""
+        pendingOpenNote = PendingOpenSharedNote(
+            noteId: result.noteId,
+            title: result.title,
+            startInEditMode: result.opensInEditor
+        )
+        phase = .idle
+        bumpActivation()
+        NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
+    }
+
     /// Syncs the offline note, uploads the queued file attachment, and returns server ids for the editor chip.
     private func finalizeSharedFileAttachment(
         localNoteId: String,
@@ -353,17 +456,21 @@ final class ShareImportCoordinator {
             serverProfileId: profileId
         )
         if let row = pending.first(where: { $0.title == preferredTitle }) ?? pending.first {
+            // Read up front: the attachment flush can delete this row during the upload, and a deleted model's
+            // attributes can't be read afterwards.
+            let rowId = row.id
+            let rowTitle = row.title
             let attachmentId = try await client.uploadNoteAttachment(
                 noteId: noteId,
                 data: row.data,
-                filename: row.title,
+                filename: rowTitle,
                 contentType: row.mime
             )
             try? PersistenceManager.shared.deletePendingAttachmentImport(
-                id: row.id,
+                id: rowId,
                 serverProfileId: profileId
             )
-            return (noteId, attachmentId, row.title)
+            return (noteId, attachmentId, rowTitle)
         }
 
         // Concurrent flush may have already uploaded it.

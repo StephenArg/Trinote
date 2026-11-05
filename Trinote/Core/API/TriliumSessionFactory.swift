@@ -58,16 +58,12 @@ enum TriliumSessionFactory {
         keychain: KeychainManager = .shared
     ) async {
         guard let data = await client.exportVerifiedSessionCookieData() else {
-            SessionCookieTrace.log(
-                "keychain save skipped (\(reason)): jar sid \(SessionCookieTrace.jarTag(for: client.baseURL)) isn't the confirmed session"
-            )
+            Log.auth.info("Kept the stored login (\(reason, privacy: .public)): the cookie jar doesn't hold the confirmed session")
             return
         }
         do {
             try await keychain.saveSessionCookies(data, forServer: profileId)
-            SessionCookieTrace.log("keychain save (\(reason)) sid \(SessionCookieTrace.tag(archive: data))")
         } catch {
-            SessionCookieTrace.log("keychain save FAILED (\(reason)): \(error)")
             Log.auth.warning("Could not save the session cookies: \(error)")
         }
     }

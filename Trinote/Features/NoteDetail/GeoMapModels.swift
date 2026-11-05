@@ -25,6 +25,20 @@ struct GeoMapPin: Identifiable, Sendable, Hashable {
     }
 }
 
+enum GeoMapCoordinateParser {
+    /// `lat,lng` from a `#geolocation` label. Nil unless both parse and are finite: `Double` reads "nan", "inf" and
+    /// "1e400", and a non-finite number makes `JSONSerialization` raise an exception nothing can catch.
+    nonisolated static func parse(_ value: String) -> (lat: Double, lng: Double)? {
+        let parts = value.split(separator: ",")
+        guard parts.count == 2,
+              let lat = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+              let lng = Double(parts[1].trimmingCharacters(in: .whitespaces)),
+              lat.isFinite, lng.isFinite
+        else { return nil }
+        return (lat, lng)
+    }
+}
+
 struct GeoMapWaypoint: Sendable, Hashable {
     let lng: Double
     let lat: Double

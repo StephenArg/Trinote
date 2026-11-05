@@ -146,6 +146,37 @@ final class TreeLogicTests: XCTestCase {
         XCTAssertEqual(shown.map { $0.node.note.noteId }, ["journal", "year2026", "other"])
     }
 
+    /// A note cloned under two expanded parents lists the same child branch twice. Rows of an animated `List` need
+    /// unique ids, so a row's id is its path of branch ids.
+    func testFlattenGivesRowsUnderExpandedClonesDistinctIds() {
+        func note(_ id: String) -> NoteItem {
+            NoteItem(
+                noteId: id, title: id, type: .text, mime: "text/html",
+                isProtected: false, dateCreated: "", dateModified: "",
+                parentNoteIds: [], childNoteIds: [], parentBranchIds: [], childBranchIds: [],
+                attributes: []
+            )
+        }
+        let child = TreeNode(
+            branch: BranchItem(branchId: "bc", noteId: "c", parentNoteId: "p", prefix: nil, notePosition: 0, isExpanded: false),
+            note: note("c")
+        )
+        let firstClone = TreeNode(
+            branch: BranchItem(branchId: "b1", noteId: "p", parentNoteId: "root", prefix: nil, notePosition: 0, isExpanded: true),
+            note: note("p"),
+            children: [child]
+        )
+        let secondClone = TreeNode(
+            branch: BranchItem(branchId: "b2", noteId: "p", parentNoteId: "other", prefix: nil, notePosition: 1, isExpanded: true),
+            note: note("p"),
+            children: [child]
+        )
+        let rows = TreeViewModel.flatten([firstClone, secondClone])
+        XCTAssertEqual(rows.map(\.id), ["b1", "b1/bc", "b2", "b2/bc"])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count)
+        XCTAssertEqual(rows.map(\.depth), [0, 1, 0, 1])
+    }
+
     // MARK: - Drag reorder
 
     /// A (open: A1, A2 (open: A2x), A3), B

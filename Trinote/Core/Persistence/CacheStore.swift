@@ -523,15 +523,16 @@ struct CacheStore {
 
     func deleteCachedNotes(noteIds: Set<String>, serverProfileId: String, clearGhost: Bool = true) throws {
         let profileId = serverProfileId
-        var closedTabs = false
+        var removed: AuxiliaryRowsRemoved = []
         defer {
-            // The tab strip reads its rows once; tell it they changed (a note deleted here, by sync or on another device).
-            if closedTabs { Self.postOnMainThread(.openNoteTabsChanged) }
+            // The tab strip, Favorites and Recents read their rows once; tell them they changed (a note deleted here,
+            // by sync or on another device).
+            if removed.contains(.openTabs) { Self.postOnMainThread(.openNoteTabsChanged) }
+            if removed.contains(.favorite) { Self.postOnMainThread(.favoritesChanged) }
+            if removed.contains(.recent) { Self.postOnMainThread(.recentsChanged) }
         }
         for noteId in noteIds {
-            if try purgeNoteFromAuxiliaryStores(noteId: noteId, serverProfileId: profileId, clearGhost: clearGhost) {
-                closedTabs = true
-            }
+            removed.formUnion(try purgeNoteFromAuxiliaryStores(noteId: noteId, serverProfileId: profileId, clearGhost: clearGhost))
 
             let nid = noteId
             let pid = profileId
@@ -558,24 +559,35 @@ struct CacheStore {
         Set(try fetchPendingNoteDeletions(serverProfileId: serverProfileId).map(\.noteId))
     }
 
+    /// What `purgeNoteFromAuxiliaryStores` removed, so the screens showing those rows can reload.
+    struct AuxiliaryRowsRemoved: OptionSet {
+        let rawValue: Int
+        static let openTabs = AuxiliaryRowsRemoved(rawValue: 1 << 0)
+        static let favorite = AuxiliaryRowsRemoved(rawValue: 1 << 1)
+        static let recent = AuxiliaryRowsRemoved(rawValue: 1 << 2)
+    }
+
     /// Removes recents, favorites, tabs, drafts, images, and optionally ghost IDs for a note (no save).
-    /// Returns whether any open tab was removed.
+    /// Returns which of the rows screens show (tabs, the favorite, the recent) were removed.
     @discardableResult
-    func purgeNoteFromAuxiliaryStores(noteId: String, serverProfileId: String, clearGhost: Bool = true) throws -> Bool {
+    func purgeNoteFromAuxiliaryStores(noteId: String, serverProfileId: String, clearGhost: Bool = true) throws -> AuxiliaryRowsRemoved {
         let compositeId = "\(serverProfileId):\(noteId)"
         let profileId = serverProfileId
         let nid = noteId
+        var removed: AuxiliaryRowsRemoved = []
 
         var recentDesc = FetchDescriptor<RecentNote>(predicate: #Predicate { $0.id == compositeId })
         recentDesc.fetchLimit = 1
         if let recent = try context.fetch(recentDesc).first {
             context.delete(recent)
+            removed.insert(.recent)
         }
 
         var favDesc = FetchDescriptor<FavoriteNote>(predicate: #Predicate { $0.id == compositeId })
         favDesc.fetchLimit = 1
         if let fav = try context.fetch(favDesc).first {
             context.delete(fav)
+            removed.insert(.favorite)
         }
 
         let tabs = try context.fetch(
@@ -584,7 +596,7 @@ struct CacheStore {
             )
         )
         tabs.forEach { context.delete($0) }
-        let closedTabs = !tabs.isEmpty
+        if !tabs.isEmpty { removed.insert(.openTabs) }
 
         var draftDesc = FetchDescriptor<DraftContent>(predicate: #Predicate { $0.id == compositeId })
         draftDesc.fetchLimit = 1
@@ -602,7 +614,7 @@ struct CacheStore {
         if clearGhost {
             GhostNoteTracker.shared.remove(noteId, serverProfileId: serverProfileId)
         }
-        return closedTabs
+        return removed
     }
 
     /// Removes cached branches under `parentNoteId` absent from the live API tree, then deletes
@@ -802,7 +814,7 @@ struct CacheStore {
                 }
             )
         )
-        return Dictionary(uniqueKeysWithValues: notes.map { ($0.noteId, "") })
+        return Dictionary(notes.map { ($0.noteId, "") }, uniquingKeysWith: { first, _ in first })
     }
 
     /// Protected notes with no body cached yet (requires an active server protected session to download).
@@ -815,7 +827,7 @@ struct CacheStore {
                 }
             )
         )
-        return Dictionary(uniqueKeysWithValues: notes.map { ($0.noteId, "") })
+        return Dictionary(notes.map { ($0.noteId, "") }, uniquingKeysWith: { first, _ in first })
     }
 
     /// Rebuilds each `CachedNote`’s parent/child id lists from `CachedBranch` rows (fixes incremental sync rows that omit tree fields).

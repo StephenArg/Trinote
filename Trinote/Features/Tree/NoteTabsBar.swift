@@ -4,8 +4,8 @@ import UIKit
 struct NoteTabsBar: View {
     /// The `OpenNoteTab.id` of the currently visible open-tab row, if any.
     let currentOpenTabId: String?
-    let onSelect: (OpenNoteTab) -> Void
-    var onOpenTabRemoved: ((OpenNoteTab) -> Void)? = nil
+    let onSelect: (OpenNoteTabItem) -> Void
+    var onOpenTabRemoved: ((OpenNoteTabItem) -> Void)? = nil
     var onTabsBecameEmpty: (() -> Void)? = nil
     var onReorderActiveChanged: ((Bool) -> Void)? = nil
     /// Above the note (iPad split layout, like Trilium's tab row) rather than below it: the hairline moves
@@ -14,7 +14,7 @@ struct NoteTabsBar: View {
 
     @Environment(AppState.self) private var appState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var tabs: [OpenNoteTab] = []
+    @State private var tabs: [OpenNoteTabItem] = []
     @State private var showAddNotePicker = false
     @State private var draggingTabId: String?
     @State private var dragTranslation: CGFloat = 0
@@ -232,7 +232,7 @@ struct NoteTabsBar: View {
     }
 
     /// Right-click menu, like Trilium's tab menu.
-    private func tabMenu(for tab: OpenNoteTab) -> UIMenu {
+    private func tabMenu(for tab: OpenNoteTabItem) -> UIMenu {
         let index = tabs.firstIndex(where: { $0.id == tab.id }) ?? 0
         let others = tabs.filter { $0.id != tab.id }
         let toTheRight = Array(tabs.dropFirst(index + 1))
@@ -263,7 +263,7 @@ struct NoteTabsBar: View {
     }
 
     /// Closes several tabs at once, then shows `kept` if the tab on screen was among them.
-    private func removeTabs(_ removing: [OpenNoteTab], keeping kept: OpenNoteTab) {
+    private func removeTabs(_ removing: [OpenNoteTabItem], keeping kept: OpenNoteTabItem) {
         guard let profileId = appState.activeProfile?.id, !removing.isEmpty else { return }
         let removedActive = removing.contains { $0.id == currentOpenTabId }
         for tab in removing {
@@ -276,7 +276,7 @@ struct NoteTabsBar: View {
         }
     }
 
-    private func removeTab(_ tab: OpenNoteTab) {
+    private func removeTab(_ tab: OpenNoteTabItem) {
         guard let profileId = appState.activeProfile?.id else { return }
         let removed = tab
         try? PersistenceManager.shared.removeOpenNoteTab(id: tab.id, serverProfileId: profileId)
@@ -335,7 +335,7 @@ struct NoteTabsBar: View {
         )
     }
 
-    private func rowIconContext(for tab: OpenNoteTab) -> NoteRowIconContext {
+    private func rowIconContext(for tab: OpenNoteTabItem) -> NoteRowIconContext {
         if let profileId = appState.activeProfile?.id {
             return PersistenceManager.shared.tabRowIconContext(
                 noteId: tab.noteId,
@@ -349,7 +349,7 @@ struct NoteTabsBar: View {
         )
     }
 
-    private func displayTitle(for tab: OpenNoteTab) -> String {
+    private func displayTitle(for tab: OpenNoteTabItem) -> String {
         guard let profileId = appState.activeProfile?.id else { return tab.title }
         if let cached = try? PersistenceManager.shared.fetchCachedNote(id: tab.noteId, serverProfileId: profileId) {
             let stored: String

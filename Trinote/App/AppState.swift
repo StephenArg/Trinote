@@ -173,7 +173,6 @@ final class AppState {
     /// Called when the app enters background.
     /// Starts a short background execution window if a sync is running, and persists cookies.
     func onBackground() async {
-        SessionCookieTrace.log("background: authenticated=\(isAuthenticated) protected=\(protectedSessionActive) policy=\(ProtectedSessionLockPolicy.current.rawValue)")
         localTransfer.onBackground()
         syncManager.beginBackgroundTimeExtensionIfNeeded()
         imageCachePrefetcher.beginBackgroundTimeExtensionIfNeeded()
@@ -532,11 +531,6 @@ final class AppState {
     /// network availability, and leaves pending rows in SwiftData on failure for later retry.
     /// Re-runs automatically if new changes arrived while a flush was in flight.
     func backgroundSyncPendingChanges() {
-        if CheckboxPerf.lastToggleID > 0,
-           CheckboxPerf.lastToggleEndedAt > 0,
-           CFAbsoluteTimeGetCurrent() - CheckboxPerf.lastToggleEndedAt < 10 {
-            CheckboxPerf.log("backgroundSyncPendingChanges kickoff lastToggle=#\(CheckboxPerf.lastToggleID)")
-        }
         // Often called as the app leaves the foreground (Autosave saves then), so ask for time to finish.
         beginUploadBackgroundTime()
         Task { [weak self] in
@@ -630,13 +624,24 @@ final class AppState {
                 return
             }
             guard let row = rows.first else { break }
-            let resolvedParent = idMap[row.parentNoteId] ?? row.parentNoteId
+            // Every field is read now: the row is deleted once the server answers, another flush can delete it while
+            // this one waits on the network, and a deleted model's attributes can't be read afterwards.
+            let rowId = row.id
+            let localNoteId = row.localNoteId
+            let localBranchId = row.localBranchId
+            let parentNoteId = row.parentNoteId
+            let rowTitle = row.title
+            let titleFromTemplate = row.titleFromTemplate
+            let noteType = row.noteType
+            let rowMime = row.mime
+            let initialContent = row.initialContent
+            let attrsJSON = row.initialAttributesJSON
+            let resolvedParent = idMap[parentNoteId] ?? parentNoteId
 
             // Pre-parse attributes to find & resolve ~template before createNote.
             var parsedAttrs: [[String: Any]] = []
             var resolvedTemplateNoteId: String?
             var templateTitleFromAttrs: String?
-            let attrsJSON = row.initialAttributesJSON
             if attrsJSON != "[]", !attrsJSON.isEmpty,
                let data = attrsJSON.data(using: .utf8),
                let raw = try? JSONSerialization.jsonObject(with: data) as? [Any] {
@@ -655,20 +660,20 @@ final class AppState {
             }
             if let templateTitleFromAttrs, resolvedTemplateNoteId == nil {
                 Log.sync.warning(
-                    "Could not resolve template title '\(templateTitleFromAttrs)' for pending note \(row.localNoteId); falling back to non-template create."
+                    "Could not resolve template title '\(templateTitleFromAttrs)' for pending note \(localNoteId); falling back to non-template create."
                 )
             }
 
             // Templates only clone attributes; the create request's content is always the
             // note's own body. Sending empty content here used to discard the initial
             // viewport JSON for geo maps (and any other initial body).
-            let contentToSend = row.initialContent
+            let contentToSend = initialContent
 
             let request = CreateNoteRequest(
                 parentNoteId: resolvedParent,
-                title: row.titleFromTemplate ? nil : row.title,
-                type: row.noteType,
-                mime: row.mime,
+                title: titleFromTemplate ? nil : rowTitle,
+                type: noteType,
+                mime: rowMime,
                 content: contentToSend,
                 notePosition: nil,
                 prefix: nil,
@@ -678,19 +683,19 @@ final class AppState {
                 templateNoteId: resolvedTemplateNoteId
             )
             let attrsForLog: String = {
-                let raw = row.initialAttributesJSON
+                let raw = attrsJSON
                 if raw.count > 2800 {
                     return String(raw.prefix(2800)) + "…(+\(raw.count - 2800) chars)"
                 }
                 return raw
             }()
             let flushCreateLog = NoteDiagnostics.describeFlushPendingCreate(
-                localNoteId: row.localNoteId,
+                localNoteId: localNoteId,
                 resolvedParent: resolvedParent,
-                title: row.title,
-                noteType: row.noteType,
-                mime: row.mime,
-                initialContentLen: row.initialContent.count,
+                title: rowTitle,
+                noteType: noteType,
+                mime: rowMime,
+                initialContentLen: initialContent.count,
                 contentToSendLen: contentToSend.count,
                 templateTitleFromAttrs: templateTitleFromAttrs,
                 resolvedTemplateNoteId: resolvedTemplateNoteId,
@@ -699,27 +704,27 @@ final class AppState {
             )
             Log.noteDiag.info("\(flushCreateLog)")
             Log.sync.info(
-                "Flushing pending create \(row.localNoteId) type=\(row.noteType) templateNoteId=\(resolvedTemplateNoteId ?? "nil")"
+                "Flushing pending create \(localNoteId) type=\(noteType) templateNoteId=\(resolvedTemplateNoteId ?? "nil")"
             )
             do {
                 let response = try await client.createNote(request)
                 let newId = response.note.noteId
-                idMap[row.localNoteId] = newId
+                idMap[localNoteId] = newId
 
                 // Apply cache + dequeue **before** attributes. If any `createAttribute` fails, we must not
                 // leave the row queued or the next flush would call `createNote` again (duplicate notes).
                 try persistence.applyOfflineNoteCreationServerResult(
-                    queueRowId: row.id,
-                    localNoteId: row.localNoteId,
-                    localBranchId: row.localBranchId,
+                    queueRowId: rowId,
+                    localNoteId: localNoteId,
+                    localBranchId: localBranchId,
                     response: response,
                     serverProfileId: profileId
                 )
-                offlineNoteIdReplacements[row.localNoteId] = newId
+                offlineNoteIdReplacements[localNoteId] = newId
                 NotificationCenter.default.post(
                     name: .trinoteOfflineNoteIdReplaced,
                     object: nil,
-                    userInfo: ["from": row.localNoteId, "to": newId]
+                    userInfo: ["from": localNoteId, "to": newId]
                 )
 
                 // When templateNoteId was provided, the server handles everything:
@@ -804,9 +809,9 @@ final class AppState {
                 }
 
                 didApplyAny = true
-                Log.sync.info("Flushed offline-created note \(row.localNoteId) → \(newId)")
+                Log.sync.info("Flushed offline-created note \(localNoteId) → \(newId)")
             } catch {
-                Log.sync.warning("Pending note creation failed for \(row.localNoteId): \(error)")
+                Log.sync.warning("Pending note creation failed for \(localNoteId): \(error)")
                 break
             }
         }
@@ -822,9 +827,11 @@ final class AppState {
               let profile = activeProfile
         else { return }
         let profileId = profile.id
-        let pending: [PendingNotePatch]
+        let pending: [(noteId: String, title: String, mime: String?)]
         do {
-            pending = try persistence.fetchPendingNotePatches(serverProfileId: profileId)
+            // Values, read now: another flush can delete these rows while this one waits on the network (the
+            // WebSocket handler runs deletions outside the serializer), and a deleted model's attributes can't be read.
+            pending = try persistence.fetchPendingNotePatches(serverProfileId: profileId).map { ($0.noteId, $0.title, $0.mime) }
         } catch {
             Log.sync.warning("Failed to read pending note patches: \(error)")
             return
@@ -893,9 +900,11 @@ final class AppState {
               let profile = activeProfile
         else { return }
         let profileId = profile.id
-        let pending: [PendingNoteDeletion]
+        let pending: [(id: String, noteId: String, eraseNotes: Bool)]
         do {
-            pending = try persistence.fetchPendingNoteDeletions(serverProfileId: profileId)
+            // Values, read now: another flush can delete these rows while this one waits on the network (the
+            // WebSocket handler runs deletions outside the serializer), and a deleted model's attributes can't be read.
+            pending = try persistence.fetchPendingNoteDeletions(serverProfileId: profileId).map { ($0.id, $0.noteId, $0.eraseNotes) }
         } catch {
             Log.sync.warning("Failed to read pending note deletions: \(error)")
             return
@@ -945,9 +954,12 @@ final class AppState {
               let profile = activeProfile
         else { return }
         let profileId = profile.id
-        let pending: [PendingBranchMove]
+        let pending: [(id: String, sourceBranchId: String, targetParentBranchId: String, sourceNoteId: String)]
         do {
+            // Values, read now: another flush can delete these rows while this one waits on the network (the
+            // WebSocket handler runs deletions outside the serializer), and a deleted model's attributes can't be read.
             pending = try persistence.fetchPendingBranchMoves(serverProfileId: profileId)
+                .map { ($0.id, $0.sourceBranchId, $0.targetParentBranchId, $0.sourceNoteId) }
         } catch {
             Log.sync.warning("Failed to read pending branch moves: \(error)")
             return
@@ -990,17 +1002,17 @@ final class AppState {
               let profile = activeProfile
         else { return }
         let profileId = profile.id
-        let pending: [PendingNoteBodyUpload]
+        let pending: [(noteId: String, body: Data, mime: String, queuedAt: Date, baseUtcDateModified: String)]
         do {
+            // Values, read now: another flush can delete these rows while this one waits on the network (the
+            // WebSocket handler runs deletions outside the serializer), and a deleted model's attributes can't be read.
             pending = try persistence.fetchPendingNoteBodyUploads(serverProfileId: profileId)
+                .map { ($0.noteId, $0.body, $0.mime, $0.queuedAt, $0.baseUtcDateModified) }
         } catch {
             Log.sync.warning("Failed to read pending body uploads: \(error)")
             return
         }
         guard !pending.isEmpty else { return }
-        CheckboxPerf.log(
-            "flushBodies start count=\(pending.count) lastToggle=#\(CheckboxPerf.lastToggleID) sizes=[\(pending.map { "\($0.noteId):\($0.body.count)B" }.joined(separator: ","))]"
-        )
         if !assumeSessionIsReady, let tc = client as? TriliumClient {
             do {
                 try await restoreSessionWithTimeout(client: tc, seconds: 10)
@@ -1012,11 +1024,7 @@ final class AppState {
         await touchServerProtectedSession()
         for row in pending {
             let snapshotDate = row.queuedAt
-            let tRow = CFAbsoluteTimeGetCurrent()
-            // Read once up front: the row is deleted below, and touching its attributes afterwards traps
-            // with "backing data was detached from a context without resolving attribute faults".
             let rowNoteId = row.noteId
-            let rowBodyBytes = row.body.count
             // A note made offline keeps its temporary id until its creation reaches the server, which renames this
             // row; until then every request for it fails, so it waits without holding up the rows after it.
             if rowNoteId.isOfflineLocalNoteId { continue }
@@ -1120,16 +1128,23 @@ final class AppState {
                         }
                         try? persistence.deletePendingNoteBodyUploadIfUnchanged(noteId: row.noteId, serverProfileId: profileId, snapshotDate: snapshotDate)
                         NotificationCenter.default.post(name: .trinoteTreeShouldRefresh, object: nil)
-                        CheckboxPerf.log(
-                            "flushBodies conflict note=\(rowNoteId) bytes=\(rowBodyBytes) ms=\(CheckboxPerf.ms(tRow)) lastToggle=#\(CheckboxPerf.lastToggleID)"
-                        )
                         continue
                     }
                 }
-                CheckboxPerf.log(
-                    "flushBodies updateNoteContent start note=\(rowNoteId) bytes=\(rowBodyBytes) lastToggle=#\(CheckboxPerf.lastToggleID)"
-                )
-                try await client.updateNoteContent(row.noteId, content: row.body, contentType: row.mime)
+                if let filename = fileBodyUploadName(noteId: rowNoteId, server: fresh, mime: row.mime, body: row.body, profileId: profileId) {
+                    // An image or file note's bytes go up as Trilium's own upload sends them. The generic path reads
+                    // some binary types as text (Office documents: their MIME names "xml") and would empty them, and it
+                    // names every upload `content.<ext>`, which Trilium then keeps as the note's `#originalFileName`.
+                    try await client.uploadNoteFileContent(
+                        noteId: row.noteId,
+                        data: row.body,
+                        filename: filename,
+                        contentType: row.mime,
+                        savesRevision: true
+                    )
+                } else {
+                    try await client.updateNoteContent(row.noteId, content: row.body, contentType: row.mime)
+                }
                 // Fetch the server's new utcDateModified after our upload so that
                 // (a) the cache is current for future pending rows, and
                 // (b) any surviving pending row won't false-conflict against our own upload.
@@ -1151,10 +1166,7 @@ final class AppState {
                 if !deleted, !newServerMod.isEmpty {
                     try? persistence.updatePendingBodyUploadBase(noteId: row.noteId, serverProfileId: profileId, newBase: newServerMod)
                 }
-                Log.sync.info("Flushed offline-edited body for note \(row.noteId)")
-                CheckboxPerf.log(
-                    "flushBodies done note=\(rowNoteId) bytes=\(rowBodyBytes) ms=\(CheckboxPerf.ms(tRow)) lastToggle=#\(CheckboxPerf.lastToggleID)"
-                )
+                Log.sync.info("Flushed offline-edited body for note \(rowNoteId)")
             } catch {
                 if noteMissingOnServer, case .notFound = APIError.from(error) {
                     // Deleted on the server: the upload can never succeed, and it would hold up every row after it.
@@ -1163,12 +1175,29 @@ final class AppState {
                     continue
                 }
                 Log.sync.warning("Pending body upload failed for \(rowNoteId): \(error)")
-                CheckboxPerf.log(
-                    "flushBodies failed note=\(rowNoteId) bytes=\(rowBodyBytes) ms=\(CheckboxPerf.ms(tRow)) lastToggle=#\(CheckboxPerf.lastToggleID)"
-                )
                 break
             }
         }
+    }
+
+    /// The name a pending body goes up under when it's an image or file note's bytes; nil for every other note, and for
+    /// a file note whose body is text (that still goes up as text). Trilium's `#originalFileName` comes first (a shared
+    /// file's queued label), then the note's title with the extension its MIME implies.
+    private func fileBodyUploadName(noteId: String, server: NoteResponse?, mime: String, body: Data, profileId: String) -> String? {
+        let cached = try? persistence.fetchCachedNote(id: noteId, serverProfileId: profileId)
+        let type = server?.type ?? cached?.noteType ?? ""
+        guard type == NoteType.file.rawValue || type == NoteType.image.rawValue else { return nil }
+        if TriliumNoteBodyEncoding.usesUTF8JSONContent(type: type, mime: mime), String(data: body, encoding: .utf8) != nil {
+            return nil
+        }
+        let labelName = SharedImportImporter.originalFileNameLabel
+        let serverLabel = server?.attributes.first { $0.type == "label" && $0.name == labelName }?.value
+        let cachedLabel = (try? persistence.fetchCachedAttributes(noteId: noteId, serverProfileId: profileId))?
+            .first { $0.type == "label" && $0.name == labelName }?.value
+        for label in [serverLabel, cachedLabel] {
+            if let name = label?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
+        }
+        return OfficeMimeTypes.filename(fromTitle: server?.title ?? cached?.title ?? "", mime: mime)
     }
 
     /// Uploads attachments queued from local note transfer after the owning note has a server id.
@@ -1178,9 +1207,11 @@ final class AppState {
               let profile = activeProfile
         else { return }
         let profileId = profile.id
-        let pending: [PendingAttachmentImport]
+        let pending: [(id: String, noteId: String)]
         do {
-            pending = try persistence.fetchPendingAttachmentImports(serverProfileId: profileId)
+            // Ids, read now: a share import can upload and delete these rows while this flush waits on the network,
+            // and a deleted model's attributes can't be read. Each row's data is read just before its upload.
+            pending = try persistence.fetchPendingAttachmentImports(serverProfileId: profileId).map { ($0.id, $0.noteId) }
         } catch {
             Log.sync.warning("Failed to read pending attachment imports: \(error)")
             return
@@ -1200,12 +1231,19 @@ final class AppState {
                 let stillPending = (try? persistence.hasPendingNoteCreation(noteId: row.noteId, serverProfileId: profileId)) ?? true
                 if stillPending { continue }
             }
+            // Gone when the share import that queued it has uploaded it meanwhile.
+            guard let current = (try? persistence.fetchPendingAttachmentImports(noteId: row.noteId, serverProfileId: profileId))?
+                .first(where: { $0.id == row.id })
+            else { continue }
+            let data = current.data
+            let filename = current.title
+            let contentType = current.mime
             do {
                 _ = try await client.uploadNoteAttachment(
                     noteId: row.noteId,
-                    data: row.data,
-                    filename: row.title,
-                    contentType: row.mime
+                    data: data,
+                    filename: filename,
+                    contentType: contentType
                 )
                 try persistence.deletePendingAttachmentImport(id: row.id, serverProfileId: profileId)
                 Log.sync.info("Flushed local-transfer attachment for note \(row.noteId)")
@@ -1490,7 +1528,6 @@ final class AppState {
     private func quickActivateProfileForLaunch(_ profile: ServerProfile) async {
         guard let url = profile.url else { return }
         let cookieData = try? await keychain.loadSessionCookies(forServer: profile.id)
-        SessionCookieTrace.log("launch: keychain sid \(SessionCookieTrace.tag(archive: cookieData)) for \(profile.name)")
         let newClient = await makeTriliumClient(baseURL: url, profileId: profile.id, persistedCookieData: cookieData)
         let hadPersistedSessionCookies = cookieData.map { !$0.isEmpty } ?? false
 
@@ -1553,7 +1590,6 @@ final class AppState {
             } else {
                 self.isAuthenticated = false
                 self.connectionError = apiError.localizedDescription
-                SessionCookieTrace.log("launch: session restore failed: \(error)")
                 Log.auth.warning("Session restore failed: \(error)")
             }
         }
@@ -1820,7 +1856,6 @@ final class AppState {
 
     /// Tears down the in-app session and clears local auth artifacts. Optionally notifies the server (explicit logout only).
     private func clearLocalSessionState(notifyServer: Bool) async {
-        SessionCookieTrace.log("clear local session state (notifyServer: \(notifyServer))")
         syncManager.cancel()
         realtime?.invalidate()
         realtime = nil
@@ -1887,7 +1922,6 @@ final class AppState {
 
     /// Called when app returns to foreground
     func onForegroundResume() async {
-        SessionCookieTrace.log("foreground: authenticated=\(isAuthenticated) protected=\(protectedSessionActive)")
         syncManager.endBackgroundTimeExtension()
         shareImport.checkForPendingPayload()
         await enforceProtectedSessionTimeoutIfNeeded()

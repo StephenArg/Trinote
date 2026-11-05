@@ -38,9 +38,9 @@ final class ImageCachePrefetcher {
         guard isRunning else { return }
         guard backgroundTaskId == .invalid else { return }
         backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "TrinoteImagePrefetch") { [weak self] in
-            Task { @MainActor in
-                self?.cancel()
-            }
+            // Runs on the main thread, and the task has to end before this returns or iOS ends the app; `cancel()`
+            // ends it.
+            MainActor.assumeIsolated { self?.cancel() }
         }
     }
 

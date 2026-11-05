@@ -52,8 +52,6 @@ final class ReadOnlyWebViewportContainer: UIView {
     private var innerOffsetObservation: NSKeyValueObservation?
     private var isApplyingLayout = false
     private var currentLayout: ReadOnlyWebViewport.Layout?
-    /// TEMP (`NoteOpenTrace`).
-    private var innerRestoreCount = 0
 
     init(webView: WKWebView) {
         self.webView = webView
@@ -141,11 +139,6 @@ final class ReadOnlyWebViewportContainer: UIView {
         )
         let frame = CGRect(x: 0, y: layout.frameY, width: bounds.width, height: layout.frameHeight)
         guard layout != currentLayout || webView.frame != frame else { return }
-        if layout.pinned != currentLayout?.pinned || layout.frameHeight != currentLayout?.frameHeight {
-            NoteOpenTrace.log(
-                "viewport pinned=\(layout.pinned) webH=\(layout.frameHeight) containerH=\(bounds.height) viewportH=\(viewportHeight.map { "\($0)" } ?? "none") y=\(layout.frameY) inWindow=\(window != nil)"
-            )
-        }
         currentLayout = layout
         isApplyingLayout = true
         defer { isApplyingLayout = false }
@@ -162,12 +155,6 @@ final class ReadOnlyWebViewportContainer: UIView {
         guard !isApplyingLayout, let layout = currentLayout else { return }
         let inner = webView.scrollView
         guard abs(inner.contentOffset.y - layout.innerOffsetY) > 0.25 || inner.contentOffset.x != 0 else { return }
-        innerRestoreCount += 1
-        if innerRestoreCount <= 30 {
-            NoteOpenTrace.log(
-                "viewport WebKit moved page to \(inner.contentOffset.y), restoring \(layout.innerOffsetY) (innerContentH=\(inner.contentSize.height) #\(innerRestoreCount))"
-            )
-        }
         isApplyingLayout = true
         inner.contentOffset = CGPoint(x: 0, y: layout.innerOffsetY)
         isApplyingLayout = false

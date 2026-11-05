@@ -72,4 +72,28 @@ final class TriliumSSOHandoffTests: XCTestCase {
         let url = URL(string: "trinote://sso-complete?p=\(encoded)")!
         XCTAssertThrowsError(try TriliumSSOHandoff.cookieArchive(from: url, expectedNonce: "n1", baseURL: baseURL))
     }
+
+    /// A second sign-in's wait ends the first one (cancelled) instead of leaving it waiting forever, and gets the
+    /// callback itself.
+    @MainActor
+    func testSecondWaitCancelsTheFirstAndReceivesTheCallback() async throws {
+        SSOHandoffInbox.prepare()
+        defer { SSOHandoffInbox.cancel() }
+        let first = Task { @MainActor in try await SSOHandoffInbox.wait() }
+        for _ in 0..<5 { await Task.yield() }
+        let second = Task { @MainActor in try await SSOHandoffInbox.wait() }
+        for _ in 0..<5 { await Task.yield() }
+
+        do {
+            _ = try await first.value
+            XCTFail("The first wait should end when the second starts")
+        } catch {
+            XCTAssertEqual(error as? SSOLoginError, .cancelled)
+        }
+
+        let callback = URL(string: "trinote://sso-complete?p=abc")!
+        XCTAssertTrue(SSOHandoffInbox.deliver(callback))
+        let received = try await second.value
+        XCTAssertEqual(received, callback)
+    }
 }

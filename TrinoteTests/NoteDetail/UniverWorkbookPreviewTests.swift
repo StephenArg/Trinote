@@ -295,4 +295,60 @@ final class UniverWorkbookPreviewTests: XCTestCase {
         XCTAssertTrue(preview[3].values.isEmpty)
         XCTAssertEqual(preview[4].values[1]?.text, "Dude")
     }
+
+    private func sheet(rows: [UniverWorkbookPreview.Row]) -> UniverWorkbookPreview.Sheet {
+        UniverWorkbookPreview.Sheet(
+            id: "s1",
+            name: "Sheet",
+            columnCount: 3,
+            rows: rows,
+            cellImageReferences: [:],
+            styleTable: [:],
+            sheetStyleContext: [:]
+        )
+    }
+
+    /// A stray cell far below the data no longer makes the grid build a row for every index in between.
+    func testPreviewRowsAreCappedFromTheFirstPopulatedRow() {
+        let far = sheet(rows: [
+            .init(index: 0, values: [0: .init(text: "top", links: [])]),
+            .init(index: 5000, values: [0: .init(text: "stray", links: [])]),
+        ])
+        let preview = UniverWorkbookPreview.previewRows(for: far, extraPadding: 3)
+        XCTAssertEqual(preview.count, UniverWorkbookPreview.maxPreviewRows + 3)
+        XCTAssertEqual(preview.first?.values[0]?.text, "top")
+        XCTAssertEqual(preview.last?.index, UniverWorkbookPreview.maxPreviewRows + 2)
+    }
+
+    /// Row keys come from note JSON; one at `Int.max` must not overflow the padding arithmetic.
+    func testPreviewRowsWithAHugeRowIndexDoNotOverflow() {
+        let huge = sheet(rows: [.init(index: Int.max, values: [0: .init(text: "x", links: [])])])
+        XCTAssertEqual(UniverWorkbookPreview.previewRows(for: huge, extraPadding: 3).map(\.index), [Int.max])
+    }
+
+    func testPreviewColumnCountIsBetweenTheMinimumAndTheCap() {
+        let narrow = sheet(rows: [.init(index: 0, values: [1: .init(text: "b", links: [])])])
+        XCTAssertEqual(UniverWorkbookPreview.previewColumnCount(for: narrow, minimum: 3), 3)
+        let wide = sheet(rows: [.init(index: 0, values: [9: .init(text: "j", links: [])])])
+        XCTAssertEqual(UniverWorkbookPreview.previewColumnCount(for: wide, minimum: 3), 10)
+        let tooWide = sheet(rows: [.init(index: 0, values: [Int.max: .init(text: "far", links: [])])])
+        XCTAssertEqual(
+            UniverWorkbookPreview.previewColumnCount(for: tooWide, minimum: 3),
+            UniverWorkbookPreview.maxPreviewColumns
+        )
+    }
+
+    /// Cell keys far past any real sheet are malformed and skipped.
+    func testParseSkipsOutOfRangeCellKeys() throws {
+        let json = """
+        {"version":1,"workbook":{"sheetOrder":["s1"],"sheets":{"s1":{"id":"s1","name":"S","cellData":{
+          "0":{"0":{"v":"ok"},"9223372036854775807":{"v":"far column"}},
+          "9223372036854775807":{"0":{"v":"far row"}},
+          "-1":{"0":{"v":"negative"}}
+        }}}}}
+        """.data(using: .utf8)!
+        let parsed = try XCTUnwrap(UniverWorkbookPreview.parse(data: json))
+        XCTAssertEqual(parsed.sheets[0].rows.map(\.index), [0])
+        XCTAssertEqual(parsed.sheets[0].rows[0].values.keys.sorted(), [0])
+    }
 }

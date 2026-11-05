@@ -10,13 +10,7 @@ struct MindMapNoteView: View {
         MindMapWebView(json: json, imageBytes: imageBytes)
             // Full-size host so the blocker joins the nav hierarchy (zero-frame hosts often don't).
             .background {
-                NavigationPopGestureBlocker(blocked: true, label: "MindMapNote")
-            }
-            .onAppear {
-                Log.popGesture.info("MindMapNoteView.onAppear")
-            }
-            .onDisappear {
-                Log.popGesture.info("MindMapNoteView.onDisappear")
+                NavigationPopGestureBlocker(blocked: true)
             }
     }
 }
@@ -112,16 +106,13 @@ final class PopGestureSuppressingWKWebView: WKWebView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil {
-            Log.popGesture.info("MindMapWK didMoveToWindow IN frame=\(String(describing: self.bounds.size), privacy: .public) retaining=\(self.isRetainingPopSuppression)")
             retainPopSuppression()
             // SwiftUI NavigationStack may attach the nav controller one runloop later.
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.window != nil else { return }
-                Log.popGesture.debug("MindMapWK async reassert retaining=\(self.isRetainingPopSuppression)")
-                NavigationPopGestureSuppression.reassertIfNeeded(from: self, source: "MindMapWK.async")
+                NavigationPopGestureSuppression.reassertIfNeeded(from: self)
             }
         } else {
-            Log.popGesture.info("MindMapWK didMoveToWindow OUT releasing=\(self.isRetainingPopSuppression)")
             releasePopSuppression()
         }
     }
@@ -129,36 +120,31 @@ final class PopGestureSuppressingWKWebView: WKWebView {
     override func layoutSubviews() {
         super.layoutSubviews()
         if isRetainingPopSuppression {
-            NavigationPopGestureSuppression.reassertIfNeeded(from: self, source: "MindMapWK.layout")
+            NavigationPopGestureSuppression.reassertIfNeeded(from: self)
         }
     }
 
     func restoreNavigationPopGesture() {
-        Log.popGesture.info("MindMapWK restoreNavigationPopGesture retaining=\(self.isRetainingPopSuppression)")
         releasePopSuppression()
     }
 
     private func retainPopSuppression() {
         guard !isRetainingPopSuppression else {
-            NavigationPopGestureSuppression.reassertIfNeeded(from: self, source: "MindMapWK.retainAgain")
+            NavigationPopGestureSuppression.reassertIfNeeded(from: self)
             return
         }
-        isRetainingPopSuppression = NavigationPopGestureSuppression.retain(from: self, source: "MindMapWK")
-        if !isRetainingPopSuppression {
-            Log.popGesture.warning("MindMapWK retain deferred (no nav yet)")
-        }
+        isRetainingPopSuppression = NavigationPopGestureSuppression.retain(from: self)
     }
 
     private func releasePopSuppression() {
         guard isRetainingPopSuppression else { return }
-        NavigationPopGestureSuppression.release(from: self, source: "MindMapWK")
+        NavigationPopGestureSuppression.release(from: self)
         isRetainingPopSuppression = false
     }
 
     deinit {
         if isRetainingPopSuppression {
-            Log.popGesture.warning("MindMapWK deinit still retaining — releasing")
-            NavigationPopGestureSuppression.release(from: nil, source: "MindMapWK.deinit")
+            NavigationPopGestureSuppression.release(from: nil)
         }
     }
 }

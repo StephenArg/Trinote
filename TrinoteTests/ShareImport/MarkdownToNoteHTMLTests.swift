@@ -233,6 +233,29 @@ final class MarkdownToNoteHTMLTests: XCTestCase {
         XCTAssertTrue(html.contains("<li>parent<ul>"), "expected nested ul inside parent li, got: \(html)")
     }
 
+    /// Tab-indented nesting (Obsidian, Logseq): a tab is 4 columns of depth but 1 character, and slicing the line by
+    /// columns used to run past the end of short lines and trap.
+    func testTabIndentedNestedListDoesNotTrap() {
+        let html = MarkdownToNoteHTML.convert("- a\n\t- b\n\t\t- c\n\t\t\t- d")
+        XCTAssertTrue(html.contains("<li>a<ul><li>b<ul><li>c<ul><li>d</li>"), html)
+    }
+
+    func testMixedSpaceAndTabIndentNests() {
+        let html = MarkdownToNoteHTML.convert("- a\n  \t- b\n  \tx")
+        XCTAssertTrue(html.contains("<li>a<ul><li>b"), html)
+    }
+
+    func testTabIndentedOrderedListNests() {
+        let html = MarkdownToNoteHTML.convert("1. a\n\t1. b")
+        XCTAssertTrue(html.contains("<li>a<ol><li>b</li>"), html)
+    }
+
+    func testAutolinkPrefixIsCaseInsensitive() {
+        let html = MarkdownToNoteHTML.convert("see HTTPS://example.com/z and Http://example.org.")
+        XCTAssertTrue(html.contains("<a href=\"HTTPS://example.com/z\">"), html)
+        XCTAssertTrue(html.contains("<a href=\"Http://example.org\">"), html)
+    }
+
     func testNestedListThreeLevelsDeep() {
         let md = """
         - Infrastructure

@@ -261,11 +261,12 @@ enum GeoMapGPXParser {
             let lonStr = match.range(at: 2).location != NSNotFound ? ns.substring(with: match.range(at: 2))
                 : ns.substring(with: match.range(at: 4))
             let innerRange = match.range(at: 3).location != NSNotFound ? match.range(at: 3) : match.range(at: 6)
-            guard let lat = Double(latStr), let lon = Double(lonStr) else { return nil }
+            // `Double` reads "nan" and "inf"; non-finite numbers would reach the map's JSON, which can't hold them.
+            guard let lat = Double(latStr), let lon = Double(lonStr), lat.isFinite, lon.isFinite else { return nil }
             var point = Point(lat: lat, lon: lon)
             if innerRange.location != NSNotFound {
                 let inner = ns.substring(with: innerRange)
-                if let eleStr = firstTagText("ele", in: inner), let elev = Double(eleStr) {
+                if let eleStr = firstTagText("ele", in: inner), let elev = Double(eleStr), elev.isFinite {
                     point.elevation = elev
                 }
                 if withTime, let timeStr = firstTagText("time", in: inner) {

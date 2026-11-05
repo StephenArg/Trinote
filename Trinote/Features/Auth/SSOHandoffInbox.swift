@@ -19,6 +19,11 @@ enum SSOHandoffInbox {
             return pending
         }
         return try await withCheckedThrowingContinuation { continuation in
+            // One sign-in waits at a time. A wait left from an abandoned sign-in ends now; replacing it unresumed
+            // would leave that sign-in waiting forever.
+            if let previous = self.continuation {
+                previous.resume(throwing: SSOLoginError.cancelled)
+            }
             self.continuation = continuation
         }
     }

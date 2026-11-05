@@ -77,7 +77,8 @@ actor GeoMapPlaceSearch {
     nonisolated static func places(from data: Data) -> [GeoMapPlace] {
         guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
         return rows.compactMap { row in
-            guard let lat = Double(row["lat"] as? String ?? ""), let lng = Double(row["lon"] as? String ?? "") else { return nil }
+            guard let lat = Double(row["lat"] as? String ?? ""), let lng = Double(row["lon"] as? String ?? ""),
+                  lat.isFinite, lng.isFinite else { return nil }
             let label = (row["display_name"] as? String) ?? ""
             let ownName = (row["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let firstPart = label.split(separator: ",").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
@@ -86,7 +87,7 @@ actor GeoMapPlaceSearch {
             if let box = row["boundingbox"] as? [String], box.count == 4 {
                 let values = box.compactMap(Double.init)
                 // Nominatim: [south, north, west, east].
-                if values.count == 4 { bounds = [values[2], values[0], values[3], values[1]] }
+                if values.count == 4, values.allSatisfy(\.isFinite) { bounds = [values[2], values[0], values[3], values[1]] }
             }
             return GeoMapPlace(
                 id: id.isEmpty ? "\(lat),\(lng)" : id,

@@ -253,12 +253,18 @@ struct TreeView: View {
                     }
                     .onChange(of: appState.shareImport.pendingOpenNote) { _, pending in
                         guard let pending else { return }
-                        openSharedImportNote(
-                            noteId: pending.noteId,
-                            title: pending.title,
-                            attachmentIdToInsert: pending.attachmentIdToInsert,
-                            attachmentTitleToInsert: pending.attachmentTitleToInsert
-                        )
+                        if pending.startInEditMode {
+                            openSharedImportNote(
+                                noteId: pending.noteId,
+                                title: pending.title,
+                                attachmentIdToInsert: pending.attachmentIdToInsert,
+                                attachmentTitleToInsert: pending.attachmentTitleToInsert
+                            )
+                        } else {
+                            // An image or file note has nothing to edit: it opens to read, as a tapped note does.
+                            viewModel?.reloadFromCache()
+                            openExternalNote(NoteNavItem(noteId: pending.noteId, title: pending.title))
+                        }
                         appState.shareImport.consumePendingOpenNote()
                     }
                     // `initial`: also when the tree first appears, after a cold launch set the request.
@@ -281,7 +287,15 @@ struct TreeView: View {
         }
     }
 
-    private var treeViewCommonSheetsAndAlerts: some View {
+    // The tree screen is built in type-erased layers (this one and `treeViewChromeAndDestinations`), as the note screen
+    // is (see `NoteDetailView.noteContentBase`): as one chain of about 40 modifiers, the runtime instantiates the
+    // whole nested view type in one go and Debug builds copy the whole view value through every generic initializer,
+    // both on the iPhone's 1 MB main-thread stack. Add new modifiers to the layer they belong to.
+    private var treeViewCommonSheetsAndAlerts: AnyView {
+        AnyView(treeViewCommonSheetsAndAlertsContent)
+    }
+
+    private var treeViewCommonSheetsAndAlertsContent: some View {
         treeViewChromeAndDestinations
             .noteDeleteConfirmationAlert(
                 isPresented: noteToDeleteBinding,
@@ -589,7 +603,12 @@ struct TreeView: View {
         .environment(appState)
     }
 
-    private var treeViewChromeAndDestinations: some View {
+    /// Type-erased; see `treeViewCommonSheetsAndAlerts`.
+    private var treeViewChromeAndDestinations: AnyView {
+        AnyView(treeViewChromeAndDestinationsContent)
+    }
+
+    private var treeViewChromeAndDestinationsContent: some View {
         Group {
             if let viewModel {
                 treeContent(viewModel)
@@ -1221,7 +1240,7 @@ struct TreeView: View {
         }
 
         let storedTabId = LastActiveOpenTabStore.get(profileId: profileId)
-        var resolved: OpenNoteTab?
+        var resolved: OpenNoteTabItem?
         if !storedTabId.isEmpty,
            let row = try? pm.fetchOpenNoteTab(id: storedTabId, serverProfileId: profileId) {
             resolved = row
@@ -1467,7 +1486,7 @@ struct TreeView: View {
                 }
                 ForEach(vm.visibleNodes) { flat in
                     treeNodeRow(flat: flat, vm: vm, favoriteNoteIds: favoriteNoteIds, onFavoriteChanged: loadFavoriteIds)
-                        .id(flat.node.branch.branchId)
+                        .id(flat.id)
                 }
                 .if(onPickParent == nil && !isSelectMode) { view in
                     view.onMove(perform: vm.handleMove)
@@ -1479,12 +1498,14 @@ struct TreeView: View {
             .background(treeChromeBackground)
             .onChange(of: pendingScrollBranchId) { _, branchId in
                 guard let branchId else { return }
+                // Rows are identified by their path of branch ids; scroll to the first row showing this branch.
+                let rowId = vm.visibleNodes.first(where: { $0.node.branch.branchId == branchId })?.id ?? branchId
                 // Jump in place after unanimated expand — animated scrollTo fights List restore and
                 // reads as bottom → top → bottom.
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
-                    proxy.scrollTo(branchId, anchor: .center)
+                    proxy.scrollTo(rowId, anchor: .center)
                 }
                 pendingScrollBranchId = nil
             }

@@ -1079,15 +1079,10 @@ struct NoteDetailView: View {
         bodyCore
             // Full-size clear host — zero-frame backgrounds often never attach under NavigationStack.
             .background {
-                NavigationPopGestureBlocker(blocked: shouldBlockNavigationPopGesture, label: "NoteDetail")
+                NavigationPopGestureBlocker(blocked: shouldBlockNavigationPopGesture)
             }
             .background {
                 TabBarHiddenEnforcer(hidden: viewModel?.isEditing == true)
-            }
-            .onChange(of: shouldBlockNavigationPopGesture) { _, blocked in
-                // TEMP: mind-map swipe-back diagnosis
-                let type = viewModel?.note?.type.rawValue ?? "nil"
-                Log.popGesture.info("NoteDetail shouldBlock=\(blocked) noteType=\(type, privacy: .public) editing=\(viewModel?.isEditing == true)")
             }
             .task(id: activeNoteId) { await initialLoad() }
             // Tab switches swap the note in place, so report on change as well as on (re)appear.
@@ -1390,8 +1385,14 @@ struct NoteDetailView: View {
         openNoteTabListNonEmpty = n > 0
     }
 
+    /// Type-erased so the lifecycle modifiers and covers above it build on a short type (see the note above
+    /// `noteContentBase`).
+    private var bodyCore: AnyView {
+        AnyView(bodyCoreContent)
+    }
+
     @ViewBuilder
-    private var bodyCore: some View {
+    private var bodyCoreContent: some View {
         Group {
             if let viewModel {
                 noteContent(viewModel)
@@ -1456,14 +1457,9 @@ struct NoteDetailView: View {
 
     private func initialLoad() async {
         if viewModel == nil {
-            NoteOpenTrace.begin(
-                noteId: activeNoteId,
-                "initialLoad tabsBar=\(showNoteTabsBar) openTabId=\(openTabId ?? "nil") activeOpenTabId=\(activeOpenTabId ?? "nil") pendingRestore=\(readOnlyScrollFractionPendingRestore.map { "\($0)" } ?? "nil") coverPending=\(isReadOnlyScrollRevealPending)"
-            )
             // Mask before the first content paint whenever we already know a mid-note scroll
             // restore is coming — otherwise cached HTML flashes, then the spinner covers it.
             seedReadScrollRevealBeforeContentPaint(for: activeNoteId)
-            NoteOpenTrace.log("after seed pendingRestore=\(readOnlyScrollFractionPendingRestore.map { "\($0)" } ?? "nil") coverPending=\(isReadOnlyScrollRevealPending)")
             let vm = NoteDetailViewModel(noteId: activeNoteId, appState: appState, seedChildSummaries: seedChildSummaries)
             viewModel = vm
             if showNoteTabsBar, retargetActiveOpenTab { eagerRetargetActiveOpenTabFromCache() }
@@ -1472,7 +1468,6 @@ struct NoteDetailView: View {
             async let attachTask: () = vm.loadAttachments()
             async let childTask: () = vm.loadChildNotes()
             await loadTask
-            NoteOpenTrace.log("vm.load done type=\(vm.note?.type.rawValue ?? "nil") isLoadingContent=\(vm.isLoadingContent)")
             // Flip into edit mode as soon as `note` is available so SwiftUI never renders the read
             // layout for a frame before the editor takes over. Only the new-note flow sets
             // `startInEditMode` (TreeView.noteEditDestination), so `editableContent` being empty at
@@ -1481,7 +1476,6 @@ struct NoteDetailView: View {
                 vm.startEditing()
             }
             _ = await (contentTask, attachTask, childTask)
-            NoteOpenTrace.log("content/attachments/children loaded contentUtf16=\(vm.contentString?.utf16.count ?? -1) isLoadingContent=\(vm.isLoadingContent)")
             await vm.prefetchChildNotesForGeoMapBookIfNeeded()
         }
         if showNoteTabsBar { reconcileOpenTabsAfterLoad() }
@@ -1497,10 +1491,7 @@ struct NoteDetailView: View {
         // this note until the restore gave up.
         func tabShowingThisNote(_ id: String) -> String? {
             guard let tab = try? pm.fetchOpenNoteTab(id: id, serverProfileId: p) else { return nil }
-            guard tab.noteId == noteId else {
-                NoteOpenTrace.log("tab \(id) shows \(tab.noteId), not this note; not restoring its position")
-                return nil
-            }
+            guard tab.noteId == noteId else { return nil }
             return id
         }
         let tabId: String? = {
@@ -1673,10 +1664,7 @@ struct NoteDetailView: View {
     /// - Parameter expectedNoteId: The note the tab should show; defaults to the note on screen.
     private func applyReadScrollStateFromStoreForOpenTabId(_ id: String, showing expectedNoteId: String? = nil) {
         if lastAppliedReadScrollTabId == id { return }
-        guard openTab(id, shows: expectedNoteId ?? activeNoteId) else {
-            NoteOpenTrace.log("tab \(id) doesn't show \(expectedNoteId ?? activeNoteId); not applying its position")
-            return
-        }
+        guard openTab(id, shows: expectedNoteId ?? activeNoteId) else { return }
 
         // Opened from a search match: the tab's saved position would scroll away from it.
         let skipsRestore = opensAtFindMatch && activeNoteId == noteId
@@ -1687,9 +1675,7 @@ struct NoteDetailView: View {
             readOnlyScrollFractionPendingRestore = f
             readOnlyScrollOffsetPendingRestore = offset.map { PendingReadScrollOffset(fraction: f, offset: $0) }
             isReadOnlyScrollRevealPending = f > Self.readOnlyScrollRevealMaskThreshold
-            NoteOpenTrace.log("tab \(id) saved fraction=\(f) → coverPending=\(isReadOnlyScrollRevealPending)")
         } else {
-            NoteOpenTrace.log("tab \(id) no saved fraction (skipsRestore=\(skipsRestore))")
             scrollTracking.fraction = 0
             scrollTracking.offset = nil
             readOnlyScrollFractionPendingRestore = nil
@@ -1727,7 +1713,7 @@ struct NoteDetailView: View {
         persistReadScrollPosition(for: tabId)
     }
 
-    private func selectOpenNoteTab(_ tab: OpenNoteTab) {
+    private func selectOpenNoteTab(_ tab: OpenNoteTabItem) {
         guard appState.activeProfile?.id == tab.serverProfileId else { return }
         if let prev = activeOpenTabId, prev != tab.id {
             if openTab(prev, shows: activeNoteId) {
@@ -1750,7 +1736,7 @@ struct NoteDetailView: View {
         activeNoteId = tab.noteId
     }
 
-    private func handleOpenTabRemoved(_ removed: OpenNoteTab) {
+    private func handleOpenTabRemoved(_ removed: OpenNoteTabItem) {
         OpenTabSessionStore.clearReadScrollState(for: removed.id)
         guard removed.id == activeOpenTabId, let p = appState.activeProfile?.id else { return }
         activeOpenTabId = nil
@@ -1965,7 +1951,6 @@ struct NoteDetailView: View {
                             fraction: readOnlyScrollFractionPendingRestore,
                             offset: pendingRestoreOffset
                         ) { outcome in
-                            NoteOpenTrace.log("restore onApplied pending=\(readOnlyScrollFractionPendingRestore.map { "\($0)" } ?? "nil") reached=\(outcome.reachedFraction.map { "\($0)" } ?? "nil") immediate=\(outcome.immediate) coverPending=\(isReadOnlyScrollRevealPending)")
                             // Where the note actually is: a restore that gave up must not save its target back
                             // to the tab, or the next open waits under the cover again.
                             if let position = outcome.reachedFraction ?? readOnlyScrollFractionPendingRestore {
@@ -2009,8 +1994,6 @@ struct NoteDetailView: View {
                 Color(uiColor: .systemBackground)
                     .transition(.opacity)
                     .allowsHitTesting(false)
-                    .onAppear { NoteOpenTrace.log("COVER shown (solid systemBackground over the note)") }
-                    .onDisappear { NoteOpenTrace.log("COVER hidden") }
             }
         }
         .onDrop(
@@ -2036,7 +2019,6 @@ struct NoteDetailView: View {
             }
         }
         .onAppear {
-            NoteOpenTrace.log("read surface appeared type=\(note.type.rawValue) isLoadingContent=\(vm.isLoadingContent) hasContent=\(vm.contentString != nil)")
             presentFloatingEditOnNoteOpen(vm: vm, note: note)
             scheduleFloatingEditScrollSettlingEndIfNeeded()
         }
@@ -2763,8 +2745,6 @@ struct NoteDetailView: View {
             ProgressView(String(localized: "Loading content…", comment: "Note body loading"))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 40)
-                .onAppear { NoteOpenTrace.log("body spinner shown") }
-                .onDisappear { NoteOpenTrace.log("body spinner hidden") }
         } else {
             readingView(vm, note: note, findControl: findControl)
         }

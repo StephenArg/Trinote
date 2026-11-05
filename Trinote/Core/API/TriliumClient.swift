@@ -48,6 +48,10 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func getSubtreeSize(_ noteId: String) async throws -> SubtreeSizeResponse
     func updateNote(_ noteId: String, request: UpdateNoteRequest) async throws -> NoteResponse
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws
+    /// `PUT /api/notes/:id/file`, Trilium's own upload for an image or file note: the bytes as they are, whatever their
+    /// MIME says, with the note's mime set to `contentType` and its `#originalFileName` to `filename`. Without
+    /// `savesRevision` the server skips the revision it would save first (pointless for a note made a moment ago).
+    func uploadNoteFileContent(noteId: String, data: Data, filename: String, contentType: String, savesRevision: Bool) async throws
     /// Soft-deletes by default (`eraseNotes: false`). When `eraseNotes` is true, Trilium erases the note and its subtree instead of sending them to Trash.
     func deleteNote(_ noteId: String, eraseNotes: Bool) async throws
     /// `POST /api/delete-notes-preview`: the ids of every note deleting `branchIds` would delete, subtrees included.
@@ -304,17 +308,12 @@ actor TriliumClient: TriliumClientProtocol {
         // `.shared` is the only storage where `cookies(for:)` reliably returns what was set.
         // We clear stale cookies for this host on every new client to keep profiles isolated.
         let jar = HTTPCookieStorage.shared
-        let jarBefore = SessionCookieTrace.jarTag(for: baseURL)
         Self.clearCookies(in: jar, for: baseURL)
         self.httpCookieStorage = jar
 
         if let persistedCookieData {
             TriliumCookieArchive.load(into: jar, data: persistedCookieData, defaultURL: baseURL)
         }
-        SessionCookieTrace.log(
-            "client init \(baseURL.host ?? "?") cleared jar sid \(jarBefore), loaded \(SessionCookieTrace.tag(archive: persistedCookieData)) -> jar \(SessionCookieTrace.jarTag(for: baseURL))"
-        )
-        SessionCookieTrace.watchJar(for: baseURL)
 
         self.decoder = JSONDecoder()
         self.encoder = JSONEncoder()
@@ -328,6 +327,9 @@ actor TriliumClient: TriliumClientProtocol {
         config.httpCookieStorage = jar
         config.httpShouldSetCookies = true
         config.httpCookieAcceptPolicy = .always
+        // Notes, images and files are cached by the app itself; the shared URL cache only wrote every response to disk
+        // a second time (Xcode's disk-write reports flagged its database).
+        config.urlCache = nil
 
         self.injectedProtocolClasses = urlSessionConfiguration?.protocolClasses
         let delegate = SameHostRedirectDelegate(allowedHost: baseURL.host?.lowercased() ?? "")
@@ -373,7 +375,6 @@ actor TriliumClient: TriliumClientProtocol {
     /// Records the jar's session as the confirmed one after `/api/app-info` answered with it.
     private func markSessionCookieVerified() {
         verifiedSessionCookieValue = currentSessionCookieValue()
-        SessionCookieTrace.log("verified sid \(SessionCookieTrace.tag(cookieValue: verifiedSessionCookieValue)) for \(baseURL.host ?? "?")")
     }
 
     // MARK: - Auth
@@ -497,6 +498,7 @@ actor TriliumClient: TriliumClientProtocol {
         cfg.timeoutIntervalForRequest = 30
         cfg.timeoutIntervalForResource = 120
         cfg.waitsForConnectivity = injectedProtocolClasses == nil
+        cfg.urlCache = nil
         if let injectedProtocolClasses {
             cfg.protocolClasses = injectedProtocolClasses
         }
@@ -691,10 +693,7 @@ actor TriliumClient: TriliumClientProtocol {
     func exitProtectedSession() async throws {
         // Signed out, there is no protected session to end, and fetching a CSRF token would only open an
         // anonymous session on the server and put its cookie in the jar.
-        guard hasSessionCookie() else {
-            SessionCookieTrace.log("exitProtectedSession skipped: no session cookie")
-            return
-        }
+        guard hasSessionCookie() else { return }
         if csrfToken == nil {
             try await refreshCsrf()
         }
@@ -724,7 +723,6 @@ actor TriliumClient: TriliumClientProtocol {
     /// v0.102+ serves CSRF via `GET /bootstrap` (JSON with `csrfToken` field).
     /// The response also sets the `_csrf` cookie needed for double-submit.
     private func fetchCsrfFromBootstrap() async -> Bool {
-        SessionCookieTrace.log("GET /bootstrap with jar sid \(SessionCookieTrace.jarTag(for: baseURL))")
         do {
             let url = try Self.makeURL(baseURL: baseURL, path: "/bootstrap", queryParams: nil)
             var req = URLRequest(url: url)
@@ -1204,31 +1202,37 @@ actor TriliumClient: TriliumClientProtocol {
             try await putJSONVoid("/api/notes/\(noteId)/data", body: Body(content: asString), csrf: true)
             return
         }
+        let ext = Self.filenameExtension(forMIME: contentType)
+        try await putNoteFile(noteId: noteId, data: content, filename: "content.\(ext)", contentType: contentType, savesRevision: true)
+    }
+
+    func uploadNoteFileContent(noteId: String, data: Data, filename: String, contentType: String, savesRevision: Bool) async throws {
+        try await putNoteFile(noteId: noteId, data: data, filename: filename, contentType: contentType, savesRevision: savesRevision)
+    }
+
+    /// Trilium native file/image body upload (`PUT /api/notes/:id/file`). `replace=1` skips the revision Trilium saves
+    /// first; servers older than that parameter ignore it.
+    private func putNoteFile(noteId: String, data: Data, filename: String, contentType: String, savesRevision: Bool) async throws {
         do {
-            try await uploadNoteFile(noteId: noteId, data: content, contentType: contentType)
+            _ = try await uploadMultipartAttachment(
+                path: "/api/notes/\(noteId)/file",
+                method: "PUT",
+                queryParams: savesRevision ? nil : ["replace": "1"],
+                data: data,
+                filename: filename,
+                contentType: contentType
+            )
         } catch {
             let api = APIError.from(error)
             if case .notFound = api {
                 // Older servers: carry raw bytes as ISO-8859-1 in JSON `{ content }`.
-                let latin1 = String(data: content, encoding: .isoLatin1) ?? ""
+                let latin1 = String(data: data, encoding: .isoLatin1) ?? ""
                 struct Body: Encodable { let content: String }
                 try await putJSONVoid("/api/notes/\(noteId)/data", body: Body(content: latin1), csrf: true)
                 return
             }
             throw error
         }
-    }
-
-    /// Trilium native file/image body upload (`PUT /api/notes/:id/file`).
-    private func uploadNoteFile(noteId: String, data: Data, contentType: String) async throws {
-        let ext = Self.filenameExtension(forMIME: contentType)
-        _ = try await uploadMultipartAttachment(
-            path: "/api/notes/\(noteId)/file",
-            method: "PUT",
-            data: data,
-            filename: "content.\(ext)",
-            contentType: contentType
-        )
     }
 
     private nonisolated static func filenameExtension(forMIME mime: String) -> String {
@@ -1880,6 +1884,7 @@ actor TriliumClient: TriliumClientProtocol {
     private func uploadMultipartAttachment(
         path: String,
         method: String,
+        queryParams: [String: String]? = nil,
         data: Data,
         filename: String,
         contentType: String
@@ -1895,7 +1900,7 @@ actor TriliumClient: TriliumClientProtocol {
         body.append(data)
         append("\r\n--\(boundary)--\r\n")
 
-        let url = try Self.makeURL(baseURL: baseURL, path: path, queryParams: nil)
+        let url = try Self.makeURL(baseURL: baseURL, path: path, queryParams: queryParams)
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -2102,6 +2107,7 @@ actor TriliumClient: TriliumClientProtocol {
         cfg.httpCookieAcceptPolicy = .always
         cfg.timeoutIntervalForResource = Self.longestRequestTimeout
         cfg.waitsForConnectivity = injectedProtocolClasses == nil
+        cfg.urlCache = nil
         if let injectedProtocolClasses {
             cfg.protocolClasses = injectedProtocolClasses
         }
@@ -2231,6 +2237,7 @@ actor TriliumClient: TriliumClientProtocol {
         cfg.timeoutIntervalForRequest = Self.llmStreamIdleTimeout
         cfg.timeoutIntervalForResource = Self.llmStreamTotalTimeout
         cfg.waitsForConnectivity = injectedProtocolClasses == nil
+        cfg.urlCache = nil
         if let injectedProtocolClasses {
             cfg.protocolClasses = injectedProtocolClasses
         }
@@ -2475,7 +2482,6 @@ actor TriliumClient: TriliumClientProtocol {
             return
         case 401:
             isSessionValid = false
-            SessionCookieTrace.log("401 \(http.url?.path ?? "?") jar sid \(SessionCookieTrace.jarTag(for: baseURL))")
             throw APIError.unauthorized
         case 404:
             let message = extractErrorMessage(from: data) ?? http.url?.path ?? "resource"

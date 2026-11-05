@@ -116,10 +116,9 @@ final class SyncManager {
         guard isSyncing else { return }
         guard backgroundTaskId == .invalid else { return }
         backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "TrinoteSync") { [weak self] in
-            Task { @MainActor in
-                self?.cancel()
-                self?.endBackgroundTimeExtension()
-            }
+            // Runs on the main thread, and the task has to end before this returns or iOS ends the app: a hop to a
+            // later turn of the main actor came too late whenever the main thread was busy. `cancel()` ends it.
+            MainActor.assumeIsolated { self?.cancel() }
         }
     }
 

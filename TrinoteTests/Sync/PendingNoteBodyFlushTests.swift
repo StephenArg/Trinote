@@ -134,6 +134,65 @@ final class PendingNoteBodyFlushTests: XCTestCase {
         XCTAssertEqual(Set(queuedNoteIds()), ["slow", "next"])
     }
 
+    // MARK: Image and file notes
+
+    private func queueBytes(_ noteId: String, _ body: Data, mime: String) throws {
+        try PersistenceManager.shared.upsertPendingNoteBodyUpload(
+            noteId: noteId,
+            body: body,
+            mime: mime,
+            serverProfileId: profileId
+        )
+    }
+
+    func testImageNoteBytesGoUpAsAFileUnderTheirOriginalName() async throws {
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0xFF, 0xFE])
+        try queueBytes("img", jpeg, mime: "image/jpeg")
+        let label = TestFixtures.attributeResponse(noteId: "img", name: "originalFileName", value: "IMG_0001.jpg")
+        await client.setNoteResult("img", .success(
+            TestFixtures.noteResponse(id: "img", title: "IMG_0001", type: "image", mime: "image/jpeg", attributes: [label])
+        ))
+
+        await appState.flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
+
+        let uploads = await client.uploadNoteFileContentCalls
+        XCTAssertEqual(uploads.map(\.noteId), ["img"])
+        XCTAssertEqual(uploads.first?.filename, "IMG_0001.jpg")
+        XCTAssertEqual(uploads.first?.contentType, "image/jpeg")
+        XCTAssertEqual(uploads.first?.data, jpeg)
+        let generic = await uploadedNoteIds()
+        XCTAssertTrue(generic.isEmpty)
+        XCTAssertEqual(queuedNoteIds(), [])
+    }
+
+    func testOfficeDocumentIsNotSentAsText() async throws {
+        // A .docx is a zip, but its MIME names "xml", which the generic path took for text (and emptied).
+        let docx = Data([0x50, 0x4B, 0x03, 0x04, 0xFF, 0xFE, 0x00, 0x81])
+        let mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        try queueBytes("doc", docx, mime: mime)
+        await client.setNoteResult("doc", .success(TestFixtures.noteResponse(id: "doc", title: "Report", type: "file", mime: mime)))
+
+        await appState.flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
+
+        let uploads = await client.uploadNoteFileContentCalls
+        XCTAssertEqual(uploads.map(\.noteId), ["doc"])
+        XCTAssertEqual(uploads.first?.filename, "Report.docx", "named after the title when it has no original name")
+        XCTAssertEqual(uploads.first?.data, docx)
+        XCTAssertEqual(queuedNoteIds(), [])
+    }
+
+    func testTextFileNoteStillGoesUpAsText() async throws {
+        try queueBytes("json", Data("{\"a\":1}".utf8), mime: "application/json")
+        await client.setNoteResult("json", .success(TestFixtures.noteResponse(id: "json", title: "data", type: "file", mime: "application/json")))
+
+        await appState.flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: true)
+
+        let generic = await uploadedNoteIds()
+        XCTAssertEqual(generic, ["json"])
+        let uploads = await client.uploadNoteFileContentCalls
+        XCTAssertTrue(uploads.isEmpty)
+    }
+
     // MARK: Notes the server keeps read-only (Trilium 0.107+)
 
     private func readOnlyHelpNote() -> NoteResponse {

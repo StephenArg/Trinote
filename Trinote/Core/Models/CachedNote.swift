@@ -187,6 +187,45 @@ final class FavoriteNote {
     }
 }
 
+/// A `RecentNote` as plain values, which screens keep instead of the model: sync deletes these rows from its own
+/// context when their note goes, and reading a property of a deleted model traps.
+struct RecentNoteItem: Identifiable, Hashable, Sendable {
+    let id: String
+    let noteId: String
+    let title: String
+    let noteType: String
+    let accessedAt: Date
+    let serverProfileId: String
+    let listIconSystemName: String?
+
+    init(_ row: RecentNote) {
+        id = row.id
+        noteId = row.noteId
+        title = row.title
+        noteType = row.noteType
+        accessedAt = row.accessedAt
+        serverProfileId = row.serverProfileId
+        listIconSystemName = row.listIconSystemName
+    }
+}
+
+/// A `FavoriteNote` as plain values (see `RecentNoteItem`).
+struct FavoriteNoteItem: Identifiable, Hashable, Sendable {
+    let id: String
+    let noteId: String
+    let title: String
+    let noteType: String
+    let serverProfileId: String
+
+    init(_ row: FavoriteNote) {
+        id = row.id
+        noteId = row.noteId
+        title = row.title
+        noteType = row.noteType
+        serverProfileId = row.serverProfileId
+    }
+}
+
 @Model
 final class RecentSearch {
     @Attribute(.unique) var id: String

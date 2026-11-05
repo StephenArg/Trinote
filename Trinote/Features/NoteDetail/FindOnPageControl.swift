@@ -237,15 +237,7 @@ final class FindOnPageControl {
 
         var ranges: [NSRange] = []
         if !q.isEmpty {
-            let lowerFull = full.lowercased() as NSString
-            let lowerQ = q.lowercased()
-            var searchStart = 0
-            while searchStart < lowerFull.length {
-                let found = lowerFull.range(of: lowerQ, range: NSRange(location: searchStart, length: lowerFull.length - searchStart))
-                if found.location == NSNotFound { break }
-                ranges.append(found)
-                searchStart = found.location + found.length
-            }
+            ranges = Self.caseInsensitiveMatchRanges(in: full, query: q)
 
             let jump = pendingJumpToMatch1Based
             pendingJumpToMatch1Based = nil
@@ -467,16 +459,7 @@ final class FindOnPageControl {
 
     private func stepCode(direction: Int) {
         guard let tv = codeTextView, !query.isEmpty else { return }
-        let lowerFull = (codePlainText.lowercased()) as NSString
-        let lowerQ = query.lowercased()
-        var ranges: [NSRange] = []
-        var searchStart = 0
-        while searchStart < lowerFull.length {
-            let found = lowerFull.range(of: lowerQ, range: NSRange(location: searchStart, length: lowerFull.length - searchStart))
-            if found.location == NSNotFound { break }
-            ranges.append(found)
-            searchStart = found.location + found.length
-        }
+        let ranges = Self.caseInsensitiveMatchRanges(in: codePlainText, query: query)
         guard !ranges.isEmpty else { return }
 
         let current = max(0, activeMatchIndex - 1)
@@ -502,6 +485,27 @@ final class FindOnPageControl {
         let activeRange = ranges[idx]
         tv.selectedRange = activeRange
         Self.scrollCodeMatchToCenter(tv, range: activeRange)
+    }
+
+    /// Every match of `query` in `text`, ignoring case, as ranges of `text` itself. Searching a lowercased copy
+    /// instead drifted: "İ" lowercases to two UTF-16 units, so later ranges landed off by one per "İ", and one near
+    /// the end ran past the text and raised.
+    nonisolated static func caseInsensitiveMatchRanges(in text: String, query: String) -> [NSRange] {
+        guard !query.isEmpty else { return [] }
+        let ns = text as NSString
+        var ranges: [NSRange] = []
+        var searchStart = 0
+        while searchStart < ns.length {
+            let found = ns.range(
+                of: query,
+                options: .caseInsensitive,
+                range: NSRange(location: searchStart, length: ns.length - searchStart)
+            )
+            if found.location == NSNotFound { break }
+            ranges.append(found)
+            searchStart = found.location + max(found.length, 1)
+        }
+        return ranges
     }
 
     /// Vertically center the glyph range in the code `UITextView` when possible; clamp so the range stays visible.

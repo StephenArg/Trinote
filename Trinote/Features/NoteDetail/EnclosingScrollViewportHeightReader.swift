@@ -16,23 +16,37 @@ struct EnclosingScrollViewportHeightReader: UIViewRepresentable {
 
     func updateUIView(_ uiView: ProbeView, context: Context) {
         uiView.onChange = onChange
-        uiView.report()
+        uiView.scheduleReport()
     }
 
     final class ProbeView: UIView {
         var onChange: ((CGFloat) -> Void)?
+        private var reportScheduled = false
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            report()
+            scheduleReport()
         }
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            report()
+            scheduleReport()
         }
 
-        func report() {
+        /// Reports on the next main-queue turn, once however often it was asked meanwhile. `onChange` writes SwiftUI
+        /// state, and these calls come from inside SwiftUI's own update and layout, where writing state isn't allowed
+        /// (it can loop or trap).
+        func scheduleReport() {
+            guard !reportScheduled else { return }
+            reportScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.reportScheduled = false
+                self.report()
+            }
+        }
+
+        private func report() {
             guard let height = Self.enclosingScrollViewportHeight(from: self), height > 1 else { return }
             onChange?(height)
         }

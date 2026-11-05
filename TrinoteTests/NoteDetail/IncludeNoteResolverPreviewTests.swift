@@ -24,4 +24,16 @@ final class IncludeNoteResolverPreviewTests: XCTestCase {
         XCTAssertTrue(IncludeNoteResolver.isHTMLEmpty("<h2></h2><ul><li></li></ul>"))
         XCTAssertFalse(IncludeNoteResolver.isHTMLEmpty("<figure class=\"image\"><img src=\"a\"></figure>"))
     }
+
+    /// Indices from a lowercased copy drifted after "İ" (two UTF-8 bytes, three once lowercased) and cut the
+    /// section's tag apart.
+    func testStripIncludeSectionsAfterDottedCapitalI() {
+        let html = #"<p>İİİ</p><section class="include-note" data-note-id="n"><p>x</p></section><p>b</p>"#
+        XCTAssertEqual(IncludeNoteResolver.stripIncludeSections(html), "<p>İİİ</p><p>b</p>")
+    }
+
+    func testStripIncludeSectionsIgnoresTagCase() {
+        let html = #"<p>a</p><SECTION class="include-note" data-note-id="n"></SECTION><p>b</p>"#
+        XCTAssertEqual(IncludeNoteResolver.stripIncludeSections(html), "<p>a</p><p>b</p>")
+    }
 }

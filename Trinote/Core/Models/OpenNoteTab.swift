@@ -120,3 +120,25 @@ final class OpenNoteTab {
 }
 
 extension OpenNoteTab: Identifiable {}
+
+/// An `OpenNoteTab` as plain values, which the tab strip and note screens keep instead of the model: sync closes the
+/// tabs of deleted notes from its own context, and reading a property of a deleted model traps.
+struct OpenNoteTabItem: Identifiable, Hashable, Sendable {
+    let id: String
+    let noteId: String
+    let title: String
+    let noteType: String
+    let listIconSystemName: String?
+    let addedAt: Date
+    let serverProfileId: String
+
+    init(_ row: OpenNoteTab) {
+        id = row.id
+        noteId = row.noteId
+        title = row.title
+        noteType = row.noteType
+        listIconSystemName = row.listIconSystemName
+        addedAt = row.addedAt
+        serverProfileId = row.serverProfileId
+    }
+}

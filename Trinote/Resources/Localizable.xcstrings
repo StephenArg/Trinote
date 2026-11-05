@@ -5669,6 +5669,77 @@
         }
       }
     },
+    "Attaching the file needs a connection." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يتطلب إرفاق الملف اتصالًا."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "K připojení souboru musíte být online."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zum Anhängen der Datei ist eine Verbindung nötig."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attaching the file needs a connection."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adjuntar el archivo requiere conexión."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Joindre le fichier nécessite une connexion."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ाइल संलग्न करने के लिए कनेक्शन चाहिए।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A fájl csatolásához kapcsolat szükséges."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Per allegare il file serve una connessione."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dołączenie pliku wymaga połączenia."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чтобы прикрепить файл, нужно подключение."
+          }
+        }
+      }
+    },
     "Attachment" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -22425,6 +22496,77 @@
         }
       }
     },
+    "File Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ملاحظة ملف"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Souborová poznámka"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dateinotiz"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota de archivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note fichier"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ाइल नोट"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fájljegyzet"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota file"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notatka z plikiem"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заметка-файл"
+          }
+        }
+      }
+    },
     "Files left out download when you open them." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -24906,6 +25048,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Пропущенные состояния"
+          }
+        }
+      }
+    },
+    "Image Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ملاحظة صورة"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obrázková poznámka"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bildnotiz"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Image Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota de imagen"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note image"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इमेज नोट"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Képjegyzet"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota immagine"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notatka z obrazem"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заметка-изображение"
           }
         }
       }
@@ -48348,6 +48561,77 @@
         }
       }
     },
+    "Text Note" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ملاحظة نصية"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Textová poznámka"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Textnotiz"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Text Note"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota de texto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note de texte"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "टेक्स्ट नोट"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Szöveges jegyzet"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota di testo"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notatka tekstowa"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Текстовая заметка"
+          }
+        }
+      }
+    },
     "The board's configuration could not be read." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -48486,6 +48770,148 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Счётчик карточек становится красным, когда в столбце больше карточек, чем позволяет лимит."
+          }
+        }
+      }
+    },
+    "The file becomes the note itself, like a file note in Trilium." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يصبح الملف هو الملاحظة نفسها، مثل ملاحظة الملف في Trilium."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soubor se stane samotnou poznámkou, jako souborová poznámka v Trilium."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Datei wird selbst zur Notiz, wie eine Dateinotiz in Trilium."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The file becomes the note itself, like a file note in Trilium."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El archivo se convierte en la propia nota, como una nota de archivo en Trilium."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le fichier devient la note elle-même, comme une note fichier dans Trilium."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ाइल ही नोट बन जाती है, जैसे Trilium में फ़ाइल नोट।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A fájl maga lesz a jegyzet, mint egy fájljegyzet a Triliumban."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il file diventa la nota stessa, come una nota file in Trilium."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plik staje się samą notatką, jak notatka z plikiem w Trilium."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файл сам становится заметкой, как заметка-файл в Trilium."
+          }
+        }
+      }
+    },
+    "The file is attached to a new text note, where you can write around it." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يُرفق الملف بملاحظة نصية جديدة، حيث يمكنك الكتابة حوله."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soubor se připojí k nové textové poznámce, kde kolem něj můžete psát."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Datei wird an eine neue Textnotiz angehängt, in der du drumherum schreiben kannst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The file is attached to a new text note, where you can write around it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El archivo se adjunta a una nueva nota de texto, donde puedes escribir alrededor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le fichier est joint à une nouvelle note de texte, où vous pouvez écrire autour."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ाइल एक नए टेक्स्ट नोट में संलग्न की जाती है, जहाँ आप उसके आसपास लिख सकते हैं।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A fájl egy új szöveges jegyzethez csatolódik, ahol köré írhatsz."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il file viene allegato a una nuova nota di testo, dove puoi scriverci intorno."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plik zostaje dołączony do nowej notatki tekstowej, w której możesz pisać wokół niego."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файл прикрепляется к новой текстовой заметке, где вокруг него можно писать."
           }
         }
       }
@@ -49626,6 +50052,148 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Не удалось загрузить фото."
+          }
+        }
+      }
+    },
+    "The picture becomes the note itself, like an image note in Trilium." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تصبح الصورة هي الملاحظة نفسها، مثل ملاحظة الصورة في Trilium."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obrázek se stane samotnou poznámkou, jako obrázková poznámka v Trilium."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Bild wird selbst zur Notiz, wie eine Bildnotiz in Trilium."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The picture becomes the note itself, like an image note in Trilium."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La imagen se convierte en la propia nota, como una nota de imagen en Trilium."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’image devient la note elle-même, comme une note image dans Trilium."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "चित्र ही नोट बन जाता है, जैसे Trilium में इमेज नोट।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A kép maga lesz a jegyzet, mint egy képjegyzet a Triliumban."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’immagine diventa la nota stessa, come una nota immagine in Trilium."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obraz staje się samą notatką, jak notatka z obrazem w Trilium."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Изображение само становится заметкой, как заметка-изображение в Trilium."
+          }
+        }
+      }
+    },
+    "The picture goes into a new text note, where you can write around it." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "توضع الصورة في ملاحظة نصية جديدة، حيث يمكنك الكتابة حولها."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obrázek se vloží do nové textové poznámky, kde kolem něj můžete psát."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Bild kommt in eine neue Textnotiz, in der du drumherum schreiben kannst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The picture goes into a new text note, where you can write around it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La imagen va en una nueva nota de texto, donde puedes escribir alrededor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’image est placée dans une nouvelle note de texte, où vous pouvez écrire autour."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "चित्र एक नए टेक्स्ट नोट में जाता है, जहाँ आप उसके आसपास लिख सकते हैं।"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A kép egy új szöveges jegyzetbe kerül, ahol köré írhatsz."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’immagine va in una nuova nota di testo, dove puoi scriverci intorno."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obraz trafia do nowej notatki tekstowej, w której możesz pisać wokół niego."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Изображение помещается в новую текстовую заметку, где вокруг него можно писать."
           }
         }
       }

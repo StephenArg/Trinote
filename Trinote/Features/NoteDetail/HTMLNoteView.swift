@@ -274,22 +274,17 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         handler.findControl = findControl
         handler.lastAppliedColorScheme = colorScheme
         webView.applyTrinoteAppearanceMode()
-        let wrapped = Self.wrapHTMLTimed(
+        let wrapped = Self.wrapHTML(
             TriliumServerAssetURLs.resolving(in: html, serverBase: baseURL),
             theme: themeColors,
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
             taskStates: taskStates,
             collapsibleReorderEnabled: collapsibleReorderEnabled,
-            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
-            phase: "makeUIView"
+            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
         )
         handler.beginPage(wrapped, layoutCacheKey: layoutCacheKey)
         handler.lastSizedReportedHeight = reportedHeight
-        handler.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
-        handler.traceLoadStartedAt = handler.loadHTMLStartedAt
-        NoteOpenTrace.log("web makeUIView bodyUtf16=\(html.utf16.count) wrappedUtf16=\(wrapped.utf16.count)")
-        CheckboxPerf.log("loadHTMLString phase=makeUIView wrappedUtf16=\(wrapped.utf16.count)")
         webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(body: html, canonicalBase: baseURL))
         handler.loadedHTML = html
 
@@ -300,7 +295,6 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
     func updateUIView(_ container: ReadOnlyWebViewportContainer, context: Context) {
         let webView = container.webView
-        let t0 = CFAbsoluteTimeGetCurrent()
         let coordinator = context.coordinator
         coordinator.findControl = findControl
         coordinator.onNoteLinkTapped = onNoteLinkTapped
@@ -333,23 +327,13 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             coordinator.lastAppliedColorScheme = colorScheme
         }
 
-        let tCompare = CFAbsoluteTimeGetCurrent()
         let htmlChanged = html != coordinator.loadedHTML
         let themeChanged = themeColors != coordinator.themeColors
         let reorderChanged = checkboxReorderEnabled != coordinator.checkboxReorderEnabled
             || collapsibleReorderEnabled != coordinator.collapsibleReorderEnabled
         let listInteractionChanged = listInteractionEnabled != coordinator.listInteractionEnabled
         let cycleChanged = taskStates != coordinator.taskStates
-        let compareMs = CheckboxPerf.ms(tCompare)
-        guard htmlChanged || themeChanged || reorderChanged || listInteractionChanged || cycleChanged else {
-            if CheckboxPerf.lastToggleEndedAt > 0,
-               CFAbsoluteTimeGetCurrent() - CheckboxPerf.lastToggleEndedAt < 5 {
-                CheckboxPerf.log(
-                    "updateUIView noop compareMs=\(compareMs) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs()) lastToggle=#\(CheckboxPerf.lastToggleID)"
-                )
-            }
-            return
-        }
+        guard htmlChanged || themeChanged || reorderChanged || listInteractionChanged || cycleChanged else { return }
 
         // A collection list row opened or closed in the page: the page already shows `html`, so take it as
         // loaded (theme changes and process recovery then reload the rows as they are) without reloading now.
@@ -407,14 +391,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     coordinator.pageChangedInPlace(page)
                 }
             }
-            CheckboxPerf.log(
-                "updateUIView skipReload lastToggle=#\(CheckboxPerf.lastToggleID) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs()) compareMs=\(compareMs) revision=\(checkboxOnlyRevision) totalMs=\(CheckboxPerf.ms(t0))"
-            )
             return
         }
-        CheckboxPerf.log(
-            "updateUIView willReload lastToggle=#\(CheckboxPerf.lastToggleID) htmlChanged=\(htmlChanged) themeChanged=\(themeChanged) reorderChanged=\(reorderChanged) revisionChanged=\(revisionChanged) compareMs=\(compareMs) incoming[\(CheckboxPerf.bodyStats(html))]"
-        )
 
         coordinator.loadedHTML = html
         coordinator.themeColors = themeColors
@@ -426,24 +404,17 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.taskStates = taskStates
         coordinator.checkboxOnlyRevision = checkboxOnlyRevision
         coordinator.inPlaceRevision = inPlaceRevision
-        let wrapped = Self.wrapHTMLTimed(
+        let wrapped = Self.wrapHTML(
             TriliumServerAssetURLs.resolving(in: html, serverBase: baseURL),
             theme: themeColors,
             checkboxReorderEnabled: checkboxReorderEnabled,
             listInteractionEnabled: listInteractionEnabled,
             taskStates: taskStates,
             collapsibleReorderEnabled: collapsibleReorderEnabled,
-            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
-            phase: "updateUIView-reload"
+            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
         )
         coordinator.beginPage(wrapped, layoutCacheKey: layoutCacheKey)
         container.invalidateIntrinsicContentSize()
-        coordinator.loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
-        coordinator.traceLoadStartedAt = coordinator.loadHTMLStartedAt
-        NoteOpenTrace.log("web RELOAD htmlChanged=\(htmlChanged) themeChanged=\(themeChanged) bodyUtf16=\(html.utf16.count)")
-        CheckboxPerf.log(
-            "loadHTMLString phase=updateUIView-reload lastToggle=#\(CheckboxPerf.lastToggleID) wrappedUtf16=\(wrapped.utf16.count) updateMs=\(CheckboxPerf.ms(t0))"
-        )
         webView.loadHTMLString(wrapped, baseURL: Self.effectiveReadOnlyHTMLBaseURL(body: html, canonicalBase: baseURL))
     }
 
@@ -459,9 +430,6 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
         if isLayoutWidth, let key = coordinator.layoutCacheKey, let signature = coordinator.pageSignature,
            let remembered = NoteBodyLayoutCache.height(forKey: key, width: width, signature: signature) {
-            if coordinator.heightFromCache != remembered {
-                NoteOpenTrace.log("web sized from remembered height \(remembered) at width \(width)")
-            }
             coordinator.heightFromCache = remembered
             uiView.hasKnownHeight = true
             return CGSize(width: width, height: remembered)
@@ -496,32 +464,6 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     /// the WebView really does need reloading.
     private static func lengthChangeFitsTaskStateChange(previous: String, incoming: String) -> Bool {
         abs(incoming.utf16.count - previous.utf16.count) <= 400
-    }
-
-    private static func wrapHTMLTimed(
-        _ body: String,
-        theme: HTMLThemeColors,
-        checkboxReorderEnabled: Bool,
-        listInteractionEnabled: Bool,
-        taskStates: TaskStateWebConfig,
-        collapsibleReorderEnabled: Bool,
-        collapsibleTogglePersistEnabled: Bool,
-        phase: String
-    ) -> String {
-        let t0 = CFAbsoluteTimeGetCurrent()
-        let wrapped = wrapHTML(
-            body,
-            theme: theme,
-            checkboxReorderEnabled: checkboxReorderEnabled,
-            listInteractionEnabled: listInteractionEnabled,
-            taskStates: taskStates,
-            collapsibleReorderEnabled: collapsibleReorderEnabled,
-            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
-        )
-        CheckboxPerf.log(
-            "wrapHTML phase=\(phase) bodyUtf16=\(body.utf16.count) wrappedUtf16=\(wrapped.utf16.count) ms=\(CheckboxPerf.ms(t0))"
-        )
-        return wrapped
     }
 
     static func wrapHTML(
@@ -2168,9 +2110,6 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var baseURL: URL?
         var collapsibleTogglePersistEnabled = false
         private let processRecovery = WebContentProcessRecovery(label: "Read-only note")
-        var loadHTMLStartedAt: CFAbsoluteTime?
-        /// TEMP (`NoteOpenTrace`): when the current page load started; kept after `didFinish`.
-        var traceLoadStartedAt: CFAbsoluteTime?
         var themeColors: HTMLThemeColors?
         var checkboxReorderEnabled: Bool = false
         var collapsibleReorderEnabled: Bool = false
@@ -2278,10 +2217,6 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             self.onImagePreview = onImagePreview
         }
 
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            NoteOpenTrace.log("web didFail \(error.localizedDescription)")
-        }
-
         /// The state menu a held checkbox opens, as a popover at the box (`rect` is in the page's viewport, which is
         /// the web view's own bounds). The picked state goes back through the page, which posts `taskStateSet`.
         private func showTaskStateMenu(index: Int, current: String, rect: CGRect, in webView: WKWebView) {
@@ -2329,23 +2264,16 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 collapsibleReorderEnabled: collapsibleReorderEnabled,
                 collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
             )
-            loadHTMLStartedAt = CFAbsoluteTimeGetCurrent()
-            traceLoadStartedAt = loadHTMLStartedAt
             webView.loadHTMLString(
                 page,
                 baseURL: HTMLNoteWebView.effectiveReadOnlyHTMLBaseURL(body: html, canonicalBase: baseURL)
             )
         }
 
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            NoteOpenTrace.log("web didFailProvisionalNavigation \(error.localizedDescription)")
-        }
-
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "heightUpdate":
                 if let height = message.body as? CGFloat, height > 0 {
-                    NoteOpenTrace.log("web heightUpdate \(height) (\(traceLoadStartedAt.map { CheckboxPerf.ms($0) } ?? "n/a") ms after load start) loaded=\(pageLoaded) remembered=\(heightFromCache.map { "\($0)" } ?? "nil")")
                     // Opened at the remembered height: an early layout from before the images are in would only
                     // shrink the note for a moment. The height after `load` settles it (see `didFinish`).
                     if !pageLoaded, let remembered = heightFromCache, height <= remembered + 0.5 { return }
@@ -2625,16 +2553,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            NoteOpenTrace.log("web didFinish (\(traceLoadStartedAt.map { CheckboxPerf.ms($0) } ?? "n/a") ms after load start) frame=\(webView.frame)")
             pageLoaded = true
             // The page reported during `load`, before this flag flipped; report again so that height counts.
             webView.evaluateJavaScript("typeof reportHeight === 'function' && reportHeight();")
-            if let started = loadHTMLStartedAt {
-                CheckboxPerf.log(
-                    "webView didFinish loadHTMLStringMs=\(CheckboxPerf.ms(started)) lastToggle=#\(CheckboxPerf.lastToggleID) sinceToggleMs=\(CheckboxPerf.sinceLastToggleMs())"
-                )
-                loadHTMLStartedAt = nil
-            }
             findControl?.registerHTMLWebView(webView)
             findControl?.reapplyHTMLSearchIfNeeded()
         }

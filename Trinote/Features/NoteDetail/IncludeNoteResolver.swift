@@ -52,12 +52,13 @@ struct IncludeNoteResolver {
     }
 
     nonisolated private static func findNextIncludeBlock(in html: String) -> IncludeBlock? {
-        let lowered = html.lowercased()
-        var searchStart = lowered.startIndex
-        while searchStart < lowered.endIndex,
-              let openLower = lowered[searchStart...].range(of: "<section") {
-            let openStart = openLower.lowerBound
-            guard let gt = html[openLower.upperBound...].firstIndex(of: ">") else { return nil }
+        // Searched in `html` itself: indices from a lowercased copy drift where lowercasing changes a character's
+        // length ("İ"), and used on `html` they cut tags apart or run past its end.
+        var searchStart = html.startIndex
+        while searchStart < html.endIndex,
+              let open = html.range(of: "<section", options: .caseInsensitive, range: searchStart..<html.endIndex) {
+            let openStart = open.lowerBound
+            guard let gt = html[open.upperBound...].firstIndex(of: ">") else { return nil }
             let openEnd = html.index(after: gt)
             let openTag = String(html[openStart..<openEnd])
             guard openTag.lowercased().contains("include-note") else {
@@ -77,7 +78,7 @@ struct IncludeNoteResolver {
             options: []
         )
         let ns = html as NSString
-        let utf16Start = html.utf16.distance(from: html.utf16.startIndex, to: scanFrom.samePosition(in: html.utf16)!)
+        let utf16Start = scanFrom.utf16Offset(in: html)
         var depth = 1
         var pos = utf16Start
         while depth > 0, pos < ns.length {

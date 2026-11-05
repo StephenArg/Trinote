@@ -184,11 +184,12 @@ private struct RGBColor {
                 .replacingOccurrences(of: ")", with: "")
                 .split(separator: ",")
                 .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-            guard digits.count >= 3 else { return nil }
-            r = Int(digits[0])
-            g = Int(digits[1])
-            b = Int(digits[2])
-            a = digits.count >= 4 ? digits[3] : 1
+            // `Double` reads "nan", "inf" and "1e400", and `Int(_:)` traps on those; channels clamp like CSS.
+            guard digits.count >= 3, digits.prefix(3).allSatisfy(\.isFinite) else { return nil }
+            r = Int(min(max(digits[0], 0), 255))
+            g = Int(min(max(digits[1], 0), 255))
+            b = Int(min(max(digits[2], 0), 255))
+            a = digits.count >= 4 && digits[3].isFinite ? min(max(digits[3], 0), 1) : 1
             return
         }
         return nil

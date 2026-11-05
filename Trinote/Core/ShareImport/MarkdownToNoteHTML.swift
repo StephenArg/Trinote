@@ -552,9 +552,9 @@ enum MarkdownToNoteHTML {
     }
 
     private static func matchListItem(_ line: String) -> ListItemMatch? {
-        let ws = leadingWhitespaceCount(line)
-        let depth = ws / 2
-        let restStart = line.index(line.startIndex, offsetBy: ws)
+        let ws = leadingWhitespace(line)
+        let depth = ws.columns / 2
+        let restStart = line.index(line.startIndex, offsetBy: ws.characters)
         let rest = String(line[restStart...])
 
         if rest.hasPrefix("- ") || rest.hasPrefix("* ") || rest.hasPrefix("+ ") {
@@ -563,7 +563,7 @@ enum MarkdownToNoteHTML {
                 number: nil,
                 text: String(rest.dropFirst(2)),
                 depth: depth,
-                markerColumn: ws
+                markerColumn: ws.columns
             )
         }
 
@@ -582,7 +582,7 @@ enum MarkdownToNoteHTML {
             number: Int(numStr),
             text: String(rest[idx...]),
             depth: depth,
-            markerColumn: ws
+            markerColumn: ws.columns
         )
     }
 
@@ -660,14 +660,23 @@ enum MarkdownToNoteHTML {
         return String(line[idx...])
     }
 
-    private static func leadingWhitespaceCount(_ line: String) -> Int {
-        var count = 0
+    /// Leading spaces and tabs: how many characters they are, for slicing the line, and how many columns they span
+    /// (a tab is 4), for indent depth. Slicing by columns ran past the end of short tab-indented lines and trapped.
+    private static func leadingWhitespace(_ line: String) -> (characters: Int, columns: Int) {
+        var characters = 0
+        var columns = 0
         for ch in line {
-            if ch == " " { count += 1 }
-            else if ch == "\t" { count += 4 }
+            if ch == " " { columns += 1 }
+            else if ch == "\t" { columns += 4 }
             else { break }
+            characters += 1
         }
-        return count
+        return (characters, columns)
+    }
+
+    /// Indent width in columns (a tab is 4).
+    private static func leadingWhitespaceCount(_ line: String) -> Int {
+        leadingWhitespace(line).columns
     }
 
     // MARK: - Tables
@@ -1098,7 +1107,10 @@ enum MarkdownToNoteHTML {
     private static func parseAutolink(from text: String, at start: String.Index) -> (url: String, endIndex: String.Index)? {
         let rest = text[start...]
         let prefixes = ["https://", "http://"]
-        for prefix in prefixes where rest.lowercased().hasPrefix(prefix) {
+        // Only the first few characters can match: lowercasing the whole rest at every position made long lines
+        // take quadratic time.
+        let head = rest.prefix(8).lowercased()
+        for prefix in prefixes where head.hasPrefix(prefix) {
             var end = start
             while end < text.endIndex {
                 let ch = text[end]

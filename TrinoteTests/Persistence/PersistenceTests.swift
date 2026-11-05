@@ -819,4 +819,32 @@ final class PersistenceTests: XCTestCase {
         try persistence.cacheNote(from: TestFixtures.noteResponse(id: id, title: title), serverProfileId: profile)
         try persistence.cacheNoteContent(id, content: Data("<p></p>".utf8), serverProfileId: profile, utcDateModified: utc)
     }
+
+    // MARK: - Values screens keep
+
+    /// Screens keep values, not models: when a note is deleted (sync does it from its own context), its tab, favorite
+    /// and recent rows go, and the values fetched before still read fine. Favorites and Recents are told to reload.
+    func testFetchedTabsFavoritesAndRecentsOutliveTheirDeletedRows() throws {
+        let profileId = "s1"
+        try persistence.addOpenNoteTab(noteId: "n1", title: "Tab", noteType: "text", serverProfileId: profileId)
+        try persistence.addFavorite(noteId: "n1", title: "Fav", noteType: "text", serverProfileId: profileId)
+        try persistence.recordRecentNote(noteId: "n1", title: "Recent", noteType: "code", serverProfileId: profileId)
+        let tabs = try persistence.fetchOpenNoteTabs(serverProfileId: profileId)
+        let tab = try XCTUnwrap(persistence.fetchOpenNoteTab(id: try XCTUnwrap(tabs.first?.id), serverProfileId: profileId))
+        let favorites = try persistence.fetchFavorites(serverProfileId: profileId)
+        let recent = try XCTUnwrap(persistence.fetchRecentNote(noteId: "n1", serverProfileId: profileId))
+        let favoritesChanged = expectation(forNotification: .favoritesChanged, object: nil)
+        let recentsChanged = expectation(forNotification: .recentsChanged, object: nil)
+
+        try persistence.deleteCachedNotes(noteIds: ["n1"], serverProfileId: profileId)
+
+        wait(for: [favoritesChanged, recentsChanged], timeout: 2)
+        XCTAssertTrue(try persistence.fetchOpenNoteTabs(serverProfileId: profileId).isEmpty)
+        XCTAssertTrue(try persistence.fetchFavorites(serverProfileId: profileId).isEmpty)
+        XCTAssertNil(try persistence.fetchRecentNote(noteId: "n1", serverProfileId: profileId))
+        XCTAssertEqual(tabs.map(\.title), ["Tab"])
+        XCTAssertEqual(tab.noteId, "n1")
+        XCTAssertEqual(favorites.map(\.title), ["Fav"])
+        XCTAssertEqual(recent.noteType, "code")
+    }
 }

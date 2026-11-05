@@ -31,7 +31,7 @@ struct MindMapEditorView: View {
             currentJSON: currentJSON
         )
             .background {
-                NavigationPopGestureBlocker(blocked: true, label: "MindMapEditor")
+                NavigationPopGestureBlocker(blocked: true)
             }
     }
 }

@@ -48,7 +48,7 @@ final class ProtectedRelaunchIntegrationTests: XCTestCase {
         try await Task.sleep(for: .seconds(2))
         await first.onBackground()
         let savedCookies = try await KeychainManager.shared.loadSessionCookies(forServer: profile.id)
-        print("IT: session cookie saved at background: \(SessionCookieTrace.tag(archive: savedCookies))")
+        print("IT: session cookies saved at background: \(savedCookies?.count ?? 0) bytes")
 
         // Relaunch: a fresh AppState runs the launch path with what was saved.
         let second = AppState()

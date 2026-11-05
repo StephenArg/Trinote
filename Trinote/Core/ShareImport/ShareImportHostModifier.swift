@@ -90,14 +90,18 @@ struct ShareImportHostModifier: ViewModifier {
             .sheet(isPresented: createNoteBinding(phase)) {
                 ShareImportCreateNoteSheet(
                     initialTitle: appState.shareImport.suggestedNoteTitle,
+                    kind: appState.shareImport.pendingKind,
+                    noteTypeChoices: appState.shareImport.noteTypeChoices,
+                    initialNoteType: appState.shareImport.preferredNoteType,
+                    isOnline: appState.isOnline,
                     onCancel: {
                         appState.shareImport.createNoteSheetWasDismissedWithoutCreating()
                     },
                     onBeginCreate: {
                         appState.shareImport.beginCreateNote()
                     },
-                    onCreate: { title in
-                        await appState.shareImport.createNote(title: title)
+                    onCreate: { title, noteType in
+                        await appState.shareImport.createNote(title: title, as: noteType)
                     }
                 )
             }
@@ -170,14 +174,19 @@ struct ShareImportHostModifier: ViewModifier {
     }
 }
 
-/// New-note sheet for share import: title editable, type locked to Text.
+/// New-note sheet for share import: title editable. A shared picture or file can become an image or file note of its
+/// own or go into a text note; anything else is a text note, shown as a locked Type row.
 /// Prefills from the shared filename (or content hint). Clear the field to get
 /// the same default as elsewhere (`Note dd-MM-yyyy HH:mm:ss`).
 private struct ShareImportCreateNoteSheet: View {
     let initialTitle: String
+    let kind: SharedImportKind?
+    let noteTypeChoices: [NoteType]
+    let initialNoteType: NoteType
+    let isOnline: Bool
     let onCancel: () -> Void
     let onBeginCreate: () -> Void
-    let onCreate: (String) async -> Void
+    let onCreate: (String, NoteType) async -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var noteTitle: String = ""
@@ -194,11 +203,25 @@ private struct ShareImportCreateNoteSheet: View {
                 )
                 .textInputAutocapitalization(.sentences)
 
-                NewNoteTypePicker(
-                    selection: .constant(.text),
-                    supportsSpreadsheet: false,
-                    isEnabled: false
-                )
+                if noteTypeChoices.count > 1 {
+                    Section {
+                        Picker(String(localized: "Type", comment: "New note type"), selection: $noteType) {
+                            ForEach(noteTypeChoices, id: \.self) { type in
+                                Text(Self.choiceTitle(type)).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(isCreating)
+                    } footer: {
+                        Text(choiceExplanation)
+                    }
+                } else {
+                    NewNoteTypePicker(
+                        selection: .constant(.text),
+                        supportsSpreadsheet: false,
+                        isEnabled: false
+                    )
+                }
             }
             .navigationTitle(String(localized: "New Note", comment: "New child sheet title"))
             .navigationBarTitleDisplayMode(.inline)
@@ -213,13 +236,14 @@ private struct ShareImportCreateNoteSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(String(localized: "Create", comment: "New note sheet")) {
                         let titleToCreate = noteTitle
+                        let typeToCreate = noteType
                         // Mark importing synchronously so a sheet dismiss cannot cancel the share payload
                         // before the async create runs (common when clearing the title / dismissing keyboard).
                         isCreating = true
                         onBeginCreate()
                         Task {
                             defer { isCreating = false }
-                            await onCreate(titleToCreate)
+                            await onCreate(titleToCreate, typeToCreate)
                             dismiss()
                         }
                     }
@@ -231,7 +255,47 @@ private struct ShareImportCreateNoteSheet: View {
         .interactiveDismissDisabled(isCreating)
         .onAppear {
             noteTitle = initialTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-            noteType = .text
+            noteType = noteTypeChoices.contains(initialNoteType) ? initialNoteType : .text
+        }
+    }
+
+    private static func choiceTitle(_ type: NoteType) -> String {
+        switch type {
+        case .image: String(localized: "Image Note", comment: "Share import: the shared picture becomes an image note")
+        case .file: String(localized: "File Note", comment: "Share import: the shared file becomes a file note")
+        default: String(localized: "Text Note", comment: "Share import: the shared content goes into a text note")
+        }
+    }
+
+    /// What the selected choice makes, under the choice.
+    private var choiceExplanation: String {
+        switch (kind, noteType) {
+        case (.image, .image):
+            return String(
+                localized: "The picture becomes the note itself, like an image note in Trilium.",
+                comment: "Share import: explains the Image Note choice"
+            )
+        case (.image, _):
+            return String(
+                localized: "The picture goes into a new text note, where you can write around it.",
+                comment: "Share import: explains the Text Note choice for a picture"
+            )
+        case (_, .file):
+            return String(
+                localized: "The file becomes the note itself, like a file note in Trilium.",
+                comment: "Share import: explains the File Note choice"
+            )
+        default:
+            let attached = String(
+                localized: "The file is attached to a new text note, where you can write around it.",
+                comment: "Share import: explains the Text Note choice for a file"
+            )
+            guard !isOnline else { return attached }
+            let needsConnection = String(
+                localized: "Attaching the file needs a connection.",
+                comment: "Share import: a file can only go into a text note while online"
+            )
+            return "\(attached) \(needsConnection)"
         }
     }
 }

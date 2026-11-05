@@ -65,15 +65,18 @@ final class PersistenceManager {
                 CacheExcludedRootNote.self,
             ])
 
+            let storeURL = PersistentStoreLocation.storeURL()
             let config = ModelConfiguration(
                 "Trinote",
                 schema: schema,
-                isStoredInMemoryOnly: false,
+                url: storeURL,
                 allowsSave: true
             )
 
             do {
                 let container = try ModelContainer(for: schema, configurations: [config])
+                // An older copy set aside on the way can go now, if the store opened from its new place.
+                PersistentStoreLocation.removeSupersededStores(afterOpening: storeURL)
                 return (container, false)
             } catch {
                 Log.persistence.error("Persistent store failed, using in-memory fallback: \(error)")
@@ -266,7 +269,7 @@ final class PersistenceManager {
     }
 
     @discardableResult
-    func purgeNoteFromAuxiliaryStores(noteId: String, serverProfileId: String, clearGhost: Bool = true) throws -> Bool {
+    func purgeNoteFromAuxiliaryStores(noteId: String, serverProfileId: String, clearGhost: Bool = true) throws -> CacheStore.AuxiliaryRowsRemoved {
         try cache.purgeNoteFromAuxiliaryStores(noteId: noteId, serverProfileId: serverProfileId, clearGhost: clearGhost)
     }
 
@@ -658,22 +661,22 @@ final class PersistenceManager {
         try pruneRecents(serverProfileId: serverProfileId, keep: 50)
     }
 
-    func fetchRecentNotes(serverProfileId: String, limit: Int = 30) throws -> [RecentNote] {
+    func fetchRecentNotes(serverProfileId: String, limit: Int = 30) throws -> [RecentNoteItem] {
         let profileId = serverProfileId
         var descriptor = FetchDescriptor<RecentNote>(
             predicate: #Predicate { $0.serverProfileId == profileId },
             sortBy: [SortDescriptor(\.accessedAt, order: .reverse)]
         )
         descriptor.fetchLimit = limit
-        return try context.fetch(descriptor)
+        return try context.fetch(descriptor).map(RecentNoteItem.init)
     }
 
     /// Single recent row for a note, if it exists (same composite id as favorites).
-    func fetchRecentNote(noteId: String, serverProfileId: String) throws -> RecentNote? {
+    func fetchRecentNote(noteId: String, serverProfileId: String) throws -> RecentNoteItem? {
         let compositeId = "\(serverProfileId):\(noteId)"
         var descriptor = FetchDescriptor<RecentNote>(predicate: #Predicate { $0.id == compositeId })
         descriptor.fetchLimit = 1
-        return try context.fetch(descriptor).first
+        return try context.fetch(descriptor).first.map(RecentNoteItem.init)
     }
 
     // MARK: - Open note tabs (user-managed strip, max 30 per profile; explicit add, not auto on every open)
@@ -712,7 +715,12 @@ final class PersistenceManager {
         return matches.max(by: { $0.addedAt < $1.addedAt })?.id
     }
 
-    func fetchOpenNoteTab(id: String, serverProfileId: String) throws -> OpenNoteTab? {
+    func fetchOpenNoteTab(id: String, serverProfileId: String) throws -> OpenNoteTabItem? {
+        try openNoteTabRow(id: id, serverProfileId: serverProfileId).map(OpenNoteTabItem.init)
+    }
+
+    /// The model row, for changing it here. Screens get `OpenNoteTabItem` values instead (see there).
+    private func openNoteTabRow(id: String, serverProfileId: String) throws -> OpenNoteTab? {
         var descriptor = FetchDescriptor<OpenNoteTab>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
         let row = try context.fetch(descriptor).first
@@ -728,7 +736,7 @@ final class PersistenceManager {
         noteType: String,
         serverProfileId: String
     ) throws {
-        guard let row = try fetchOpenNoteTab(id: id, serverProfileId: serverProfileId) else { return }
+        guard let row = try openNoteTabRow(id: id, serverProfileId: serverProfileId) else { return }
         row.noteId = noteId
         row.title = title
         row.noteType = noteType
@@ -746,9 +754,14 @@ final class PersistenceManager {
         (try? fetchOpenNoteTabs(serverProfileId: serverProfileId))?.count ?? 0
     }
 
-    func fetchOpenNoteTabs(serverProfileId: String) throws -> [OpenNoteTab] {
+    func fetchOpenNoteTabs(serverProfileId: String) throws -> [OpenNoteTabItem] {
+        try openNoteTabRows(serverProfileId: serverProfileId).map(OpenNoteTabItem.init)
+    }
+
+    /// The model rows in strip order, for changing them here. Screens get `OpenNoteTabItem` values instead.
+    private func openNoteTabRows(serverProfileId: String) throws -> [OpenNoteTab] {
         let profileId = serverProfileId
-        var descriptor = FetchDescriptor<OpenNoteTab>(
+        let descriptor = FetchDescriptor<OpenNoteTab>(
             predicate: #Predicate { $0.serverProfileId == profileId },
             sortBy: [SortDescriptor(\.addedAt, order: .forward)]
         )
@@ -759,7 +772,7 @@ final class PersistenceManager {
     func reorderOpenNoteTabs(orderedIds: [String], serverProfileId: String) throws {
         let base = Date(timeIntervalSince1970: 0)
         for (index, id) in orderedIds.enumerated() {
-            guard let row = try fetchOpenNoteTab(id: id, serverProfileId: serverProfileId) else { continue }
+            guard let row = try openNoteTabRow(id: id, serverProfileId: serverProfileId) else { continue }
             row.addedAt = base.addingTimeInterval(TimeInterval(index))
         }
         try context.save()
@@ -780,7 +793,7 @@ final class PersistenceManager {
     /// note that is also cloned elsewhere keeps its tabs. Returns how many closed, telling the tab strip if any did.
     @discardableResult
     func closeOpenNoteTabs(forDeletedNoteId noteId: String, serverProfileId: String) -> Int {
-        guard let tabs = try? fetchOpenNoteTabs(serverProfileId: serverProfileId), !tabs.isEmpty else { return 0 }
+        guard let tabs = try? openNoteTabRows(serverProfileId: serverProfileId), !tabs.isEmpty else { return 0 }
         let profileId = serverProfileId
         var memo: [String: Bool] = [:]
         func isDeletedWithNote(_ id: String, visiting: Set<String>) -> Bool {
@@ -1348,13 +1361,13 @@ final class PersistenceManager {
         return try context.fetch(descriptor).first != nil
     }
 
-    func fetchFavorites(serverProfileId: String) throws -> [FavoriteNote] {
+    func fetchFavorites(serverProfileId: String) throws -> [FavoriteNoteItem] {
         let profileId = serverProfileId
-        var descriptor = FetchDescriptor<FavoriteNote>(
+        let descriptor = FetchDescriptor<FavoriteNote>(
             predicate: #Predicate { $0.serverProfileId == profileId },
             sortBy: [SortDescriptor(\.title)]
         )
-        return try context.fetch(descriptor)
+        return try context.fetch(descriptor).map(FavoriteNoteItem.init)
     }
 
     func removeFavorites(noteIds: Set<String>, serverProfileId: String) throws {
@@ -1471,6 +1484,8 @@ final class PersistenceManager {
 
     /// Inserts a placeholder note + branch, enqueues `PendingNoteCreation`, and reconciles tree metadata.
     /// Pass `initialAttributes` for labels that should be created alongside the note (e.g. geolocation).
+    /// - Parameter cachedContent: What the cached note holds instead of `initialContent`: an image or file note's bytes,
+    ///   which go up as a pending body upload once the note exists, so the note shows them before then.
     func createOfflineChildNote(
         parentNoteId: String,
         title: String,
@@ -1479,7 +1494,8 @@ final class PersistenceManager {
         initialContent: String,
         serverProfileId: String,
         initialAttributes: [NoteCreationAttribute] = [],
-        useParentTitleTemplate: Bool = false
+        useParentTitleTemplate: Bool = false,
+        cachedContent: Data? = nil
     ) throws -> (noteId: String, branchId: String) {
         let profileId = serverProfileId
         let pid = parentNoteId
@@ -1494,7 +1510,7 @@ final class PersistenceManager {
         let noteId = "ol_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
         let branchId = "olb_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
 
-        let contentData = Data(initialContent.utf8)
+        let contentData = cachedContent ?? Data(initialContent.utf8)
         let cached = CachedNote(
             noteId: noteId,
             title: title,
@@ -2034,15 +2050,7 @@ final class PersistenceManager {
         let rowId = "\(serverProfileId):\(noteId)"
         var descriptor = FetchDescriptor<PendingNoteBodyUpload>(predicate: #Predicate { $0.id == rowId })
         descriptor.fetchLimit = 1
-        let tFetch = CFAbsoluteTimeGetCurrent()
         let existingRow = try context.fetch(descriptor).first
-        let fetchMs = CheckboxPerf.ms(tFetch)
-        let tRest = CFAbsoluteTimeGetCurrent()
-        defer {
-            CheckboxPerf.log(
-                "upsertPendingUpload note=\(noteId) bytes=\(body.count) existing=\(existingRow != nil) fetchMs=\(fetchMs) saveMs=\(CheckboxPerf.ms(tRest))"
-            )
-        }
         if let existing = existingRow {
             existing.body = body
             existing.mime = mime
@@ -2657,5 +2665,126 @@ enum PersistenceError: LocalizedError {
                 comment: "Error when adding another Trilium server profile beyond the limit"
             )
         }
+    }
+}
+
+// MARK: - Store location
+
+/// Where the SwiftData store lives. Until 1.22 it had SwiftData's default for an app in an App Group: the shared App
+/// Group container (from July 2026; before that, the app's own container, under the same name). iOS ends a suspended
+/// app that still holds a lock on a file in a shared container (0xdead10cc), and background sync can be mid-write when
+/// the app is suspended. Only the app opens the store (the share extension hands files over through
+/// `SharedImportStore`), so it lives in the app's own container, and the App Group store is moved there once.
+enum PersistentStoreLocation {
+    static let storeFileName = "Trinote.store"
+
+    /// Files that belong to the store: SQLite's write-ahead log and shared memory, and Core Data's folder for
+    /// `.externalStorage` attributes (large note bodies, queued uploads, images). They move before the store file, so
+    /// while `Trinote.store` is still in the old place the move is unfinished, and the next launch carries on with it.
+    static let companionFileNames = ["Trinote.store-wal", "Trinote.store-shm", ".Trinote_SUPPORT"]
+
+    /// Where `storeURL` puts an older copy of the store it replaces, until `removeSupersededStores` deletes it.
+    static let supersededFolderName = "Superseded stores"
+
+    /// The app's own `Library/Application Support`.
+    static var appDirectory: URL { URL.applicationSupportDirectory }
+
+    /// `Library/Application Support` in the App Group container, where SwiftData kept the store before.
+    static var legacyDirectory: URL? {
+        FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: SharedImportConstants.appGroupIdentifier)?
+            .appending(path: "Library/Application Support", directoryHint: .isDirectory)
+    }
+
+    /// The store's URL in `directory`, first moving the store in `legacyDirectory` there when it has one.
+    ///
+    /// The App Group store is the live one: every build since July 2026 opened it, and so does an older build installed
+    /// again. A store already in `directory` is an older copy, left there when the app joined its App Group, so it is
+    /// set aside under `Superseded stores` and deleted once the store has opened from `directory`
+    /// (`removeSupersededStores`). When a step fails, what moved goes back and the App Group store is used for this
+    /// launch; the next launch tries again. Every step is a rename within one volume, so nothing is copied.
+    static func storeURL(
+        in directory: URL = appDirectory,
+        movingLegacyStoreFrom legacyDirectory: URL? = legacyDirectory,
+        fileManager: FileManager = .default
+    ) -> URL {
+        let newURL = directory.appending(path: storeFileName, directoryHint: .notDirectory)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let legacyDirectory else { return newURL }
+        let oldURL = legacyDirectory.appending(path: storeFileName, directoryHint: .notDirectory)
+        guard fileManager.fileExists(atPath: oldURL.path) else { return newURL }
+
+        if fileManager.fileExists(atPath: newURL.path) {
+            guard setAsideStore(in: directory, fileManager: fileManager) else { return oldURL }
+        }
+        guard moveStoreFiles(from: legacyDirectory, to: directory, fileManager: fileManager) else { return oldURL }
+        Log.persistence.info("Moved the store out of the App Group container")
+        return newURL
+    }
+
+    /// Deletes the older copies `storeURL` set aside, once the store has opened from `directory` (`url` is where it
+    /// opened). Nothing is deleted while the store isn't known to work from its new place.
+    static func removeSupersededStores(
+        afterOpening url: URL,
+        in directory: URL = appDirectory,
+        fileManager: FileManager = .default
+    ) {
+        guard url.deletingLastPathComponent().standardizedFileURL.path == directory.standardizedFileURL.path else { return }
+        let superseded = directory.appending(path: supersededFolderName, directoryHint: .isDirectory)
+        guard fileManager.fileExists(atPath: superseded.path) else { return }
+        do {
+            try fileManager.removeItem(at: superseded)
+            Log.persistence.info("Deleted the older copy of the store")
+        } catch {
+            Log.persistence.error("Could not delete the older copy of the store: \(error)")
+        }
+    }
+
+    /// Moves the store in `directory` into a new folder under `Superseded stores`. When that fails, what moved goes
+    /// back and nothing is set aside.
+    private static func setAsideStore(in directory: URL, fileManager: FileManager) -> Bool {
+        let folder = directory
+            .appending(path: supersededFolderName, directoryHint: .isDirectory)
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        do {
+            try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        } catch {
+            Log.persistence.error("Could not make a folder for the older copy of the store: \(error)")
+            return false
+        }
+        guard moveStoreFiles(from: directory, to: folder, fileManager: fileManager) else {
+            // Kept if a file couldn't be moved back: nothing is deleted before the store works from its new place.
+            if (try? fileManager.contentsOfDirectory(atPath: folder.path))?.isEmpty == true {
+                try? fileManager.removeItem(at: folder)
+            }
+            return false
+        }
+        return true
+    }
+
+    /// Moves the store's files that are in `source` into `destination`, the store file last. When one can't move, the
+    /// ones that did go back.
+    private static func moveStoreFiles(from source: URL, to destination: URL, fileManager: FileManager) -> Bool {
+        var moved: [(from: URL, to: URL)] = []
+        do {
+            for name in companionFileNames + [storeFileName] {
+                let from = source.appending(path: name)
+                guard fileManager.fileExists(atPath: from.path) else { continue }
+                let to = destination.appending(path: name)
+                try fileManager.moveItem(at: from, to: to)
+                moved.append((from, to))
+            }
+            return true
+        } catch {
+            Log.persistence.error("Could not move the store's files: \(error)")
+        }
+        for item in moved.reversed() {
+            do {
+                try fileManager.moveItem(at: item.to, to: item.from)
+            } catch {
+                Log.persistence.error("Could not move \(item.to.lastPathComponent) back: \(error)")
+            }
+        }
+        return false
     }
 }

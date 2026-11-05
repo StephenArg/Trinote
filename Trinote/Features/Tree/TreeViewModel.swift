@@ -6,7 +6,15 @@ import SwiftUI
 struct FlatTreeNode: Identifiable, Equatable {
     let node: TreeNode
     let depth: Int
-    var id: String { node.id }
+    /// The branch ids from the top row down to this one, joined with "/". Two expanded clones of one parent list the
+    /// same child branches, and rows of an animated `List` need ids that are unique (duplicates can crash it).
+    let id: String
+
+    init(node: TreeNode, depth: Int, id: String? = nil) {
+        self.node = node
+        self.depth = depth
+        self.id = id ?? node.id
+    }
 }
 
 @Observable
@@ -119,12 +127,14 @@ final class TreeViewModel {
     nonisolated private static func appendFlattened(
         _ nodes: [TreeNode],
         depth: Int,
+        parentPath: String = "",
         hideCalendarRootChildren: Bool,
         hidesChildren: (NoteItem) -> Bool,
         into result: inout [FlatTreeNode]
     ) {
         for node in nodes {
-            result.append(FlatTreeNode(node: node, depth: depth))
+            let rowId = parentPath.isEmpty ? node.id : parentPath + "/" + node.id
+            result.append(FlatTreeNode(node: node, depth: depth, id: rowId))
             if hideCalendarRootChildren && node.note.isCalendarRoot {
                 continue
             }
@@ -132,6 +142,7 @@ final class TreeViewModel {
                 appendFlattened(
                     children,
                     depth: depth + 1,
+                    parentPath: rowId,
                     hideCalendarRootChildren: hideCalendarRootChildren,
                     hidesChildren: hidesChildren,
                     into: &result

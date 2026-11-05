@@ -79,6 +79,10 @@ actor MockTriliumClient: TriliumClientProtocol {
         noteResults[noteId] = result
     }
 
+    func setCreateNoteResult(_ result: Result<CreateNoteResponse, Error>?) {
+        createNoteResult = result
+    }
+
     func setBranchResult(_ branchId: String, _ result: Result<BranchResponse, Error>) {
         branchResults[branchId] = result
     }
@@ -427,6 +431,18 @@ actor MockTriliumClient: TriliumClientProtocol {
         updateNoteContentCalls.append((noteId, content))
         if let error = updateNoteContentErrorsByNote[noteId] { throw error }
         if let error = updateNoteContentError { throw error }
+    }
+
+    var uploadNoteFileContentCalls: [(noteId: String, data: Data, filename: String, contentType: String, savesRevision: Bool)] = []
+    var uploadNoteFileContentError: Error?
+
+    func setUploadNoteFileContentError(_ error: Error?) {
+        uploadNoteFileContentError = error
+    }
+
+    func uploadNoteFileContent(noteId: String, data: Data, filename: String, contentType: String, savesRevision: Bool) async throws {
+        uploadNoteFileContentCalls.append((noteId, data, filename, contentType, savesRevision))
+        if let error = uploadNoteFileContentError { throw error }
     }
 
     func deleteNote(_ noteId: String, eraseNotes: Bool) async throws {
