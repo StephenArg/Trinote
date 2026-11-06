@@ -45,8 +45,22 @@ struct MainTabView: View {
         MainTabPreferences.tabs(fromStored: shownTabsRaw).filter { $0 != .aiChat || appState.showsAIEntryPoints }
     }
 
+    /// The tab bar's selection. A tap on the tab that is already selected still comes through the setter, which is
+    /// how tapping Notes again takes the notes stack back to the tree, like a navigation controller's tab.
+    private var tabSelection: Binding<MainTab> {
+        Binding(
+            get: { selectedTab },
+            set: { newValue in
+                if newValue == selectedTab, newValue == .notes {
+                    NotificationCenter.default.post(name: .trinoteNotesTabReselected, object: nil)
+                }
+                selectedTab = newValue
+            }
+        )
+    }
+
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: tabSelection) {
             ForEach(displayedTabs) { tab in
                 tabContent(for: tab)
                     .tabItem {

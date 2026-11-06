@@ -26,7 +26,7 @@ struct NoteTabsBar: View {
 
     private static let addButtonWidth: CGFloat = 44
     private static let horizontalPadding: CGFloat = 10
-    private static let tabGap: CGFloat = 5
+    fileprivate static let tabGap: CGFloat = 3
     /// Slightly more than 3 “full” columns so the last tab peeks (scroll affordance).
     private static let visibleTabSlots: CGFloat = 3.3
     /// Handle + icon + paddings + close control; title width is added on top.
@@ -101,11 +101,13 @@ struct NoteTabsBar: View {
                                     let title = titles[index]
                                     let icon = rowIconContext(for: tab)
                                     let isDragging = draggingTabId == tab.id
+                                    let isActive = currentOpenTabId != nil && tab.id == currentOpenTabId
                                     NoteTabCell(
                                         displayTitle: title,
                                         iconClass: icon.iconClass,
                                         fallbackNoteType: icon.fallbackNoteType,
-                                        isActive: currentOpenTabId != nil && tab.id == currentOpenTabId,
+                                        isActive: isActive,
+                                        isDragging: isDragging,
                                         width: tabWidths[index],
                                         reorderHandleWidth: Self.reorderHandleWidth,
                                         onTap: {
@@ -160,11 +162,11 @@ struct NoteTabsBar: View {
         Button {
             showAddNotePicker = true
         } label: {
-            Image(systemName: "plus.circle.fill")
-                .font(.title3)
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.tint)
+            Image(systemName: "plus")
+                .font(.body.weight(.medium))
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(String(localized: "Add open tab", comment: "A11y: add note to tab bar"))
@@ -614,26 +616,32 @@ private struct NoteTabsHorizontalScrollView<Content: View>: UIViewRepresentable 
 
 // MARK: - Cell
 
+/// One open-note tab. Unselected tabs are cards in the same colour a lifted (dragged) tab uses, so they stand off
+/// the bar; the selected tab is a neutral filled pill with primary text, so it shows through contrast, not colour.
 private struct NoteTabCell: View {
     let displayTitle: String
     let iconClass: String?
     let fallbackNoteType: NoteType
     let isActive: Bool
+    let isDragging: Bool
     let width: CGFloat
     let reorderHandleWidth: CGFloat
     let onTap: () -> Void
     let onClose: () -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
+    private static let cornerRadius: CGFloat = 8
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
             Color.clear
                 .frame(width: reorderHandleWidth, height: NoteTabsBar.cellHeight)
                 .overlay {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.tertiary)
+                    // Reorder hint on the selected tab only; a long-press anywhere on any tab still reorders.
+                    if isActive {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.quaternary)
+                    }
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -644,7 +652,7 @@ private struct NoteTabCell: View {
                         iconClass: iconClass,
                         fallbackNoteType: fallbackNoteType,
                         size: .compact,
-                        foregroundStyle: isActive ? Color.accentColor : Color.secondary
+                        foregroundStyle: isActive ? Color.primary : Color.secondary
                     )
                     .frame(width: 16, alignment: .center)
                     Text(displayTitle)
@@ -652,7 +660,7 @@ private struct NoteTabCell: View {
                         .lineLimit(2)
                         .truncationMode(.tail)
                         .multilineTextAlignment(.leading)
-                        .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+                        .foregroundStyle(isActive ? Color.primary : Color.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .minimumScaleFactor(0.82)
                 }
@@ -662,11 +670,12 @@ private struct NoteTabCell: View {
             }
             .buttonStyle(.plain)
             .hoverEffect(.highlight)
+            .accessibilityAddTraits(isActive ? .isSelected : [])
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isActive ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
                     .frame(width: 22, height: 32)
                     .contentShape(Rectangle())
             }
@@ -675,20 +684,12 @@ private struct NoteTabCell: View {
             .accessibilityLabel(String(localized: "Close tab", comment: "A11y: close open note tab"))
         }
         .frame(width: width, height: NoteTabsBar.cellHeight, alignment: .center)
-        .background(activeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(borderColor, lineWidth: 0.5)
-        )
+        .background(background, in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+        .animation(.easeOut(duration: 0.15), value: isActive)
     }
 
-    private var activeBackground: Color {
-        guard isActive else { return .clear }
-        return colorScheme == .dark ? Color.accentColor.opacity(0.28) : Color.accentColor.opacity(0.18)
-    }
-
-    private var borderColor: Color {
-        if isActive { return Color.accentColor.opacity(colorScheme == .dark ? 0.6 : 0.5) }
-        return Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.14)
+    /// Unselected and dragged tabs share the card colour; the selected tab keeps the neutral system fill.
+    private var background: Color {
+        isActive && !isDragging ? Color(uiColor: .secondarySystemFill) : Color(uiColor: .secondarySystemGroupedBackground)
     }
 }

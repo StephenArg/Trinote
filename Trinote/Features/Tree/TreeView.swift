@@ -380,6 +380,9 @@ struct TreeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .trinoteWillSwitchServerProfile)) { _ in
                 resetNavigationStackBeforeServerProfileChange()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .trinoteNotesTabReselected)) { _ in
+                popToTree()
+            }
             .sheet(isPresented: $showBulkDeleteConfirm, onDismiss: { eraseNotesOnBulkDelete = false }) {
                 treeBulkDeleteConfirmSheet
             }
@@ -1251,6 +1254,21 @@ struct TreeView: View {
         } catch {
             Log.persistence.error("Failed to toggle favorite: \(error)")
         }
+    }
+
+    /// Tapping the Notes tab again (iPhone): pops whatever is pushed on the notes stack (notes, subtrees, Settings,
+    /// Go to screens) so the tree shows. Only the stack's root tree answers; clearing its destinations pops the
+    /// screens above them too. Pickers and the iPad pane are left alone. The editor hides the tab bar while it
+    /// edits, so this never leaves an edit unsaved.
+    private func popToTree() {
+        guard parentNoteId == TriliumTreeConstants.rootNoteId, onPickParent == nil, noteWorkspace == nil else { return }
+        navigateToNote = nil
+        navigateToNoteForEdit = nil
+        drillDownTarget = nil
+        tabsBarNav = nil
+        showSettings = false
+        showAIChats = false
+        goToTab = nil
     }
 
     /// Pops note / subtree / tab destinations so no `NoteDetailView` stays mounted with the outgoing profile’s note ids when `activeProfile` changes (see `AppState` posting `.trinoteWillSwitchServerProfile`).
