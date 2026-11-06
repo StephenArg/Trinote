@@ -1456,15 +1456,16 @@ struct TreeView: View {
                 }
                 .buttonStyle(.borderless)
             } else if !isSelectMode {
-                if showCollapseAllButton {
+                // Only while something is open: with every root note closed there is nothing to collapse.
+                if showCollapseAllButton, vm.hasExpandedBranches {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { vm.collapseAllExpanded() }
                     } label: {
                         CollapseAllIcon()
-                            .foregroundStyle(vm.hasExpandedBranches ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(Color.accentColor)
                     }
                     .buttonStyle(.borderless)
-                    .disabled(!vm.hasExpandedBranches)
+                    .transition(.opacity)
                     .accessibilityLabel(String(localized: "Collapse All", comment: "Tree: close every open branch"))
                 }
                 Button {
