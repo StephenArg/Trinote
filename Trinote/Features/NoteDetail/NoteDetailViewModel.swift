@@ -4149,11 +4149,11 @@ final class NoteDetailViewModel {
         return false
     }
 
-    /// Geo map pins from SwiftData (`#geolocation` on direct children). Used offline or when the API is unavailable.
+    /// Geo map pins from SwiftData (`#geolocation` anywhere under the map). Used offline or when the API is unavailable.
     func geoMapPinsFromCache() -> [GeoMapPin] {
         guard let profileId = serverProfileId else { return [] }
         var pins: [GeoMapPin] = []
-        for childId in resolvedChildNoteIdsForDetail() {
+        for childId in geoMapSubtreeNoteIdsFromCache() {
             guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
             let attrs = (try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
             guard let geoVal = attrs.first(where: { $0.type == "label" && $0.name == "geolocation" })?.value,
@@ -4174,11 +4174,11 @@ final class NoteDetailViewModel {
         return pins
     }
 
-    /// Shapes (`#geoShape` on direct children) from SwiftData. Used offline or when the API is unavailable.
+    /// Shapes (`#geoShape` anywhere under the map) from SwiftData. Used offline or when the API is unavailable.
     func geoMapShapesFromCache() -> [GeoMapShape] {
         guard let profileId = serverProfileId else { return [] }
         var shapes: [GeoMapShape] = []
-        for childId in resolvedChildNoteIdsForDetail() {
+        for childId in geoMapSubtreeNoteIdsFromCache() {
             guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
             let attrs = (try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []
             guard let value = attrs.first(where: { $0.type == "label" && $0.name == GeoMapShape.label })?.value else { continue }
@@ -4191,19 +4191,73 @@ final class NoteDetailViewModel {
         return shapes
     }
 
-    /// Pins (`#geolocation`), shapes (`#geoShape`) and GPX tracks among the map's children, from one batched load of
-    /// the children (bodies only for tracks). Empty when there is no client or the app is offline.
+    /// Most notes a map reads from its subtree, so a huge tree under a map can't stall it.
+    static let geoMapSubtreeLimit = 5000
+
+    /// Whether the map shows archived notes in its subtree (`#includeArchived`), as Trilium's `getSubtreeNoteIds` does.
+    private func geoMapIncludesArchived(_ attributes: [AttributeItem]) -> Bool {
+        CollectionNoteModels.isTruthyLabel(
+            attributes.first(where: { $0.type == .label && $0.name == "includeArchived" })?.value
+        )
+    }
+
+    /// The map's descendants from SwiftData, depth first like Trilium's `getSubtreeNoteIds`: a map reads pins,
+    /// shapes and tracks from notes in folders under it, not only from its direct children. Archived notes and
+    /// everything under them are left out unless the map says `#includeArchived`.
+    func geoMapSubtreeNoteIdsFromCache() -> [String] {
+        guard let profileId = serverProfileId else { return [] }
+        let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
+        let includeArchived = geoMapIncludesArchived(note?.attributes ?? [])
+        var visited: Set<String> = [noteId]
+        var result: [String] = []
+        var stack = resolvedChildNoteIdsForDetail().reversed() as [String]
+        while let id = stack.popLast(), result.count < Self.geoMapSubtreeLimit {
+            guard visited.insert(id).inserted else { continue }
+            if !includeArchived,
+               let attrs = try? persistence.fetchCachedAttributes(noteId: id, serverProfileId: profileId),
+               attrs.contains(where: { $0.type == "label" && $0.name == "archived" }) {
+                continue
+            }
+            result.append(id)
+            let children = (try? persistence.fetchChildNoteIdsOrderedFromBranches(
+                parentNoteId: id,
+                serverProfileId: profileId
+            )) ?? []
+            stack.append(contentsOf: children.filter { !ghosts.contains($0) }.reversed())
+        }
+        return result
+    }
+
+    /// Pins (`#geolocation`), shapes (`#geoShape`) and GPX tracks anywhere under the map, loaded a tree level at a
+    /// time in batches (bodies only for tracks). Archived notes and their subtrees are skipped unless the map says
+    /// `#includeArchived`. Empty when there is no client or the app is offline.
     func fetchGeoMapLayersFromServer(note: NoteItem) async -> (pins: [GeoMapPin], shapes: [GeoMapShape], tracks: [GeoMapTrack]) {
         guard let client, isOnline else { return ([], [], []) }
         var pins: [GeoMapPin] = []
         var shapes: [GeoMapShape] = []
         var tracks: [GeoMapTrack] = []
         let parentNote = try? await client.getNote(note.noteId)
-        let childIds = parentNote?.childNoteIds ?? note.childNoteIds
-        let children = Dictionary(
-            await fetchNotesBatched(childIds, client: client).map { ($0.noteId, NoteItem(from: $0)) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        let includeArchived = geoMapIncludesArchived(parentNote.map { NoteItem(from: $0).attributes } ?? note.attributes)
+        var visited: Set<String> = [note.noteId]
+        var level = parentNote?.childNoteIds ?? note.childNoteIds
+        var childIds: [String] = []
+        var children: [String: NoteItem] = [:]
+        while !level.isEmpty, childIds.count < Self.geoMapSubtreeLimit {
+            let unseen = level.filter { visited.insert($0).inserted }
+            let loaded = await fetchNotesBatched(unseen, client: client).map { NoteItem(from: $0) }
+            for item in loaded where children[item.noteId] == nil { children[item.noteId] = item }
+            var next: [String] = []
+            for id in unseen {
+                guard let item = children[id] else { continue }
+                if !includeArchived, item.attributes.contains(where: { $0.type == .label && $0.name == "archived" }) {
+                    continue
+                }
+                childIds.append(id)
+                next += item.childNoteIds
+            }
+            level = next
+        }
+        childIds = Array(childIds.prefix(Self.geoMapSubtreeLimit))
         for childId in childIds {
             guard let childItem = children[childId] else { continue }
             if let shapeAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == GeoMapShape.label }),
@@ -4246,7 +4300,7 @@ final class NoteDetailViewModel {
     func geoMapTracksFromCache() -> [GeoMapTrack] {
         guard let profileId = serverProfileId else { return [] }
         var tracks: [GeoMapTrack] = []
-        for childId in resolvedChildNoteIdsForDetail() {
+        for childId in geoMapSubtreeNoteIdsFromCache() {
             guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
             guard cached.mime == GeoMapDisplaySettings.gpxMIME else { continue }
             let title = cached.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? childId : cached.title
