@@ -9,13 +9,13 @@ struct GeoMapSubnoteTreeState: Equatable {
     }
 
     var path: [Level] = []
-    /// First-level rows folded shut; every row with sub-notes starts open.
-    var collapsed: Set<String> = []
+    /// First-level rows folded open; every row with sub-notes starts shut.
+    var expanded: Set<String> = []
 }
 
 /// The notes under a geo map as a small tree two levels deep, so places kept in folders show below the map too.
 ///
-/// A first-level row with sub-notes folds open and shut in place. A second-level one's chevron opens that note's
+/// A first-level row with sub-notes starts shut and folds open in place. A second-level one's chevron opens that note's
 /// own two levels in the list's place, with a back button beside the header. Tapping a row opens its note; a row on
 /// the map ends in a pin that moves the map to it.
 struct GeoMapSubnoteTree: View {
@@ -49,6 +49,7 @@ struct GeoMapSubnoteTree: View {
     private struct LoadKey: Equatable {
         let path: [String]
         let rootIds: [String]
+        let expanded: Set<String>
         let reload: Int
     }
 
@@ -63,7 +64,7 @@ struct GeoMapSubnoteTree: View {
         var rows: [Row] = []
         for note in firstLevel {
             rows.append(Row(id: "0:\(note.noteId)", note: note, level: 0))
-            guard note.childCount > 0, !state.collapsed.contains(note.noteId) else { continue }
+            guard note.childCount > 0, state.expanded.contains(note.noteId) else { continue }
             if let children = childrenByParent[note.noteId] {
                 // A note cloned into two folders is a row in each.
                 rows += children.map { Row(id: "1:\(note.noteId):\($0.noteId)", note: $0, level: 1) }
@@ -87,7 +88,12 @@ struct GeoMapSubnoteTree: View {
                 .padding(.bottom, 8)
             }
         }
-        .task(id: LoadKey(path: state.path.map(\.noteId), rootIds: state.path.isEmpty ? rootChildren.map(\.noteId) : [], reload: reloadKey)) {
+        .task(id: LoadKey(
+            path: state.path.map(\.noteId),
+            rootIds: state.path.isEmpty ? rootChildren.map(\.noteId) : [],
+            expanded: state.expanded,
+            reload: reloadKey
+        )) {
             await loadShownLevels()
         }
     }
@@ -216,11 +222,11 @@ struct GeoMapSubnoteTree: View {
     @ViewBuilder
     private func disclosure(_ note: ChildNoteSummary, level: Int) -> some View {
         if note.childCount > 0 {
-            let isOpen = level == 0 && !state.collapsed.contains(note.noteId)
+            let isOpen = level == 0 && state.expanded.contains(note.noteId)
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
                     if level == 0 {
-                        if isOpen { state.collapsed.insert(note.noteId) } else { state.collapsed.remove(note.noteId) }
+                        if isOpen { state.expanded.remove(note.noteId) } else { state.expanded.insert(note.noteId) }
                     } else {
                         state.path.append(GeoMapSubnoteTreeState.Level(noteId: note.noteId, title: title(note)))
                     }
@@ -246,14 +252,14 @@ struct GeoMapSubnoteTree: View {
 
     // MARK: Loading
 
-    /// The note opened into (when there is one), then the second level under what the first shows.
+    /// The note opened into (when there is one), then the second level under the first-level rows folded open.
     private func loadShownLevels() async {
         if let opened = state.path.last {
             await load([opened.noteId])
             if Task.isCancelled { return }
         }
         guard let firstLevel else { return }
-        await load(firstLevel.filter { $0.childCount > 0 }.map(\.noteId))
+        await load(firstLevel.filter { $0.childCount > 0 && state.expanded.contains($0.noteId) }.map(\.noteId))
     }
 
     /// From the cache at once, then from the server once per reload.
