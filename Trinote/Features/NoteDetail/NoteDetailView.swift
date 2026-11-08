@@ -301,7 +301,6 @@ struct NoteDetailView: View {
     /// Why the Locate button could not show a position (`nil` while there is nothing to say).
     @State private var geoMapLocateFailure: GeoMapLocator.Failure?
     /// The place search sheet, with the area the map showed when it opened.
-    @State private var geoMapSearchViewport: GeoMapSearchRequest?
     @State private var geoMapDetailHTML: String?
     @State private var geoMapDetailGPXStats: GeoMapGPXParser.Stats?
     @State private var geoMapFocusedMarkId: String?
@@ -309,6 +308,11 @@ struct NoteDetailView: View {
     @State private var geoMapLastFeatureSelectTime: Date?
     @State private var geoMapLastLoadNoteId: String?
     @State private var geoMapLastLoadAt = Date.distantPast
+    /// The refresh button over the map is reloading it from the server.
+    @State private var geoMapRefreshing = false
+    /// Bumped whenever the map's layers are read again, so the sub-note tree re-reads its deeper levels.
+    @State private var geoMapLayersRevision = 0
+    @State private var geoMapSubnoteTree = GeoMapSubnoteTreeState()
 
     /// The note the bar title describes: the loaded one, else its cached copy while it loads (opening a note,
     /// switching tabs). Without that the bar showed this view's first title, uncolored, for a moment.
@@ -3914,9 +3918,6 @@ struct NoteDetailView: View {
                         }
                     }
                 },
-                onSearchRequested: { viewport in
-                    geoMapSearchViewport = GeoMapSearchRequest(viewport: viewport)
-                },
                 onShapeDrawn: { kind, coordinates, radius in
                     handleGeoMapShapeDrawn(vm: vm, note: note, kind: kind, coordinates: coordinates, radiusMeters: radius)
                 }
@@ -3924,6 +3925,9 @@ struct NoteDetailView: View {
             .equatable()
             .frame(height: Self.geoMapEditorBandHeight())
             .frame(maxWidth: .infinity)
+            .overlay(alignment: .topLeading) {
+                geoMapSearchBar(vm: vm, note: note)
+            }
             .clipped()
 
             geoMapSubnotesScrollArea(vm: vm, mapParentNote: note)
@@ -3942,6 +3946,7 @@ struct NoteDetailView: View {
             geoMapPins = []
             geoMapTracks = []
             geoMapShapes = []
+            geoMapSubnoteTree = GeoMapSubnoteTreeState()
             clearGeoMapSelection()
             geoMapDisplaySettings = GeoMapDisplaySettings(from: note, defaultStyle: GeoMapStyleID.triliumDefault(for: appState.serverAppInfo))
             geoMapCachedSettingsJSON = geoMapDisplaySettings.bridgeJSON()
@@ -3971,14 +3976,6 @@ struct NoteDetailView: View {
                 ? String(localized: "Allow Trinote to use your location in Settings to show where you are on the map.", comment: "Geo map locate: permission denied")
                 : String(localized: "Your location couldn't be found right now. Try again in a moment.", comment: "Geo map locate: no fix"))
         }
-        .sheet(item: $geoMapSearchViewport) { request in
-            GeoMapPlaceSearchSheet(viewport: request.viewport) { place in
-                geoMapEditorBridge.showPlace(place)
-            } onAddPin: { place in
-                geoMapEditorBridge.showPlace(place)
-                handleGeoMapCreatePin(vm: vm, note: note, lat: place.lat, lng: place.lng, title: place.isUnnamed ? nil : place.name)
-            }
-        }
         .sheet(isPresented: $geoMapShowSettings) {
             GeoMapSettingsSheet(
                 settings: $geoMapDisplaySettings,
@@ -3994,6 +3991,37 @@ struct NoteDetailView: View {
         ) { result in
             handleGeoMapGpxImport(result: result, vm: vm, note: note)
         }
+    }
+
+    /// The search bar in the map's top leading corner: the map's own notes by title, typed coordinates, and places
+    /// from OpenStreetMap, as on Trilium's web map.
+    private func geoMapSearchBar(vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        GeoMapSearchBar(
+            pins: geoMapPins,
+            shapes: geoMapShapes,
+            tracks: geoMapTracks,
+            visibleBounds: { await geoMapEditorBridge.visibleBounds() },
+            onPickNote: { noteId, kind in
+                geoMapEditorBridge.selectFeature(noteId: noteId, kind: kind)
+                geoMapLastFeatureSelectTime = Date()
+                handleGeoMapFeatureSelected(vm: vm, noteId: noteId, kind: kind)
+            },
+            onShowPlace: { place in
+                geoMapEditorBridge.showPlace(place)
+            },
+            onAddPin: { place in
+                // Goes there (a row's pin button may be the first the map hears of the place); the new pin
+                // replaces the searched-place mark.
+                geoMapEditorBridge.showPlace(place)
+                geoMapEditorBridge.clearPlace()
+                handleGeoMapCreatePin(vm: vm, note: note, lat: place.lat, lng: place.lng, title: place.isUnnamed ? nil : place.name)
+            },
+            onClear: {
+                geoMapEditorBridge.clearPlace()
+            }
+        )
+        // A different map starts with an empty search.
+        .id(note.noteId)
     }
 
     @ViewBuilder
@@ -4022,7 +4050,7 @@ struct NoteDetailView: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                         }
-                        geoMapLastChangedRow(note: note)
+                        geoMapLastChangedRow(vm: vm, note: note)
                     }
                 }
             } else {
@@ -4035,7 +4063,7 @@ struct NoteDetailView: View {
                                 .foregroundStyle(noteDetailTitleForegroundColor(for: note))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        geoMapLastChangedRow(note: note)
+                        geoMapLastChangedRow(vm: vm, note: note)
                             .padding(.leading, titleIconColumnWidth + titleIconSpacing)
                     }
                     Spacer(minLength: 0)
@@ -4054,7 +4082,8 @@ struct NoteDetailView: View {
     }
 
     @ViewBuilder
-    private func geoMapLastChangedRow(note: NoteItem) -> some View {
+    private func geoMapLastChangedRow(vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        let canRefresh = vm.client != nil && vm.isOnline
         HStack(alignment: .center, spacing: 8) {
             if let modified = lastChangedCaption(for: note) {
                 Text(modified)
@@ -4065,6 +4094,19 @@ struct NoteDetailView: View {
             } else {
                 Spacer(minLength: 0)
             }
+            Button {
+                refreshGeoMap(vm: vm, note: note)
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .symbolEffect(.rotate, options: .speed(1.5), isActive: geoMapRefreshing)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canRefresh || geoMapRefreshing)
+            .opacity(canRefresh ? 1 : 0.4)
+            .padding(.trailing, 6)
+            .accessibilityLabel(String(localized: "Refresh map", comment: "Geo map: reload the map's markers from the server"))
             Button {
                 geoMapShowSettings = true
             } label: {
@@ -4125,9 +4167,22 @@ struct NoteDetailView: View {
                             .padding(.horizontal, 20)
                             .padding(.bottom, 12)
                         }
-                        childNotesSection(
-                            vm,
+                        GeoMapSubnoteTree(
+                            rootChildren: vm.childNotes,
+                            isLoadingRoot: vm.isLoadingChildren,
+                            state: $geoMapSubnoteTree,
+                            reloadKey: geoMapLayersRevision,
+                            title: { child in
+                                NoteItem.maskedStoredTitle(
+                                    child.title,
+                                    isProtected: child.isProtected,
+                                    protectedSessionActive: appState.protectedSessionActive
+                                )
+                            },
                             mapFeature: { geoMapFeatureKind(forNoteId: $0) },
+                            cachedChildren: { vm.cachedChildSummaries(ofParents: $0) },
+                            serverChildren: { await vm.serverChildSummaries(ofParents: $0) },
+                            onOpen: { openLinkedNote($0) },
                             onShowOnMap: { noteId, kind in
                                 geoMapEditorBridge.focusFeature(noteId: noteId, kind: kind)
                             }
@@ -4154,6 +4209,7 @@ struct NoteDetailView: View {
         }
         .refreshable {
             await vm.refresh(force: true)
+            geoMapLayersRevision &+= 1
             loadGeoMapData(vm: vm, note: mapParentNote, force: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -4168,31 +4224,65 @@ struct NoteDetailView: View {
         }
         geoMapLastLoadNoteId = note.noteId
         geoMapLastLoadAt = now
+        applyGeoMapDisplaySettings(from: note)
+        Task { @MainActor in
+            await reloadGeoMapLayers(vm: vm, note: note)
+        }
+    }
+
+    private func applyGeoMapDisplaySettings(from note: NoteItem) {
         let newSettings = GeoMapDisplaySettings(from: note, defaultStyle: GeoMapStyleID.triliumDefault(for: appState.serverAppInfo))
         if newSettings != geoMapDisplaySettings {
             geoMapDisplaySettings = newSettings
             geoMapCachedSettingsJSON = newSettings.bridgeJSON()
         }
+    }
+
+    /// The map's pins, shapes and tracks from the server (the cache offline), kept when they changed.
+    @MainActor
+    private func reloadGeoMapLayers(vm: NoteDetailViewModel, note: NoteItem) async {
+        let pins: [GeoMapPin]
+        let tracks: [GeoMapTrack]
+        let shapes: [GeoMapShape]
+        if vm.client != nil, vm.isOnline {
+            (pins, shapes, tracks) = await vm.fetchGeoMapLayersFromServer(note: note)
+        } else {
+            (pins, shapes, tracks) = vm.geoMapLayersFromCache()
+        }
+        if pins == geoMapPins, tracks == geoMapTracks, shapes == geoMapShapes {
+            return
+        }
+        geoMapPins = pins
+        geoMapTracks = tracks
+        geoMapShapes = shapes
+        geoMapLayersRevision &+= 1
+        Log.geoMap.info(
+            "[geo-map-debug] loadGeoMapData pins=\(pins.count) tracks=\(tracks.count) shapes=\(shapes.count) online=\(vm.isOnline)"
+        )
+    }
+
+    /// The refresh button over the map: the map note and its sub-notes from the server, then every pin, shape and
+    /// track under it, and the map drawn again from exactly those.
+    private func refreshGeoMap(vm: NoteDetailViewModel, note: NoteItem) {
+        guard !geoMapRefreshing else { return }
+        geoMapRefreshing = true
+        // Loads that the note's own refresh sets off wait their turn; this one reads the layers itself.
+        geoMapLastLoadNoteId = note.noteId
+        geoMapLastLoadAt = Date()
         Task { @MainActor in
-            let pins: [GeoMapPin]
-            let tracks: [GeoMapTrack]
-            let shapes: [GeoMapShape]
-            if vm.client != nil, vm.isOnline {
-                (pins, shapes, tracks) = await vm.fetchGeoMapLayersFromServer(note: note)
-            } else {
-                pins = vm.geoMapPinsFromCache()
-                tracks = vm.geoMapTracksFromCache()
-                shapes = vm.geoMapShapesFromCache()
+            defer { geoMapRefreshing = false }
+            await vm.refresh(force: true)
+            let latest = vm.note?.noteId == note.noteId ? (vm.note ?? note) : note
+            applyGeoMapDisplaySettings(from: latest)
+            let revision = geoMapLayersRevision
+            await reloadGeoMapLayers(vm: vm, note: latest)
+            // The sub-note tree reads its deeper levels again even when the map's layers came back the same.
+            if geoMapLayersRevision == revision { geoMapLayersRevision &+= 1 }
+            geoMapLastLoadAt = Date()
+            geoMapEditorBridge.redrawLayers(markers: geoMapPins, tracks: geoMapTracks, shapes: geoMapShapes)
+            if let selection = geoMapSelection, geoMapFeatureKind(forNoteId: selection.noteId) == nil {
+                clearGeoMapSelection()
             }
-            if pins == geoMapPins, tracks == geoMapTracks, shapes == geoMapShapes {
-                return
-            }
-            geoMapPins = pins
-            geoMapTracks = tracks
-            geoMapShapes = shapes
-            Log.geoMap.info(
-                "[geo-map-debug] loadGeoMapData pins=\(pins.count) tracks=\(tracks.count) shapes=\(shapes.count) online=\(vm.isOnline)"
-            )
         }
     }
 
@@ -5859,13 +5949,6 @@ private struct NoteOverflowPopoverSizingModifier: ViewModifier {
 // Make String Identifiable for navigationDestination
 extension String: @retroactive Identifiable {
     public var id: String { self }
-}
-
-
-/// The geo map's place search sheet, opened with the area the map showed.
-private struct GeoMapSearchRequest: Identifiable {
-    let id = UUID()
-    let viewport: [Double]?
 }
 
 private extension View {

@@ -69,11 +69,6 @@
     '<path fill="currentColor" d="M20.5 3.5 3.4 10.6c-.5.2-.5.9 0 1.1l6.9 2.8 2.8 6.9c.2.5.9.5 1.1 0L21.4 4.3c.2-.5-.4-1-.9-.8z"/>' +
     "</svg>";
 
-  const SEARCH_ICON_SVG =
-    '<svg class="geomap-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">' +
-    '<path fill="currentColor" d="M10 2a8 8 0 0 1 6.32 12.9l5.39 5.39-1.42 1.42-5.39-5.39A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/>' +
-    "</svg>";
-
   const DRAW_ICON_SVG =
     '<svg class="geomap-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">' +
     '<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 18 8 6l8 3 4 9z"/>' +
@@ -2122,7 +2117,7 @@
         paint: { "circle-radius": 7, "circle-color": "#007aff" } });
     }
 
-    // A place picked in the search sheet, marked until another is picked.
+    // A place picked in the search bar, marked until another is picked or the search is cleared.
     let searchPlace = null;
 
     function renderSearchPlace() {
@@ -2184,10 +2179,7 @@
         bar.id = "geomap-toolbar";
         bar.className = "geomap-toolbar";
         bar.innerHTML =
-          '<button type="button" id="geomap-btn-search" class="geomap-tool-btn" aria-label="Find a place">' +
-          SEARCH_ICON_SVG +
-          "</button>" +
-          '<button type="button" id="geomap-btn-locate" class="geomap-tool-btn" aria-label="Show my location">' +
+                    '<button type="button" id="geomap-btn-locate" class="geomap-tool-btn" aria-label="Show my location">' +
           LOCATE_ICON_SVG +
           "</button>" +
           '<button type="button" id="geomap-btn-draw" class="geomap-tool-btn" aria-label="Draw a shape">' +
@@ -2212,9 +2204,6 @@
         document.getElementById("geomap-btn-draw").addEventListener("click", () => {
           if (drawSession) endDrawSession();
           else startDrawSession();
-        });
-        document.getElementById("geomap-btn-search").addEventListener("click", () => {
-          post("geoMapSearchRequested", JSON.stringify({ bounds: visibleBounds() }));
         });
       }
     }
@@ -2706,6 +2695,11 @@
 
       invalidateSize() {
         invalidateMapSizeSoon();
+      },
+
+      /** What the map shows, [west, south, east, north] (the app's search bar ranks places by it). */
+      getVisibleBounds() {
+        return visibleBounds();
       },
 
       getViewport() {

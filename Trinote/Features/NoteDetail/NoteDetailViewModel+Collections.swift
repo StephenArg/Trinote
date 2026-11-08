@@ -119,9 +119,6 @@ extension NoteDetailViewModel {
     /// Labels the way Trilium reads them (own, inherited, template's), from notes just loaded first and the cache
     /// for everything else.
     private func collectionLabelResolver(fresh: [String: NoteResponse], known: [NoteItem]) -> TriliumLabelResolver {
-        let profileId = serverProfileId
-        let persistence = self.persistence
-        let boardHidesChildren = TriliumServerCompatibility.supportsBoardOverhaul(appState.serverAppInfo)
         var contexts: [String: TriliumLabelResolver.NoteContext] = [:]
         for (id, response) in fresh {
             contexts[id] = TriliumLabelResolver.NoteContext(
@@ -132,6 +129,14 @@ extension NoteDetailViewModel {
         for item in known where contexts[item.noteId] == nil {
             contexts[item.noteId] = TriliumLabelResolver.NoteContext(attributes: item.attributes, parentNoteIds: item.parentNoteIds)
         }
+        return labelResolver(contexts: contexts)
+    }
+
+    /// A label resolver that reads `contexts` first and the cache for any other note.
+    func labelResolver(contexts: [String: TriliumLabelResolver.NoteContext]) -> TriliumLabelResolver {
+        let profileId = serverProfileId
+        let persistence = self.persistence
+        let boardHidesChildren = TriliumServerCompatibility.supportsBoardOverhaul(appState.serverAppInfo)
         return TriliumLabelResolver(
             context: { noteId in
                 if let context = contexts[noteId] { return context }

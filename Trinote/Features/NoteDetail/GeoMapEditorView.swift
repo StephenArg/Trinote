@@ -10,6 +10,13 @@ final class GeoMapEditorBridge: ObservableObject {
         coordinator.getViewport(completion: completion)
     }
 
+    /// What the map shows, `[west, south, east, north]`, or nil before it has drawn.
+    @MainActor
+    func visibleBounds() async -> [Double]? {
+        guard let coordinator else { return nil }
+        return await coordinator.visibleBounds()
+    }
+
     func addPin(noteId: String, title: String, lat: Double, lng: Double, color: String? = nil) {
         coordinator?.addPin(noteId: noteId, title: title, lat: lat, lng: lng, color: color)
     }
@@ -56,6 +63,11 @@ final class GeoMapEditorBridge: ObservableObject {
         coordinator?.clearSelection()
     }
 
+    /// Draws the map's pins, tracks and shapes again from exactly these, whether or not they changed.
+    func redrawLayers(markers: [GeoMapPin], tracks: [GeoMapTrack], shapes: [GeoMapShape]) {
+        coordinator?.redrawLayers(markers: markers, tracks: tracks, shapes: shapes)
+    }
+
     /// Moves the map to a pin, track or shape without selecting it.
     func focusFeature(noteId: String, kind: GeoMapFeatureKind) {
         coordinator?.callEngine("focusFeature('\(noteId)', '\(kind.rawValue)')")
@@ -86,8 +98,6 @@ struct GeoMapEditorView: UIViewRepresentable {
     var onSelectionCleared: (() -> Void)?
     var onImportGpxRequested: (() -> Void)?
     var onLocateRequested: (() -> Void)?
-    /// The Search button, with what the map shows (`[west, south, east, north]`).
-    var onSearchRequested: ((_ viewport: [Double]?) -> Void)?
     /// A shape finished in the Draw banner: `[longitude, latitude]` points (a circle's centre alone) and its radius.
     var onShapeDrawn: ((_ kind: GeoMapShape.Kind, _ coordinates: [[Double]], _ radiusMeters: Double?) -> Void)?
 
@@ -133,7 +143,6 @@ struct GeoMapEditorView: UIViewRepresentable {
         uc.add(coordinator, name: "geoMapImportGpxRequested")
         uc.add(coordinator, name: "geoMap3DChanged")
         uc.add(coordinator, name: "geoMapLocateRequested")
-        uc.add(coordinator, name: "geoMapSearchRequested")
         uc.add(coordinator, name: "geoMapShapeDrawn")
 
         let config = WKWebViewConfiguration()
@@ -180,7 +189,6 @@ struct GeoMapEditorView: UIViewRepresentable {
         context.coordinator.onSelectionCleared = onSelectionCleared
         context.coordinator.onImportGpxRequested = onImportGpxRequested
         context.coordinator.onLocateRequested = onLocateRequested
-        context.coordinator.onSearchRequested = onSearchRequested
         context.coordinator.onShapeDrawn = onShapeDrawn
         context.coordinator.latestViewportJSON = viewportJSON
         context.coordinator.latestMarkers = markers
@@ -198,7 +206,7 @@ struct GeoMapEditorView: UIViewRepresentable {
             "geoMapEditorReady", "geoMapCreatePin", "geoMapPinMoved", "geoMapPinRemoved",
             "geoMapViewportChanged", "geoMapOpenPinNote", "geoMapJSError", "geoMapDebugLog",
             "geoMapFeatureSelected", "geoMapSelectionCleared", "geoMapImportGpxRequested", "geoMap3DChanged",
-            "geoMapLocateRequested", "geoMapSearchRequested", "geoMapShapeDrawn"
+            "geoMapLocateRequested", "geoMapShapeDrawn"
         ] {
             uc.removeScriptMessageHandler(forName: name)
         }
@@ -217,7 +225,6 @@ struct GeoMapEditorView: UIViewRepresentable {
         var onSelectionCleared: (() -> Void)?
         var onImportGpxRequested: (() -> Void)?
         var onLocateRequested: (() -> Void)?
-        var onSearchRequested: ((_ viewport: [Double]?) -> Void)?
         var onShapeDrawn: ((_ kind: GeoMapShape.Kind, _ coordinates: [[Double]], _ radiusMeters: Double?) -> Void)?
         var latestViewportJSON: String
         var latestMarkers: [GeoMapPin]
@@ -342,15 +349,6 @@ struct GeoMapEditorView: UIViewRepresentable {
                 let radius = (dict["radiusMeters"] as? NSNumber)?.doubleValue
                 DispatchQueue.main.async { [weak self] in self?.onShapeDrawn?(kind, coordinates, radius) }
 
-            case "geoMapSearchRequested":
-                var viewport: [Double]?
-                if let body = message.body as? String, let data = body.data(using: .utf8),
-                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let bounds = dict["bounds"] as? [NSNumber], bounds.count == 4 {
-                    viewport = bounds.map(\.doubleValue)
-                }
-                DispatchQueue.main.async { [weak self] in self?.onSearchRequested?(viewport) }
-
             default:
                 break
             }
@@ -377,6 +375,30 @@ struct GeoMapEditorView: UIViewRepresentable {
                 "try{window.geoMapEditor&&window.geoMapEditor.invalidateSize&&window.geoMapEditor.invalidateSize();}catch(e){}",
                 completionHandler: nil
             )
+        }
+
+        /// Sends every pin, track and shape to the page whatever was sent before, so what the map draws is exactly
+        /// these (the refresh button). Before the map is up, the page is handed them when it starts instead.
+        func redrawLayers(markers: [GeoMapPin], tracks: [GeoMapTrack], shapes: [GeoMapShape]) {
+            latestMarkers = markers
+            latestTracks = tracks
+            latestShapes = shapes
+            guard editorReady, mapReady, let webView,
+                  let markersJSON = Self.markersJSONArray(markers),
+                  let tracksJSON = Self.tracksJSONArray(tracks),
+                  let shapesJSON = shapes.bridgeJSONArray() else { return }
+            lastSyncedMarkersFingerprint = Self.markersFingerprint(markers)
+            lastSyncedTracksFingerprint = Self.tracksFingerprint(tracks)
+            lastSyncedShapes = shapes
+            Log.geoMap.info("[geo-map-debug] redraw pins=\(markers.count) tracks=\(tracks.count) shapes=\(shapes.count)")
+            let js = """
+            window.geoMapEditor.loadMarkersData(\(markersJSON));
+            window.geoMapEditor.loadTracksData(\(tracksJSON));
+            window.geoMapEditor.loadShapesData(\(shapesJSON));
+            """
+            webView.evaluateJavaScript(js) { _, error in
+                if let error { Log.geoMap.error("geoMapEditor redraw failed: \(error.localizedDescription)") }
+            }
         }
 
         func syncFromSwiftUIIfNeeded() {
@@ -573,6 +595,23 @@ struct GeoMapEditorView: UIViewRepresentable {
                 "window.geoMapEditor.focusTrackMark('\(escapedNoteId)', '\(escapedMarkId)', \(focus.lng), \(focus.lat));",
                 completionHandler: nil
             )
+        }
+
+        @MainActor
+        func visibleBounds() async -> [Double]? {
+            guard editorReady, mapReady, let webView else { return nil }
+            do {
+                let value = try await webView.callAsyncJavaScript(
+                    "return window.geoMapEditor.getVisibleBounds();",
+                    arguments: [:], in: nil, contentWorld: .page
+                )
+                guard let numbers = value as? [NSNumber], numbers.count == 4 else { return nil }
+                let bounds = numbers.map(\.doubleValue)
+                return bounds.allSatisfy(\.isFinite) ? bounds : nil
+            } catch {
+                Log.geoMap.error("geoMapEditor.getVisibleBounds failed: \(error.localizedDescription)")
+                return nil
+            }
         }
 
         func getViewport(completion: @escaping (String) -> Void) {
