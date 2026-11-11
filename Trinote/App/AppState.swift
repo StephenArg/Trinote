@@ -89,6 +89,11 @@ final class AppState {
     let shareImport = ShareImportCoordinator()
     /// A note the Open Today's Journal Shortcut asked for, for the notes tree to open (`handleExternalOpenRequests`).
     var pendingExternalOpen: ExternalOpenResult?
+    /// The server ended this session (Trilium v0.107 does when its password changes). `RootView` offers to sign in;
+    /// until then the app keeps working from its cache.
+    var sessionEndedByServer = false
+    /// Where a tapped link wants its note to land once it has opened.
+    @ObservationIgnored var pendingNoteJump: PendingNoteJump?
     private let persistence = PersistenceManager.shared
     private let cacheExclusion = CacheExclusionPolicy()
     private let keychain = KeychainManager.shared
@@ -1207,11 +1212,17 @@ final class AppState {
               let profile = activeProfile
         else { return }
         let profileId = profile.id
-        let pending: [(id: String, noteId: String)]
+        let pending: [(id: String, noteId: String, drawingId: String?)]
         do {
             // Ids, read now: a share import can upload and delete these rows while this flush waits on the network,
             // and a deleted model's attributes can't be read. Each row's data is read just before its upload.
-            pending = try persistence.fetchPendingAttachmentImports(serverProfileId: profileId).map { ($0.id, $0.noteId) }
+            let rows = try persistence.fetchPendingAttachmentImports(serverProfileId: profileId)
+            let sourceIds = Dictionary(grouping: rows, by: \.noteId).mapValues { Set($0.compactMap(\.sourceAttachmentId)) }
+            let mapped: [(id: String, noteId: String, drawingId: String?)] = rows.map {
+                ($0.id, $0.noteId, CrossInstanceCopyBodyRewriter.drawingPictureOwner(title: $0.title, among: sourceIds[$0.noteId] ?? []))
+            }
+            // A drawing's picture is named after the drawing's attachment id, so it goes up after the drawing.
+            pending = mapped.filter { $0.drawingId == nil } + mapped.filter { $0.drawingId != nil }
         } catch {
             Log.sync.warning("Failed to read pending attachment imports: \(error)")
             return
@@ -1226,6 +1237,16 @@ final class AppState {
             }
         }
         await touchServerProtectedSession()
+        var newAttachmentIds: [String: [String: String]] = [:]
+        defer {
+            // Embeds name attachments by id, and the server erases the ones no body names.
+            let client = client
+            Task { [newAttachmentIds] in
+                for (noteId, map) in newAttachmentIds {
+                    await Self.repointEmbeddedAttachments(noteId: noteId, map: map, client: client)
+                }
+            }
+        }
         for row in pending {
             if row.noteId.isOfflineLocalNoteId {
                 let stillPending = (try? persistence.hasPendingNoteCreation(noteId: row.noteId, serverProfileId: profileId)) ?? true
@@ -1236,21 +1257,38 @@ final class AppState {
                 .first(where: { $0.id == row.id })
             else { continue }
             let data = current.data
-            let filename = current.title
+            let sourceAttachmentId = current.sourceAttachmentId
+            var filename = current.title
+            if let drawingId = row.drawingId, let newDrawingId = newAttachmentIds[row.noteId]?[drawingId] {
+                filename = "\(newDrawingId).svg"
+            }
             let contentType = current.mime
             do {
-                _ = try await client.uploadNoteAttachment(
+                let newId = try await client.uploadNoteAttachment(
                     noteId: row.noteId,
                     data: data,
                     filename: filename,
                     contentType: contentType
                 )
+                if let sourceAttachmentId { newAttachmentIds[row.noteId, default: [:]][sourceAttachmentId] = newId }
                 try persistence.deletePendingAttachmentImport(id: row.id, serverProfileId: profileId)
                 Log.sync.info("Flushed local-transfer attachment for note \(row.noteId)")
             } catch {
                 Log.sync.warning("Pending attachment import failed for note \(row.noteId): \(error)")
                 break
             }
+        }
+    }
+
+    /// Re-points a transferred note's embeds at its newly uploaded attachments.
+    private static func repointEmbeddedAttachments(noteId: String, map: [String: String], client: (any TriliumClientProtocol)?) async {
+        guard !map.isEmpty, let client, let body = try? await client.getNoteContent(noteId) else { return }
+        let rewritten = CrossInstanceCopyBodyRewriter.rewrite(body, attachmentIdMap: map, imageNoteIdMap: [:], imageNoteToAttachmentId: [:])
+        guard rewritten != body else { return }
+        do {
+            try await client.updateNoteContent(noteId, content: rewritten, contentType: "text/html")
+        } catch {
+            Log.sync.warning("Couldn't re-point embedded attachments for note \(noteId): \(error)")
         }
     }
 
@@ -1388,6 +1426,9 @@ final class AppState {
                         self.syncManager.incrementalSync(client: c, profileId: pid, triliumInstanceId: iid)
                     }
                 }
+            },
+            onSessionRevoked: { [weak self] in
+                Task { @MainActor [weak self] in await self?.confirmSessionAfterRevocationNotice() }
             },
             onProtectedSessionLogout: { [weak self] in
                 Task { @MainActor in
@@ -1942,8 +1983,32 @@ final class AppState {
             await runIncrementalSync(maxWaitSeconds: 15)
             startRealtimeIfPossible()
         } catch {
-            connectionError = APIError.from(error).localizedDescription
+            let apiError = APIError.from(error)
+            connectionError = apiError.localizedDescription
+            if apiError.isAuthError { sessionEndedByServer = true }
         }
+    }
+
+    /// The server said sessions are ending; only a refused request shows that this one did.
+    private func confirmSessionAfterRevocationNotice() async {
+        guard isAuthenticated, let client else { return }
+        do {
+            try await client.restoreSession()
+        } catch {
+            let apiError = APIError.from(error)
+            if apiError.isAuthError {
+                connectionError = apiError.localizedDescription
+                sessionEndedByServer = true
+            }
+        }
+    }
+
+    /// Goes to the sign-in screen as a failed session restore at launch does: the server and any unsent changes stay.
+    func signInAgainAfterSessionEnded() {
+        sessionEndedByServer = false
+        realtime?.invalidate()
+        realtime = nil
+        isAuthenticated = false
     }
 
     /// Handles `trinote://` URLs opened by the Share Extension or Safari SSO handoff.

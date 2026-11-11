@@ -415,4 +415,62 @@ final class MarkdownToNoteHTMLTests: XCTestCase {
         let html = PlainTextToNoteHTML.convert("one\n\ntwo")
         XCTAssertEqual(html, "<p>one</p><p>two</p>")
     }
+
+    // MARK: Source lines, for the split view
+
+    func testPreviewBlocksCarryTheLineTheyStartOn() {
+        let markdown = """
+        # Title
+
+        First paragraph
+        still the first.
+
+        - one
+        - two
+
+        | A | B |
+        |---|---|
+        | 1 | 2 |
+        | 3 | 4 |
+
+        ```
+        code
+        ```
+        """
+        let html = MarkdownToNoteHTML.convert(markdown, options: .markdownNote(taskStates: TaskStateCatalog.defaults))
+        XCTAssertTrue(html.contains(#"<h1 data-source-line="0">"#), html)
+        XCTAssertTrue(html.contains(#"<p data-source-line="2">"#), html)
+        XCTAssertTrue(html.contains(#"<li data-source-line="5">"#), html)
+        XCTAssertTrue(html.contains(#"<li data-source-line="6">"#), html)
+        XCTAssertTrue(html.contains(#"<table data-source-line="8">"#), html)
+        XCTAssertTrue(html.contains(#"<tr data-source-line="10">"#), html)
+        XCTAssertTrue(html.contains(#"<tr data-source-line="11">"#), html)
+        XCTAssertTrue(html.contains(#"<pre data-source-line="13">"#), html)
+        XCTAssertTrue(MarkdownToNoteHTML.convert("- [/] Doing it", options: .markdownNote(taskStates: TaskStateCatalog.defaults)).contains(#"title="Doing" data-source-line="0">"#), "last in the tag")
+    }
+
+    func testLinesStayTrueWhenDefinitionsAreTakenOut() {
+        let markdown = """
+        [ref]: https://example.com
+        *[HTML]: Hyper Text
+
+        After the definitions
+        """
+        let html = MarkdownToNoteHTML.convert(markdown, options: .markdownNote(taskStates: TaskStateCatalog.defaults))
+        XCTAssertTrue(html.contains(#"<p data-source-line="3">"#), html)
+    }
+
+    func testImportedNotesAndChatGetNoLineMarks() {
+        for options in [MarkdownToNoteHTML.Options.noteImport, .preview] {
+            let html = MarkdownToNoteHTML.convert("# Title\n\nText\n\n- item", options: options)
+            XCTAssertFalse(html.contains("data-source-line"), "only a Markdown note's own preview: \(html)")
+        }
+    }
+
+    func testAQuoteIsLinedUpAsAWhole() {
+        let html = MarkdownToNoteHTML.convert("> one\n> two", options: .markdownNote(taskStates: TaskStateCatalog.defaults))
+        XCTAssertTrue(html.hasPrefix(#"<blockquote data-source-line="0">"#), html)
+        XCTAssertEqual(html.components(separatedBy: "data-source-line").count - 1, 1, html)
+    }
 }
+

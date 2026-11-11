@@ -47,15 +47,22 @@ struct TriliumAIConfig: Equatable, Sendable {
     let mcpEnabled: Bool
     /// Which tool calls wait for the user in a chat that didn't choose (`llmPermissionMode`, Trilium 0.107+).
     let permissionMode: LlmPermissionMode?
+    /// The search provider chats search the web through (`llmWebSearchProvider`, Trilium 0.107+). `nil` when that names
+    /// none configured, which means the model's built-in search.
+    let webSearchProviderId: String?
+    /// Whether this server has that option at all, which is what makes it Trilium 0.107+ for web search's rules.
+    let knowsSearchProviders: Bool
 
     init(
         aiEnabled: Bool, providers: [LlmProviderSummary], assistantModel: AIAssistantModel? = nil, mcpEnabled: Bool = false,
-        permissionMode: LlmPermissionMode? = nil
+        permissionMode: LlmPermissionMode? = nil, webSearchProviderId: String? = nil, knowsSearchProviders: Bool = false
     ) {
         self.aiEnabled = aiEnabled
         self.providers = providers
         self.assistantModel = assistantModel
         self.mcpEnabled = mcpEnabled
+        self.webSearchProviderId = webSearchProviderId
+        self.knowsSearchProviders = knowsSearchProviders
         self.permissionMode = permissionMode
     }
 
@@ -66,7 +73,12 @@ struct TriliumAIConfig: Equatable, Sendable {
             providers: Self.providers(fromOption: options["llmProviders"]),
             assistantModel: Self.assistantModel(fromOption: options["aiAssistantModel"]),
             mcpEnabled: options["mcpEnabled"] == "true",
-            permissionMode: permissionMode.isEmpty ? nil : LlmPermissionMode(rawValue: permissionMode)
+            permissionMode: permissionMode.isEmpty ? nil : LlmPermissionMode(rawValue: permissionMode),
+            webSearchProviderId: Self.webSearchProviderId(
+                fromOption: options["llmWebSearchProvider"],
+                providersOption: options["llmProviders"]
+            ),
+            knowsSearchProviders: options["llmWebSearchProvider"] != nil
         )
     }
 
@@ -83,6 +95,20 @@ struct TriliumAIConfig: Equatable, Sendable {
         let selectedModels: [LlmModelInfo]?
         /// `llm` (chat models; also when absent) or `search` (a web search provider, Trilium 0.107+).
         let kind: String?
+    }
+
+    /// The `llmWebSearchProvider` option, when it names a `search` provider that's still configured.
+    static func webSearchProviderId(fromOption value: String?, providersOption json: String?) -> String? {
+        let id = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !id.isEmpty, let json, let data = json.data(using: .utf8),
+              let rows = try? JSONDecoder().decode([JSONValue].self, from: data) else { return nil }
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
+        let isConfigured = rows.contains { row in
+            guard let rowData = try? encoder.encode(row), let setup = try? decoder.decode(ProviderSetup.self, from: rowData) else { return false }
+            return setup.id == id && setup.kind == "search"
+        }
+        return isConfigured ? id : nil
     }
 
     /// The chat providers in the `llmProviders` option. A row that doesn't parse is skipped, as are web search

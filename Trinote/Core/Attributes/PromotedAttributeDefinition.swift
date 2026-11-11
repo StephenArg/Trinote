@@ -43,7 +43,7 @@ struct PromotedAttributeDefinition: Equatable, Sendable {
                     .split(separator: ";", omittingEmptySubsequences: true)
                     .map { Self.decodeOption(String($0)) }
             } else if token.hasPrefix("alias") {
-                promotedAlias = Self.parameterValue(token)
+                promotedAlias = Self.parameterValue(token).map(Self.decodeAlias)
             } else if token.hasPrefix("inverse") {
                 inverseRelation = AttributeNames.filter(Self.parameterValue(token) ?? "")
             }
@@ -58,7 +58,7 @@ struct PromotedAttributeDefinition: Equatable, Sendable {
             props.append("promoted")
         }
         if let promotedAlias, !promotedAlias.isEmpty {
-            props.append("alias=\(promotedAlias)")
+            props.append("alias=\(Self.encodeAlias(promotedAlias))")
         }
         props.append((multiplicity ?? .single).rawValue)
 
@@ -97,6 +97,19 @@ struct PromotedAttributeDefinition: Equatable, Sendable {
         let digits = rest.prefix { $0.isASCII && $0.isNumber }
         guard !digits.isEmpty, let magnitude = Int(digits) else { return nil }
         return sign * magnitude
+    }
+
+    // Trilium v0.107 escapes an alias so a comma can't end its token; `;` means nothing inside one.
+    private static func encodeAlias(_ alias: String) -> String {
+        alias
+            .replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: ",", with: "%2C")
+    }
+
+    private static func decodeAlias(_ alias: String) -> String {
+        alias
+            .replacingOccurrences(of: "%2C", with: ",", options: .caseInsensitive)
+            .replacingOccurrences(of: "%25", with: "%", options: .caseInsensitive)
     }
 
     // `;` separates options and `,` separates tokens, so both are escaped URL-style, `%` first.

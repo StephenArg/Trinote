@@ -159,6 +159,82 @@ span.link-mention { display: inline; }
 
 .link-embed a.link-embed-video:active .link-embed-video-play { background: #f00; }
 
+/* ---------- Video and audio files (Trilium v0.107); a tap in a read-only note swaps in a player ---------- */
+
+.link-embed div.link-embed-video {
+  max-width: 640px;
+  margin: 0 auto;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+}
+
+.link-embed button.link-embed-media-facade {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.link-embed button.link-embed-audio-facade {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+  border-radius: 10px;
+  background: none;
+}
+
+.link-embed .link-embed-audio-play {
+  position: relative;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(128, 128, 128, 0.25);
+}
+
+.link-embed .link-embed-audio-play::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 2px;
+  margin: auto;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 6px 0 6px 10px;
+  border-color: transparent transparent transparent currentColor;
+}
+
+.link-embed .link-embed-audio-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-embed video.link-embed-media-player { display: block; width: 100%; background: #000; }
+.link-embed audio.link-embed-media-player { display: block; width: 100%; }
+
+/* Where the embed sits on the page, as Trilium v0.107 saves it. */
+section.link-embed[style*="--include-note-width"] { width: var(--include-note-width); max-width: 100%; margin-left: auto; margin-right: auto; }
+section.link-embed[data-position="left"] { margin-left: 0; margin-right: auto; }
+section.link-embed[data-position="right"] { margin-left: auto; margin-right: 0; }
+section.link-embed[data-position="wrap-left"] { float: left; margin: 4px 14px 8px 0; max-width: 50%; }
+section.link-embed[data-position="wrap-right"] { float: right; margin: 4px 0 8px 14px; max-width: 50%; }
+figure.captioned-content-embed { margin: 1em 0; }
+figure.captioned-content-embed > figcaption { padding-top: 4px; font-size: 0.85em; opacity: 0.72; text-align: center; }
+
 /* ---------- Card ---------- */
 
 .link-embed a.link-embed-card {

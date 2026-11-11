@@ -4,10 +4,12 @@
  *   right edge (top + bottom) → resize the selection range
  */
 import {
+  ICommandService,
   IUniverInstanceService,
   RANGE_TYPE,
   UniverInstanceType,
 } from "@univerjs/core";
+import { AutoFillCommand } from "@univerjs/sheets";
 import {
   CustomObject,
   IRenderManagerService,
@@ -22,12 +24,29 @@ import { ISheetSelectionRenderService } from "@univerjs/sheets-ui";
 const MOBILE_EXPANDING_SELECTION = "MOBILE_EXPANDING_SELECTION";
 
 let protoPatchesApplied = false;
+let injectorRef = null;
+
+/**
+ * Fills `target` from the selection, as Univer's autofill render controller does on desktop. Univer 1.x doesn't register
+ * that controller in its mobile UI, so the selection's `selectionFilled$` reaches nothing there.
+ */
+function runAutoFill(source, target) {
+  if (!injectorRef) return;
+  const unit = injectorRef.get(IUniverInstanceService).getCurrentUnitOfType(UniverInstanceType.UNIVER_SHEET);
+  if (!unit) return;
+  injectorRef.get(ICommandService).executeCommand(AutoFillCommand.id, {
+    sourceRange: source,
+    targetRange: target,
+    unitId: unit.getUnitId(),
+    subUnitId: unit.getActiveSheet().getSheetId(),
+  });
+}
 
 function getSheetSelectionService(injector) {
   const univerInstance = injector.get(IUniverInstanceService);
   const unit = univerInstance.getCurrentUnitOfType(UniverInstanceType.UNIVER_SHEET);
   if (!unit) return null;
-  const render = injector.get(IRenderManagerService).getRenderById(unit.getUnitId());
+  const render = injector.get(IRenderManagerService).getRenderUnitById(unit.getUnitId());
   return render?.with(ISheetSelectionRenderService) ?? null;
 }
 
@@ -139,13 +158,13 @@ function ensureTrinoteHandles(control) {
   }
 
   // Disable Univer's default diagonal corner targets so only our handles receive touches.
-  if (control.fillControlTopLeft) {
-    control.fillControlTopLeft.evented = false;
-    control.fillControlTopLeft.hide();
+  if (control.expandControlTopLeft) {
+    control.expandControlTopLeft.evented = false;
+    control.expandControlTopLeft.hide();
   }
-  if (control.fillControlBottomRight) {
-    control.fillControlBottomRight.evented = false;
-    control.fillControlBottomRight.hide();
+  if (control.expandControlBottomRight) {
+    control.expandControlBottomRight.evented = false;
+    control.expandControlBottomRight.hide();
   }
 
   control.__trinoteHandles = handles;
@@ -185,12 +204,18 @@ function patchMobileSelectionControlProto(control) {
   const origUpdateLayout = proto._updateLayoutOfSelectionControl;
   proto._updateLayoutOfSelectionControl = function (style) {
     origUpdateLayout.call(this, style);
-    if (this._enableAutoFill === true && !this.__trinoteHandles) {
-      ensureTrinoteHandles(this);
+    // Show ours exactly when Univer would show its own corners. Univer 0.x tied that to `_enableAutoFill`; 1.x turns
+    // autofill off for every mobile selection and shows the corners whenever the selection has no widgets.
+    const univerCorners = [this.expandControlTopLeft, this.expandControlBottomRight].filter(Boolean);
+    const show = univerCorners.length ? univerCorners.some((corner) => corner.visible) : this._enableAutoFill === true;
+    if (show && !this.__trinoteHandles) ensureTrinoteHandles(this);
+    // Univer shows its corners again on every layout; they stay hidden so only ours take touches.
+    for (const corner of univerCorners) {
+      corner.evented = false;
+      corner.hide();
     }
     const handles = this.__trinoteHandles;
     if (handles) {
-      const show = this._enableAutoFill === true;
       for (const rect of Object.values(handles)) {
         show ? rect.show() : rect.hide();
       }
@@ -205,18 +230,28 @@ function bindResizeHandle(service, handle, expandingMode, rangeType) {
     service._contextService.setContextValue(MOBILE_EXPANDING_SELECTION, true);
     service.expandingControlMode = expandingMode;
     service._selectionMoveStart$.next(service.getSelectionDataWithStyle());
-    service._fillControlPointerDownHandler(evt, rangeType, service._activeViewport);
+    service._expandControlPointerDownHandler(evt, rangeType, service._activeViewport);
   });
 }
 
+/**
+ * The range a fill drag covers: the selection extended toward the finger along one axis only, the one it moved further
+ * along, as in Excel. (The handles sit on a cell boundary, so a straight drag can stray into the next column; filling
+ * two ways at once isn't something Univer's fill can do.)
+ */
 function computeFillTargetRange(source, row, column) {
   let { startRow, endRow, startColumn, endColumn } = source;
+  const rowOverflow = row < startRow ? startRow - row : row > endRow ? row - endRow : 0;
+  const columnOverflow = column < startColumn ? startColumn - column : column > endColumn ? column - endColumn : 0;
 
-  if (column < startColumn) startColumn = column;
-  else if (column > endColumn) endColumn = column;
-
-  if (row < startRow) startRow = row;
-  else if (row > endRow) endRow = row;
+  if (rowOverflow >= columnOverflow) {
+    if (row < startRow) startRow = row;
+    else if (row > endRow) endRow = row;
+  } else if (column < startColumn) {
+    startColumn = column;
+  } else if (column > endColumn) {
+    endColumn = column;
+  }
 
   return { startRow, endRow, startColumn, endColumn };
 }
@@ -282,7 +317,7 @@ function startMobileFillDrag(service, control, evt) {
       target.endColumn !== source.endColumn;
 
     if (changed) {
-      control.refreshSelectionFilled(target);
+      runAutoFill(source, target);
     }
   });
 }
@@ -367,7 +402,51 @@ function patchSelectionService(service, injector) {
   void injector;
 }
 
+/** Whether the open workbook is far enough along for these patches: current, and with its renderer built. */
+export function isSheetSelectionServiceReady(injector) {
+  return !!getSheetSelectionService(injector);
+}
+
+/** For tests: the selections on screen, how many have Trinote's handles, and whether Univer's own corners are off. */
+export function debugSelectionHandles(injector) {
+  const service = getSheetSelectionService(injector);
+  const controls = service ? service.getSelectionControls() : [];
+  return {
+    controls: controls.length,
+    withHandles: controls.filter((control) => control.__trinoteHandles).length,
+    builtInCornersOff: controls.every((control) => control.expandControlTopLeft && control.expandControlTopLeft.evented === false),
+  };
+}
+
+/**
+ * For tests: where each of Trinote's handles on the active selection can be touched, in client coordinates, found by
+ * asking the scene what a touch there would hit.
+ */
+export function debugHandlePoints(injector) {
+  const service = getSheetSelectionService(injector);
+  const control = service?.getActiveSelectionControl?.() ?? service?.getSelectionControls()[0];
+  const handles = control?.__trinoteHandles;
+  const scene = service?._scene;
+  const canvas = scene?.getEngine?.()?.getCanvasElement?.();
+  if (!handles || !canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const points = {};
+  for (const [name, handle] of Object.entries(handles)) {
+    points[name] = null;
+    for (let y = 0; y < rect.height && !points[name]; y += 2) {
+      for (let x = 0; x < rect.width; x += 2) {
+        if (scene.pick(Vector2.FromArray([x, y]), 3) === handle) {
+          points[name] = { x: rect.left + x, y: rect.top + y };
+          break;
+        }
+      }
+    }
+  }
+  return { points, visible: Object.fromEntries(Object.entries(handles).map(([name, h]) => [name, !!h.visible])) };
+}
+
 export function configureMobileSelectionHandles(injector) {
+  injectorRef = injector;
   const service = getSheetSelectionService(injector);
   patchSelectionService(service, injector);
 }

@@ -450,6 +450,8 @@ final class PendingAttachmentImport {
     var position: Int
     @Attribute(.externalStorage) var data: Data
     var queuedAt: Date
+    /// The id on the server it came from (local transfer), to re-point embeds in the note's body once it has a new one.
+    var sourceAttachmentId: String?
 
     init(
         id: String = UUID().uuidString,
@@ -460,7 +462,8 @@ final class PendingAttachmentImport {
         title: String,
         position: Int,
         data: Data,
-        queuedAt: Date = .now
+        queuedAt: Date = .now,
+        sourceAttachmentId: String? = nil
     ) {
         self.id = id
         self.serverProfileId = serverProfileId
@@ -471,6 +474,7 @@ final class PendingAttachmentImport {
         self.position = position
         self.data = data
         self.queuedAt = queuedAt
+        self.sourceAttachmentId = sourceAttachmentId
     }
 }
 

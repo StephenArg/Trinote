@@ -278,6 +278,33 @@ final class PersistenceTests: XCTestCase {
         XCTAssertTrue(persistence.hasEffectiveTitleTemplate(noteId: "plain", serverProfileId: "server1"), "via ~template")
     }
 
+    func testTemplateTitleIsOwnOrInheritedOnTheTemplate() throws {
+        try persistence.cacheBranch(from: TestFixtures.branchResponse(branchId: "b_tpl", noteId: "tpl", parentNoteId: "templates"), serverProfileId: "server1")
+        XCTAssertFalse(persistence.templateGivesTitle(templateNoteId: "tpl", serverProfileId: "server1"))
+
+        try cacheLabel("template:titleTemplate", value: "A", on: "templates")
+        try persistence.commitBatch()
+        XCTAssertFalse(persistence.templateGivesTitle(templateNoteId: "tpl", serverProfileId: "server1"), "not inheritable")
+
+        try cacheLabel("template:titleTemplate", value: "A", on: "templates", inheritable: true)
+        try persistence.commitBatch()
+        XCTAssertTrue(persistence.templateGivesTitle(templateNoteId: "tpl", serverProfileId: "server1"), "inherited")
+    }
+
+    func testOfflineCreateFromATemplateThatNamesTitlesLeavesTitleToServer() throws {
+        try persistence.cacheNote(from: TestFixtures.noteResponse(id: "parent", title: "Parent"), serverProfileId: "server1")
+        try cacheLabel("template:titleTemplate", value: "Task", on: "tpl")
+        try persistence.commitBatch()
+        _ = try persistence.createOfflineChildNote(
+            parentNoteId: "parent", title: "Note", noteType: "text", mime: "text/html", initialContent: "",
+            serverProfileId: "server1",
+            initialAttributes: [NoteCreationAttribute(type: "relation", name: "template", value: "tpl")],
+            useParentTitleTemplate: true
+        )
+        let row = try XCTUnwrap(persistence.fetchPendingNoteCreations(serverProfileId: "server1").first)
+        XCTAssertTrue(row.titleFromTemplate)
+    }
+
     func testOfflineCreateLeavesTitleToServerOnlyWhenParentHasTitleTemplate() throws {
         try persistence.cacheNote(from: TestFixtures.noteResponse(id: "parent", title: "Parent"), serverProfileId: "server1")
         _ = try persistence.createOfflineChildNote(

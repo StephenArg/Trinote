@@ -48,7 +48,7 @@ function attachCanvasGuards(injector) {
   const unit = univerInstance.getCurrentUnitOfType(UniverInstanceType.UNIVER_SHEET);
   if (!unit) return;
 
-  const render = renderManager.getRenderById(unit.getUnitId());
+  const render = renderManager.getRenderUnitById(unit.getUnitId());
   const scene = render?.scene;
   const engine = scene?.getEngine?.();
   const canvas = engine?.getCanvasElement?.();

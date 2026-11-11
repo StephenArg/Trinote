@@ -18,6 +18,7 @@ struct KanbanBoardView: View {
     @State private var boardSort: KanbanBoardModels.ColumnSort?
     /// `#includeArchived`: archived columns (greyed) and `#archived` cards are shown.
     @State private var showsArchived = false
+    @State private var hidesAddColumn = false
     @State private var groupingOptions: [KanbanBoardModels.GroupingOption] = []
     /// Selection mode: tapping a card ticks it; the toolbar moves or deletes the ticked cards together.
     @State private var isSelecting = false
@@ -401,7 +402,7 @@ struct KanbanBoardView: View {
                 .labelStyle(.iconOnly)
                 .accessibilityLabel(String(localized: "Reorder Columns", comment: "Kanban reorder columns"))
             }
-            if !groupsByRelation {
+            if !groupsByRelation && !hidesAddColumn {
                 Button {
                     newColumnPlacement = nil
                     showAddColumn = true
@@ -1296,6 +1297,7 @@ struct KanbanBoardView: View {
         relationTitles = result.relationTitles
         boardSort = result.boardSort
         showsArchived = result.showsArchived
+        hidesAddColumn = result.hidesAddColumn
         groupingOptions = result.groupingOptions
         // Avoid a no-op reassignment flash when optimistic UI already matches the server.
         guard result.columns != columns || result.groupBy != groupBy else { return }
@@ -1469,13 +1471,11 @@ struct KanbanBoardView: View {
             }
         }
 
+        // A position only means something among a note's siblings, so cards from deeper notes don't count.
         var rebuilt: [String] = []
         for col in columns {
-            if col.value == column.value {
-                rebuilt.append(contentsOf: ordered.map(\.branchId).filter { !$0.isEmpty })
-            } else {
-                rebuilt.append(contentsOf: col.cards.map(\.branchId).filter { !$0.isEmpty })
-            }
+            let cards = col.value == column.value ? ordered : col.cards
+            rebuilt.append(contentsOf: cards.filter { $0.parentNoteId == card.parentNoteId }.map(\.branchId).filter { !$0.isEmpty })
         }
         var seen = Set<String>()
         let allBranchIds = rebuilt.filter { seen.insert($0).inserted }

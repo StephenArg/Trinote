@@ -115,8 +115,19 @@ final class LlmChatSession {
         set { content.reasoningEffort = newValue; saveSettings() }
     }
 
-    /// Desktop: on a Google model, web search can't be combined with the note tools.
-    var webSearchUnavailable: Bool { selectedModel?.provider == "google" && enableNoteTools }
+    /// The web search this chat's next turn would use, with its model and the server's search provider.
+    var webSearch: LlmWebSearch {
+        let config = aiConfig()
+        return .resolve(
+            modelProvider: selectedModel?.provider,
+            enableWebSearch: enableWebSearch,
+            enableNoteTools: enableNoteTools,
+            searchProviderId: config?.webSearchProviderId,
+            knowsSearchProviders: config?.knowsSearchProviders == true
+        )
+    }
+
+    var webSearchUnavailable: Bool { webSearch.unavailable != nil }
 
     /// Which tool calls wait for the user (Trilium 0.107+): the chat's own choice (desktop can make one), else the
     /// server's `llmPermissionMode` option, else that option's default.
@@ -313,15 +324,17 @@ final class LlmChatSession {
         saveError = nil
 
         let request = LlmChatTurnReducer.apiMessages(from: conversation)
+        let webSearch = webSearch
         var baseConfig = LlmChatRequestConfig(
             provider: model.provider,
             providerId: model.providerId,
             model: model.id,
-            enableWebSearch: enableWebSearch && !webSearchUnavailable,
+            enableWebSearch: webSearch.enableWebSearch,
             enableNoteTools: enableNoteTools,
             contextNoteId: contextNoteId,
             allowedTools: content.allowedTools?.isEmpty == false ? content.allowedTools : nil,
-            permissionMode: permissionMode
+            permissionMode: permissionMode,
+            webSearchProviderId: webSearch.webSearchProviderId
         )
         if model.hasReasoningLevels {
             baseConfig.reasoningEffort = reasoningEffort

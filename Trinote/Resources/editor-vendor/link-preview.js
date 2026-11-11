@@ -26,7 +26,8 @@
     ['description', 'data-description'],
     ['favicon', 'data-favicon'],
     ['siteName', 'data-site-name'],
-    ['image', 'data-image']
+    ['image', 'data-image'],
+    ['aspectRatio', 'data-aspect-ratio']
   ];
 
   var CARD_IMAGE_PLACEHOLDER = '<div class="link-embed-card-image-placeholder">&#128279;</div>';
@@ -99,6 +100,12 @@
     return embedType !== 'opengraph' && youTubeVideoId(data.url) != null;
   }
 
+  /** `video` or `audio` when the preview plays the file at its URL (Trilium v0.107), else null. */
+  function mediaKind(data) {
+    if (!data || (data.embedType !== 'video' && data.embedType !== 'audio')) return null;
+    return isHttpUrl(data.url) ? data.embedType : null;
+  }
+
   function picture(raw, className, size) {
     var src = imageSrc(raw);
     if (!src) return '';
@@ -122,8 +129,28 @@
    * The block preview: a card, or for a YouTube embed the stored thumbnail with a play badge. Trinote opens the
    * video outside the app instead of swapping in an inline player.
    */
-  function embedHTML(data) {
+  function embedHTML(data, boxSize) {
+    var media = mediaKind(data);
+    if (media === 'audio') {
+      return '<button type="button" class="link-embed-media-facade link-embed-audio-facade" data-media-kind="audio"'
+        + ' data-media-url="' + escapeHtml(data.url) + '" aria-label="' + escapeHtml(data.title || 'Play audio') + '">'
+        + '<span class="link-embed-audio-play" aria-hidden="true"></span>'
+        + '<span class="link-embed-audio-title">' + escapeHtml(data.title || hostname(data.url)) + '</span>'
+        + '</button>';
+    }
+    if (media === 'video') {
+      // A compact video is its title row alone.
+      if (boxSize === 'compact') return mentionHTML(data);
+      var shape = /^\d{1,4}\/\d{1,4}$/.test(data.aspectRatio || '') ? ' style="aspect-ratio:' + data.aspectRatio + '"' : '';
+      return '<div class="link-embed-video">'
+        + '<button type="button" class="link-embed-media-facade link-embed-video-facade" data-media-kind="video"'
+        + ' data-media-url="' + escapeHtml(data.url) + '" aria-label="' + escapeHtml(data.title || 'Play video') + '"' + shape + '>'
+        + picture(data.image, 'link-embed-video-thumbnail')
+        + '<span class="link-embed-video-play" aria-hidden="true"></span>'
+        + '</button></div>';
+    }
     if (isVideo(data)) {
+      if (boxSize === 'compact') return mentionHTML(data);
       return '<a class="link-embed-video" href="' + escapeHtml(href(data.url)) + '" rel="noopener noreferrer"'
         + ' aria-label="' + escapeHtml(data.title || 'Play video') + '">'
         + '<div class="link-embed-video-facade">'
@@ -259,9 +286,31 @@
   function fill(el) {
     var data = readData(el);
     if (!data) return false;
-    el.innerHTML = el.tagName === 'SECTION' ? embedHTML(data) : mentionHTML(data);
+    el.innerHTML = el.tagName === 'SECTION' ? embedHTML(data, el.getAttribute('data-box-size')) : mentionHTML(data);
     wireImages(el);
     return true;
+  }
+
+  /** In a read-only note, a tap swaps the thumbnail for a player: nothing loads from the host until then. */
+  function enhanceMedia(container) {
+    var root = container || document.body;
+    root.querySelectorAll('.link-embed-media-facade').forEach(function (facade) {
+      facade.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var player = document.createElement(facade.getAttribute('data-media-kind') === 'audio' ? 'audio' : 'video');
+        player.className = 'link-embed-media-player';
+        player.src = facade.getAttribute('data-media-url');
+        player.controls = true;
+        player.setAttribute('playsinline', '');
+        var parent = facade.parentNode;
+        parent.replaceChild(player, facade);
+        if (player.play) {
+          var playing = player.play();
+          if (playing && playing.catch) playing.catch(function () {});
+        }
+      });
+    });
   }
 
   /** Draws every stored preview under `container` (the read-only note view). */
@@ -292,6 +341,8 @@
     embedHTML: embedHTML,
     wireImages: wireImages,
     fill: fill,
-    render: render
+    render: render,
+    enhanceMedia: enhanceMedia,
+    mediaKind: mediaKind
   };
 })();

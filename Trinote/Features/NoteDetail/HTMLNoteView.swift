@@ -8,6 +8,8 @@ struct HTMLNoteView: View {
     /// Changes only when `html` differs from the last one by checkbox `checked` state alone.
     var checkboxOnlyRevision: Int = 0
     var onNoteLinkTapped: ((String) -> Void)?
+    /// A link pointing inside a note (a block, a bookmark or a PDF page). Without this, it opens the note as a whole.
+    var onNoteJumpLinkTapped: ((String, NoteJumpTarget) -> Void)?
     /// A to-do item was set to a task state (by a tap, or from the state menu a hold opens). `index` counts
     /// checkboxes in document order, leaving out included-note cards. The page already shows the change.
     var onTaskStateSet: ((_ index: Int, _ stateName: String) -> Void)?
@@ -99,6 +101,7 @@ struct HTMLNoteView: View {
             taskStates: taskStates,
             checkboxOnlyRevision: checkboxOnlyRevision,
             onNoteLinkTapped: onNoteLinkTapped,
+            onNoteJumpLinkTapped: onNoteJumpLinkTapped,
             onTaskStateSet: onTaskStateSet,
             onEditTaskStates: onEditTaskStates,
             onTaskStateMenuShown: onTaskStateMenuShown,
@@ -168,7 +171,7 @@ enum TriliumServerAssetURLs {
     }
 }
 
-private struct HTMLNoteWebView: UIViewRepresentable {
+struct HTMLNoteWebView: UIViewRepresentable {
     let html: String
     let baseURL: URL?
     let themeColors: HTMLThemeColors
@@ -177,6 +180,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     let taskStates: TaskStateWebConfig
     let checkboxOnlyRevision: Int
     var onNoteLinkTapped: ((String) -> Void)?
+    var onNoteJumpLinkTapped: ((String, NoteJumpTarget) -> Void)?
     var onTaskStateSet: ((_ index: Int, _ stateName: String) -> Void)?
     var onEditTaskStates: (() -> Void)?
     var onTaskStateMenuShown: (() -> Void)?
@@ -200,6 +204,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onNoteLinkTapped: onNoteLinkTapped,
+            onNoteJumpLinkTapped: onNoteJumpLinkTapped,
             onTaskStateSet: onTaskStateSet,
             onEditTaskStates: onEditTaskStates,
             onTaskStateMenuShown: onTaskStateMenuShown,
@@ -218,6 +223,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let contentController = WKUserContentController()
         contentController.add(handler, name: "heightUpdate")
         contentController.add(handler, name: "noteLink")
+        contentController.add(handler, name: "noteJumpLink")
         contentController.add(handler, name: "attachmentLink")
         contentController.add(handler, name: "taskStateSet")
         contentController.add(handler, name: "taskStateMenu")
@@ -233,6 +239,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        // Videos embedded in a note play in the note, not full screen.
+        config.allowsInlineMediaPlayback = true
         // Linked mermaid cards embed `mermaid-viewer.html` via a file:// iframe. WKWebView keeps iframe
         // loads and postMessage working between same-origin file:// documents without any KVC toggles,
         // so we don't set `allowFileAccessFromFileURLs` / `allowUniversalAccessFromFileURLs` here —
@@ -298,6 +306,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.findControl = findControl
         coordinator.onNoteLinkTapped = onNoteLinkTapped
+        coordinator.onNoteJumpLinkTapped = onNoteJumpLinkTapped
         coordinator.onTaskStateSet = onTaskStateSet
         coordinator.onEditTaskStates = onEditTaskStates
         coordinator.onTaskStateMenuShown = onTaskStateMenuShown
@@ -446,6 +455,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         let uc = container.webView.configuration.userContentController
         uc.removeScriptMessageHandler(forName: "heightUpdate")
         uc.removeScriptMessageHandler(forName: "noteLink")
+        uc.removeScriptMessageHandler(forName: "noteJumpLink")
         uc.removeScriptMessageHandler(forName: "attachmentLink")
         uc.removeScriptMessageHandler(forName: "taskStateSet")
         uc.removeScriptMessageHandler(forName: "taskStateMenu")
@@ -855,6 +865,23 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         .trinote-include__body { padding: 8px 10px 10px; font-size: 0.95em; }
         .trinote-include__body[data-box-size="small"] { max-height: 10em; overflow: hidden; }
         .trinote-include__body[data-box-size="medium"] { max-height: 20em; overflow: auto; -webkit-overflow-scrolling: touch; }
+        .trinote-include__body[data-box-size="resizable"] { max-height: var(--trinote-include-height, 20em); overflow: auto; -webkit-overflow-scrolling: touch; }
+        .trinote-include[data-box-size="compact"] .trinote-include__header { border-bottom: none; }
+        .trinote-include[data-box-size="expandable"] .trinote-include__title::before { content: '\\25B8\\00A0'; }
+        .trinote-include[data-box-size="expandable"][data-expanded] .trinote-include__title::before { content: '\\25BE\\00A0'; }
+        .trinote-include[data-box-size="expandable"]:not([data-expanded]) .trinote-include__header { border-bottom: none; }
+        .trinote-include[data-box-size="expandable"]:not([data-expanded]) .trinote-include__body { display: none; }
+        .trinote-include[data-hide-title] .trinote-include__header { border-bottom: none; justify-content: flex-end; padding: 6px 8px 0; }
+        .trinote-include[data-hide-title] .trinote-include__title { display: none; }
+        .trinote-include[style*="--trinote-include-width"] { width: var(--trinote-include-width); max-width: 100%; margin-left: auto; margin-right: auto; }
+        .trinote-include[data-position="left"] { margin-left: 0; margin-right: auto; }
+        .trinote-include[data-position="right"] { margin-left: auto; margin-right: 0; }
+        .trinote-include[data-position="wrap-left"] { float: left; margin: 4px 14px 8px 0; max-width: 50%; }
+        .trinote-include[data-position="wrap-right"] { float: right; margin: 4px 0 8px 14px; max-width: 50%; }
+        .trinote-include__caption { padding: 2px 10px 8px; font-size: 0.85em; opacity: 0.72; text-align: center; }
+        .trinote-include__broken { opacity: 0.65; font-style: italic; }
+        @keyframes trinote-block-flash { 0%, 55% { background-color: rgba(128,128,128,0.3); } 100% { background-color: transparent; } }
+        .trinote-block-flash { animation: trinote-block-flash 1.7s ease-out; border-radius: 4px; }
         .trinote-include__inner--text { font-size: 0.95em; }
         .trinote-include__inner--text p:first-child { margin-top: 0; }
         .trinote-include__inner--text p:last-child { margin-bottom: 0; }
@@ -946,6 +973,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         </head>
         <body>
         \(body)
+        \(ContentEmbedHTML.readingViewSnippet(forBody: body))
         \(LinkPreviewHTML.readingViewSnippet(forBody: body))
         \(CollectionNoteWebStyles.script(forHTML: body))
         \(TaskStateWebConfig.bundledScript.map { "<script>\n\($0)\ntrinoteTaskStates.configure(\(taskStates.json));\n</script>" } ?? "")
@@ -1042,6 +1070,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 if (i < 0 || i >= marks.length) return;
                 activeIdx = i;
                 marks[i].classList.add(ACTIVE);
+                try { if (window.trinoteContentBlocks) trinoteContentBlocks.revealTab(marks[i]); } catch (e) {}
                 try { revealInNestedScrollers(marks[i]); } catch (e) {}
             }
             function next() {
@@ -1094,6 +1123,9 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             if (noteId === 'root') noteId = '';
             var viewMode = '';
             var attachmentId = '';
+            var block = '';
+            var bookmark = '';
+            var page = 0;
             if (queryPart) {
                 queryPart.split('&').forEach(function(pair) {
                     var eq = pair.indexOf('=');
@@ -1102,10 +1134,67 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     var v = decodeURIComponent(pair.slice(eq + 1));
                     if (k === 'viewMode') viewMode = v;
                     if (k === 'attachmentId') attachmentId = v;
+                    if (k === 'block') block = v;
+                    if (k === 'bookmark') bookmark = v;
+                    if (k === 'page') page = parseInt(v, 10) || 0;
                 });
             }
-            return { noteId: noteId, viewMode: viewMode, attachmentId: attachmentId };
+            return { noteId: noteId, viewMode: viewMode, attachmentId: attachmentId, block: block, bookmark: bookmark, page: page };
         }
+        // Shows a link's target (opening any tab or collapsible around it) and flashes it. Returns where to scroll.
+        var trinoteJumpTarget = null;
+        function trinoteRevealAndFlash(start, end) {
+            if (window.trinoteContentBlocks) trinoteContentBlocks.revealTab(start);
+            for (var d = start.closest('details'); d; d = d.parentElement ? d.parentElement.closest('details') : null) {
+                if (d.open) continue;
+                // Opening it to show a target isn't the reader choosing to, so it's not saved.
+                d._trinoteRevealing = true;
+                d.open = true;
+                (function(el) { setTimeout(function() { el._trinoteRevealing = false; }, 300); })(d);
+            }
+            var flashed = [start];
+            if (end !== start && start.parentNode === end.parentNode) {
+                for (var n = start.nextElementSibling; n; n = n.nextElementSibling) {
+                    flashed.push(n);
+                    if (n === end) break;
+                }
+            } else if (end !== start) {
+                flashed.push(end);
+            }
+            flashed.forEach(function(el) {
+                el.classList.remove('trinote-block-flash');
+                void el.offsetWidth;
+                el.classList.add('trinote-block-flash');
+            });
+            trinoteJumpTarget = start;
+            return start.getBoundingClientRect().top;
+        }
+        window.trinoteJumpTargetTop = function() {
+            return trinoteJumpTarget ? trinoteJumpTarget.getBoundingClientRect().top : null;
+        };
+        // Blocks of this note, not of the notes shown in its include cards.
+        window.trinoteJumpToBlock = function(value) {
+            var ids = String(value).split(':');
+            var blocks = Array.from(document.querySelectorAll('[data-trilium-block-id]')).filter(function(b) { return !b.closest('.trinote-include'); });
+            var find = function(id) { return blocks.find(function(b) { return b.getAttribute('data-trilium-block-id') === id; }); };
+            var first = find(ids[0]);
+            var last = ids.length > 1 ? find(ids[1]) : first;
+            if (!first) return null;
+            if (!last) last = first;
+            // Written end first when the range was selected upwards.
+            if (first !== last && (first.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_PRECEDING)) {
+                var swap = first; first = last; last = swap;
+            }
+            return trinoteRevealAndFlash(first, last);
+        };
+        window.trinoteJumpToBookmark = function(name) {
+            var target = document.getElementById(name);
+            if (!target) {
+                var named = document.getElementsByName(name);
+                target = named.length ? named[0] : null;
+            }
+            return target ? trinoteRevealAndFlash(target, target) : null;
+        };
         function trinoteAttachmentIdFromApiHref(href) {
             var m = (href || '').match(/api\\/attachments\\/([a-zA-Z0-9_-]+)/i);
             return m ? m[1] : '';
@@ -1128,7 +1217,13 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 }
                 if (parsed.noteId) {
                     e.preventDefault();
-                    window.webkit.messageHandlers.noteLink.postMessage(parsed.noteId);
+                    if (parsed.block || parsed.bookmark || parsed.page) {
+                        window.webkit.messageHandlers.noteJumpLink.postMessage({
+                            noteId: parsed.noteId, block: parsed.block, bookmark: parsed.bookmark, page: parsed.page
+                        });
+                    } else {
+                        window.webkit.messageHandlers.noteLink.postMessage(parsed.noteId);
+                    }
                     return true;
                 }
             }
@@ -1137,12 +1232,14 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         var trinoteLastIncludeNavMs = 0;
         var trinoteLastIncludeNavId = '';
         function trinoteNavigateInclude(inc, reason) {
-            var id = inc.getAttribute('data-note-id') || '';
+            var attachmentId = inc.getAttribute('data-attachment-id') || '';
+            var id = attachmentId || inc.getAttribute('data-note-id') || '';
             var now = Date.now();
             if (id && id === trinoteLastIncludeNavId && (now - trinoteLastIncludeNavMs) < 400) return;
             trinoteLastIncludeNavMs = now;
             trinoteLastIncludeNavId = id;
-            if (id) window.webkit.messageHandlers.noteLink.postMessage(id);
+            if (attachmentId) window.webkit.messageHandlers.attachmentLink.postMessage(attachmentId);
+            else if (id) window.webkit.messageHandlers.noteLink.postMessage(id);
         }
 
         function trinoteFindImageNoteTarget(el) {
@@ -1181,6 +1278,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                     e.preventDefault();
                     trinoteNavigateInclude(inc, 'open-click');
                     return;
+                }
+                // An expandable box opens from its title row. The page's ResizeObserver reports the new height.
+                if (inc.getAttribute('data-box-size') === 'expandable' && e.target.closest('.trinote-include__header')) {
+                    if (inc.hasAttribute('data-expanded')) inc.removeAttribute('data-expanded');
+                    else inc.setAttribute('data-expanded', '');
                 }
                 return;
             }
@@ -1797,7 +1899,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
                 if (persistEnabled) {
                     d.addEventListener('toggle', function() {
-                        if (d._trinoteDragging) return;
+                        if (d._trinoteDragging || d._trinoteRevealing) return;
                         try {
                             window.webkit.messageHandlers.collapsibleToggle.postMessage({
                                 index: fromIndex,
@@ -1874,6 +1976,8 @@ private struct HTMLNoteWebView: UIViewRepresentable {
     private static func htmlContainsInlineMermaidBlocks(_ html: String) -> Bool {
         // The regex scans the whole body, which is several megabytes once image data URIs are inlined.
         guard html.containsASCIICaseInsensitive("mermaid") else { return false }
+        // Trilium stores diagrams in a note as code blocks; `content-blocks.js` turns them into `.mermaid` divs.
+        if html.containsASCIICaseInsensitive("language-mermaid") { return true }
         guard let regex = try? NSRegularExpression(pattern: #"(?i)class\s*=\s*["']mermaid["']"#, options: []) else {
             return false
         }
@@ -2122,6 +2226,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
         weak var findControl: FindOnPageControl?
         var lastAppliedColorScheme: ColorScheme?
         var onNoteLinkTapped: ((String) -> Void)?
+        var onNoteJumpLinkTapped: ((String, NoteJumpTarget) -> Void)?
         var onTaskStateSet: ((_ index: Int, _ stateName: String) -> Void)?
         var onEditTaskStates: (() -> Void)?
         var onTaskStateMenuShown: (() -> Void)?
@@ -2193,6 +2298,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
 
         init(
             onNoteLinkTapped: ((String) -> Void)?,
+            onNoteJumpLinkTapped: ((String, NoteJumpTarget) -> Void)?,
             onTaskStateSet: ((_ index: Int, _ stateName: String) -> Void)?,
             onEditTaskStates: (() -> Void)?,
             onTaskStateMenuShown: (() -> Void)?,
@@ -2205,6 +2311,7 @@ private struct HTMLNoteWebView: UIViewRepresentable {
             onImagePreview: ((FullScreenImagePayload) -> Void)?
         ) {
             self.onNoteLinkTapped = onNoteLinkTapped
+            self.onNoteJumpLinkTapped = onNoteJumpLinkTapped
             self.onTaskStateSet = onTaskStateSet
             self.onEditTaskStates = onEditTaskStates
             self.onTaskStateMenuShown = onTaskStateMenuShown
@@ -2286,6 +2393,15 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                 }
             case "noteLink":
                 if let noteId = message.body as? String {
+                    onNoteLinkTapped?(noteId)
+                }
+            case "noteJumpLink":
+                guard let body = message.body as? [String: Any], let noteId = body["noteId"] as? String, !noteId.isEmpty else { return }
+                if let onNoteJumpLinkTapped {
+                    func text(_ key: String) -> String? { (body[key] as? String).flatMap { $0.isEmpty ? nil : $0 } }
+                    let page = (body["page"] as? NSNumber)?.intValue
+                    onNoteJumpLinkTapped(noteId, NoteJumpTarget(block: text("block"), bookmark: text("bookmark"), page: page.flatMap { $0 >= 1 ? $0 : nil }))
+                } else {
                     onNoteLinkTapped?(noteId)
                 }
             case "collectionRow":
@@ -2583,7 +2699,11 @@ private struct HTMLNoteWebView: UIViewRepresentable {
                         return .cancel
                     }
                     if let noteId = HTMLNoteWebView.noteIdFromTriliumHashLink(url: url), !noteId.isEmpty {
-                        onNoteLinkTapped?(noteId)
+                        if let target = TriliumHashLinkNavigation.parse(url: url)?.jumpTarget, let onNoteJumpLinkTapped {
+                            onNoteJumpLinkTapped(noteId, target)
+                        } else {
+                            onNoteLinkTapped?(noteId)
+                        }
                         return .cancel
                     }
                 }

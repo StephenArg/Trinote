@@ -188,7 +188,8 @@ struct NoteDetailView: View {
     /// When `true`, hide the floating edit FAB and instead require a 1.5-second hold on the read-only view to start editing. Mirrors `SettingsView`'s toggle of the same key.
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     /// When `true`, Image–Code block tools appear in a top toolbar below the nav header instead of the bottom bar.
-    @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
+    @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = true
+    @AppStorage("markdownEditorViewMode") private var markdownEditorModeRaw = MarkdownViewMode.source.rawValue
     @AppStorage(NoteContentWidth.storageKey) private var noteMaxContentWidth: Int = 0
     /// Journal day notes: “Notes edited on that day” pill row starts collapsed.
     @AppStorage("journalNotesEditedOnDayExpanded") private var notesEditedOnDayExpanded: Bool = false
@@ -202,6 +203,7 @@ struct NoteDetailView: View {
     @AppStorage("noteInspectorTab") private var noteInspectorTabRaw = NoteInspectorTab.contents.rawValue
     /// Headings of the note on screen, for the inspector's table of contents.
     @State private var tocHeadings: [NoteHeading] = []
+    @State private var showTableOfContents = false
     /// A file is being dragged over the note (iPad layout); dropping it adds an attachment.
     @State private var isFileDropTargeted = false
     @State private var isTabBarReordering = false
@@ -269,6 +271,9 @@ struct NoteDetailView: View {
     /// The same question over the iPhone spreadsheet editor, which is a full-screen cover.
     @State private var showSpreadsheetCancelEditingConfirm = false
     @State private var showIncludeNotePicker = false
+    @State private var blockReferenceKind: BlockReferenceSheet.Kind?
+    @State private var showMediaURLPrompt = false
+    @State private var mediaURLDraft = ""
     @State private var showInlineIconPicker = false
 
     /// Bridge to communicate with the canvas editor WKWebView (call getSceneData on save).
@@ -292,6 +297,8 @@ struct NoteDetailView: View {
     @State private var geoMapShapes: [GeoMapShape] = []
     @State private var geoMapDisplaySettings = GeoMapDisplaySettings()
     @State private var geoMapCachedSettingsJSON = GeoMapDisplaySettings().bridgeJSON()
+    /// The picture of the image map last looked up, and what it was looked up for.
+    @State private var geoMapImageLoaded: GeoMapImageLoaded?
     @State private var geoMapInitialViewportJSON = ""
     @State private var geoMapViewportSaveTask: Task<Void, Never>?
     @State private var geoMapSelection: GeoMapSelection?
@@ -700,6 +707,7 @@ struct NoteDetailView: View {
         if (typeof b.hasLoadedContent === 'function' && !b.hasLoadedContent()) {
           return JSON.stringify({ html: null, f: null });
         }
+        window.editorBridge.flushExcerptEdits();
         var html = window.editorBridge.getContent();
         var f = window.editorBridge.getScrollFraction();
         return JSON.stringify({ html: html, f: f });
@@ -782,6 +790,44 @@ struct NoteDetailView: View {
             .replacingOccurrences(of: "${", with: "\\${")
     }
 
+    /// The open note's headings and paragraphs as the editor has them now, unsaved edits included.
+    @MainActor
+    private static func editorBlockOutline(webView: WKWebView?) async -> [NoteBlock] {
+        guard let webView,
+              let json = (try? await webView.evaluateJavaScript("window.editorBridge.blockOutlineJSON()")) as? String else { return [] }
+        return (try? JSONDecoder().decode([NoteBlock].self, from: Data(json.utf8))) ?? []
+    }
+
+    @MainActor
+    private static func assignEditorBlockId(webView: WKWebView?, block: NoteBlock) async -> String? {
+        guard let webView,
+              let id = (try? await webView.evaluateJavaScript("window.editorBridge.assignBlockId(\(block.id))")) as? String,
+              !id.isEmpty else { return nil }
+        return id
+    }
+
+    private static func insertBlockReference(_ pick: BlockReferenceSheet.Pick, webView: WKWebView?) {
+        guard let webView else { return }
+        let noteId = javaScriptTemplateLiteralContent(pick.noteId)
+        let blockId = javaScriptTemplateLiteralContent(pick.blockId)
+        let script: String
+        switch pick.kind {
+        case .link:
+            let label = javaScriptTemplateLiteralContent("\(pick.noteTitle) - \(pick.excerpt)")
+            script = "window.editorBridge.insertBlockLink(`\(noteId)`, `\(blockId)`, `\(label)`);"
+        case .excerpt:
+            let title = javaScriptTemplateLiteralContent(pick.noteTitle)
+            script = "window.editorBridge.insertBlockExcerpt(`\(noteId)`, `\(blockId)`, `\(title)`);"
+        }
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    private static func insertMediaEmbed(webView: WKWebView?, url: String) {
+        guard let webView else { return }
+        let escaped = javaScriptTemplateLiteralContent(url)
+        webView.evaluateJavaScript("window.editorBridge.insertMediaEmbed(`\(escaped)`);", completionHandler: nil)
+    }
+
     private static func insertIncludeNoteInEditor(webView: WKWebView?, noteId: String, title: String, boxSize: String) {
         guard let webView else { return }
         let idEsc = javaScriptTemplateLiteralContent(noteId)
@@ -806,6 +852,18 @@ struct NoteDetailView: View {
         let idEsc = javaScriptTemplateLiteralContent(noteId)
         let titleEsc = javaScriptTemplateLiteralContent(title)
         webView.evaluateJavaScript("window.editorBridge.setIncludeNoteTitle(`\(idEsc)`, `\(titleEsc)`);", completionHandler: nil)
+    }
+
+    private static func pushExcerptContent(webView: WKWebView?, requestId: String, html: String?) {
+        callEditorBridge(webView: webView, "applyExcerptContent", arguments: [requestId, html ?? NSNull()])
+    }
+
+    /// Calls `window.editorBridge[method]`, its arguments going across as JSON.
+    private static func callEditorBridge(webView: WKWebView?, _ method: String, arguments: [Any]) {
+        guard let webView,
+              let data = try? JSONSerialization.data(withJSONObject: arguments),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.editorBridge.\(method).apply(window.editorBridge, \(json));", completionHandler: nil)
     }
 
     private static func pushIncludeNotePreviewToEditor(webView: WKWebView?, previewId: String, html: String) {
@@ -853,6 +911,16 @@ struct NoteDetailView: View {
             "window.editorBridge.insertAttachmentLink(\(noteIdJSON), \(attachmentIdJSON), \(titleJSON));",
             completionHandler: nil
         )
+    }
+
+    /// The note a picture or file added at the insert point belongs to, when that's an excerpt being edited. Its text
+    /// is saved to that note, so anything uploaded for it goes there too.
+    @MainActor
+    private static func excerptNoteAtInsertPoint(webView: WKWebView?) async -> String? {
+        guard let webView,
+              let noteId = try? await webView.evaluateJavaScript("window.editorBridge.excerptNoteAtInsertPoint()") as? String,
+              !noteId.isEmpty else { return nil }
+        return noteId
     }
 
     private static func beginEditorImageBatch(webView: WKWebView?, count: Int) {
@@ -915,10 +983,11 @@ struct NoteDetailView: View {
         vm: NoteDetailViewModel
     ) async {
         let filename = item.resolvedFilename(basename: basename)
-        if let attachment = await vm.uploadAttachment(data: item.data, filename: filename, mime: item.mime) {
+        let excerptNoteId = await Self.excerptNoteAtInsertPoint(webView: editorWebView)
+        if let attachment = await vm.uploadAttachment(data: item.data, filename: filename, mime: item.mime, ownerNoteId: excerptNoteId) {
             Self.insertAttachmentLinkInEditor(
                 webView: editorWebView,
-                noteId: vm.noteId,
+                noteId: excerptNoteId ?? vm.noteId,
                 attachmentId: attachment.attachmentId,
                 title: attachment.title
             )
@@ -1029,7 +1098,7 @@ struct NoteDetailView: View {
         guard let note = vm.note else { return }
         if noteEditorAutosave {
             cancelScheduledAutosave()
-            autosaveEditedContent(vm: vm)
+            autosaveEditedContent(vm: vm, userRequested: true)
         } else {
             saveEditedContent(vm: vm, note: note)
         }
@@ -1223,17 +1292,17 @@ struct NoteDetailView: View {
     }
 
     /// Reads the open editor's latest content and saves it without leaving the editor.
-    private func autosaveEditedContent(vm: NoteDetailViewModel) {
+    private func autosaveEditedContent(vm: NoteDetailViewModel, userRequested: Bool = false) {
         guard vm.isEditing, let note = vm.note else { return }
         switch note.type {
         case .text:
             guard let wv = editorWebView else {
-                vm.autosaveRichText(freshHTML: nil)
+                vm.autosaveRichText(freshHTML: nil, userRequested: userRequested)
                 return
             }
             wv.evaluateJavaScript(Self.richTextEditorSavePayloadScript) { result, _ in
                 DispatchQueue.main.async {
-                    vm.autosaveRichText(freshHTML: Self.parseRichTextEditorSavePayload(result).html)
+                    vm.autosaveRichText(freshHTML: Self.parseRichTextEditorSavePayload(result).html, userRequested: userRequested)
                 }
             }
         case .canvas:
@@ -1250,7 +1319,7 @@ struct NoteDetailView: View {
                 DispatchQueue.main.async { vm.autosaveSpreadsheet(json: json) }
             }
         default:
-            vm.autosaveEditedBody(vm.editableContent)
+            vm.autosaveEditedBody(vm.editableContent, userRequested: userRequested)
         }
     }
 
@@ -1262,10 +1331,15 @@ struct NoteDetailView: View {
         autosaveEditedContent(vm: vm)
     }
 
-    /// Back (or ⌘[) while editing: saves first when Autosave or Back Button Saves is on, then leaves.
+    /// Back (or ⌘[) while editing: closes the editor and shows the note. With Autosave or Back Button Saves on it
+    /// saves first, so the note shows the edit straight away; otherwise what was typed stays as a draft.
     private func leaveEditor(vm: NoteDetailViewModel) {
-        guard savesWhenLeavingEditor, vm.isEditing, let note = vm.note else {
+        guard vm.isEditing else {
             dismiss()
+            return
+        }
+        guard savesWhenLeavingEditor, !vm.resumedDraftIsUnchanged, let note = vm.note else {
+            closeEditorKeepingDraft(vm: vm)
             return
         }
         guard !isLeavingEditor else { return }
@@ -1276,9 +1350,26 @@ struct NoteDetailView: View {
         }
         cancelScheduledAutosave()
         isLeavingEditor = true
-        saveEditedContent(vm: vm, note: note) { canLeave in
+        // A failed save leaves the editor open, with the error showing.
+        saveEditedContent(vm: vm, note: note) { _ in
             isLeavingEditor = false
-            if canLeave { dismiss() }
+        }
+    }
+
+    private func closeEditorKeepingDraft(vm: NoteDetailViewModel) {
+        guard vm.note?.type == .text, let wv = editorWebView else {
+            vm.closeEditorKeepingDraft()
+            return
+        }
+        // The editor's last keystrokes may not have been reported yet.
+        wv.evaluateJavaScript(Self.richTextEditorSavePayloadScript) { result, _ in
+            DispatchQueue.main.async {
+                let (html, fraction) = Self.parseRichTextEditorSavePayload(result)
+                if let fraction {
+                    queueReadOnlyScrollRestoreAfterRichTextSave(fraction: fraction)
+                }
+                vm.closeEditorKeepingDraft(freshHTML: html)
+            }
         }
     }
 
@@ -1286,7 +1377,7 @@ struct NoteDetailView: View {
     /// (`WorkspaceCommand.saveBeforeLeaving`). Saves first when Autosave or Back Button Saves is on.
     private func saveBeforeLeavingPane() {
         guard let noteWorkspace else { return }
-        guard savesWhenLeavingEditor, let vm = viewModel, vm.isEditing, let note = vm.note,
+        guard savesWhenLeavingEditor, let vm = viewModel, vm.isEditing, !vm.resumedDraftIsUnchanged, let note = vm.note,
               vm.mediaUploadStatus == nil, !isLeavingEditor
         else {
             // Nothing to save here, or photos still uploading: leave as before, keeping a draft.
@@ -1351,11 +1442,10 @@ struct NoteDetailView: View {
         case .back:
             // Only a linked note pushed inside the pane has somewhere to go back to.
             guard onClose == nil else { return }
-            if !vm.isEditing {
-                dismiss()
-            } else if savesWhenLeavingEditor {
-                // Like the Back button, which saves first.
+            if vm.isEditing {
                 leaveEditor(vm: vm)
+            } else {
+                dismiss()
             }
         case .saveBeforeLeaving, .jumpToNote, .showSection, .focusSearch, .toggleSidebar, .nextTab, .previousTab, .closeTab:
             break
@@ -1659,6 +1749,31 @@ struct NoteDetailView: View {
 
     /// Opens a note from this screen: pushed here, or on the Notes tab when this screen is a tab's fixed root
     /// (Pinned Note, Calendar), so that tab keeps showing its own note.
+    /// A link pointing inside a note: this note scrolls to the place, another opens at it.
+    private func openNoteJump(noteId: String, target: NoteJumpTarget, vm: NoteDetailViewModel) {
+        if noteId == vm.noteId {
+            findControl.jump(to: target)
+            return
+        }
+        appState.pendingNoteJump = PendingNoteJump(noteId: noteId, target: target)
+        openLinkedNote(noteId)
+    }
+
+    /// Lands on the place a link was pointing at once this note can show it.
+    private func consumePendingNoteJumpIfNeeded() {
+        guard let vm = viewModel, let note = vm.note, note.type == .text,
+              !vm.isEditing, !vm.needsProtectedSession, !vm.isLoadingContent, vm.contentString != nil,
+              let target = vm.consumePendingNoteJump()
+        else { return }
+        // The link decides where the note scrolls, not the open tab's saved position.
+        if readOnlyScrollFractionPendingRestore != nil || isReadOnlyScrollRevealPending {
+            readOnlyScrollFractionPendingRestore = nil
+            isReadOnlyScrollRevealPending = false
+            finishFloatingEditScrollSettling(vm: vm, note: note)
+        }
+        findControl.jump(to: target)
+    }
+
     private func openLinkedNote(_ noteId: String) {
         if opensNotesOnNotesTab {
             appState.pendingExternalOpen = .note(NoteNavItem(noteId: noteId, title: ""))
@@ -1845,10 +1960,12 @@ struct NoteDetailView: View {
             }
             .onChange(of: content) { _, _ in
                 consumeFindDeepLinkIfNeeded()
+                consumePendingNoteJumpIfNeeded()
             }
             .onChange(of: loading) { _, isLoading in
                 if isLoading == false {
                     consumeFindDeepLinkIfNeeded()
+                    consumePendingNoteJumpIfNeeded()
                 }
             }
             .onChange(of: editing) { _, isEditing in
@@ -2370,6 +2487,9 @@ struct NoteDetailView: View {
             .sheet(isPresented: noteOverflowPresentationBinding(asPopover: false)) {
                 noteOverflowActionsSheet(vm: vm, note: note)
             }
+            .sheet(isPresented: $showTableOfContents) {
+                tableOfContentsSheet(vm)
+            }
         )
     }
 
@@ -2462,7 +2582,11 @@ struct NoteDetailView: View {
                 Button(String(localized: "Discard Draft", comment: "Draft dialog"), role: .destructive) { vm.discardDraft() }
                 Button(String(localized: "Cancel", comment: "Draft dialog"), role: .cancel) {}
             } message: {
-                Text(String(localized: "You have an unsaved draft for this note. Would you like to restore it?", comment: "Draft dialog message"))
+                if vm.draftMayLackEmbeddedContent {
+                    Text(String(localized: "This draft doesn't have some embedded notes, files or block links that are in the saved note. Saving it would remove them from the note.", comment: "Draft dialog message when the draft lacks embedded content"))
+                } else {
+                    Text(String(localized: "You have an unsaved draft for this note. Would you like to restore it?", comment: "Draft dialog message"))
+                }
             }
         )
     }
@@ -2585,7 +2709,9 @@ struct NoteDetailView: View {
             HStack(spacing: 8) {
                 Image(systemName: "doc.badge.clock")
                     .font(.caption)
-                Text(String(localized: "Unsaved draft available", comment: "Draft banner"))
+                Text(vm.draftMayLackEmbeddedContent
+                    ? String(localized: "Unsaved draft is missing embedded items", comment: "Draft banner when the draft lacks embedded content")
+                    : String(localized: "Unsaved draft available", comment: "Draft banner"))
                     .font(.caption.weight(.medium))
                 Spacer()
                 Button(String(localized: "Restore", comment: "Draft banner")) { vm.restoreDraft() }
@@ -2796,6 +2922,9 @@ struct NoteDetailView: View {
                 onNoteLinkTapped: { linkedNoteId in
                     openLinkedNote(linkedNoteId)
                 },
+                onNoteJumpLinkTapped: { linkedNoteId, target in
+                    openNoteJump(noteId: linkedNoteId, target: target, vm: vm)
+                },
                 onTaskStateSet: { index, stateName in
                     vm.setTaskState(index: index, stateName: stateName)
                 },
@@ -2840,6 +2969,9 @@ struct NoteDetailView: View {
                 onNoteLinkTapped: { linkedNoteId in
                     openLinkedNote(linkedNoteId)
                 },
+                onNoteJumpLinkTapped: { linkedNoteId, target in
+                    openNoteJump(noteId: linkedNoteId, target: target, vm: vm)
+                },
                 loadAttachmentPreview: { attachmentId in
                     if let attachment = vm.attachments.first(where: { $0.attachmentId == attachmentId }) {
                         return await vm.prepareAttachmentPreview(for: attachment)
@@ -2874,7 +3006,8 @@ struct NoteDetailView: View {
                 attachments: vm.attachments,
                 attachmentsLoaded: vm.attachmentsLoaded,
                 client: vm.client,
-                excalidrawJSON: vm.contentString
+                excalidrawJSON: vm.contentString,
+                savedPreview: vm.savedCanvasPreview
             ))
         case .mindMap:
             guard let json = vm.contentString else { return AnyView(EmptyView()) }
@@ -2921,24 +3054,151 @@ struct NoteDetailView: View {
                     serverURL: appState.activeProfile?.normalizedBaseURL
                 ))
             }
+        case .search:
+            return AnyView(SavedSearchNoteView(viewModel: vm, note: note) { openLinkedNote($0) })
         default:
             return AnyView(UnsupportedNoteView(note: note, serverURL: appState.activeProfile?.normalizedBaseURL))
         }
     }
 
+    /// The ⋮ menu of an excerpt or included note in the editor, as a popover at the button. The included note's type
+    /// decides what it offers (an excerpt is always of a text note).
+    private func showExcerptMenu(
+        vm: NoteDetailViewModel, pos: Int, noteId: String, title: String, raw: String, canEdit: Bool, isExcerpt: Bool, rect: CGRect
+    ) {
+        guard let webView = editorWebView else { return }
+        Task { @MainActor in
+            let noteType = isExcerpt ? "text" : (await vm.includedNoteType(noteId) ?? "")
+            var model = IncludeEmbedMenuModel(
+                state: ContentEmbedEdit.state(ofEmbedAt: 0, in: raw),
+                noteType: noteType,
+                canChange: true,
+                canOpenInNewTab: noteWorkspace != nil && showNoteTabsBar
+            )
+            // Editing in place needs the server and a text note (the editor here is the text editor), and a note can't
+            // edit an embed of itself inside itself. Turning it off always works.
+            model.offersEditable = model.isEditable || (noteType == "text" && canEdit && vm.isOnline && noteId != vm.noteId)
+
+            func change(_ change: ContentEmbedEdit.Change) {
+                switch change {
+                case .editable(let isOn):
+                    // Stored Editable first (an older `<section>` becomes a figure); the editor takes it back if the
+                    // note can't be fetched.
+                    if isOn, let html = ContentEmbedEdit.applying(.editable(true), toEmbedAt: 0, in: raw) {
+                        Self.callEditorBridge(webView: webView, "setIncludeEmbedRaw", arguments: [pos, html])
+                    }
+                    Self.callEditorBridge(webView: webView, "setExcerptEditing", arguments: [pos, isOn])
+                case .delete:
+                    Self.callEditorBridge(webView: webView, "replaceIncludeEmbed", arguments: [pos, ""])
+                case .convertToLink:
+                    // A title not loaded yet would leave an empty link nobody could see or tap.
+                    let label = title.isEmpty ? noteId : title
+                    guard let html = ContentEmbedEdit.applying(.convertToLink(title: label), toEmbedAt: 0, in: raw) else { return }
+                    Self.callEditorBridge(webView: webView, "replaceIncludeEmbed", arguments: [pos, html])
+                default:
+                    guard let html = ContentEmbedEdit.applying(change, toEmbedAt: 0, in: raw) else { return }
+                    Self.callEditorBridge(webView: webView, "setIncludeEmbedRaw", arguments: [pos, html])
+                }
+            }
+
+            IncludeEmbedMenuPresenter.present(
+                model: model,
+                from: webView,
+                rect: rect,
+                onDismiss: { Self.callEditorBridge(webView: webView, "embedMenuClosed", arguments: []) }
+            ) { action in
+                switch action {
+                case .open:
+                    openLinkedNote(noteId)
+                case .openInNewTab:
+                    openIncludedNoteInNewTab(noteId: noteId, title: title, noteType: noteType.isEmpty ? "text" : noteType)
+                case .askForCaption:
+                    IncludeEmbedMenuPresenter.askForCaption { change(.caption($0)) }
+                case .change(let requested):
+                    change(requested)
+                }
+            }
+        }
+    }
+
+    private func openIncludedNoteInNewTab(noteId: String, title: String, noteType: String) {
+        guard let noteWorkspace, let profileId = appState.activeProfile?.id,
+              let tabId = try? PersistenceManager.shared.addOpenNoteTab(
+                  noteId: noteId,
+                  title: title,
+                  noteType: noteType,
+                  serverProfileId: profileId
+              )
+        else { return }
+        LastActiveOpenTabStore.set(tabId, profileId: profileId)
+        noteWorkspace.open(NoteRoute(noteId: noteId, title: title, openTabId: tabId))
+    }
+
     /// A geo map note (or a collection shown as one), loading its pins when it appears.
     private func geoMapReadingView(_ vm: NoteDetailViewModel, note: NoteItem) -> some View {
+        Group {
+            switch geoMapImageState(for: note) {
+            case .loading:
+                geoMapImageLoadingView
+            case .unavailable(let isSVG):
+                geoMapImageUnavailableView(isSVG: isSVG)
+            case .geo:
+                geoMapViewer(vm, image: nil)
+            case .image(let image):
+                geoMapViewer(vm, image: image)
+                    .id(image.key)
+            }
+        }
+        .onAppear { loadGeoMapData(vm: vm, note: note) }
+    }
+
+    private func geoMapViewer(_ vm: NoteDetailViewModel, image: GeoMapImage?) -> some View {
         GeoMapNoteView(
-            viewportJSON: geoMapInitialViewportJSON.isEmpty
-                ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
-                : geoMapInitialViewportJSON,
+            viewportJSON: image.map { GeoMapViewConfig.savedImageView(in: vm.contentString) ?? $0.defaultViewportJSON }
+                ?? (geoMapInitialViewportJSON.isEmpty
+                    ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
+                    : geoMapInitialViewportJSON),
             markers: geoMapPins,
             tracks: geoMapTracks,
             shapes: geoMapShapes,
             settingsJSON: geoMapCachedSettingsJSON,
+            imageJSON: image?.bridgeJSON(fit: true) ?? "null",
             onOpenPinNote: { openLinkedNote($0) }
         )
-        .onAppear { loadGeoMapData(vm: vm, note: note) }
+    }
+
+    private var geoMapImageLoadingView: some View {
+        ProgressView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func geoMapImageUnavailableView(isSVG: Bool) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "photo")
+                .font(.title)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(isSVG
+                ? String(localized: "SVG images can’t be used as a map. Convert the image to PNG, JPEG or WebP.", comment: "Image map: the chosen image is an SVG")
+                : String(localized: "This map’s image couldn’t be loaded.", comment: "Image map: the picture failed to load"))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// What this map note is drawn over, as far as it's known yet. An image that hasn't been looked up is still loading.
+    private func geoMapImageState(for note: NoteItem) -> GeoMapImageState {
+        guard let request = GeoMapImageRequest(note: note) else { return .geo }
+        guard let loaded = geoMapImageLoaded, loaded.request == request else { return .loading }
+        return loaded.state
+    }
+
+    private func geoMapSpace(for note: NoteItem) -> GeoMapSpace {
+        if case .image(let image) = geoMapImageState(for: note) { return .image(image.space) }
+        return .geo
     }
 
     @ViewBuilder
@@ -3166,7 +3426,7 @@ struct NoteDetailView: View {
                     if noteEditorAutosave {
                         // Like the floating save button: saves now and keeps the editor open.
                         cancelScheduledAutosave()
-                        vm.autosaveRichText(freshHTML: html)
+                        vm.autosaveRichText(freshHTML: html, userRequested: true)
                         return
                     }
                     queueReadOnlyScrollRestoreAfterRichTextSave(fraction: scrollFraction)
@@ -3180,6 +3440,11 @@ struct NoteDetailView: View {
                     switch req {
                     case .pickIncludeNote:
                         showIncludeNotePicker = true
+                    case .pickBlockReference(let excerpt):
+                        blockReferenceKind = excerpt ? .excerpt : .link
+                    case .pickMediaURL:
+                        mediaURLDraft = ""
+                        showMediaURLPrompt = true
                     case .pickInlineIcon:
                         showInlineIconPicker = true
                     case .resolveNoteTitle(let nid):
@@ -3189,9 +3454,34 @@ struct NoteDetailView: View {
                         }
                     case .openNote(let nid):
                         openLinkedNote(nid)
-                    case .includePreview(let previewId, let nid, let box):
+                    case .excerptMenu(let pos, let nid, let title, let raw, let canEdit, let isExcerpt, let rect):
+                        showExcerptMenu(vm: vm, pos: pos, noteId: nid, title: title, raw: raw, canEdit: canEdit, isExcerpt: isExcerpt, rect: rect)
+                    case .excerptLoadFailed:
+                        vm.reportExcerptCannotBeEdited()
+                    case .noteLinkToEmbed(let from, let href, let nid, let block, let title):
                         Task { @MainActor in
-                            let html = await vm.resolvedIncludePreviewHTML(noteId: nid, boxSize: box)
+                            // Trilium's default size for the kind of note; an excerpt shows in full.
+                            let type = block.isEmpty ? (await vm.includedNoteType(nid) ?? "text") : "text"
+                            let html = ContentEmbedEdit.embedHTML(
+                                noteId: nid,
+                                block: block.isEmpty ? nil : block,
+                                boxSize: ContentEmbedEdit.defaultBoxSize(noteType: type, isExcerpt: !block.isEmpty)
+                            )
+                            Self.callEditorBridge(webView: editorWebView, "convertNoteLinkToEmbed", arguments: [from, href, html, title])
+                        }
+                    case .excerptLoad(let requestId, let nid, let block):
+                        Task { @MainActor in
+                            let html = await vm.excerptContentForEditor(noteId: nid, block: block)
+                            Self.pushExcerptContent(webView: editorWebView, requestId: requestId, html: html)
+                        }
+                    case .excerptSave(let key, let nid, let block, let newBlock, let html):
+                        Task { @MainActor in
+                            let saved = await vm.saveExcerpt(noteId: nid, block: block, newBlock: newBlock, html: html)
+                            Self.callEditorBridge(webView: editorWebView, "excerptSaved", arguments: [key, saved, newBlock])
+                        }
+                    case .includePreview(let previewId, let nid, let box, let rawEmbed):
+                        Task { @MainActor in
+                            let html = await vm.resolvedIncludePreviewHTML(noteId: nid, boxSize: box, rawEmbed: rawEmbed)
                             Self.pushIncludeNotePreviewToEditor(webView: editorWebView, previewId: previewId, html: html)
                         }
                     case .linkPreview(let requestId, let url, let explicit):
@@ -3230,6 +3520,7 @@ struct NoteDetailView: View {
                 onContentLoaded: { vm.setAutosaveBaselineFromEditor($0) },
                 hidesSaveButton: !showsEditorSaveButton(vm),
                 linkPreviews: vm.linkPreviewSupport,
+                contentBlocks: TriliumServerCompatibility.supportsContentBlocks(appState.serverAppInfo),
                 taskStates: TaskStateWebConfig.forNote(store: appState.taskStates, isMarkdown: false)
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
@@ -3318,6 +3609,30 @@ struct NoteDetailView: View {
                 Self.insertIncludeNoteInEditor(webView: editorWebView, noteId: pickedId, title: pickedTitle, boxSize: "medium")
             }
             .environment(appState)
+        }
+        .sheet(item: $blockReferenceKind) { kind in
+            BlockReferenceSheet(
+                kind: kind,
+                currentNoteId: activeNoteId,
+                currentNoteTitle: vm.note?.title ?? "",
+                viewModel: vm,
+                readEditorBlocks: { await Self.editorBlockOutline(webView: editorWebView) },
+                assignEditorBlockId: { await Self.assignEditorBlockId(webView: editorWebView, block: $0) },
+                onPick: { Self.insertBlockReference($0, webView: editorWebView) }
+            )
+            .environment(appState)
+        }
+        .alert(String(localized: "Add Video or Audio", comment: "Editor: insert a media link"), isPresented: $showMediaURLPrompt) {
+            TextField("https://", text: $mediaURLDraft)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+            Button(String(localized: "Cancel", comment: "Close the media link prompt"), role: .cancel) {}
+            Button(String(localized: "Add", comment: "Insert the media link")) {
+                Self.insertMediaEmbed(webView: editorWebView, url: mediaURLDraft)
+            }
+        } message: {
+            Text(String(localized: "Paste a link to a YouTube video, or to a video or audio file.", comment: "Editor: insert a media link"))
         }
     }
 
@@ -3422,7 +3737,7 @@ struct NoteDetailView: View {
     @ViewBuilder
     private func spreadsheetEditingView(_ vm: NoteDetailViewModel) -> some View {
         ZStack(alignment: .bottomTrailing) {
-            SpreadsheetEditorView(
+            SpreadsheetEditorWithCellBar(
                 initialJSON: vm.editableContent,
                 bridge: spreadsheetEditorBridge,
                 colorScheme: colorScheme,
@@ -3525,7 +3840,7 @@ struct NoteDetailView: View {
     @ViewBuilder
     private func spreadsheetEditorCover(vm: NoteDetailViewModel) -> some View {
         NavigationStack {
-            SpreadsheetEditorView(
+            SpreadsheetEditorWithCellBar(
                 initialJSON: vm.editableContent,
                 bridge: spreadsheetEditorBridge,
                 colorScheme: colorScheme,
@@ -3539,7 +3854,6 @@ struct NoteDetailView: View {
                 },
                 currentJSON: { vm.editableContent }
             )
-            .ignoresSafeArea(edges: .bottom)
             .navigationTitle(vm.note?.uiTitle(forProtectedSessionActive: appState.protectedSessionActive) ?? "")
             .navigationBarTitleDisplayMode(.inline)
             .cancelEditingConfirmation(isPresented: $showSpreadsheetCancelEditingConfirm) {
@@ -3855,78 +4169,26 @@ struct NoteDetailView: View {
             geoMapTitleSection(vm, note: note)
             Divider()
 
-            GeoMapEditorView(
-                viewportJSON: geoMapInitialViewportJSON.isEmpty
-                    ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
-                    : geoMapInitialViewportJSON,
-                markers: geoMapPins,
-                tracks: geoMapTracks,
-                shapes: geoMapShapes,
-                settingsJSON: geoMapCachedSettingsJSON,
-                bridge: geoMapEditorBridge,
-                onCreatePin: { lat, lng in
-                    handleGeoMapCreatePin(vm: vm, note: note, lat: lat, lng: lng)
-                },
-                onMovePin: { noteId, lat, lng in
-                    handleGeoMapMovePin(vm: vm, noteId: noteId, lat: lat, lng: lng)
-                },
-                onRemovePin: { noteId in
-                    handleGeoMapRemovePin(vm: vm, noteId: noteId)
-                },
-                onViewportChanged: { json in
-                    geoMapViewportSaveTask?.cancel()
-                    geoMapViewportSaveTask = Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 1_500_000_000)
-                        guard !Task.isCancelled else { return }
-                        let canon = Self.canonicalGeoMapViewportJSONForTriliumDesktop(json)
-                        let trimmed = (vm.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard canon != trimmed else { return }
-                        vm.editableContent = canon
-                        vm.saveContent()
-                    }
-                },
-                onOpenPinNote: { pinNoteId in
-                    openLinkedNote(pinNoteId)
-                },
-                onFeatureSelected: { noteId, kind, markFocus in
-                    geoMapLastFeatureSelectTime = Date()
-                    handleGeoMapFeatureSelected(vm: vm, noteId: noteId, kind: kind, markFocus: markFocus)
-                },
-                onSelectionCleared: {
-                    if let selectedAt = geoMapLastFeatureSelectTime,
-                       Date().timeIntervalSince(selectedAt) < 0.25 {
-                        Log.geoMap.info("[geo-map-debug] selectionCleared ignored (recent feature select)")
-                        return
-                    }
-                    clearGeoMapSelection()
-                },
-                onImportGpxRequested: {
-                    geoMapShowGpxImporter = true
-                },
-                onLocateRequested: {
-                    Task { @MainActor in
-                        switch await geoMapLocator.currentLocation() {
-                        case .success(let location):
-                            geoMapEditorBridge.showUserLocation(
-                                lat: location.coordinate.latitude,
-                                lng: location.coordinate.longitude,
-                                accuracyMeters: max(0, location.horizontalAccuracy)
-                            )
-                        case .failure(let failure):
-                            geoMapEditorBridge.stopLocating()
-                            geoMapLocateFailure = failure
-                        }
-                    }
-                },
-                onShapeDrawn: { kind, coordinates, radius in
-                    handleGeoMapShapeDrawn(vm: vm, note: note, kind: kind, coordinates: coordinates, radiusMeters: radius)
+            Group {
+                switch geoMapImageState(for: note) {
+                case .loading:
+                    geoMapImageLoadingView
+                case .unavailable(let isSVG):
+                    geoMapImageUnavailableView(isSVG: isSVG)
+                case .geo:
+                    geoMapEditor(vm, note: note, image: nil)
+                case .image(let image):
+                    geoMapEditor(vm, note: note, image: image)
+                        .id(image.key)
                 }
-            )
-            .equatable()
+            }
             .frame(height: Self.geoMapEditorBandHeight())
             .frame(maxWidth: .infinity)
             .overlay(alignment: .topLeading) {
-                geoMapSearchBar(vm: vm, note: note)
+                // Places on the Earth, which an image doesn't have.
+                if geoMapImageState(for: note) == .geo {
+                    geoMapSearchBar(vm: vm, note: note)
+                }
             }
             .clipped()
 
@@ -3979,7 +4241,8 @@ struct NoteDetailView: View {
         .sheet(isPresented: $geoMapShowSettings) {
             GeoMapSettingsSheet(
                 settings: $geoMapDisplaySettings,
-                styles: GeoMapStyleID.available(for: appState.serverAppInfo)
+                styles: GeoMapStyleID.available(for: appState.serverAppInfo),
+                isImageMap: geoMapSpace(for: note).isImage
             ) {
                 saveGeoMapSettings(vm: vm, note: note)
             }
@@ -3991,6 +4254,84 @@ struct NoteDetailView: View {
         ) { result in
             handleGeoMapGpxImport(result: result, vm: vm, note: note)
         }
+    }
+
+    private func geoMapEditor(_ vm: NoteDetailViewModel, note: NoteItem, image: GeoMapImage?) -> some View {
+            GeoMapEditorView(
+                viewportJSON: image.map { GeoMapViewConfig.savedImageView(in: vm.contentString) ?? $0.defaultViewportJSON }
+                    ?? (geoMapInitialViewportJSON.isEmpty
+                        ? effectiveGeoMapViewportJSONForDisplay(vm.contentString)
+                        : geoMapInitialViewportJSON),
+                markers: geoMapPins,
+                tracks: geoMapTracks,
+                shapes: geoMapShapes,
+                settingsJSON: geoMapCachedSettingsJSON,
+                imageJSON: image?.bridgeJSON(fit: GeoMapViewConfig.savedImageView(in: vm.contentString) == nil) ?? "null",
+                bridge: geoMapEditorBridge,
+                onCreatePin: { lat, lng in
+                    handleGeoMapCreatePin(vm: vm, note: note, lat: lat, lng: lng)
+                },
+                onMovePin: { noteId, lat, lng in
+                    handleGeoMapMovePin(vm: vm, noteId: noteId, lat: lat, lng: lng)
+                },
+                onRemovePin: { noteId in
+                    handleGeoMapRemovePin(vm: vm, noteId: noteId)
+                },
+                onViewportChanged: { json in
+                    geoMapViewportSaveTask?.cancel()
+                    geoMapViewportSaveTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        guard !Task.isCancelled else { return }
+                        // The other kind of map's camera stays in the body, for when the map is switched back.
+                        let canon = GeoMapViewConfig.merging(
+                            Self.canonicalGeoMapViewportJSONForTriliumDesktop(json),
+                            as: image == nil ? GeoMapViewConfig.geoKey : GeoMapViewConfig.imageKey,
+                            into: vm.contentString
+                        )
+                        let trimmed = (vm.contentString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard canon != trimmed else { return }
+                        vm.editableContent = canon
+                        vm.saveContent()
+                    }
+                },
+                onOpenPinNote: { pinNoteId in
+                    openLinkedNote(pinNoteId)
+                },
+                onFeatureSelected: { noteId, kind, markFocus in
+                    geoMapLastFeatureSelectTime = Date()
+                    handleGeoMapFeatureSelected(vm: vm, noteId: noteId, kind: kind, markFocus: markFocus)
+                },
+                onSelectionCleared: {
+                    if let selectedAt = geoMapLastFeatureSelectTime,
+                       Date().timeIntervalSince(selectedAt) < 0.25 {
+                        Log.geoMap.info("[geo-map-debug] selectionCleared ignored (recent feature select)")
+                        return
+                    }
+                    clearGeoMapSelection()
+                },
+                onImportGpxRequested: {
+                    geoMapShowGpxImporter = true
+                },
+                onLocateRequested: {
+                    Task { @MainActor in
+                        switch await geoMapLocator.currentLocation() {
+                        case .success(let location):
+                            geoMapEditorBridge.showUserLocation(
+                                lat: location.coordinate.latitude,
+                                lng: location.coordinate.longitude,
+                                accuracyMeters: max(0, location.horizontalAccuracy)
+                            )
+                        case .failure(let failure):
+                            geoMapEditorBridge.stopLocating()
+                            geoMapLocateFailure = failure
+                        }
+                    }
+                },
+                onShapeDrawn: { kind, coordinates, radius in
+                    handleGeoMapShapeDrawn(vm: vm, note: note, kind: kind, coordinates: coordinates, radiusMeters: radius)
+                }
+            )
+            .equatable()
     }
 
     /// The search bar in the map's top leading corner: the map's own notes by title, typed coordinates, and places
@@ -4131,6 +4472,7 @@ struct NoteDetailView: View {
                             pin: geoMapPins.first(where: { $0.noteId == selection.noteId }),
                             track: geoMapTracks.first(where: { $0.noteId == selection.noteId }),
                             shape: geoMapShapes.first(where: { $0.noteId == selection.noteId }),
+                            space: geoMapSpace(for: mapParentNote),
                             pinHTML: geoMapDetailHTML,
                             gpxStats: geoMapDetailGPXStats,
                             onClose: { clearGeoMapSelection() },
@@ -4240,14 +4582,16 @@ struct NoteDetailView: View {
 
     /// The map's pins, shapes and tracks from the server (the cache offline), kept when they changed.
     @MainActor
-    private func reloadGeoMapLayers(vm: NoteDetailViewModel, note: NoteItem) async {
+    private func reloadGeoMapLayers(vm: NoteDetailViewModel, note: NoteItem, freshImage: Bool = false) async {
+        // An image that can't be drawn has nothing to place pins on.
+        guard let space = await resolveGeoMapSpace(vm: vm, note: note, freshImage: freshImage) else { return }
         let pins: [GeoMapPin]
         let tracks: [GeoMapTrack]
         let shapes: [GeoMapShape]
         if vm.client != nil, vm.isOnline {
-            (pins, shapes, tracks) = await vm.fetchGeoMapLayersFromServer(note: note)
+            (pins, shapes, tracks) = await vm.fetchGeoMapLayersFromServer(note: note, space: space)
         } else {
-            (pins, shapes, tracks) = vm.geoMapLayersFromCache()
+            (pins, shapes, tracks) = vm.geoMapLayersFromCache(space: space)
         }
         if pins == geoMapPins, tracks == geoMapTracks, shapes == geoMapShapes {
             return
@@ -4259,6 +4603,23 @@ struct NoteDetailView: View {
         Log.geoMap.info(
             "[geo-map-debug] loadGeoMapData pins=\(pins.count) tracks=\(tracks.count) shapes=\(shapes.count) online=\(vm.isOnline)"
         )
+    }
+
+    /// The coordinate space of this map, looking its picture up the first time; `nil` while there's no image to draw on.
+    @MainActor
+    private func resolveGeoMapSpace(vm: NoteDetailViewModel, note: NoteItem, freshImage: Bool) async -> GeoMapSpace? {
+        guard let request = GeoMapImageRequest(note: note) else {
+            geoMapImageLoaded = nil
+            return .geo
+        }
+        if freshImage || geoMapImageLoaded?.request != request {
+            let state = await vm.loadGeoMapImage(request, fresh: freshImage)
+            // A note switched while the picture came in has its own.
+            guard GeoMapImageRequest(note: vm.note ?? note) == request else { return nil }
+            geoMapImageLoaded = GeoMapImageLoaded(request: request, state: state)
+        }
+        guard case .image(let image)? = geoMapImageLoaded?.state else { return nil }
+        return .image(image.space)
     }
 
     /// The refresh button over the map: the map note and its sub-notes from the server, then every pin, shape and
@@ -4275,7 +4636,7 @@ struct NoteDetailView: View {
             let latest = vm.note?.noteId == note.noteId ? (vm.note ?? note) : note
             applyGeoMapDisplaySettings(from: latest)
             let revision = geoMapLayersRevision
-            await reloadGeoMapLayers(vm: vm, note: latest)
+            await reloadGeoMapLayers(vm: vm, note: latest, freshImage: true)
             // The sub-note tree reads its deeper levels again even when the map's layers came back the same.
             if geoMapLayersRevision == revision { geoMapLayersRevision &+= 1 }
             geoMapLastLoadAt = Date()
@@ -4426,7 +4787,8 @@ struct NoteDetailView: View {
         coordinates: [[Double]],
         radiusMeters: Double?
     ) {
-        guard let value = GeoMapShape.serializedValue(kind: kind, coordinates: coordinates, radiusMeters: radiusMeters) else { return }
+        let space = geoMapSpace(for: note)
+        guard let value = space.serializeShape(kind: kind, coordinates: coordinates, radiusMeters: radiusMeters) else { return }
         Task {
             guard let profileId = vm.serverProfileId else { return }
             let title = String(localized: "New Shape", comment: "Default title for a shape drawn on a geo map")
@@ -4438,10 +4800,10 @@ struct NoteDetailView: View {
                     mime: "text/html",
                     initialContent: "",
                     serverProfileId: profileId,
-                    initialAttributes: [NoteCreationAttribute(type: "label", name: GeoMapShape.label, value: value)],
+                    initialAttributes: [NoteCreationAttribute(type: "label", name: space.shapeLabel, value: value)],
                     useParentTitleTemplate: true
                 )
-                if let shape = GeoMapShape(noteId: newNoteId, title: title, value: value, color: nil) {
+                if let shape = space.shape(noteId: newNoteId, title: title, value: value, color: nil) {
                     geoMapShapes.append(shape)
                 }
                 await vm.loadChildNotes()
@@ -4455,6 +4817,7 @@ struct NoteDetailView: View {
     /// `placeName` titles a pin dropped on a searched place (as the web map does); without one, the default title
     /// stands in and a map's `#titleTemplate` names the pin.
     private func handleGeoMapCreatePin(vm: NoteDetailViewModel, note: NoteItem, lat: Double, lng: Double, title placeName: String? = nil) {
+        let space = geoMapSpace(for: note)
         Task {
             guard let profileId = vm.serverProfileId else { return }
             let title = placeName ?? String(localized: "New Location", comment: "Default title for new geo map pin")
@@ -4468,7 +4831,7 @@ struct NoteDetailView: View {
                     serverProfileId: profileId,
                     // v0.106 writes no #iconClass on new markers, so a template's or #child:iconClass icon applies and
                     // the default pin shows otherwise; older servers show a plain note icon without one.
-                    initialAttributes: [NoteCreationAttribute(type: "label", name: "geolocation", value: "\(lat),\(lng)")]
+                    initialAttributes: [NoteCreationAttribute(type: "label", name: space.locationLabel, value: space.serializeLocation(lat: lat, lng: lng))]
                         + (TriliumServerCompatibility.supportsGeoNoteIcons(appState.serverAppInfo)
                             ? []
                             : [NoteCreationAttribute(type: "label", name: "iconClass", value: "bx bx-map-pin")]),
@@ -4488,17 +4851,18 @@ struct NoteDetailView: View {
     }
 
     private func handleGeoMapMovePin(vm: NoteDetailViewModel, noteId: String, lat: Double, lng: Double) {
+        let space = vm.note.map { geoMapSpace(for: $0) } ?? .geo
         Task {
             guard let client = vm.client else { return }
             do {
                 let noteResp = try await client.getNote(noteId)
                 let noteItem = NoteItem(from: noteResp)
-                if let existingAttr = noteItem.attributes.first(where: { $0.type == .label && $0.name == "geolocation" }) {
+                if let existingAttr = noteItem.attributes.first(where: { $0.type == .label && $0.name == space.locationLabel }) {
                     try await client.deleteAttribute(noteId: noteId, attributeId: existingAttr.attributeId)
                 }
                 try await client.createAttribute(CreateAttributeRequest(
-                    noteId: noteId, type: "label", name: "geolocation",
-                    value: "\(lat),\(lng)", isInheritable: nil, position: nil
+                    noteId: noteId, type: "label", name: space.locationLabel,
+                    value: space.serializeLocation(lat: lat, lng: lng), isInheritable: nil, position: nil
                 ))
                 if let idx = geoMapPins.firstIndex(where: { $0.noteId == noteId }) {
                     let existing = geoMapPins[idx]
@@ -4635,8 +4999,10 @@ struct NoteDetailView: View {
         guard !batch.isEmpty, let vm = viewModel else { return }
         // Reserve a slot per photo before the first upload, then fill them as each one lands.
         let webView = editorWebView
+        // Before the batch starts, which uses up the insert point.
+        let excerptNoteId = await Self.excerptNoteAtInsertPoint(webView: webView)
         Self.beginEditorImageBatch(webView: webView, count: batch.count)
-        await vm.uploadPhotosAsAttachments(batch) { insert in
+        await vm.uploadPhotosAsAttachments(batch, ownerNoteId: excerptNoteId) { insert in
             Self.insertBatchImageInEditor(webView: webView, insert: insert)
         }
         Self.endEditorImageBatch(webView: webView)
@@ -4675,39 +5041,29 @@ struct NoteDetailView: View {
 
     @ViewBuilder
     private func codeEditingView(_ vm: NoteDetailViewModel) -> some View {
-        @Bindable var vm = vm
+        let isMarkdown = vm.note.map { $0.type == .markdown || CodeNoteLanguage.isMarkdownMime($0.mime) } ?? false
+        let mode = isMarkdown ? markdownEditorMode : .source
         ZStack(alignment: .bottomTrailing) {
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $vm.editableContent)
-                    .font(.system(.body, design: .monospaced))
-                    .padding(.horizontal, 8)
-                    .scrollContentBackground(.hidden)
-                    .contentMargins(
-                        .bottom,
-                        NoteDetailFloatingChipLayout.scrollClearance(findBarPresented: false, editing: true),
-                        for: .scrollContent
-                    )
-                    .background(Color(.systemGroupedBackground))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if vm.editableContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    // Match UITextView origin: TextEditor’s 8pt horizontal padding + 5pt
-                    // `lineFragmentPadding`, and the default 8pt top `textContainerInset`.
-                    Text(String(localized: "Start writing…", comment: "Empty code note editor placeholder"))
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(Color.primary.opacity(0.42))
-                        .padding(.leading, 13)
-                        .padding(.top, 8)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+            VStack(spacing: 0) {
+                if isMarkdown {
+                    MarkdownViewModePicker(mode: markdownEditorModeBinding, modes: MarkdownViewMode.editingModes)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                }
+                if mode == .split {
+                    MarkdownSplitLayout(sourceScrollsItself: true) {
+                        codeTextEditor(vm)
+                    } preview: {
+                        MarkdownLivePreview(
+                            source: vm.editableContent,
+                            baseURL: vm.serverBaseURL,
+                            taskStates: TaskStateWebConfig.forNote(store: appState.taskStates, isMarkdown: true)
+                        )
+                    }
+                } else {
+                    codeTextEditor(vm)
                 }
             }
-            .background(
-                NoteDetailScrollOffsetReader { y, verticallyScrollable, _, _ in
-                    updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
-                }
-                .frame(width: 0, height: 0)
-            )
 
             if showEditorSaveCancelChip && showsEditorSaveButton(vm) {
                 editorSaveChip(vm: vm)
@@ -4737,6 +5093,51 @@ struct NoteDetailView: View {
         }
     }
 
+    /// The plain text editor of code and Markdown notes.
+    private func codeTextEditor(_ vm: NoteDetailViewModel) -> some View {
+        @Bindable var vm = vm
+        return ZStack(alignment: .topLeading) {
+            TextEditor(text: $vm.editableContent)
+                .font(.system(.body, design: .monospaced))
+                .padding(.horizontal, 8)
+                .scrollContentBackground(.hidden)
+                .contentMargins(
+                    .bottom,
+                    NoteDetailFloatingChipLayout.scrollClearance(findBarPresented: false, editing: true),
+                    for: .scrollContent
+                )
+                .background(Color(.systemGroupedBackground))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if vm.editableContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Match UITextView origin: TextEditor’s 8pt horizontal padding + 5pt
+                // `lineFragmentPadding`, and the default 8pt top `textContainerInset`.
+                Text(String(localized: "Start writing…", comment: "Empty code note editor placeholder"))
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(Color.primary.opacity(0.42))
+                    .padding(.leading, 13)
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .background(
+            NoteDetailScrollOffsetReader { y, verticallyScrollable, _, _ in
+                updateEditorSaveCancelChipVisibility(contentOffsetY: y, verticallyScrollable: verticallyScrollable)
+            }
+            .frame(width: 0, height: 0)
+        )
+    }
+
+    /// Source or Split in the Markdown editor, remembered across notes; Source to begin with.
+    private var markdownEditorMode: MarkdownViewMode {
+        MarkdownViewMode.stored(markdownEditorModeRaw, offering: MarkdownViewMode.editingModes, fallback: .source)
+    }
+
+    private var markdownEditorModeBinding: Binding<MarkdownViewMode> {
+        Binding(get: { markdownEditorMode }, set: { markdownEditorModeRaw = $0.rawValue })
+    }
+
     @ViewBuilder
     private func attachmentsSection(_ vm: NoteDetailViewModel) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -4745,7 +5146,7 @@ struct NoteDetailView: View {
                 Text(String(localized: "Attachments", comment: "Note detail section"))
                     .font(.headline)
                 Spacer()
-                if !vm.attachments.isEmpty {
+                if !vm.attachments.userVisible.isEmpty {
                     Button {
                         showDeleteAllAttachmentsConfirm = true
                     } label: {
@@ -4764,13 +5165,13 @@ struct NoteDetailView: View {
             .padding(.horizontal)
             .padding(.top, 8)
 
-            if vm.attachments.isEmpty {
+            if vm.attachments.userVisible.isEmpty {
                 Text(String(localized: "No attachments", comment: "Attachments empty"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
             } else {
-                ForEach(vm.attachments) { attachment in
+                ForEach(vm.attachments.userVisible) { attachment in
                     AttachmentRow(attachment: attachment, viewModel: vm) { noteId, _ in
                         openLinkedNote(noteId)
                     }
@@ -4791,7 +5192,7 @@ struct NoteDetailView: View {
         } message: {
             Text(
                 String(
-                    localized: "Delete all \(vm.attachments.count) attachments from this note? This cannot be undone.",
+                    localized: "Delete all \(vm.attachments.userVisible.count) attachments from this note? This cannot be undone.",
                     comment: "Delete-all attachments confirm message; count is substituted"
                 )
             )
@@ -5010,8 +5411,31 @@ struct NoteDetailView: View {
         }
     }
 
+    /// The note's headings in a sheet, where a narrow window has no inspector. Picking one goes there and closes it.
+    private func tableOfContentsSheet(_ vm: NoteDetailViewModel) -> some View {
+        NavigationStack {
+            tableOfContents(vm) { showTableOfContents = false }
+                .navigationTitle(String(localized: "Table of Contents", comment: "Note headings list"))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(String(localized: "Done", comment: "Close the note headings list")) {
+                            showTableOfContents = false
+                        }
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+        .task {
+            let control = findControl
+            tocHeadings = await withCheckedContinuation { continuation in
+                control.readHeadings { continuation.resume(returning: $0) }
+            }
+        }
+    }
+
     @ViewBuilder
-    private func tableOfContents(_ vm: NoteDetailViewModel) -> some View {
+    private func tableOfContents(_ vm: NoteDetailViewModel, onPick: (() -> Void)? = nil) -> some View {
         if vm.isEditing {
             ContentUnavailableView(
                 String(localized: "Contents Show While Reading", comment: "iPad table of contents while editing"),
@@ -5029,6 +5453,7 @@ struct NoteDetailView: View {
             List(tocHeadings) { heading in
                 Button {
                     findControl.scrollToHeading(at: heading.index)
+                    onPick?()
                 } label: {
                     Text(heading.text)
                         .font(heading.level == topLevel ? .subheadline.weight(.semibold) : .subheadline)
@@ -5132,6 +5557,21 @@ struct NoteDetailView: View {
             }
             .buttonStyle(.plain)
             .disabled(vm.isSaving)
+
+            if !note.childNoteIds.isEmpty, TriliumServerCompatibility.supportsDuplicateWithoutChildren(appState.serverAppInfo) {
+                Button {
+                    dismissNoteOverflow()
+                    Task {
+                        if let dup = await vm.duplicateNote(withChildren: false) {
+                            openLinkedNote(dup.noteId)
+                        }
+                    }
+                } label: {
+                    noteOverflowLabel(String(localized: "Duplicate Without Children", comment: "Duplicate a note but not its sub-notes"), systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.isSaving)
+            }
         }
 
         if note.noteId != TriliumTreeConstants.rootNoteId, !note.isProtected || appState.protectedSessionActive {
@@ -5302,6 +5742,21 @@ struct NoteDetailView: View {
         .buttonStyle(.plain)
 
         Divider().padding(.leading, 20)
+
+        // iPad keeps this in the inspector.
+        if !usesNoteInspector, !vm.isEditing, note.type == .text || note.type == .markdown {
+            Button {
+                dismissNoteOverflowThen { showTableOfContents = true }
+            } label: {
+                noteOverflowLabel(
+                    String(localized: "Table of Contents", comment: "Note headings list"),
+                    systemImage: "list.bullet.indent"
+                )
+            }
+            .buttonStyle(.plain)
+
+            Divider().padding(.leading, 20)
+        }
 
         if note.type == .spreadsheet, TriliumServerCompatibility.supportsSpreadsheetXlsxExport(appState.serverAppInfo) {
             Button {
@@ -5707,10 +6162,11 @@ struct NewNoteTypePicker: View {
             } label: {
                 HStack(spacing: 4) {
                     Text(selection.title)
+                        .foregroundStyle(.primary)
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .foregroundStyle(.secondary)
             }
             .menuOrder(.fixed)
         }

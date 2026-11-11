@@ -73,7 +73,8 @@ enum LocalNoteTransferBundleBuilder {
                         mime: item.mime,
                         title: item.title,
                         position: item.position,
-                        data: bytes
+                        data: bytes,
+                        sourceAttachmentId: item.attachmentId
                     )
                 )
             }

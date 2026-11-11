@@ -7,6 +7,8 @@ enum ChatTranscriptEvent: Equatable, Sendable {
     case openNote(String)
     /// An http(s) link in a message.
     case openURL(URL)
+    /// An image attached to a message was tapped.
+    case openImage(attachmentId: String, title: String?)
     case retry
     case regenerate
     /// Whether the transcript is scrolled to its end (drives the jump-to-latest button).
@@ -139,6 +141,11 @@ struct ChatTranscriptWebView: UIViewRepresentable {
             case "externalLink":
                 if let url = URL(string: strings["href"] ?? ""), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
                     onEvent?(.openURL(url))
+                }
+            case "imageOpen":
+                if let id = strings["attachmentId"], !id.isEmpty {
+                    let title = strings["title"] ?? ""
+                    onEvent?(.openImage(attachmentId: id, title: title.isEmpty ? nil : title))
                 }
             case "retry":
                 onEvent?(.retry)

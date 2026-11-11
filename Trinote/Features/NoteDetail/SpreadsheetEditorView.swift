@@ -5,15 +5,60 @@ import WebKit
 /// the embedded Univer Sheets editor on demand.
 final class SpreadsheetEditorBridge: ObservableObject {
     fileprivate weak var coordinator: SpreadsheetEditorView.Coordinator?
+    /// What's typed in the cell bar and not yet in the sheet; written before the workbook is read.
+    var typedInput: (@MainActor () -> [SpreadsheetCellAction])?
 
     /// Returns the full Univer workbook JSON wrapped in Trilium's `{ version, workbook }`
     /// envelope, ready to upload via `NoteDetailViewModel.saveSpreadsheetContent`.
+    @MainActor
     func getWorkbook(completion: @escaping (String) -> Void) {
         guard let coordinator else {
             completion("")
             return
         }
+        // Scripts run in the order they're sent, so the write lands before the read.
+        perform(typedInput?() ?? [])
         coordinator.getWorkbook(completion: completion)
+    }
+
+    /// Carries out what the cell bar asks of the sheet.
+    func perform(_ actions: [SpreadsheetCellAction]) {
+        for action in actions {
+            switch action {
+            case .write(let cell, let text):
+                coordinator?.callBridge(
+                    "window.univerBridge.setCellInput(sheetId, row, column, text);",
+                    ["sheetId": cell.sheetId, "row": cell.row, "column": cell.column, "text": text]
+                )
+            case .select(let sheetId, let row, let column):
+                coordinator?.callBridge(
+                    "window.univerBridge.selectCell(sheetId, row, column);",
+                    ["sheetId": sheetId, "row": row, "column": column]
+                )
+            case .preview(let cell, let text):
+                coordinator?.callBridge(
+                    "window.univerBridge.previewCellInput(sheetId, row, column, text);",
+                    ["sheetId": cell.sheetId, "row": cell.row, "column": cell.column, "text": text]
+                )
+            case .endPreview(let cell):
+                coordinator?.callBridge(
+                    "window.univerBridge.endCellPreview(sheetId, row, column);",
+                    ["sheetId": cell.sheetId, "row": cell.row, "column": cell.column]
+                )
+            }
+        }
+    }
+
+    func clearSelectedCells() {
+        coordinator?.callBridge("window.univerBridge.clearSelectedCells();")
+    }
+
+    func undo() {
+        coordinator?.callBridge("await window.univerBridge.undo();")
+    }
+
+    func redo() {
+        coordinator?.callBridge("await window.univerBridge.redo();")
     }
 }
 
@@ -28,10 +73,13 @@ struct SpreadsheetEditorView: UIViewRepresentable {
     var onWorkbookChanged: (() -> Void)?
     /// The note's newest saved workbook (Autosave updates it), shown if the page reloads after its process ended.
     var currentJSON: (() -> String)?
+    /// The selected cell changed, or what it holds; `nil` without a workbook.
+    var onCellSelection: ((SpreadsheetCell?) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         let coordinator = Coordinator(initialJSON: initialJSON, onWorkbookChanged: onWorkbookChanged)
         coordinator.currentJSON = currentJSON
+        coordinator.onCellSelection = onCellSelection
         return coordinator
     }
 
@@ -44,6 +92,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
         contentController.add(coordinator, name: "workbookChanged")
         contentController.add(coordinator, name: "univerLog")
         contentController.add(coordinator, name: "trinoteImageRequest")
+        contentController.add(coordinator, name: "cellSelection")
 
         let consoleScript = WKUserScript(source: """
             (function() {
@@ -118,6 +167,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onWorkbookChanged = onWorkbookChanged
         context.coordinator.currentJSON = currentJSON
+        context.coordinator.onCellSelection = onCellSelection
         context.coordinator.imageBytes = imageBytes
         context.coordinator.applyDarkModeIfChanged(colorScheme == .dark)
     }
@@ -128,6 +178,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "workbookChanged")
         uc.removeScriptMessageHandler(forName: "univerLog")
         uc.removeScriptMessageHandler(forName: "trinoteImageRequest")
+        uc.removeScriptMessageHandler(forName: "cellSelection")
     }
 
     // MARK: - Coordinator
@@ -138,6 +189,7 @@ struct SpreadsheetEditorView: UIViewRepresentable {
         var imageBytes: TriliumImageSchemeHandler.ByteProvider?
         var lastAppliedDarkMode: Bool = false
         var currentJSON: (() -> String)?
+        var onCellSelection: ((SpreadsheetCell?) -> Void)?
 
         private let initialJSON: String
         private var univerReady = false
@@ -181,6 +233,13 @@ struct SpreadsheetEditorView: UIViewRepresentable {
                     } else {
                         Log.api.debug("UniverJS: \(msg)")
                     }
+                }
+
+            case "cellSelection":
+                let text = message.body as? String ?? ""
+                let cell = try? JSONDecoder().decode(SpreadsheetCell.self, from: Data(text.utf8))
+                DispatchQueue.main.async { [weak self] in
+                    self?.onCellSelection?(cell)
                 }
 
             case "trinoteImageRequest":
@@ -273,12 +332,22 @@ struct SpreadsheetEditorView: UIViewRepresentable {
             }
         }
 
+        func callBridge(_ script: String, _ arguments: [String: Any] = [:]) {
+            guard univerReady, let webView else { return }
+            webView.callAsyncJavaScript(script, arguments: arguments, in: nil, in: .page) { result in
+                if case .failure(let error) = result {
+                    Log.api.error("Spreadsheet bridge call failed: \(error)")
+                }
+            }
+        }
+
         func getWorkbook(completion: @escaping (String) -> Void) {
             guard univerReady, let webView else {
                 completion("")
                 return
             }
-            let js = "return window.univerBridge.getWorkbook();"
+            // Waits for a pending formula recalculation first, as Trilium does.
+            let js = "return await window.univerBridge.getWorkbook();"
             webView.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { result in
                 switch result {
                 case .success(let value):

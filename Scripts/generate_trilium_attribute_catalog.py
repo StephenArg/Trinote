@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate Trinote/Resources/TriliumAttributeCatalog.json from a Trilium checkout.
 
-Reads, at a git ref of the Trilium repository (default v0.106.0):
+Reads, at a git ref of the Trilium repository (default v0.107.0):
   - packages/commons/src/lib/builtin_attributes.ts   the built-in names, their value kinds and choices
   - apps/client/src/widgets/attribute_widgets/attr_help.ts   which explanation belongs to which name
   - apps/client/src/translations/<locale>/translation.json   the explanations, per language
@@ -9,7 +9,7 @@ Reads, at a git ref of the Trilium repository (default v0.106.0):
 The explanations are HTML in Trilium; they are converted here to inline Markdown (code spans, "• " list
 lines, http(s) links only), which the app renders with AttributedString(markdown:).
 
-Usage: Scripts/generate_trilium_attribute_catalog.py /path/to/Trilium [--ref v0.106.0]
+Usage: Scripts/generate_trilium_attribute_catalog.py /path/to/Trilium [--ref v0.107.0]
 """
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ def html_to_markdown(source: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("trilium", type=Path, help="path to a Trilium git checkout")
-    parser.add_argument("--ref", default="v0.106.0", help="git ref to read (default: v0.106.0)")
+    parser.add_argument("--ref", default="v0.107.0", help="git ref to read (default: v0.107.0)")
     args = parser.parse_args()
 
     builtins_source = git_show(args.trilium, args.ref, "packages/commons/src/lib/builtin_attributes.ts")

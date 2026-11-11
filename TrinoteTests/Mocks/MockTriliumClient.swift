@@ -427,6 +427,25 @@ actor MockTriliumClient: TriliumClientProtocol {
         updateNoteContentErrorsByNote[noteId] = error
     }
 
+    var noteBlocksResult: Result<String, Error> = .success("")
+    var updateNoteBlocksCalls: [(noteId: String, block: String, content: String)] = []
+    var updateNoteBlocksDelays: [String: UInt64] = [:]
+
+    var updateNoteBlocksFails = false
+    func failNoteBlocksUpdate() { updateNoteBlocksFails = true }
+    func setNoteBlocks(_ html: String) { noteBlocksResult = .success(html) }
+    func delayNoteBlocksUpdate(of block: String, nanoseconds: UInt64) { updateNoteBlocksDelays[block] = nanoseconds }
+
+    func getNoteBlocks(noteId: String, block: String) async throws -> String {
+        try noteBlocksResult.get()
+    }
+
+    func updateNoteBlocks(noteId: String, block: String, content: String) async throws {
+        if updateNoteBlocksFails { throw URLError(.notConnectedToInternet) }
+        if let delay = updateNoteBlocksDelays[block] { try await Task.sleep(nanoseconds: delay) }
+        updateNoteBlocksCalls.append((noteId, block, content))
+    }
+
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws {
         updateNoteContentCalls.append((noteId, content))
         if let error = updateNoteContentErrorsByNote[noteId] { throw error }
@@ -478,7 +497,10 @@ actor MockTriliumClient: TriliumClientProtocol {
         return CreateNoteResponse(note: note, branch: branch)
     }
 
-    func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse {
+    var duplicateCalls: [(sourceNoteId: String, parentNoteId: String, withChildren: Bool)] = []
+
+    func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String, withChildren: Bool) async throws -> CreateNoteResponse {
+        duplicateCalls.append((sourceNoteId, parentNoteId, withChildren))
         let src = try await getNote(sourceNoteId)
         let data = try await getNoteContent(sourceNoteId)
         let title = src.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -622,6 +644,18 @@ actor MockTriliumClient: TriliumClientProtocol {
         return searchNoteIdsValue
     }
 
+    var savedSearchCalls: [String] = []
+    var savedSearchResponse = SavedSearchResponse(searchResultNoteIds: [], highlightedTokens: nil, error: nil)
+
+    func setSavedSearchResponse(_ response: SavedSearchResponse) {
+        savedSearchResponse = response
+    }
+
+    func runSavedSearch(noteId: String) async throws -> SavedSearchResponse {
+        savedSearchCalls.append(noteId)
+        return savedSearchResponse
+    }
+
     var quickSearchCalls: [String] = []
 
     func quickSearchResults(query: String) async throws -> [QuickSearchResult] {
@@ -760,8 +794,14 @@ actor MockTriliumClient: TriliumClientProtocol {
         return try attachmentsResult.get()
     }
 
+    var attachmentResponsesById: [String: AttachmentResponse] = [:]
+
+    func setAttachment(_ attachment: AttachmentResponse) {
+        attachmentResponsesById[attachment.attachmentId] = attachment
+    }
+
     func getAttachment(_ attachmentId: String) async throws -> AttachmentResponse {
-        TestFixtures.attachmentResponse(attachmentId: attachmentId)
+        attachmentResponsesById[attachmentId] ?? TestFixtures.attachmentResponse(attachmentId: attachmentId)
     }
 
     func getAttachmentContent(_ attachmentId: String) async throws -> Data {

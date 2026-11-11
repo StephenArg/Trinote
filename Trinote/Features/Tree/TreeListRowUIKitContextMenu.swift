@@ -131,6 +131,23 @@ struct TreeListRowUIKitContextMenu<Content: View>: UIViewRepresentable {
                         }
                     }
                 })
+                if !model.note.childNoteIds.isEmpty, model.vm.canDuplicateWithoutChildren {
+                    duplicateMove.append(UIAction(
+                        title: String(localized: "Duplicate Without Children", comment: "Duplicate a note but not its sub-notes"),
+                        image: UIImage(systemName: "doc.on.doc")
+                    ) { [weak self] _ in
+                        guard let self else { return }
+                        Task { @MainActor in
+                            if let newNote = await self.model.vm.duplicateNote(
+                                sourceNoteId: self.model.note.noteId,
+                                parentNoteId: self.model.duplicateParentNoteId,
+                                withChildren: false
+                            ) {
+                                self.model.onDuplicateSuccess(newNote)
+                            }
+                        }
+                    })
+                }
             }
             if !model.note.isProtected, model.client != nil {
                 duplicateMove.append(UIAction(

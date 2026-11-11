@@ -8,6 +8,7 @@ struct GeoMapNoteView: View {
     let tracks: [GeoMapTrack]
     let shapes: [GeoMapShape]
     let settingsJSON: String
+    let imageJSON: String
     var onOpenPinNote: ((String) -> Void)?
     var onFeatureSelected: ((String, GeoMapFeatureKind, GeoMapMarkFocus?) -> Void)?
     var onSelectionCleared: (() -> Void)?
@@ -18,6 +19,7 @@ struct GeoMapNoteView: View {
         tracks: [GeoMapTrack] = [],
         shapes: [GeoMapShape] = [],
         settingsJSON: String = "{}",
+        imageJSON: String = "null",
         onOpenPinNote: ((String) -> Void)? = nil,
         onFeatureSelected: ((String, GeoMapFeatureKind, GeoMapMarkFocus?) -> Void)? = nil,
         onSelectionCleared: (() -> Void)? = nil
@@ -27,6 +29,7 @@ struct GeoMapNoteView: View {
         self.tracks = tracks
         self.shapes = shapes
         self.settingsJSON = settingsJSON
+        self.imageJSON = imageJSON
         self.onOpenPinNote = onOpenPinNote
         self.onFeatureSelected = onFeatureSelected
         self.onSelectionCleared = onSelectionCleared
@@ -39,6 +42,7 @@ struct GeoMapNoteView: View {
             tracks: tracks,
             shapes: shapes,
             settingsJSON: settingsJSON,
+            imageJSON: imageJSON,
             onOpenPinNote: onOpenPinNote,
             onFeatureSelected: onFeatureSelected,
             onSelectionCleared: onSelectionCleared
@@ -52,6 +56,7 @@ private struct GeoMapWebView: UIViewRepresentable {
     let tracks: [GeoMapTrack]
     let shapes: [GeoMapShape]
     let settingsJSON: String
+    let imageJSON: String
     let onOpenPinNote: ((String) -> Void)?
     let onFeatureSelected: ((String, GeoMapFeatureKind, GeoMapMarkFocus?) -> Void)?
     let onSelectionCleared: (() -> Void)?
@@ -89,6 +94,7 @@ private struct GeoMapWebView: UIViewRepresentable {
         context.coordinator.tracks = tracks
         context.coordinator.shapes = shapes
         context.coordinator.settingsJSON = settingsJSON
+        context.coordinator.imageJSON = imageJSON
         context.coordinator.onOpenPinNote = onOpenPinNote
         context.coordinator.onFeatureSelected = onFeatureSelected
         context.coordinator.onSelectionCleared = onSelectionCleared
@@ -143,6 +149,7 @@ private struct GeoMapWebView: UIViewRepresentable {
         var shapes: [GeoMapShape] = []
         private var lastShapes: [GeoMapShape] = []
         var settingsJSON = "{}"
+        var imageJSON = "null"
         var onOpenPinNote: ((String) -> Void)?
         var onFeatureSelected: ((String, GeoMapFeatureKind, GeoMapMarkFocus?) -> Void)?
         var onSelectionCleared: (() -> Void)?
@@ -199,7 +206,7 @@ private struct GeoMapWebView: UIViewRepresentable {
                 return
             }
             let js = """
-            window.geoMapViewer.init(\(viewportJSON), \(settingsJSON));
+            window.geoMapViewer.init(\(viewportJSON), \(settingsJSON), \(imageJSON));
             window.geoMapViewer.loadMarkersData(\(markersJSON));
             window.geoMapViewer.loadTracksData(\(tracksJSON));
             window.geoMapViewer.loadShapesData(\(shapesJSON));

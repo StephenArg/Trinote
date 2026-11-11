@@ -1,0 +1,114 @@
+/* Trilium v0.107's text-note layouts, outside the editor: read mode and include previews. */
+
+.trilium-multicolumn-layout {
+  container: multicolumn-layout / inline-size;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 2em;
+  margin: 1em 0;
+}
+.trilium-multicolumn-layout[data-trilium-column-ratios="1-3"] { grid-template-columns: minmax(0, 1fr) minmax(0, 3fr); }
+.trilium-multicolumn-layout[data-trilium-column-ratios="3-1"] { grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); }
+.trilium-multicolumn-layout[data-trilium-column-ratios="1-1-1"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.trilium-multicolumn-layout[data-trilium-column-ratios="1-2-1"] { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr); }
+.trilium-multicolumn-layout[data-trilium-column-ratios="1-1-1-1"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.trilium-multicolumn-layout > .trilium-multicolumn-column { padding-block: 0.75rem; min-width: 0; }
+.trilium-multicolumn-layout > .trilium-multicolumn-column > :first-child { margin-top: 0; }
+.trilium-multicolumn-layout > .trilium-multicolumn-column > :last-child { margin-bottom: 0; }
+/* As in Trilium, columns stack once there's no room for them (every iPhone in portrait). */
+@container multicolumn-layout (max-width: 500px) {
+  .trilium-multicolumn-layout > .trilium-multicolumn-column { grid-column: 1 / -1; }
+}
+
+.trilium-tabs { margin: 1em 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.trinote-tabs-bar {
+  display: flex;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border);
+}
+.trinote-tabs-bar::-webkit-scrollbar { display: none; }
+.trilium-tabs[data-trilium-tab-alignment="bottom"] > .trinote-tabs-bar { border-bottom: 0; border-top: 1px solid var(--border); }
+button.trinote-tab-title {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 9px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  opacity: 0.62;
+  touch-action: manipulation;
+}
+button.trinote-tab-title[aria-selected="true"] { opacity: 1; font-weight: 600; border-bottom-color: currentColor; }
+.trilium-tabs[data-trilium-tab-alignment="bottom"] button.trinote-tab-title { border-bottom: 0; border-top: 2px solid transparent; }
+.trilium-tabs[data-trilium-tab-alignment="bottom"] button.trinote-tab-title[aria-selected="true"] { border-top-color: currentColor; }
+.trilium-tabs:has(> .trinote-tabs-bar) > .trilium-tab { display: none; }
+.trilium-tabs:has(> .trinote-tabs-bar) > .trilium-tab.trinote-tab--active { display: block; }
+.trilium-tab-panel { padding: 10px 12px; }
+.trilium-tab-panel > :first-child { margin-top: 0; }
+.trilium-tab-panel > :last-child { margin-bottom: 0; }
+/* Before the script has run, every tab shows under its title. */
+.trilium-tab-title { font-weight: 600; margin: 0.6em 12px 0; }
+
+/* Theme-adaptive note colours, from Trilium's adaptive_colors.css: each colour is stored again as a variable, and
+   these rules keep its hue, move its lightness into a range that reads well on this theme, and cap its chroma. */
+:root {
+  --_adaptive-text-min: 0;
+  --_adaptive-text-max: 45;
+  --_adaptive-text-chroma: 150;
+  --_adaptive-background-min: 90;
+  --_adaptive-background-max: 100;
+  --_adaptive-background-chroma: 20;
+  --_adaptive-table-border-min: 0;
+  --_adaptive-table-border-max: 60;
+  --_adaptive-table-border-chroma: 150;
+  --_adaptive-table-background-min: 90;
+  --_adaptive-table-background-max: 100;
+  --_adaptive-table-background-chroma: 20;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --_adaptive-text-min: 75;
+    --_adaptive-text-max: 100;
+    --_adaptive-text-chroma: 55;
+    --_adaptive-background-min: 0;
+    --_adaptive-background-max: 30;
+    --_adaptive-background-chroma: 30;
+    --_adaptive-table-border-min: 47;
+    --_adaptive-table-border-max: 100;
+    --_adaptive-table-border-chroma: 150;
+    --_adaptive-table-background-min: 0;
+    --_adaptive-table-background-max: 30;
+    --_adaptive-table-background-chroma: 30;
+  }
+}
+[style*="--tn-color"] {
+  color: lch(from var(--tn-color)
+    calc(min(1, c / 1.5) * clamp(var(--_adaptive-text-min), l, var(--_adaptive-text-max))
+      + (1 - min(1, c / 1.5)) * (var(--_adaptive-text-min) + l / 100 * (var(--_adaptive-text-max) - var(--_adaptive-text-min))))
+    min(c, var(--_adaptive-text-chroma)) h) !important;
+}
+[style*="--tn-background"] {
+  background-color: lch(from var(--tn-background)
+    calc(min(1, c / 1.5) * clamp(var(--_adaptive-background-min), l, var(--_adaptive-background-max))
+      + (1 - min(1, c / 1.5)) * (var(--_adaptive-background-min) + l / 100 * (var(--_adaptive-background-max) - var(--_adaptive-background-min))))
+    min(c, var(--_adaptive-background-chroma)) h) !important;
+}
+:is(table, td, th)[style*="--tn-border-color"] {
+  border-color: lch(from var(--tn-border-color)
+    calc(min(1, c / 1.5) * clamp(var(--_adaptive-table-border-min), l, var(--_adaptive-table-border-max))
+      + (1 - min(1, c / 1.5)) * (var(--_adaptive-table-border-min) + l / 100 * (var(--_adaptive-table-border-max) - var(--_adaptive-table-border-min))))
+    min(c, var(--_adaptive-table-border-chroma)) h) !important;
+}
+:is(table, td, th)[style*="--tn-background"] {
+  background-color: lch(from var(--tn-background)
+    calc(min(1, c / 1.5) * clamp(var(--_adaptive-table-background-min), l, var(--_adaptive-table-background-max))
+      + (1 - min(1, c / 1.5)) * (var(--_adaptive-table-background-min) + l / 100 * (var(--_adaptive-table-background-max) - var(--_adaptive-table-background-min))))
+    min(c, var(--_adaptive-table-background-chroma)) h) !important;
+}

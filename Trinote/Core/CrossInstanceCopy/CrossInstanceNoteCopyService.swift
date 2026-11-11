@@ -613,12 +613,22 @@ enum CrossInstanceNoteCopyService {
         )
         let destId = created.note.noteId
         noteIdMap[node.sourceNoteId] = destId
-        for attachment in node.attachments {
+        // A drawing's picture is named after the drawing's attachment id, so it goes up after the drawing.
+        let sourceIds = Set(node.attachments.compactMap(\.sourceAttachmentId))
+        let isPicture = { (a: CopyableAttachment) in
+            CrossInstanceCopyBodyRewriter.drawingPictureOwner(title: a.title, among: sourceIds) != nil
+        }
+        for attachment in node.attachments.filter({ !isPicture($0) }) + node.attachments.filter(isPicture) {
             if Task.isCancelled { throw CopyError.cancelled }
+            var filename = attachment.title
+            if let owner = CrossInstanceCopyBodyRewriter.drawingPictureOwner(title: attachment.title, among: sourceIds),
+               let newOwner = attachmentIdMap[owner] {
+                filename = "\(newOwner).svg"
+            }
             let newAttId = try await destClient.uploadNoteAttachment(
                 noteId: destId,
                 data: attachment.data,
-                filename: attachment.title,
+                filename: filename,
                 contentType: attachment.mime
             )
             if let oldAttId = attachment.sourceAttachmentId {

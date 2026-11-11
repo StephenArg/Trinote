@@ -23,7 +23,7 @@ struct SettingsView: View {
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     @AppStorage("noteCheckboxReorderEnabled") private var noteCheckboxReorderEnabled: Bool = true
     /// When true, Image–Code insert tools sit in a top bar below the nav header instead of the bottom formatting toolbar.
-    @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = false
+    @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = true
     @AppStorage(NoteEditorSaving.autosaveKey) private var noteEditorAutosave = false
     @AppStorage(NoteEditorSaving.autosaveDelayKey) private var noteEditorAutosaveDelay = NoteEditorSaving.defaultAutosaveDelay
     @AppStorage(NoteEditorSaving.hideSaveButtonKey) private var noteEditorHideSaveButton = false

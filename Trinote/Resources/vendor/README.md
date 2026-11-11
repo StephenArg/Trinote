@@ -17,6 +17,7 @@ desktop / web client.
 
 | Trilium release | Mermaid version | Source URL |
 |-----------------|-----------------|------------|
+| v0.107.0        | 12.3.0          | `https://cdn.jsdelivr.net/npm/mermaid@12.3.0/dist/mermaid.min.js` |
 | v0.106.0        | 12.0.0          | `https://cdn.jsdelivr.net/npm/mermaid@12.0.0/dist/mermaid.min.js` |
 | v0.105.0        | 11.16.1         | `https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js` |
 | v0.103.0        | 11.15.0         | `https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js` |
@@ -77,7 +78,7 @@ Replaced by MapLibre GL for geo-map notes (see below).
 
 ## `maplibre-gl.js` / `maplibre-gl.css`
 
-MapLibre GL **6.10.0** for geo-map editor/viewer (`geomap-*.html`). Matches Trilium v0.106.
+MapLibre GL **6.16.0** for geo-map editor/viewer (`geomap-*.html`). Matches Trilium v0.107.
 
 MapLibre 6 ships as ES modules only, and WKWebView runs neither module scripts nor module workers on the
 `file://` pages the maps load from. `Scripts/build_maplibre.sh` therefore rebuilds the release into one classic
@@ -101,11 +102,11 @@ VersaTiles Colorful vector style JSON (`versatiles-colorful.json`), copied from 
 
 ## `katex/`
 
-Vendored KaTeX **0.18.7** (`katex.min.js`, `katex.min.css`, `fonts/`) for
-inline math in HTML and mermaid notes. Matches Trilium v0.106.
+Vendored KaTeX **0.19.1** (`katex.min.js`, `katex.min.css`, `fonts/`) for
+inline math in HTML and mermaid notes. Matches Trilium v0.107.
 
 ```bash
-curl -sSfL -o /tmp/katex.tgz https://registry.npmjs.org/katex/-/katex-0.18.7.tgz
+curl -sSfL -o /tmp/katex.tgz https://registry.npmjs.org/katex/-/katex-0.19.1.tgz
 tar xzf /tmp/katex.tgz -C /tmp
 cp /tmp/package/dist/katex.min.{js,css} Trinote/Resources/vendor/katex/
 cp /tmp/package/dist/fonts/* Trinote/Resources/vendor/katex/fonts/

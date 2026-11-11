@@ -117,4 +117,27 @@ final class GeoMapSettingsTests: XCTestCase {
             XCTAssertNotNil((style["sources"] as? [String: Any])?["versatiles-shortbread"], "\(name) draws the map data the 3D buildings use")
         }
     }
+
+    func testSavingKeepsAStyleTrinoteDoesntKnow() async throws {
+        let client = MockTriliumClient()
+        let note = mapNote(style: "https://tiles.example/{z}/{x}/{y}.png")
+        let settings = GeoMapDisplaySettings(from: note, defaultStyle: .openstreetmap)
+
+        _ = try await settings.apply(to: note, via: client)
+
+        let calls = await client.createAttributeCalls
+        XCTAssertFalse(calls.contains { $0.name == "map:style" })
+    }
+
+    func testPickingAStyleReplacesOneTrinoteDoesntKnow() async throws {
+        let client = MockTriliumClient()
+        let note = mapNote(style: "https://tiles.example/{z}/{x}/{y}.png")
+        var settings = GeoMapDisplaySettings(from: note, defaultStyle: .openstreetmap)
+        settings.mapStyle = .versatilesColorfulEclipse
+
+        _ = try await settings.apply(to: note, via: client)
+
+        let calls = await client.createAttributeCalls
+        XCTAssertEqual(calls.first { $0.name == "map:style" }?.value, GeoMapStyleID.versatilesColorfulEclipse.rawValue)
+    }
 }

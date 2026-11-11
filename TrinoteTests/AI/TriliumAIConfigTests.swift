@@ -120,4 +120,52 @@ final class TriliumAIConfigTests: XCTestCase {
         XCTAssertTrue(TriliumServerCompatibility.supportsLlmChat(info("0.105.0")))
         XCTAssertTrue(TriliumServerCompatibility.supportsLlmChat(info("v0.106.0")))
     }
+
+    private let searchRows = #"[{"id":"s1","name":"SearXNG","provider":"searxng","kind":"search"},{"id":"c1","name":"Claude","provider":"anthropic"}]"#
+
+    func testTheSearchProviderOptionMustNameASearchProvider() {
+        XCTAssertEqual(TriliumAIConfig.webSearchProviderId(fromOption: "s1", providersOption: searchRows), "s1")
+        XCTAssertNil(TriliumAIConfig.webSearchProviderId(fromOption: "c1", providersOption: searchRows), "a chat provider isn't a search provider")
+        XCTAssertNil(TriliumAIConfig.webSearchProviderId(fromOption: "gone", providersOption: searchRows))
+        XCTAssertNil(TriliumAIConfig.webSearchProviderId(fromOption: "", providersOption: searchRows))
+    }
+
+    func testTheOptionsSayWhetherTheServerKnowsSearchProviders() {
+        let newer = TriliumAIConfig(options: options(["llmProviders": searchRows, "llmWebSearchProvider": "s1"]))
+        XCTAssertEqual(newer.webSearchProviderId, "s1")
+        XCTAssertTrue(newer.knowsSearchProviders)
+        let older = TriliumAIConfig(options: options(["llmProviders": searchRows]))
+        XCTAssertNil(older.webSearchProviderId)
+        XCTAssertFalse(older.knowsSearchProviders)
+    }
+
+    private func resolve(_ provider: String?, on: Bool = true, notes: Bool = false, search: String? = nil, known: Bool = true) -> LlmWebSearch {
+        .resolve(modelProvider: provider, enableWebSearch: on, enableNoteTools: notes, searchProviderId: search, knowsSearchProviders: known)
+    }
+
+    func testASearchProviderIsSentWhenItCanBeUsed() {
+        XCTAssertEqual(resolve("ollama", search: "s1"), LlmWebSearch(unavailable: nil, enableWebSearch: true, webSearchProviderId: "s1"))
+        XCTAssertEqual(resolve("google", notes: true, search: "s1").webSearchProviderId, "s1", "it replaces Gemini's built-in search")
+        XCTAssertNil(resolve("ollama", on: false, search: "s1").webSearchProviderId)
+    }
+
+    func testAnAgentProviderSearchesWithItsOwnTools() {
+        let result = resolve("claude-agent", search: "s1")
+        XCTAssertEqual(result.unavailable, .providerSearchesWithOwnTools)
+        XCTAssertFalse(result.enableWebSearch)
+        XCTAssertNil(result.webSearchProviderId)
+        XCTAssertTrue(resolve("claude-agent").enableWebSearch, "it has a built-in search otherwise")
+    }
+
+    func testBuiltInSearchNeedsAModelThatHasOne() {
+        XCTAssertEqual(resolve("ollama").unavailable, .noBuiltInSearch)
+        XCTAssertFalse(resolve("ollama").enableWebSearch)
+        XCTAssertEqual(resolve("google", notes: true).unavailable, .geminiWithNoteTools)
+        XCTAssertTrue(resolve("anthropic").enableWebSearch)
+    }
+
+    func testOlderServersKeepTheGeminiLimitAlone() {
+        XCTAssertTrue(resolve("ollama", known: false).enableWebSearch)
+        XCTAssertEqual(resolve("google", notes: true, known: false).unavailable, .geminiWithNoteTools)
+    }
 }

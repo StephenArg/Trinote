@@ -147,4 +147,13 @@ final class ChatTranscriptRendererTests: XCTestCase {
         XCTAssertNil(failed.approval)
         XCTAssertEqual(failed.toolError, true)
     }
+
+    func testThinkingIsRenderedAsMarkdown() throws {
+        let json = ChatTranscriptRenderer.streamingJSON(status: nil, thinking: "**bold** idea", blocks: [.thinking("*in a block*")])
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(payload["thinking"] as? String, "**bold** idea", "the source stays for the page to fall back on")
+        XCTAssertTrue((payload["thinkingHTML"] as? String)?.contains("<strong>bold</strong>") == true)
+        let block = try XCTUnwrap((payload["blocks"] as? [[String: Any]])?.first)
+        XCTAssertTrue((block["html"] as? String)?.contains("<em>in a block</em>") == true)
+    }
 }

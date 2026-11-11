@@ -91,14 +91,14 @@ struct LinkPreviewMetadata: Codable, Equatable, Sendable {
 /// understand which quirks (new note types, schema changes) might not be fully handled yet.
 enum TriliumServerCompatibility {
     /// Highest `MAX_MIGRATION_VERSION` (`dbVersion`) the iOS client was tested against.
-    /// 240 as of v0.105.0 (migrations 239–240: TOTP cleanup, board select definitions); unchanged in v0.106.0.
-    static let testedMaxDbVersion: Int = 240
+    /// 242 as of v0.107.0 (240 from v0.105.0 through v0.106.0).
+    static let testedMaxDbVersion: Int = 242
 
-    /// Highest `SYNC_VERSION` the iOS client was tested against. Still 39 as of v0.106.0.
-    static let testedMaxSyncVersion: Int = 39
+    /// Highest `SYNC_VERSION` the iOS client was tested against. 41 as of v0.107.0.
+    static let testedMaxSyncVersion: Int = 41
 
     /// Human label used in the Settings banner when displaying the tested ceiling.
-    static let testedMaxAppVersion = "v0.106.0"
+    static let testedMaxAppVersion = "v0.107.0"
 
     /// Trilium release that introduced the `spreadsheet` note type (Univer Sheets).
     static let spreadsheetMinAppVersion = "0.103.0"
@@ -274,6 +274,18 @@ enum TriliumServerCompatibility {
         guard let info else { return false }
         return isAppVersion(info.appVersion, atLeast: v0107RoutesMinAppVersion)
             || (info.syncVersion ?? 0) >= v0107RoutesMinSyncVersion
+    }
+
+    /// `true` when the server stores columns, tabs, block links and excerpts (Trilium v0.107+); older clients and
+    /// servers would only drop them, so the editor doesn't offer them.
+    static func supportsContentBlocks(_ info: AppInfoResponse?) -> Bool {
+        usesV0107Routes(info)
+    }
+
+    /// `true` when duplicating a note can leave its sub-notes out (`POST /api/notes/:id/duplicate/:parent` with
+    /// `{ withChildren: false }`, Trilium v0.107+); older servers ignore the option and copy the whole subtree.
+    static func supportsDuplicateWithoutChildren(_ info: AppInfoResponse?) -> Bool {
+        usesV0107Routes(info)
     }
 
     /// Semantic compare for Trilium `appVersion` strings (`0.103.0`, `v0.102.1`, `0.103.0-beta.1`).
@@ -662,6 +674,14 @@ struct CreateAttachmentRequest: Encodable {
 /// `GET /api/quick-search?searchString=` (`/api/quick-search/:query` before Trilium 0.107) — the web's quick search.
 /// Trinote uses it for the snippet and breadcrumb Trilium builds per result. Every field is optional: older servers
 /// return fewer of them.
+/// `GET /api/search-note/:noteId`: what a saved search note finds right now.
+struct SavedSearchResponse: Decodable, Sendable {
+    let searchResultNoteIds: [String]
+    let highlightedTokens: [String]?
+    /// Trilium's message when the query can't be run.
+    let error: String?
+}
+
 struct QuickSearchResponse: Decodable, Sendable {
     let searchResults: [QuickSearchResult]?
 }

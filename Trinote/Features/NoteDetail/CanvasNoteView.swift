@@ -1,6 +1,28 @@
 import SwiftUI
 import WebKit
 
+/// A canvas as this device last saved it. Reading view draws it until the server catches up: the exported SVG is
+/// replaced in place on the server (the attachment list looks the same) and uploads only after the editor closes.
+struct SavedCanvasPreview: Equatable {
+    enum Drawing: Equatable {
+        case svg(Data)
+        /// No export came with the save, so the scene is drawn from its JSON.
+        case scene
+    }
+
+    let json: String
+    let svg: Data?
+    /// Changes with every save, so reading view redraws.
+    let generation: Int
+
+    /// What to draw for a note whose body is `body`; `nil` once the body is another one (the server sent a newer).
+    func drawing(for body: String?) -> Drawing? {
+        guard body == json else { return nil }
+        if let svg { return .svg(svg) }
+        return NoteEditorSaving.isUsableCanvasJSON(json) ? .scene : nil
+    }
+}
+
 struct CanvasNoteView: View {
     let noteId: String
     let attachments: [AttachmentItem]
@@ -8,6 +30,7 @@ struct CanvasNoteView: View {
     var attachmentsLoaded = false
     let client: (any TriliumClientProtocol)?
     let excalidrawJSON: String?
+    var savedPreview: SavedCanvasPreview? = nil
 
     @State private var svgData: Data?
     @State private var isLoading = true
@@ -82,10 +105,26 @@ struct CanvasNoteView: View {
                 }
             }
         }
-        .task(id: "\(attachments.count)-\(attachmentsLoaded)") { await loadCanvas() }
+        .task(id: "\(attachments.count)-\(attachmentsLoaded)-\(savedPreview?.generation ?? 0)") { await loadCanvas() }
     }
 
     private func loadCanvas() async {
+        errorMessage = nil
+        isEmpty = false
+        isUnreadable = false
+        switch savedPreview?.drawing(for: excalidrawJSON) {
+        case .svg(let data)?:
+            svgData = data
+            useFallback = false
+            isLoading = false
+            return
+        case .scene?:
+            useFallback = true
+            isLoading = false
+            return
+        case nil:
+            break
+        }
         if let attachment = svgAttachment, let client {
             do {
                 let data = try await client.getAttachmentContent(attachment.attachmentId)
@@ -218,7 +257,7 @@ private struct CanvasSVGWebView: UIViewRepresentable {
 
 // MARK: - Excalidraw fallback renderer (uses @excalidraw/utils to generate SVG)
 
-private struct ExcalidrawReadOnlyWebView: UIViewRepresentable {
+struct ExcalidrawReadOnlyWebView: UIViewRepresentable {
     let json: String
     var onHeightChanged: ((CGFloat) -> Void)?
 

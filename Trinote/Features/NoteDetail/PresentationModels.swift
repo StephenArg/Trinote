@@ -68,6 +68,36 @@ enum PresentationModels {
         themeStyles[normalizedTheme(theme)] ?? themeStyles[defaultTheme]!
     }
 
+    /// What a slide shows when that isn't its note's body, as in Trilium's `model.ts`.
+    enum SlideKind: Equatable, Sendable {
+        case content
+        /// A web view note's page across the whole slide; `nil` when it names no http(s) page.
+        case webPage(URL?)
+        case board
+        case table
+
+        /// The children of a board or table are what it shows, so they aren't vertical slides.
+        var showsItsChildren: Bool { self == .board || self == .table }
+    }
+
+    static func slideKind(type: NoteType?, viewType: String?, webViewSrc: String?) -> SlideKind {
+        if type == .webView { return .webPage(webPageURL(webViewSrc)) }
+        if type == .kanban { return .board }
+        guard type == .book || type == .collection else { return .content }
+        switch viewType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "board": return .board
+        case "table": return .table
+        default: return .content
+        }
+    }
+
+    private static func webPageURL(_ source: String?) -> URL? {
+        guard let source = source?.trimmingCharacters(in: .whitespacesAndNewlines), !source.isEmpty,
+              let url = URL(string: source), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              url.host != nil else { return nil }
+        return url
+    }
+
     struct Slide: Identifiable, Equatable, Sendable {
         let noteId: String
         let branchId: String
@@ -75,6 +105,7 @@ enum PresentationModels {
         let html: String
         let background: String?
         var verticalSlides: [Slide]
+        var kind: SlideKind = .content
 
         var id: String { noteId }
     }
@@ -82,17 +113,20 @@ enum PresentationModels {
     /// Builds a horizontal slide list; each slide's `verticalSlides` are its direct children (Trilium nesting).
     static func buildSlides(
         horizontal: [(noteId: String, branchId: String, title: String, html: String, background: String?)],
-        verticalByParent: [String: [(noteId: String, branchId: String, title: String, html: String, background: String?)]]
+        verticalByParent: [String: [(noteId: String, branchId: String, title: String, html: String, background: String?)]],
+        kinds: [String: SlideKind] = [:]
     ) -> [Slide] {
         horizontal.map { h in
-            let vertical = (verticalByParent[h.noteId] ?? []).map { v in
+            let kind = kinds[h.noteId] ?? .content
+            let vertical = kind.showsItsChildren ? [] : (verticalByParent[h.noteId] ?? []).map { v in
                 Slide(
                     noteId: v.noteId,
                     branchId: v.branchId,
                     title: v.title,
                     html: v.html,
                     background: v.background,
-                    verticalSlides: []
+                    verticalSlides: [],
+                    kind: kinds[v.noteId] ?? .content
                 )
             }
             return Slide(
@@ -101,7 +135,8 @@ enum PresentationModels {
                 title: h.title,
                 html: h.html,
                 background: h.background,
-                verticalSlides: vertical
+                verticalSlides: vertical,
+                kind: kind
             )
         }
     }

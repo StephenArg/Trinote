@@ -10,7 +10,9 @@ final class CollectionLoaderTests: XCTestCase {
     private let profileId = "collection-loader-test-server"
     private var appState: AppState!
     private var persistence: PersistenceManager { PersistenceManager.shared }
-    private let policy = CacheExclusionPolicy()
+    /// Made on first use, inside a test: building it reads the shared store, which the test host may not have opened yet
+    /// when XCTest creates the test case.
+    private lazy var policy = CacheExclusionPolicy()
 
     override func tearDown() async throws {
         if PersistenceManager.isInitialized {

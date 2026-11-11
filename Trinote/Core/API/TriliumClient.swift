@@ -44,6 +44,11 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func getNoteContent(_ noteId: String) async throws -> Data
     /// A note's body, or `nil` when it's larger than `maxBytes`: the download stops as soon as that shows.
     func getNoteContent(_ noteId: String, maxBytes: Int) async throws -> Data?
+    /// `GET /api/notes/:noteId/blocks?block=` (Trilium 0.107+): the HTML of the blocks a `block` reference points at,
+    /// to edit apart from the rest of the note. Answers not found when they can't be edited apart.
+    func getNoteBlocks(noteId: String, block: String) async throws -> String
+    /// `PUT /api/notes/:noteId/blocks?block=`: replaces those blocks; the rest of the note stays byte for byte.
+    func updateNoteBlocks(noteId: String, block: String, content: String) async throws
     /// `GET /api/stats/subtree-size/:noteId`: how many notes are under the note and how much their content weighs.
     func getSubtreeSize(_ noteId: String) async throws -> SubtreeSizeResponse
     func updateNote(_ noteId: String, request: UpdateNoteRequest) async throws -> NoteResponse
@@ -62,8 +67,9 @@ protocol TriliumClientProtocol: Actor, Sendable {
     /// `taskProgressCount` messages for `taskId`, out of `totalCount` when given.
     func deleteNotes(branchIds: [String], deleteAllClones: Bool, eraseNotes: Bool, totalCount: Int?, taskId: String) async throws
     func createNote(_ request: CreateNoteRequest) async throws -> CreateNoteResponse
-    /// New note under `parentNoteId` with copied title, type, mime, and body (child notes are not copied).
-    func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse
+    /// Trilium's own duplicate: a new note under `parentNoteId` with the title, body, attributes and attachments, and
+    /// the sub-notes unless `withChildren` is false (which needs Trilium 0.107+; older servers copy them regardless).
+    func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String, withChildren: Bool) async throws -> CreateNoteResponse
     /// New child with arbitrary body (text in `createNote`, binary via `updateNoteContent` when needed).
     func createChildNoteWithContent(parentNoteId: String, title: String, noteType: String, mime: String, body: Data) async throws -> CreateNoteResponse
     func searchNotes(query: String, fastSearch: Bool, includeArchived: Bool, ancestorNoteId: String?, orderBy: String?, orderDirection: String?, limit: Int?) async throws -> SearchResponse
@@ -72,6 +78,8 @@ protocol TriliumClientProtocol: Actor, Sendable {
     /// `GET /api/quick-search?searchString=` (Trilium 0.107+; `/api/quick-search/:query` before) — per-result snippets
     /// and breadcrumbs (up to 200 results, archived notes excluded).
     func quickSearchResults(query: String) async throws -> [QuickSearchResult]
+    /// `GET /api/search-note/:noteId`: runs the query a saved search note holds.
+    func runSavedSearch(noteId: String) async throws -> SavedSearchResponse
     /// Matching note ids only. `ancestorNoteId` limits the search to that subtree on Trilium 0.106+; older servers
     /// ignore it, so callers that need the scope intersect with the notes they hold.
     func searchNoteIds(query: String, ancestorNoteId: String?) async throws -> [String]
@@ -1195,6 +1203,21 @@ actor TriliumClient: TriliumClientProtocol {
         return try await getNote(noteId)
     }
 
+    func getNoteBlocks(noteId: String, block: String) async throws -> String {
+        struct Blocks: Decodable { let content: String }
+        let blocks: Blocks = try await get("/api/notes/\(noteId)/blocks", queryParams: ["block": block], csrf: false)
+        return blocks.content
+    }
+
+    func updateNoteBlocks(noteId: String, block: String, content: String) async throws {
+        struct Body: Encodable { let content: String }
+        var request = try buildRequest(path: "/api/notes/\(noteId)/blocks", method: "PUT", queryParams: ["block": block], csrf: true, jsonBody: true)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(Body(content: content))
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response, data: data)
+    }
+
     func updateNoteContent(_ noteId: String, content: Data, contentType: String) async throws {
         if TriliumNoteBodyEncoding.usesUTF8JSONContent(mime: contentType, data: content) {
             let asString = String(data: content, encoding: .utf8) ?? ""
@@ -1354,20 +1377,25 @@ actor TriliumClient: TriliumClientProtocol {
         return CreateNoteResponse(note: note, branch: branch)
     }
 
-    func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String) async throws -> CreateNoteResponse {
-        let src = try await getNote(sourceNoteId)
-        if src.isProtected {
-            throw APIError.unknown("Protected notes can’t be duplicated in the app.")
-        }
-        let data = try await getNoteContent(sourceNoteId)
-        let dupTitle = Self.duplicateNoteTitle(from: src.title)
-        return try await createChildNoteWithContent(
-            parentNoteId: parentNoteId,
-            title: dupTitle,
-            noteType: src.type,
-            mime: src.mime,
-            body: data
+    func duplicateNoteAsChild(sourceNoteId: String, parentNoteId: String, withChildren: Bool) async throws -> CreateNoteResponse {
+        struct Body: Encodable { let withChildren: Bool }
+        let res: CreateNoteNativeResponse = try await postJSON(
+            "/api/notes/\(sourceNoteId)/duplicate/\(parentNoteId)",
+            body: Body(withChildren: withChildren),
+            csrf: true
         )
+        let note = try await getNote(res.note.noteId)
+        let br = res.branch
+        let branch = BranchResponse(
+            branchId: br.branchId,
+            noteId: br.noteId,
+            parentNoteId: br.parentNoteId,
+            prefix: br.prefix,
+            notePosition: br.notePosition,
+            isExpanded: br.isExpanded ?? false,
+            utcDateModified: br.utcDateModified
+        )
+        return CreateNoteResponse(note: note, branch: branch)
     }
 
     func createChildNoteWithContent(parentNoteId: String, title: String, noteType: String, mime: String, body: Data) async throws -> CreateNoteResponse {
@@ -1396,12 +1424,6 @@ actor TriliumClient: TriliumClientProtocol {
             response = CreateNoteResponse(note: refreshed, branch: response.branch)
         }
         return response
-    }
-
-    private static func duplicateNoteTitle(from title: String) -> String {
-        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty { return "Note (copy)" }
-        return "\(t) (copy)"
     }
 
     /// UTF-8 text for `createNote`, or empty with `needsBinaryUpload` when body should be sent via `updateNoteContent`.
@@ -1480,6 +1502,10 @@ actor TriliumClient: TriliumClientProtocol {
             )
         }
         return response.searchResults ?? []
+    }
+
+    func runSavedSearch(noteId: String) async throws -> SavedSearchResponse {
+        try await get("/api/search-note/\(noteId)", csrf: false)
     }
 
     func searchNoteIdTitles(query: String, limit: Int) async throws -> [NoteIdTitle] {

@@ -112,6 +112,9 @@ struct GeoMapShape: Identifiable, Sendable, Hashable {
     let coordinates: [[Double]]
     /// Circles only.
     let radiusMeters: Double?
+    /// An image map's circle, as `[longitude, latitude]` pairs without the closing repeat: there it's an ellipse where
+    /// the image's two axes have different units. On a world map the ring is worked out from the radius instead.
+    var ring: [[Double]]? = nil
     var color: String?
 
     var id: String { noteId }
@@ -133,6 +136,16 @@ struct GeoMapShape: Identifiable, Sendable, Hashable {
         let lng = coordinates.map { $0[0] }.reduce(0, +) / Double(coordinates.count)
         let lat = coordinates.map { $0[1] }.reduce(0, +) / Double(coordinates.count)
         return (lat, lng)
+    }
+
+    init(noteId: String, title: String, kind: Kind, coordinates: [[Double]], radiusMeters: Double?, ring: [[Double]]?, color: String?) {
+        self.noteId = noteId
+        self.title = title
+        self.kind = kind
+        self.coordinates = coordinates
+        self.radiusMeters = radiusMeters
+        self.ring = ring
+        self.color = color
     }
 
     init?(noteId: String, title: String, value: String, color: String?) {
@@ -214,6 +227,7 @@ extension Array where Element == GeoMapShape {
                 "color": shape.colorHex,
             ]
             if let radius = shape.radiusMeters { dict["radiusMeters"] = radius }
+            if let ring = shape.ring { dict["ring"] = ring }
             return dict
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
@@ -348,6 +362,8 @@ struct GeoMapDisplaySettings: Equatable, Sendable {
     /// When `true`, marker titles are hidden (Trilium `map:hideLabels`).
     var hideLabels: Bool
     var cluster: Bool
+    /// Shown in place of a stored `#map:style` Trinote can't use; `nil` when the stored style is a known one.
+    private(set) var fallbackForUnknownStoredStyle: GeoMapStyleID? = nil
 
     static let gpxMIME = "application/gpx+xml"
 
@@ -357,6 +373,8 @@ struct GeoMapDisplaySettings: Equatable, Sendable {
             note.attributes.first(where: { $0.type == .label && $0.name == name })?.value
         }
         mapStyle = GeoMapStyleID(rawStored: label("map:style"), default: defaultStyle)
+        let storedStyle = label("map:style")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        fallbackForUnknownStoredStyle = !storedStyle.isEmpty && GeoMapStyleID(rawValue: storedStyle) == nil ? mapStyle : nil
         showScale = Self.boolLabel(label("map:scale"), default: false)
         scaleUnit = GeoMapScaleUnit(rawStored: label("map:scaleUnit"))
         hideLabels = Self.boolLabel(label("map:hideLabels"), default: true)
@@ -401,7 +419,10 @@ struct GeoMapDisplaySettings: Equatable, Sendable {
 
     func apply(to note: NoteItem, via client: any TriliumClientProtocol) async throws -> NoteItem {
         var updated = note
-        updated = try await upsertLabel(on: updated, via: client, name: "map:style", value: mapStyle.rawValue)
+        // A style Trinote doesn't know (Trilium also allows a raster tile URL) stays until another is picked here.
+        if mapStyle != fallbackForUnknownStoredStyle {
+            updated = try await upsertLabel(on: updated, via: client, name: "map:style", value: mapStyle.rawValue)
+        }
         updated = try await upsertLabel(on: updated, via: client, name: "map:scale", value: showScale ? "true" : "false")
         updated = try await upsertLabel(on: updated, via: client, name: "map:scaleUnit", value: scaleUnit.rawValue)
         updated = try await upsertLabel(on: updated, via: client, name: "map:hideLabels", value: hideLabels ? "true" : "false")

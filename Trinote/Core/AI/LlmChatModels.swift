@@ -724,12 +724,14 @@ struct LlmChatRequestConfig: Codable, Equatable, Sendable {
     var allowedTools: [String]?
     /// Which tool calls wait for the user (Trilium 0.107+); the server asks before every one when it's absent.
     var permissionMode: LlmPermissionMode?
+    /// The configured search provider that does this turn's web search, in place of the model's own (Trilium 0.107+).
+    var webSearchProviderId: String?
 
     init(
         provider: String? = nil, providerId: String? = nil, model: String? = nil, systemPrompt: String? = nil,
         enableWebSearch: Bool? = nil, enableNoteTools: Bool? = nil, enableExtendedThinking: Bool? = nil,
         thinkingBudget: Int? = nil, reasoningEffort: LlmReasoningEffort? = nil, contextNoteId: String? = nil, chatNoteId: String? = nil,
-        allowedTools: [String]? = nil, permissionMode: LlmPermissionMode? = nil
+        allowedTools: [String]? = nil, permissionMode: LlmPermissionMode? = nil, webSearchProviderId: String? = nil
     ) {
         self.provider = provider
         self.providerId = providerId
@@ -744,6 +746,57 @@ struct LlmChatRequestConfig: Codable, Equatable, Sendable {
         self.chatNoteId = chatNoteId
         self.allowedTools = allowedTools
         self.permissionMode = permissionMode
+        self.webSearchProviderId = webSearchProviderId
+    }
+}
+
+/// A chat turn's web search, worked out as Trilium's `resolveWebSearch` (`services/llm_providers.ts`) does.
+struct LlmWebSearch: Equatable, Sendable {
+    enum Unavailable: Equatable, Sendable {
+        case noBuiltInSearch
+        case geminiWithNoteTools
+        case providerSearchesWithOwnTools
+    }
+
+    /// Why the chosen search can't be used with this model, if it can't.
+    var unavailable: Unavailable?
+    var enableWebSearch: Bool
+    /// The search provider the turn goes through; `nil` means the model's built-in search.
+    var webSearchProviderId: String?
+
+    /// Provider types whose models can search the web on their own.
+    private static let builtInSearch: Set<String> = [
+        "anthropic", "openai", "google", "deepseek", "claude-agent", "antigravity-agent", "codex-agent",
+    ]
+    /// Provider types that run their own agent loop, which takes no tool from Trilium's chat.
+    private static let ownAgentLoop: Set<String> = ["claude-agent", "copilot-agent", "antigravity-agent", "codex-agent"]
+
+    /// - Parameters:
+    ///   - searchProviderId: The `llmWebSearchProvider` option, when it names a configured search provider.
+    ///   - knowsSearchProviders: The server is Trilium 0.107+. Before it, only the Gemini limit existed.
+    static func resolve(
+        modelProvider: String?,
+        enableWebSearch: Bool,
+        enableNoteTools: Bool,
+        searchProviderId: String?,
+        knowsSearchProviders: Bool
+    ) -> LlmWebSearch {
+        let builtInLimit: Unavailable?
+        if knowsSearchProviders, let modelProvider, !builtInSearch.contains(modelProvider) {
+            builtInLimit = .noBuiltInSearch
+        } else if modelProvider == "google" && enableNoteTools {
+            builtInLimit = .geminiWithNoteTools
+        } else {
+            builtInLimit = nil
+        }
+        let providerLimit: Unavailable? = modelProvider.map(ownAgentLoop.contains) == true ? .providerSearchesWithOwnTools : nil
+        let unavailable = searchProviderId != nil ? providerLimit : builtInLimit
+        let usable = enableWebSearch && unavailable == nil
+        return LlmWebSearch(
+            unavailable: unavailable,
+            enableWebSearch: usable,
+            webSearchProviderId: usable ? searchProviderId : nil
+        )
     }
 }
 

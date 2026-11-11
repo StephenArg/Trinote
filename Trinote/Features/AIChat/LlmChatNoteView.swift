@@ -77,6 +77,7 @@ struct ChatConversationView: View {
     @State private var isAtBottom = true
     @State private var showOptions = false
     @State private var showSaveErrorAlert = false
+    @State private var fullScreenImage: FullScreenImagePayload?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,6 +100,11 @@ struct ChatConversationView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .fullScreenCover(item: $fullScreenImage) { payload in
+            FullScreenImageViewer(image: payload.image, title: payload.title) {
+                fullScreenImage = nil
+            }
+        }
         .task {
             await appState.refreshAIConfig()
         }
@@ -250,6 +256,11 @@ struct ChatConversationView: View {
             onOpenNote(noteId)
         case .openURL(let url):
             openURL(url)
+        case .openImage(let attachmentId, let title):
+            Task { @MainActor in
+                guard let data = await imageProvider?(attachmentId), let image = OriginalImage(data: data) else { return }
+                fullScreenImage = FullScreenImagePayload(image: image, title: title)
+            }
         case .atBottom(let atBottom):
             withAnimation(.easeInOut(duration: 0.15)) { isAtBottom = atBottom }
         case .retry:

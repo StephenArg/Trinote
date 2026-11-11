@@ -4,12 +4,15 @@ struct GeoMapSettingsSheet: View {
     @Binding var settings: GeoMapDisplaySettings
     /// The styles the server's Trilium offers (`GeoMapStyleID.available(for:)`).
     let styles: [GeoMapStyleID]
+    /// An image map is drawn over its picture, so there's no style to pick and no distance to scale.
+    var isImageMap = false
     let onSave: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
+                if !isImageMap {
                 Section {
                     ForEach(styles) { style in
                         Button {
@@ -36,10 +39,13 @@ struct GeoMapSettingsSheet: View {
                         ))
                     }
                 }
+                }
 
                 Section(String(localized: "Display", comment: "Geo map settings section")) {
-                    Toggle(String(localized: "Show scale", comment: "Geo map setting"), isOn: $settings.showScale)
-                    if settings.showScale {
+                    if !isImageMap {
+                        Toggle(String(localized: "Show scale", comment: "Geo map setting"), isOn: $settings.showScale)
+                    }
+                    if settings.showScale && !isImageMap {
                         Picker(String(localized: "Scale units", comment: "Geo map setting"), selection: $settings.scaleUnit) {
                             ForEach(GeoMapScaleUnit.allCases) { unit in
                                 Text(unit.displayName).tag(unit)

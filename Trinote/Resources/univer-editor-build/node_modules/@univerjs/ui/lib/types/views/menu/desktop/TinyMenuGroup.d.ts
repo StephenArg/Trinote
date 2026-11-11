@@ -1,0 +1,33 @@
+/**
+ * Copyright 2023-present DreamNum Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import type { IValueOption } from '../../../services/menu/menu';
+import type { IMenuSchema } from '../../../services/menu/menu-manager.service';
+import type { TinyMenuLayoutVariant, TinyMenuSizeVariant } from './DesignTinyMenuGroup';
+interface IUIQuickMenuGroupProps {
+    item: IMenuSchema;
+    activeItemIds?: string[];
+    hiddenItemIds?: string[];
+    hoverSuppressed?: boolean;
+    columns?: number;
+    sizeVariant?: TinyMenuSizeVariant;
+    layoutVariant?: TinyMenuLayoutVariant;
+    onOptionSelect?: (option: IValueOption) => void;
+}
+export declare function resolveMenuItemActiveState(itemId: string | undefined, observableActive: boolean, activeItemIds?: string[]): boolean;
+export declare function getVisibleTinyMenuChildren(children: IMenuSchema[], hiddenItemKeys: string[]): IMenuSchema[];
+export declare function UITinyMenuGroup(props: IUIQuickMenuGroupProps): import("react").JSX.Element | null;
+export declare function UIQuickTileMenuGroup(props: IUIQuickMenuGroupProps): import("react").JSX.Element | null;
+export {};

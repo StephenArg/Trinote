@@ -508,6 +508,35 @@ final class CrossInstanceNoteCopyServiceTests: XCTestCase {
         XCTAssertTrue(rewritten.contains("api/attachments/dest-att-1/image/photo.png"))
     }
 
+    func testCopyRepointsEmbedsAndNamesTheDrawingPictureAfterTheNewDrawing() async throws {
+        let html = ##"<figure class="include-note" data-attachment-id="draw1" data-box-size="full"></figure><p><a class="reference-link" href="#root/x/n1?viewMode=attachments&amp;attachmentId=draw1">d</a></p>"##
+        await source.setNoteResult("n1", .success(TestFixtures.noteResponse(id: "n1", title: "With drawing")))
+        await source.setNoteContentResult("n1", .success(Data(html.utf8)))
+        await source.setAttachments(noteId: "n1", [
+            TestFixtures.attachmentResponse(attachmentId: "pic1", ownerId: "n1", title: "draw1.svg", mime: "image/svg+xml"),
+            TestFixtures.attachmentResponse(attachmentId: "draw1", ownerId: "n1", title: "Canvas.excalidraw", mime: "application/vnd.excalidraw+json"),
+        ])
+        await source.setAttachmentBytes(id: "pic1", Data("<svg/>".utf8))
+        await source.setAttachmentBytes(id: "draw1", Data("{}".utf8))
+
+        _ = try await copy(noteId: "n1", includeSubtree: false)
+
+        let uploads = await dest.uploadNoteAttachmentCalls
+        XCTAssertEqual(uploads.map(\.filename), ["Canvas.excalidraw", "dest-att-1.svg"])
+        let updates = await dest.updateNoteContentCalls
+        let rewritten = String(data: try XCTUnwrap(updates.last?.1), encoding: .utf8) ?? ""
+        XCTAssertTrue(rewritten.contains(#"data-attachment-id="dest-att-1""#), rewritten)
+        XCTAssertTrue(rewritten.contains("attachmentId=dest-att-1"), rewritten)
+        XCTAssertFalse(rewritten.contains("draw1"), rewritten)
+        XCTAssertFalse(rewritten.contains("#root/x/n1"), rewritten)
+    }
+
+    func testAttachmentPayloadFromAnOlderAppStillDecodes() throws {
+        let json = #"{"role":"image","mime":"image/png","title":"a.png","position":0,"data":"AA=="}"#
+        let payload = try JSONDecoder().decode(LocalTransferAttachmentPayload.self, from: Data(json.utf8))
+        XCTAssertNil(payload.sourceAttachmentId)
+    }
+
     func testCopyTextNoteRewritesChildImageNoteURLsWhenSubtreeIncluded() async throws {
         let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
         let html = #"<img src="api/images/img-child/image/image.png">"#

@@ -32,6 +32,7 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
     private let cloudflareAccessCredentials: CloudflareAccessCredentials?
     private let onEvent: @Sendable () -> Void
     private let onProtectedSessionLogout: (@Sendable () -> Void)?
+    private let onSessionRevoked: (@Sendable () -> Void)?
     /// `(pulled, total)` while the server pulls from its own sync server; `nil` once it finishes.
     private let onServerPullProgress: (@Sendable (_ progress: (pulled: Int, total: Int)?) -> Void)?
     /// Every client hears every task's progress, so the receiver keeps only the tasks it started.
@@ -45,6 +46,7 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
         cookieStorage: HTTPCookieStorage,
         cloudflareAccessCredentials: CloudflareAccessCredentials? = nil,
         onEvent: @escaping @Sendable () -> Void,
+        onSessionRevoked: (@Sendable () -> Void)? = nil,
         onProtectedSessionLogout: (@Sendable () -> Void)? = nil,
         onServerPullProgress: (@Sendable (_ progress: (pulled: Int, total: Int)?) -> Void)? = nil,
         onTaskProgress: (@Sendable (ServerTaskProgress) -> Void)? = nil,
@@ -55,6 +57,7 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
         self.cloudflareAccessCredentials = cloudflareAccessCredentials?.isComplete == true ? cloudflareAccessCredentials : nil
         self.onEvent = onEvent
         self.onProtectedSessionLogout = onProtectedSessionLogout
+        self.onSessionRevoked = onSessionRevoked
         self.onServerPullProgress = onServerPullProgress
         self.onTaskProgress = onTaskProgress
         self.onReconnected = onReconnected
@@ -162,11 +165,20 @@ final class TriliumWebSocketConnection: NSObject, URLSessionWebSocketDelegate {
             if Self.isProtectedSessionEnd(reloadFrontendMessage: obj) {
                 onProtectedSessionLogout?()
             }
+            if Self.isSessionRevocation(reloadFrontendMessage: obj) {
+                onSessionRevoked?()
+            }
         case "ping":
             sendPingAck()
         default:
             break
         }
+    }
+
+    /// `{ type: "reload-frontend", reason: "password changed" }`: Trilium v0.107 ends every session when the password
+    /// changes, and tells open connections so just before closing them.
+    nonisolated static func isSessionRevocation(reloadFrontendMessage message: [String: Any]) -> Bool {
+        (message["reason"] as? String)?.localizedCaseInsensitiveContains("password changed") == true
     }
 
     /// `{ type: "reload-frontend", reason: "leaving protected session" }`: Trilium's scheduler ending the protected

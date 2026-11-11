@@ -573,4 +573,98 @@ final class KanbanPresentationModelTests: XCTestCase {
         XCTAssertEqual(AppState.templateTitleSearchQuery(title: "Geo Map"), #"#template note.title = "Geo Map""#)
         XCTAssertEqual(AppState.templateTitleSearchQuery(title: #"A "B" \ C"#), #"#template note.title = "A \"B\" \\ C""#)
     }
+
+    // MARK: Cards from the whole subtree
+
+    private let boardTree: [String: [String]] = [
+        "board": ["a", "b", "old", "saved"],
+        "a": ["a1", "a2"], "a1": ["a1x"], "a1x": [], "a2": [],
+        "b": ["a2"],
+        "old": ["oldChild"], "oldChild": [],
+        "saved": ["result"], "result": [],
+    ]
+
+    private func candidates(maxDepth: Int = -1, includeArchived: Bool = false, limit: Int = 100) -> [String] {
+        KanbanBoardModels.subtreeCandidates(
+            boardNoteId: "board",
+            options: GeoMapSubtree.Options(includeArchived: includeArchived, maxDepth: maxDepth),
+            limit: limit,
+            children: { self.boardTree[$0] },
+            isArchived: { $0 == "old" },
+            isSearch: { $0 == "saved" }
+        ).map(\.noteId)
+    }
+
+    func testBoardCollectsItsSubtreeChildrenBeforeParents() {
+        XCTAssertEqual(candidates(), ["a1x", "a1", "a2", "a", "b", "saved"])
+    }
+
+    func testBoardDepthLimits() {
+        XCTAssertEqual(candidates(maxDepth: 0), ["a", "b", "saved"])
+        XCTAssertEqual(candidates(maxDepth: 1), ["a1", "a2", "a", "b", "saved"])
+    }
+
+    func testBoardArchivedNotesComeBackWhenAsked() {
+        XCTAssertTrue(candidates(includeArchived: true).contains("oldChild"))
+        XCTAssertFalse(candidates().contains("oldChild"))
+    }
+
+    func testBoardCandidatesCarryTheirParentAndDepth() {
+        let found = KanbanBoardModels.subtreeCandidates(
+            boardNoteId: "board", options: .init(), children: { self.boardTree[$0] }, isArchived: { _ in false }, isSearch: { _ in false }
+        )
+        XCTAssertEqual(found.first { $0.noteId == "a1x" }, .init(noteId: "a1x", parentNoteId: "a1", depth: 2))
+        XCTAssertEqual(found.first { $0.noteId == "a" }, .init(noteId: "a", parentNoteId: "board", depth: 0))
+    }
+
+    private func label(_ name: String, _ value: String = "") -> AttributeItem {
+        AttributeItem(attributeId: name, noteId: "n", type: .label, name: name, value: value, position: 0, isInheritable: false)
+    }
+
+    func testHideAddColumnLabel() {
+        XCTAssertFalse(KanbanBoardModels.hidesAddColumn([]))
+        XCTAssertTrue(KanbanBoardModels.hidesAddColumn([label("board:hideAddColumn")]))
+        XCTAssertFalse(KanbanBoardModels.hidesAddColumn([label("board:hideAddColumn", "false")]))
+    }
+
+    func testInboxOnlyReachesDeepNotesWhenNested() {
+        let groupBy = KanbanBoardModels.GroupBy("status")
+        XCTAssertEqual(KanbanBoardModels.cardColumn(attributes: [], groupBy: groupBy, showInbox: true, nestedInbox: false, depth: 0), KanbanBoardModels.inboxColumnValue)
+        XCTAssertNil(KanbanBoardModels.cardColumn(attributes: [], groupBy: groupBy, showInbox: true, nestedInbox: false, depth: 1))
+        XCTAssertEqual(KanbanBoardModels.cardColumn(attributes: [], groupBy: groupBy, showInbox: true, nestedInbox: true, depth: 1), KanbanBoardModels.inboxColumnValue)
+        XCTAssertNil(KanbanBoardModels.cardColumn(attributes: [], groupBy: groupBy, showInbox: false, nestedInbox: true, depth: 0))
+    }
+
+    func testTemplatesAreNotCards() {
+        XCTAssertTrue(KanbanBoardModels.isTemplate([label("template")]))
+        XCTAssertFalse(KanbanBoardModels.isTemplate([label("status", "open")]))
+    }
+
+    // MARK: Slides that aren't their body
+
+    func testAWebViewNoteShowsItsPageWhenItIsAWebAddress() {
+        XCTAssertEqual(
+            PresentationModels.slideKind(type: .webView, viewType: nil, webViewSrc: " https://example.com/a "),
+            .webPage(URL(string: "https://example.com/a"))
+        )
+        XCTAssertEqual(PresentationModels.slideKind(type: .webView, viewType: nil, webViewSrc: "file:///etc/passwd"), .webPage(nil))
+        XCTAssertEqual(PresentationModels.slideKind(type: .webView, viewType: nil, webViewSrc: nil), .webPage(nil))
+    }
+
+    func testBoardsAndTablesAreCollectionsOfThoseViews() {
+        XCTAssertEqual(PresentationModels.slideKind(type: .book, viewType: "board", webViewSrc: nil), .board)
+        XCTAssertEqual(PresentationModels.slideKind(type: .book, viewType: "table", webViewSrc: nil), .table)
+        XCTAssertEqual(PresentationModels.slideKind(type: .book, viewType: "grid", webViewSrc: nil), .content)
+        XCTAssertEqual(PresentationModels.slideKind(type: .text, viewType: "board", webViewSrc: nil), .content, "only a collection has a view")
+    }
+
+    func testABoardSlidesChildrenAreItsCardsNotVerticalSlides() {
+        let row = (noteId: "b", branchId: "bb", title: "Board", html: "", background: nil as String?)
+        let child = (noteId: "c", branchId: "bc", title: "Card", html: "", background: nil as String?)
+        let board = PresentationModels.buildSlides(horizontal: [row], verticalByParent: ["b": [child]], kinds: ["b": .board])
+        XCTAssertEqual(board.first?.kind, .board)
+        XCTAssertEqual(board.first?.verticalSlides.count, 0)
+        let plain = PresentationModels.buildSlides(horizontal: [row], verticalByParent: ["b": [child]], kinds: [:])
+        XCTAssertEqual(plain.first?.verticalSlides.count, 1)
+    }
 }

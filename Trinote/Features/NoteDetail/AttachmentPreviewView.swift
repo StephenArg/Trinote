@@ -42,11 +42,32 @@ enum TriliumAttachmentURLParser {
 }
 
 /// Parsed Trilium internal hash links (`#root/{noteId}?viewMode=attachments&attachmentId=…`).
+/// Where inside a note a link points: its blocks (`?block=id` or `start:end`), a bookmark, or a page of a PDF.
+struct NoteJumpTarget: Equatable, Sendable {
+    var block: String? = nil
+    var bookmark: String? = nil
+    var page: Int? = nil
+}
+
+/// A jump waiting for its note to open. Consumed once.
+struct PendingNoteJump: Equatable, Sendable {
+    let noteId: String
+    let target: NoteJumpTarget
+}
+
 enum TriliumHashLinkNavigation {
     struct Parsed: Sendable {
         let noteId: String?
         let viewMode: String?
         let attachmentId: String?
+        var block: String? = nil
+        var bookmark: String? = nil
+        var page: Int? = nil
+
+        /// `nil` for a link to the note as a whole.
+        var jumpTarget: NoteJumpTarget? {
+            block == nil && bookmark == nil && page == nil ? nil : NoteJumpTarget(block: block, bookmark: bookmark, page: page)
+        }
     }
 
     static func parse(url: URL) -> Parsed? {
@@ -91,6 +112,9 @@ enum TriliumHashLinkNavigation {
 
         var viewMode: String?
         var attachmentId: String?
+        var block: String?
+        var bookmark: String?
+        var page: Int?
         if let queryPart {
             for pair in queryPart.split(separator: "&") {
                 let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
@@ -100,13 +124,17 @@ enum TriliumHashLinkNavigation {
                 switch key {
                 case "viewMode": viewMode = value
                 case "attachmentId": attachmentId = value
+                case "block": block = value
+                case "bookmark": bookmark = value
+                // Pages count from 1 in Trilium's links.
+                case "page": page = Int(value).flatMap { $0 >= 1 ? $0 : nil }
                 default: break
                 }
             }
         }
 
         guard noteId != nil || viewMode != nil || attachmentId != nil else { return nil }
-        return Parsed(noteId: noteId, viewMode: viewMode, attachmentId: attachmentId)
+        return Parsed(noteId: noteId, viewMode: viewMode, attachmentId: attachmentId, block: block, bookmark: bookmark, page: page)
     }
 }
 
@@ -144,6 +172,10 @@ struct AttachmentPreviewItem: Identifiable {
         case pdf
         case quickLook
         case officeHTML(String)
+        /// A canvas drawing's Excalidraw scene.
+        case drawing(String)
+        /// A Mermaid diagram's source.
+        case mermaid(String)
     }
 
     let id = UUID()
@@ -180,6 +212,12 @@ struct AttachmentPreviewItem: Identifiable {
         if lowered.hasPrefix("image/"), let image = OriginalImage(data: data) {
             return .image(image)
         }
+        if lowered == AttachmentItem.drawingMIME, let scene = decodeText(from: data) {
+            return .drawing(scene)
+        }
+        if lowered == AttachmentItem.mermaidMIME, let source = decodeText(from: data) {
+            return .mermaid(source)
+        }
         if isTextMime(lowered), let text = decodeText(from: data) {
             return .text(text)
         }
@@ -213,6 +251,7 @@ struct AttachmentPreviewView: View {
     let onDismiss: () -> Void
 
     @State private var showShareSheet = false
+    @State private var drawingHeight: CGFloat = 300
 
     var body: some View {
         Group {
@@ -252,6 +291,17 @@ struct AttachmentPreviewView: View {
                 previewChrome {
                     OfficeHTMLPreviewView(html: html, fillsAvailableHeight: true)
                         .ignoresSafeArea(edges: .bottom)
+                }
+            case .drawing(let scene):
+                previewChrome {
+                    ScrollView {
+                        ExcalidrawReadOnlyWebView(json: scene, onHeightChanged: { drawingHeight = $0 })
+                            .frame(height: max(drawingHeight, 300))
+                    }
+                }
+            case .mermaid(let source):
+                previewChrome {
+                    ScrollView { MermaidNoteView(source: source) }
                 }
             }
         }

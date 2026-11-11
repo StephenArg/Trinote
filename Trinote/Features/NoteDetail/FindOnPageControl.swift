@@ -42,6 +42,8 @@ final class FindOnPageControl {
     /// Bumped each time the read-only web view finishes loading a document, so the iPad table of contents
     /// re-reads its headings.
     private(set) var loadedHTMLDocumentCount = 0
+    /// Waiting for the read-only page to finish loading.
+    private var pendingJump: NoteJumpTarget?
 
     /// Opens the find bar with the given text and jumps to `matchIndex1Based` once matches are computed.
     func prepareFindDeepLink(findQuery: String, matchIndex1Based: Int) {
@@ -64,6 +66,33 @@ final class FindOnPageControl {
     func consumeFocusOnPresent() -> Bool {
         defer { focusesFieldOnPresent = true }
         return focusesFieldOnPresent
+    }
+
+    /// Scrolls the read-only note to the blocks or bookmark a link points at and flashes them, once the page is there.
+    func jump(to target: NoteJumpTarget) {
+        guard target.block != nil || target.bookmark != nil else { return }
+        pendingJump = target
+        if loadedHTMLDocumentCount > 0 { runPendingJump() }
+    }
+
+    private func runPendingJump() {
+        guard let target = pendingJump, let webView = htmlWebView else { return }
+        pendingJump = nil
+        let call = target.block.map { "window.trinoteJumpToBlock(\(Self.javascriptStringLiteral($0)))" }
+            ?? "window.trinoteJumpToBookmark(\(Self.javascriptStringLiteral(target.bookmark ?? "")))"
+        webView.evaluateJavaScript("window.trinoteJumpToBlock ? \(call) : null") { [weak webView] result, _ in
+            guard let webView, let top = Self.cgFloat(from: result) else { return }
+            Task { @MainActor in
+                Self.scrollOuterScrollView(for: webView, toShowTopOf: top)
+                // The note can still be laying out (images, diagrams), which moves the block.
+                for delay in [350, 1000] {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    guard let settled = try? await webView.evaluateJavaScript("window.trinoteJumpTargetTop ? window.trinoteJumpTargetTop() : null"),
+                          let y = Self.cgFloat(from: settled) else { return }
+                    Self.scrollOuterScrollView(for: webView, toShowTopOf: y)
+                }
+            }
+        }
     }
 
     func registerHTMLWebView(_ webView: WKWebView) {
@@ -113,6 +142,7 @@ final class FindOnPageControl {
     /// reloads when fresher content arrives, and that shouldn't send the reader back to match 1).
     func reapplyHTMLSearchIfNeeded() {
         loadedHTMLDocumentCount += 1
+        runPendingJump()
         guard htmlWebView != nil, !query.isEmpty else { return }
         keepActiveMatchForNextSearch()
         applyHTMLQueryDebounced(immediate: true)

@@ -24,7 +24,9 @@ struct ChatTranscriptBlock: Encodable, Equatable, Sendable {
     var title: String?
 
     static func html(_ html: String) -> ChatTranscriptBlock { ChatTranscriptBlock(type: "html", html: html) }
-    static func thinking(_ text: String) -> ChatTranscriptBlock { ChatTranscriptBlock(type: "thinking", text: text) }
+    static func thinking(_ text: String) -> ChatTranscriptBlock {
+        ChatTranscriptBlock(type: "thinking", html: ChatTranscriptRenderer.html(markdown: text), text: text)
+    }
     static func image(_ ref: AttachmentBlockRef) -> ChatTranscriptBlock {
         ChatTranscriptBlock(type: "image", attachmentId: ref.attachmentId, mime: ref.mime, title: ref.title)
     }
@@ -62,6 +64,8 @@ struct ChatTranscriptMessage: Encodable, Equatable, Sendable {
     var blocks: [ChatTranscriptBlock]
     /// Plain text, for thinking and error messages.
     var text: String?
+    /// A thinking message's Markdown, rendered.
+    var html: String?
     var time: String
     var fullTime: String
     var model: String?
@@ -78,6 +82,8 @@ struct ChatTranscriptMessage: Encodable, Equatable, Sendable {
 struct ChatStreamingPayload: Encodable, Equatable, Sendable {
     var status: String?
     var thinking: String?
+    /// `thinking`'s Markdown, rendered.
+    var thinkingHTML: String?
     var blocks: [ChatTranscriptBlock]
 }
 
@@ -135,6 +141,7 @@ enum ChatTranscriptRenderer {
         switch message.kind {
         case .thinking:
             rendered.text = message.text
+            rendered.html = html(markdown: message.text)
         case .error:
             rendered.text = message.text
             rendered.errorTitle = errorTitle(message.errorDetails)
@@ -208,7 +215,12 @@ enum ChatTranscriptRenderer {
         if status == nil, case .toolCall(let call)? = blocks.last, call.result == nil, isEmptyToolCall(call) {
             status = toolActivity(call.toolName)
         }
-        return encode(ChatStreamingPayload(status: status, thinking: thinking.isEmpty ? nil : thinking, blocks: rendered))
+        return encode(ChatStreamingPayload(
+            status: status,
+            thinking: thinking.isEmpty ? nil : thinking,
+            thinkingHTML: thinking.isEmpty ? nil : html(markdown: thinking),
+            blocks: rendered
+        ))
     }
 
     /// Whether a tool call has neither arguments nor a result worth a card.

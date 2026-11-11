@@ -80,4 +80,37 @@ final class NoteIconClassResolverTests: XCTestCase {
         XCTAssertNil(icon(["clipType": "page"], isTextNote: false), "only text notes, as in Trilium")
         XCTAssertEqual(icon(["clipType": "page", "geolocation": "48.85,2.29"]), "bx bx-pin", "a place outranks it")
     }
+
+    private func icon(labels: [String: String], fileMime: String? = nil, isText: Bool = true) -> String? {
+        NoteIconClassResolver.defaultIconClass(isTextNote: isText, fileMime: fileMime) { labels[$0] }
+    }
+
+    func testAPinOnAnImageMapIsAPin() {
+        XCTAssertEqual(icon(labels: ["mapPosition": "10,20"]), "bx bx-pin")
+    }
+
+    func testAShapeOnAnImageMapIsItsShape() {
+        XCTAssertEqual(icon(labels: ["mapShape": "circle:1,2:3"]), "bx bx-shape-circle")
+    }
+
+    func testARecordedMeeting() {
+        XCTAssertEqual(icon(labels: ["meetingRecording": ""]), "bx bx-conversation")
+    }
+
+    func testACalendarEvent() {
+        XCTAssertEqual(icon(labels: ["startDate": "2026-01-02"]), "bx bx-calendar-event")
+        XCTAssertEqual(icon(labels: ["calendar:startDate": "due", "due": "2026-01-02"]), "bx bx-calendar-event")
+        XCTAssertNil(icon(labels: ["calendar:startDate": "due"]))
+    }
+
+    func testAPlaceOutranksAnEventAndAClippingOutranksAMeeting() {
+        XCTAssertEqual(icon(labels: ["geolocation": "1,2", "startDate": "2026-01-02"]), "bx bx-pin")
+        XCTAssertEqual(icon(labels: ["clipType": "page", "meetingRecording": ""]), "bx bx-globe")
+    }
+
+    func testDrawingAndDiagramFiles() {
+        XCTAssertEqual(icon(labels: [:], fileMime: "application/vnd.excalidraw+json", isText: false), "bx bx-pen")
+        XCTAssertEqual(icon(labels: [:], fileMime: "text/vnd.mermaid", isText: false), "bx bx-selection")
+        XCTAssertNil(icon(labels: [:], fileMime: "application/pdf", isText: false))
+    }
 }

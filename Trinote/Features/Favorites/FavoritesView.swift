@@ -611,7 +611,7 @@ struct FavoritesView: View {
         var failures = 0
         for noteId in ids {
             do {
-                let response = try await client.duplicateNoteAsChild(sourceNoteId: noteId, parentNoteId: parent.id)
+                let response = try await client.duplicateNoteAsChild(sourceNoteId: noteId, parentNoteId: parent.id, withChildren: true)
                 try? PersistenceManager.shared.cacheNote(from: response.note, serverProfileId: profileId)
                 try? PersistenceManager.shared.cacheBranch(from: response.branch, serverProfileId: profileId)
                 try? PersistenceManager.shared.commitBatch()

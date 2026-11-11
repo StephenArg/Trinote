@@ -11,6 +11,9 @@ enum MarkdownToNoteHTML {
         var taskLists = false
         /// The task states whose symbols `taskLists` recognizes (the server's, in a Markdown note's preview).
         var taskStates: [TaskStateDefinition] = TaskStateCatalog.defaults
+        /// Writes `data-source-line` (the 0-based Markdown line a block starts on) on paragraphs, headings, list items,
+        /// table rows and the other blocks, so the split view can line its source up with its preview.
+        var sourceLines = false
 
         static let noteImport = Options()
         static let preview = Options(mermaidFencesAsDiagrams: true, taskLists: true)
@@ -19,6 +22,13 @@ enum MarkdownToNoteHTML {
         static func preview(taskStates: [TaskStateDefinition]) -> Options {
             var options = preview
             options.taskStates = taskStates
+            return options
+        }
+
+        /// A Markdown note's preview: `preview(taskStates:)` with the source lines its split view lines up by.
+        static func markdownNote(taskStates: [TaskStateDefinition]) -> Options {
+            var options = preview(taskStates: taskStates)
+            options.sourceLines = true
             return options
         }
     }
@@ -70,16 +80,37 @@ enum MarkdownToNoteHTML {
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // The source line each of `lines` is, once definitions are taken out.
+        var origins = Array(lines.indices)
 
         var linkRefs: [String: (url: String, title: String?)] = [:]
         var footnoteDefs: [String: String] = [:]
         var abbrDefs: [String: String] = [:]
-        extractDefinitions(from: &lines, linkRefs: &linkRefs, footnoteDefs: &footnoteDefs, abbrDefs: &abbrDefs)
+        extractDefinitions(from: &lines, origins: &origins, linkRefs: &linkRefs, footnoteDefs: &footnoteDefs, abbrDefs: &abbrDefs)
+
+        // Blocks inside a quote or container are lined up as the whole quote.
+        var innerOptions = options
+        innerOptions.sourceLines = false
+
+        func lineMark(_ index: Int?) -> String {
+            guard options.sourceLines, let index, index < origins.count else { return "" }
+            return " data-source-line=\"\(origins[index])\""
+        }
+
+        /// `html` with its first tag marked as starting at line `index`. The mark goes last in the tag, so markup that's
+        /// matched by how it begins (`<div class="mermaid"`, a task item's `<li data-trilium-task-state`) still is.
+        func marked(_ html: String, at index: Int) -> String {
+            let mark = lineMark(index)
+            guard !mark.isEmpty, html.hasPrefix("<"), let close = html.firstIndex(of: ">") else { return html }
+            let tagEnd = html[html.index(before: close)] == "/" ? html.index(before: close) : close
+            return String(html[..<tagEnd]) + mark + String(html[tagEnd...])
+        }
 
         let ctx = InlineContext(linkRefs: linkRefs, footnoteDefs: footnoteDefs, abbrDefs: abbrDefs)
         var html: [String] = []
         var i = 0
         var paragraphLines: [String] = []
+        var paragraphStart: Int?
         var openListStack: [ListFrame] = []
 
         func flushParagraph() {
@@ -94,8 +125,9 @@ enum MarkdownToNoteHTML {
                 }
                 rendered += renderInline(text, ctx: ctx)
             }
-            html.append("<p>\(rendered)</p>")
+            html.append("<p\(lineMark(paragraphStart))>\(rendered)</p>")
             paragraphLines.removeAll()
+            paragraphStart = nil
         }
 
         func closeLists(downTo depth: Int = 0) {
@@ -119,6 +151,7 @@ enum MarkdownToNoteHTML {
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let blockStart = i
 
             // Fenced code
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
@@ -139,12 +172,12 @@ enum MarkdownToNoteHTML {
                 let langKey = lang.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? lang
                 if options.mermaidFencesAsDiagrams, langKey.lowercased() == "mermaid" {
                     // Exact class="mermaid" so HTMLNoteView’s detector injects vendor/mermaid.min.js.
-                    html.append("<div class=\"mermaid\">\(code)</div>")
+                    html.append(marked("<div class=\"mermaid\">\(code)</div>", at: blockStart))
                 } else if lang.isEmpty {
-                    html.append("<pre><code>\(code)</code></pre>")
+                    html.append(marked("<pre><code>\(code)</code></pre>", at: blockStart))
                 } else {
                     let safeLang = escapeAttribute(lang)
-                    html.append("<pre><code class=\"language-\(safeLang)\">\(code)</code></pre>")
+                    html.append(marked("<pre><code class=\"language-\(safeLang)\">\(code)</code></pre>", at: blockStart))
                 }
                 continue
             }
@@ -165,7 +198,7 @@ enum MarkdownToNoteHTML {
                 }
                 while codeLines.last?.isEmpty == true { codeLines.removeLast() }
                 let code = codeLines.map(escapeHTML).joined(separator: "\n")
-                html.append("<pre><code>\(code)</code></pre>")
+                html.append(marked("<pre><code>\(code)</code></pre>", at: blockStart))
                 continue
             }
 
@@ -181,9 +214,9 @@ enum MarkdownToNoteHTML {
                     i += 1
                 }
                 if i < lines.count { i += 1 }
-                let inner = convert(bodyLines.joined(separator: "\n"), options: options)
+                let inner = convert(bodyLines.joined(separator: "\n"), options: innerOptions)
                 let cls = name.isEmpty ? "container" : escapeAttribute(name)
-                html.append("<blockquote class=\"markdown-container markdown-container-\(cls)\">\(inner)</blockquote>")
+                html.append(marked("<blockquote class=\"markdown-container markdown-container-\(cls)\">\(inner)</blockquote>", at: blockStart))
                 continue
             }
 
@@ -198,7 +231,7 @@ enum MarkdownToNoteHTML {
             if isHorizontalRule(trimmed) {
                 flushParagraph()
                 flushAllLists()
-                html.append("<hr>")
+                html.append(marked("<hr>", at: blockStart))
                 i += 1
                 continue
             }
@@ -207,7 +240,7 @@ enum MarkdownToNoteHTML {
             if let heading = matchHeading(trimmed) {
                 flushParagraph()
                 flushAllLists()
-                html.append("<h\(heading.level)>\(renderInline(heading.text, ctx: ctx))</h\(heading.level)>")
+                html.append(marked("<h\(heading.level)>\(renderInline(heading.text, ctx: ctx))</h\(heading.level)>", at: blockStart))
                 i += 1
                 continue
             }
@@ -216,7 +249,7 @@ enum MarkdownToNoteHTML {
             if i + 1 < lines.count, let level = matchSetextUnderline(lines[i + 1]), !trimmed.isEmpty {
                 flushParagraph()
                 flushAllLists()
-                html.append("<h\(level)>\(renderInline(trimmed, ctx: ctx))</h\(level)>")
+                html.append(marked("<h\(level)>\(renderInline(trimmed, ctx: ctx))</h\(level)>", at: blockStart))
                 i += 2
                 continue
             }
@@ -225,7 +258,7 @@ enum MarkdownToNoteHTML {
             if looksLikeTableRow(trimmed), i + 1 < lines.count, isTableSeparator(lines[i + 1].trimmingCharacters(in: .whitespaces)) {
                 flushParagraph()
                 flushAllLists()
-                let (tableHTML, consumed) = parseTable(lines: lines, start: i, ctx: ctx)
+                let (tableHTML, consumed) = parseTable(lines: lines, start: i, ctx: ctx, lineMark: lineMark)
                 html.append(tableHTML)
                 i += consumed
                 continue
@@ -249,8 +282,8 @@ enum MarkdownToNoteHTML {
                         break
                     }
                 }
-                let inner = convert(quoteLines.joined(separator: "\n"), options: options)
-                html.append("<blockquote>\(inner)</blockquote>")
+                let inner = convert(quoteLines.joined(separator: "\n"), options: innerOptions)
+                html.append(marked("<blockquote>\(inner)</blockquote>", at: blockStart))
                 continue
             }
 
@@ -263,7 +296,7 @@ enum MarkdownToNoteHTML {
                 if lookAhead < lines.count, matchDefinitionStart(lines[lookAhead]) != nil {
                     flushParagraph()
                     flushAllLists()
-                    var dl = "<dl>"
+                    var dl = "<dl\(lineMark(blockStart))>"
                     var j = i
                     while j < lines.count {
                         while j < lines.count, lines[j].trimmingCharacters(in: .whitespaces).isEmpty {
@@ -300,7 +333,7 @@ enum MarkdownToNoteHTML {
                         }
                     }
                     dl += "</dl>"
-                    if dl != "<dl></dl>" {
+                    if dl != "<dl\(lineMark(blockStart))></dl>" {
                         html.append(dl)
                         i = j
                         continue
@@ -324,7 +357,7 @@ enum MarkdownToNoteHTML {
                     return " start=\"\(n)\""
                 }()
                 let openMarkup = openListMarkup(tag: tag, startAttr: startAttr, isTodoList: isTodoList)
-                let liOpen = openListItemMarkup(taskState: listItem.taskState)
+                let liOpen = marked(openListItemMarkup(taskState: listItem.taskState), at: blockStart)
 
                 if openListStack.isEmpty {
                     html.append("\(openMarkup)\(liOpen)")
@@ -380,6 +413,7 @@ enum MarkdownToNoteHTML {
 
             flushAllLists()
             // Keep trailing spaces / `\` so CommonMark hard line breaks survive flushParagraph.
+            if paragraphLines.isEmpty { paragraphStart = i }
             paragraphLines.append(Self.stripLeadingWhitespaceOnly(line))
             i += 1
         }
@@ -399,11 +433,13 @@ enum MarkdownToNoteHTML {
 
     private static func extractDefinitions(
         from lines: inout [String],
+        origins: inout [Int],
         linkRefs: inout [String: (url: String, title: String?)],
         footnoteDefs: inout [String: String],
         abbrDefs: inout [String: String]
     ) {
         var kept: [String] = []
+        var keptOrigins: [Int] = []
         var i = 0
         while i < lines.count {
             let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
@@ -443,9 +479,11 @@ enum MarkdownToNoteHTML {
             }
 
             kept.append(lines[i])
+            keptOrigins.append(origins[i])
             i += 1
         }
         lines = kept
+        origins = keptOrigins
     }
 
     // MARK: - Block matchers
@@ -718,7 +756,7 @@ enum MarkdownToNoteHTML {
         }
     }
 
-    private static func parseTable(lines: [String], start: Int, ctx: InlineContext) -> (String, Int) {
+    private static func parseTable(lines: [String], start: Int, ctx: InlineContext, lineMark: (Int?) -> String) -> (String, Int) {
         let header = splitTableRow(lines[start].trimmingCharacters(in: .whitespaces))
         let aligns = parseTableAlignments(lines[start + 1].trimmingCharacters(in: .whitespaces))
         var rowIndex = start + 2
@@ -735,13 +773,13 @@ enum MarkdownToNoteHTML {
             return "<\(tag)\(style)>\(renderInline(text, ctx: ctx))</\(tag)>"
         }
 
-        var html = "<table><thead><tr>"
+        var html = "<table\(lineMark(start))><thead><tr>"
         for (idx, h) in header.enumerated() {
             html += cell(h, tag: "th", align: idx < aligns.count ? aligns[idx] : nil)
         }
         html += "</tr></thead><tbody>"
-        for row in bodyRows {
-            html += "<tr>"
+        for (rowOffset, row) in bodyRows.enumerated() {
+            html += "<tr\(lineMark(start + 2 + rowOffset))>"
             for (idx, c) in row.enumerated() {
                 html += cell(c, tag: "td", align: idx < aligns.count ? aligns[idx] : nil)
             }

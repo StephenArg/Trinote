@@ -1051,8 +1051,10 @@ final class PersistenceManager {
             }
         )
         if let resolved { return resolved }
-        let isTextNote = (try? fetchCachedNote(id: noteId, serverProfileId: serverProfileId))?.noteType == NoteType.text.rawValue
-        return NoteIconClassResolver.defaultIconClass(isTextNote: isTextNote) { name in
+        let cachedNote = try? fetchCachedNote(id: noteId, serverProfileId: serverProfileId)
+        let isTextNote = cachedNote?.noteType == NoteType.text.rawValue
+        let fileMime = cachedNote?.noteType == NoteType.file.rawValue ? cachedNote?.mime : nil
+        return NoteIconClassResolver.defaultIconClass(isTextNote: isTextNote, fileMime: fileMime) { name in
             attrs.first { $0.type == "label" && $0.name == name }?.value
         }
     }
@@ -1587,7 +1589,8 @@ final class PersistenceManager {
             initialContent: initialContent,
             initialAttributesJSON: attrsJSON,
             titleFromTemplate: useParentTitleTemplate
-                && hasEffectiveTitleTemplate(noteId: parentNoteId, serverProfileId: serverProfileId)
+                && (hasEffectiveTitleTemplate(noteId: parentNoteId, serverProfileId: serverProfileId)
+                    || newNoteTemplateGivesTitle(initialAttributes: initialAttributes, parentNoteId: parentNoteId, serverProfileId: serverProfileId))
         )
         context.insert(pending)
         try context.save()
@@ -2145,7 +2148,8 @@ final class PersistenceManager {
         title: String,
         position: Int,
         data: Data,
-        serverProfileId: String
+        serverProfileId: String,
+        sourceAttachmentId: String? = nil
     ) throws {
         let row = PendingAttachmentImport(
             serverProfileId: serverProfileId,
@@ -2154,7 +2158,8 @@ final class PersistenceManager {
             mime: mime,
             title: title,
             position: position,
-            data: data
+            data: data,
+            sourceAttachmentId: sourceAttachmentId
         )
         context.insert(row)
         try context.save()
@@ -2260,6 +2265,31 @@ final class PersistenceManager {
             return true
         }
 
+        return ancestorHasInheritableLabel("titleTemplate", ofNote: noteId, serverProfileId: serverProfileId)
+    }
+
+    /// Whether the template a new note is made from (chosen, or the parent's `~child:template`) names its titles.
+    private func newNoteTemplateGivesTitle(
+        initialAttributes: [NoteCreationAttribute],
+        parentNoteId: String,
+        serverProfileId: String
+    ) -> Bool {
+        var templateIds = initialAttributes.filter { $0.type == "relation" && $0.name == "template" }.map(\.value)
+        let parentAttributes = (try? fetchCachedAttributes(noteId: parentNoteId, serverProfileId: serverProfileId)) ?? []
+        templateIds += parentAttributes.filter { $0.type == "relation" && $0.name == "child:template" }.map(\.value)
+        return templateIds.contains { templateGivesTitle(templateNoteId: $0, serverProfileId: serverProfileId) }
+    }
+
+    /// Whether a template sets the title of notes made from it (`#template:titleTemplate`, Trilium v0.107): its own
+    /// label, or an inheritable one on an ancestor.
+    func templateGivesTitle(templateNoteId: String, serverProfileId: String) -> Bool {
+        let name = "template:titleTemplate"
+        let own = (try? fetchCachedAttributes(noteId: templateNoteId, serverProfileId: serverProfileId)) ?? []
+        if own.contains(where: { $0.type == "label" && $0.name == name }) { return true }
+        return ancestorHasInheritableLabel(name, ofNote: templateNoteId, serverProfileId: serverProfileId)
+    }
+
+    private func ancestorHasInheritableLabel(_ name: String, ofNote noteId: String, serverProfileId: String) -> Bool {
         var visited: Set<String> = [noteId]
         var frontier = [noteId]
         while !frontier.isEmpty, visited.count < 200 {
@@ -2271,7 +2301,8 @@ final class PersistenceManager {
                     predicate: #Predicate { $0.noteId == childId && $0.serverProfileId == profileId }
                 ))) ?? []).map(\.parentNoteId)
                 for parent in parents where visited.insert(parent).inserted {
-                    if titleTemplateLabels(parent).contains(where: \.isInheritable) { return true }
+                    let labels = (try? fetchCachedAttributes(noteId: parent, serverProfileId: serverProfileId)) ?? []
+                    if labels.contains(where: { $0.type == "label" && $0.name == name && $0.isInheritable }) { return true }
                     next.append(parent)
                 }
             }

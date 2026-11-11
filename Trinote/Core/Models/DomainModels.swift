@@ -452,6 +452,26 @@ struct AttachmentItem: Identifiable, Hashable, Sendable {
     var humanReadableSize: String { ByteCountFormatter.string(fromByteCount: Int64(contentLength), countStyle: .file) }
 }
 
+extension Array where Element == AttachmentItem {
+    /// What attachment lists show: not viewer state, and not the picture Trilium keeps of a drawing in the note
+    /// (`<attachmentId>.svg`), which is generated from the drawing listed beside it.
+    var userVisible: [AttachmentItem] {
+        let drawingIds = Set(filter { $0.mime.lowercased() == AttachmentItem.drawingMIME }.map(\.attachmentId))
+        return filter { attachment in
+            if attachment.isPDFViewerState { return false }
+            guard attachment.title.hasSuffix(".svg") else { return true }
+            return !drawingIds.contains(String(attachment.title.dropLast(4)))
+        }
+    }
+}
+
+extension AttachmentItem {
+    /// Trilium's `CANVAS_ATTACHMENT_MIME`.
+    static let drawingMIME = "application/vnd.excalidraw+json"
+    /// Trilium's `MERMAID_ATTACHMENT_MIME`.
+    static let mermaidMIME = "text/vnd.mermaid"
+}
+
 extension AttachmentItem {
     init(from response: AttachmentResponse) {
         self.attachmentId = response.attachmentId

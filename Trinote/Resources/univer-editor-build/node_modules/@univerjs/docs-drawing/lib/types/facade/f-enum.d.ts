@@ -1,0 +1,89 @@
+/**
+ * Copyright 2023-present DreamNum Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import { ObjectRelativeFromH, ObjectRelativeFromV } from '@univerjs/core';
+import { FEnum } from '@univerjs/core/facade';
+import { TextWrappingStyle } from '@univerjs/docs-drawing';
+/**
+ * @ignore
+ */
+export interface IFDocumentImageEnumMixin {
+    /**
+     * Represents the text wrapping styles used by document drawings, including images and Shapes.
+     *
+     * Prefer `INLINE`, `WRAP_SQUARE`, or `WRAP_TOP_AND_BOTTOM` for ordinary document content.
+     * `BEHIND_TEXT` and `IN_FRONT_OF_TEXT` are overlay styles that do not cause text to reflow.
+     * Use this property whenever a Facade signature references `TextWrappingStyle`.
+     * @example
+     * ```ts
+     * const fDocument = univerAPI.getActiveDocument();
+     * const image = await fDocument.insertImage({
+     *   source: 'https://avatars.githubusercontent.com/u/61444807?s=48&v=4',
+     *   imageSourceType: univerAPI.Enum.ImageSourceType.URL,
+     *   width: 320,
+     *   // Float the image and wrap body text around its rectangular bounds.
+     *   wrappingStyle: univerAPI.Enum.TextWrappingStyle.WRAP_SQUARE,
+     *   textRange: {
+     *     startOffset: 30,
+     *   },
+     * });
+     * console.log(image);
+     * ```
+     */
+    TextWrappingStyle: typeof TextWrappingStyle;
+    /**
+     * Represents the horizontal position types used by docs image operations.
+     * @example
+     * ```ts
+     * const fDocument = univerAPI.getActiveDocument();
+     * const image = fDocument.getImages()[0];
+     *
+     * if (image) {
+     *   const success = image.setPositionH({
+     *     relativeFrom: univerAPI.Enum.DocsImageRelativeFromH.MARGIN,
+     *     posOffset: 100
+     *   });
+     *   console.log(success);
+     * }
+     * ```
+     */
+    DocsImageRelativeFromH: typeof ObjectRelativeFromH;
+    /**
+     * Represents the vertical position types used by docs image operations.
+     * @example
+     * ```ts
+     * const fDocument = univerAPI.getActiveDocument();
+     * const image = fDocument.getImages()[0];
+     *
+     * if (image) {
+     *   const success = image.setPositionV({
+     *     relativeFrom: univerAPI.Enum.DocsImageRelativeFromV.MARGIN,
+     *     posOffset: 100
+     *   });
+     *   console.log(success);
+     * }
+     * ```
+     */
+    DocsImageRelativeFromV: typeof ObjectRelativeFromV;
+}
+export declare class FDocumentImageEnumMixin extends FEnum implements IFDocumentImageEnumMixin {
+    get TextWrappingStyle(): typeof TextWrappingStyle;
+    get DocsImageRelativeFromH(): typeof ObjectRelativeFromH;
+    get DocsImageRelativeFromV(): typeof ObjectRelativeFromV;
+}
+declare module '@univerjs/core/facade' {
+    interface FEnum extends IFDocumentImageEnumMixin {
+    }
+}

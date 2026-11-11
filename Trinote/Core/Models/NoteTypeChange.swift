@@ -65,7 +65,7 @@ enum NoteTypeChange {
             case .canvas: return "bx bx-pen"
             case .mermaid: return "bx bx-selection"
             case .mindMap: return "bx bx-sitemap"
-            case .relationMap: return "bx bxs-network-chart"
+            case .relationMap: return "bx bx-shape-polygon"
             case .llmChat: return "bx bx-message-square-dots"
             case .render: return "bx bx-extension"
             case .webView: return "bx bx-globe-alt"

@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 /// Native swipeable presentation viewer for Trilium `#viewType=presentation` collections.
 struct PresentationNoteView: View {
@@ -222,6 +223,33 @@ struct PresentationNoteView: View {
         _ slide: PresentationModels.Slide,
         style: PresentationModels.ThemeStyle
     ) -> some View {
+        switch slide.kind {
+        case .content:
+            bodySlide(slide, style: style)
+        case .webPage(let url):
+            if let url {
+                SlideWebPageView(url: url)
+            } else {
+                slideUnavailable(style: style)
+            }
+        case .board, .table:
+            PresentationCollectionSlide(noteId: slide.noteId, kind: slide.kind, onOpenNote: onOpenSlide) {
+                slideUnavailable(style: style)
+            }
+        }
+    }
+
+    private func slideUnavailable(style: PresentationModels.ThemeStyle) -> some View {
+        Text(String(localized: "This slide can’t be shown.", comment: "Presentation: a web page, board or table slide that can't be drawn"))
+            .foregroundStyle(Color(hex: style.text).opacity(0.6))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func bodySlide(
+        _ slide: PresentationModels.Slide,
+        style: PresentationModels.ThemeStyle
+    ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text(slide.title)
@@ -354,7 +382,8 @@ struct PresentationNoteView: View {
                         title: nested.title,
                         html: await viewModel.htmlForReadOnlyDisplay(nested.html),
                         background: nested.background,
-                        verticalSlides: []
+                        verticalSlides: [],
+                        kind: nested.kind
                     )
                 )
             }
@@ -365,7 +394,8 @@ struct PresentationNoteView: View {
                     title: slide.title,
                     html: html,
                     background: slide.background,
-                    verticalSlides: vertical
+                    verticalSlides: vertical,
+                    kind: slide.kind
                 )
             )
         }
@@ -472,5 +502,56 @@ private extension Color {
             return
         }
         return nil
+    }
+}
+
+/// A web view note's page across a slide. Its cookies stay out of the app's other web views.
+private struct SlideWebPageView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.load(URLRequest(url: url))
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {}
+}
+
+/// A board or table across a slide, in the same view the note has by itself.
+private struct PresentationCollectionSlide<Unavailable: View>: View {
+    let noteId: String
+    let kind: PresentationModels.SlideKind
+    let onOpenNote: (String) -> Void
+    @ViewBuilder let unavailable: () -> Unavailable
+
+    @Environment(AppState.self) private var appState
+    @State private var slideViewModel: NoteDetailViewModel?
+    @State private var isLoading = true
+
+    var body: some View {
+        Group {
+            if isLoading {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let slideViewModel, let note = slideViewModel.note {
+                if kind == .board {
+                    KanbanBoardView(viewModel: slideViewModel, note: note, onOpenCard: onOpenNote)
+                } else {
+                    ScrollView {
+                        CollectionNoteView(viewModel: slideViewModel, note: note, view: .table, onOpenNote: onOpenNote)
+                    }
+                }
+            } else {
+                unavailable()
+            }
+        }
+        .task(id: noteId) {
+            let model = NoteDetailViewModel(noteId: noteId, appState: appState)
+            await model.loadForSlide()
+            slideViewModel = model
+            isLoading = false
+        }
     }
 }

@@ -512,6 +512,8 @@ struct SearchResultRow: View {
     var showTrailingChevron: Bool = true
     /// Trilium's snippet for this result (matched text and breadcrumb), when the server sent one.
     var snippet: SearchResultSnippet? = nil
+    /// Several terms to highlight in the title instead of `searchQuery`, for a saved search.
+    var highlightTerms: [String] = []
 
     @Environment(AppState.self) private var appState
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
@@ -557,7 +559,9 @@ struct SearchResultRow: View {
     private var titleView: some View {
         let color = triliumColor ?? Color.primary
         Group {
-            if titleHighlightQuery.isEmpty {
+            if !highlightTerms.isEmpty {
+                Text(SearchQueryHighlight.attributedString(text: displayTitle, terms: highlightTerms))
+            } else if titleHighlightQuery.isEmpty {
                 Text(displayTitle)
             } else {
                 Text(SearchQueryHighlight.attributedString(text: displayTitle, query: titleHighlightQuery))

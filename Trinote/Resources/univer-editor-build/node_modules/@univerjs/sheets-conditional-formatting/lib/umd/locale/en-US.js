@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsConditionalFormattingEnUS=t())})(this,function(){return{"sheets-conditional-formatting":{iconSet:{direction:`Direction`,shape:`Shape`,mark:`Mark`,rank:`Rank`}}}});

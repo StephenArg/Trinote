@@ -219,8 +219,16 @@
     let styleRequestId = 0;
     let pendingStyleApply = null;
     let pendingInit = null;
+    // A map drawn over an image (Trilium v0.107): { url, corners, bounds, maxBounds, maxZoom, fit, darkLabels }.
+    let imageMap = null;
+    let imageFitPending = false;
     let markerBuildGeneration = 0;
     const registeredMarkerImages = new Set();
+
+    /** Past this zoom pins stand alone. An image's zoom range ends early, and its pins still have to come apart. */
+    function clusterMaxZoom() {
+      return imageMap ? Math.max(0, Math.floor(imageMap.maxZoom) - 1) : 14;
+    }
 
     function getMarkerImages() {
       return global.TrinoteGeoMap && global.TrinoteGeoMap.MarkerImages;
@@ -751,7 +759,7 @@
           type: "geojson",
           data: geojson,
           cluster: settings.cluster,
-          clusterMaxZoom: 14,
+          clusterMaxZoom: clusterMaxZoom(),
           clusterRadius: 50,
         });
         lastMarkerClusterSetting = settings.cluster;
@@ -810,8 +818,8 @@
           filter: settings.cluster ? ["!", ["has", "point_count"]] : ["all"],
           layout: pinLayout,
           paint: {
-            "text-color": "#222222",
-            "text-halo-color": "#ffffff",
+            "text-color": imageMap && imageMap.darkLabels ? "#f2f2f7" : "#222222",
+            "text-halo-color": imageMap && imageMap.darkLabels ? "#1c1c1e" : "#ffffff",
             "text-halo-width": 1,
           },
         });
@@ -837,7 +845,7 @@
             type: "geojson",
             data: geojson,
             cluster: settings.cluster,
-            clusterMaxZoom: 14,
+            clusterMaxZoom: clusterMaxZoom(),
             clusterRadius: 50,
           });
         }
@@ -1192,7 +1200,10 @@
     }
 
     function shapeOutline(shape) {
-      if (shape.type === "circle") return circleRing(shape.coordinates[0], shape.radiusMeters);
+      if (shape.type === "circle") {
+        // On an image map a circle comes with its ring: an ellipse on the image where the axes' units differ.
+        return shape.ring ? shape.ring.concat([shape.ring[0]]) : circleRing(shape.coordinates[0], shape.radiusMeters);
+      }
       return shape.coordinates;
     }
 
@@ -1207,7 +1218,7 @@
           // The label leaves out the closing point; GeoJSON rings end where they began.
           geometry = { type: "Polygon", coordinates: [shape.coordinates.concat([shape.coordinates[0]])] };
         } else if (shape.type === "circle" && shape.radiusMeters > 0) {
-          geometry = { type: "Polygon", coordinates: [circleRing(shape.coordinates[0], shape.radiusMeters)] };
+          geometry = { type: "Polygon", coordinates: [shapeOutline(shape)] };
         }
         if (!geometry) return;
         features.push({
@@ -1350,7 +1361,7 @@
         } catch (e) {}
         scaleControl = null;
       }
-      if (settings.showScale) {
+      if (settings.showScale && !imageMap) {
         const unit = settings.scaleUnit === "imperial" ? "imperial" : "metric";
         scaleControl = new maplibregl.ScaleControl({ maxWidth: 120, unit });
         map.addControl(scaleControl, "bottom-left");
@@ -1680,7 +1691,7 @@
       suppressViewportFor(2000);
       if (kind === "pin") {
         const pin = markers.find((m) => m.noteId === noteId);
-        if (pin) map.flyTo({ center: [pin.lng, pin.lat], zoom: Math.max(map.getZoom(), 14) });
+        if (pin) map.flyTo({ center: [pin.lng, pin.lat], zoom: imageMap ? map.getZoom() : Math.max(map.getZoom(), 14) });
         return;
       }
       if (kind === "shape") {
@@ -1691,7 +1702,7 @@
           (b, c) => b.extend(c),
           new maplibregl.LngLatBounds(outline[0], outline[0])
         );
-        map.fitBounds(shapeBounds, { padding: 48, maxZoom: 16 });
+        map.fitBounds(shapeBounds, { padding: 48, maxZoom: imageMap ? imageMap.maxZoom - 2 : 16 });
         return;
       }
       const source = map.getSource("tracks");
@@ -2190,6 +2201,12 @@
           GPX_TRIP_ICON_SVG +
           "</button>";
         document.body.appendChild(bar);
+        if (imageMap) {
+          // A position on an image is no place on the Earth: no locating, no tracks, no buildings.
+          ["geomap-btn-locate", "geomap-btn-3d", "geomap-btn-gpx"].forEach(function (id) {
+            document.getElementById(id).style.display = "none";
+          });
+        }
         document.getElementById("geomap-btn-3d").addEventListener("click", () => {
           set3DInternal(!is3DEnabled);
         });
@@ -2241,6 +2258,11 @@
         applyMapStyle(restoreView);
         return;
       }
+      if (imageFitPending) {
+        imageFitPending = false;
+        suppressViewportFor(1500);
+        map.fitBounds(imageMap.bounds, { animate: false });
+      }
       if (pendingInit && pendingInit.fitBounds && markers.length) {
         fitMarkerBounds();
         pendingInit = null;
@@ -2257,6 +2279,19 @@
       if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 40, maxZoom: 14 });
     }
 
+    /** The map's picture on an image map, the chosen map style otherwise. */
+    function currentStyleSpec() {
+      if (imageMap) {
+        return Promise.resolve({
+          version: 8,
+          glyphs: OSM_RASTER_STYLE.glyphs,
+          sources: { "map-image": { type: "image", url: imageMap.url, coordinates: imageMap.corners } },
+          layers: [{ id: "map-image", type: "raster", source: "map-image" }],
+        });
+      }
+      return loadStyleSpec(settings.mapStyle);
+    }
+
     function applyMapStyle(restoreView) {
       if (!map) return;
       if (!styleLoaded) {
@@ -2266,7 +2301,7 @@
       pendingStyleApply = null;
       styleLoaded = false;
       const requestId = ++styleRequestId;
-      loadStyleSpec(settings.mapStyle).then(function (spec) {
+      currentStyleSpec().then(function (spec) {
         if (!map || requestId !== styleRequestId) return;
         map.setStyle(spec);
         map.once("style.load", function () {
@@ -2283,7 +2318,7 @@
     // A light/dark style redraws when the appearance changes, keeping the view where it is.
     if (darkModeQuery) {
       const onAppearanceChange = function () {
-        if (!map || !styleFollowsDarkMode(settings.mapStyle)) return;
+        if (!map || imageMap || !styleFollowsDarkMode(settings.mapStyle)) return;
         applyMapStyle({ center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() });
       };
       if (darkModeQuery.addEventListener) darkModeQuery.addEventListener("change", onAppearanceChange);
@@ -2333,7 +2368,21 @@
         fadeDuration: 0,
         refreshExpiredTiles: false,
         attributionControl: false,
+        // An image has its own zoom range and edges, and is looked at flat.
+        ...(imageMap
+          ? {
+              minZoom: 0,
+              maxZoom: imageMap.maxZoom,
+              maxBounds: imageMap.maxBounds,
+              renderWorldCopies: false,
+              maxPitch: 0,
+              dragRotate: false,
+              pitchWithRotate: false,
+              touchPitch: false,
+            }
+          : {}),
       });
+      if (imageMap) map.touchZoomRotate.disableRotation();
 
       map.on("style.load", function () {
         onStyleReady();
@@ -2395,7 +2444,7 @@
           tracks.length
       );
       const requestId = ++styleRequestId;
-      loadStyleSpec(settings.mapStyle).then(function (styleSpec) {
+      currentStyleSpec().then(function (styleSpec) {
         if (requestId !== styleRequestId) return;
         createMap(viewport, styleSpec);
       });
@@ -2445,7 +2494,7 @@
           (sample ? " first=" + sample.noteId : "")
       );
       rebuildMarkers();
-      if (readOnly && markers.length) fitMarkerBounds();
+      if (readOnly && !imageMap && markers.length) fitMarkerBounds();
     }
 
     function setTracksData(next) {
@@ -2507,6 +2556,8 @@
         markerImagesModule: !!getMarkerImages(),
         boxiconsCatalog: global.__TRINOTE_BOXICONS__ ? Object.keys(global.__TRINOTE_BOXICONS__).length : 0,
         hasMap: !!map,
+        imageLoaded: map && map.getSource("map-image") ? map.getSource("map-image").loaded() : null,
+        maxZoom: map ? map.getMaxZoom() : null,
         hasMarkersSource: !!(map && map.getSource("markers")),
         hasPinLayer: !!(map && map.getLayer("unclustered-pin")),
         hasPinFallback: !!(map && map.getLayer("unclustered-pin-fallback")),
@@ -2562,7 +2613,9 @@
     }
 
     const api = {
-      init(viewportJSON, settingsJSON) {
+      init(viewportJSON, settingsJSON, imageJSON) {
+        imageMap = parseJSONValue(imageJSON, null);
+        imageFitPending = !!(imageMap && (imageMap.fit || readOnly));
         const viewport = parseJSONValue(viewportJSON, {});
         const settingsPatch = parseJSONValue(settingsJSON, {});
         settings = { ...settings, ...settingsPatch };
@@ -2571,7 +2624,7 @@
           normalizedViewport = { view: { center: normalizedViewport.center, zoom: normalizedViewport.zoom } };
         }
         logMarkers("init api=" + apiName + " readOnly=" + readOnly + " markerImagesModule=" + !!getMarkerImages() + " settings=" + JSON.stringify(settings));
-        pendingInit = readOnly ? { fitBounds: true } : null;
+        pendingInit = readOnly && !imageMap ? { fitBounds: true } : null;
         beginCreateMap(normalizedViewport);
       },
 
@@ -2648,7 +2701,7 @@
           return;
         }
         settings = merged;
-        if (prevStyle !== settings.mapStyle && map) {
+        if (prevStyle !== settings.mapStyle && map && !imageMap) {
           const c = map.getCenter();
           applyMapStyle({ center: c, zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() });
         } else {

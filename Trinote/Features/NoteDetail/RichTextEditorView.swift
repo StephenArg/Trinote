@@ -17,12 +17,26 @@ final class TrinoteEditorWebView: WKWebView {
 
 enum RichTextEditorBridgeRequest: Equatable {
     case pickIncludeNote
+    /// Insert menu: a heading or paragraph to link to, or to embed as an excerpt.
+    case pickBlockReference(excerpt: Bool)
+    /// Insert menu: a link to a video or audio file.
+    case pickMediaURL
+    /// A note excerpt's ⋮ button. `raw` is the stored embed, `rect` the button in the web view.
+    case excerptMenu(pos: Int, noteId: String, title: String, raw: String, canEdit: Bool, isExcerpt: Bool, rect: CGRect)
+    /// Its blocks couldn't be opened, after the user turned on Editable.
+    case excerptLoadFailed
+    /// A link to a note (or to blocks of it) is to become an embed again; answered with `convertNoteLinkToEmbed`.
+    case noteLinkToEmbed(from: Int, href: String, noteId: String, block: String, title: String)
+    /// Editable turned on: the excerpt's blocks are wanted, answered with `applyExcerptContent`.
+    case excerptLoad(requestId: String, noteId: String, block: String)
+    /// An excerpt was edited: `html` goes to `block` of the note, answered with `excerptSaved`.
+    case excerptSave(key: String, noteId: String, block: String, newBlock: String, html: String)
     /// Toolbar Icon button: pick a Boxicons glyph to insert as a Trilium inline icon.
     case pickInlineIcon
     case resolveNoteTitle(noteId: String)
     case openNote(noteId: String)
     /// Stable id from the TipTap NodeView; native resolves HTML and calls `applyIncludeNotePreviewJSON` for that host only.
-    case includePreview(previewId: String, noteId: String, boxSize: String)
+    case includePreview(previewId: String, noteId: String, boxSize: String, rawEmbed: String?)
     /// Long-press on an attachment chip in the editor; `pos` is the ProseMirror document position.
     case renameAttachment(attachmentId: String, noteId: String, title: String, pos: Int)
     /// A link may become a Trilium link preview: fetch its details and answer with `editorBridge.applyLinkPreviewJSON`
@@ -80,6 +94,8 @@ struct RichTextEditorView: UIViewRepresentable {
     /// What the editor may do with Trilium link previews; it sends `.linkPreview` requests through
     /// `onEditorBridgeRequest`.
     var linkPreviews: LinkPreviewSupport = .none
+    /// The server stores columns, tabs, block links and excerpts, so the Insert menu is offered.
+    var contentBlocks: Bool = false
     /// The to-do task states the editor draws and offers, and what a tap sets.
     var taskStates: TaskStateWebConfig = .plain
 
@@ -181,12 +197,14 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.onTableToolsVisibilityChanged = onTableToolsVisibilityChanged
         coordinator.onRequestSave = onRequestSave
         coordinator.onEditorBridgeRequest = onEditorBridgeRequest
+        coordinator.webViewBinding = webViewBinding
         coordinator.onPasteFile = onPasteFile
         coordinator.onInsertToolsAtTopChanged = onInsertToolsAtTopChanged
         coordinator.syncInsertToolsAtTop(insertToolsAtTop)
         coordinator.onContentLoaded = onContentLoaded
         coordinator.syncSaveButtonHidden(hidesSaveButton)
         coordinator.syncLinkPreviews(linkPreviews)
+        coordinator.syncContentBlocks(contentBlocks)
         coordinator.syncTaskStates(taskStates)
         Self.applyEditorSurfaceColors(to: webView)
 
@@ -279,6 +297,7 @@ struct RichTextEditorView: UIViewRepresentable {
         var onTableToolsVisibilityChanged: ((Bool) -> Void)?
         var onRequestSave: ((String?, CGFloat) -> Void)?
         var onEditorBridgeRequest: ((RichTextEditorBridgeRequest) -> Void)?
+        var webViewBinding: Binding<WKWebView?>?
         var onPasteFile: ((Data, String, String) -> Void)?
         var onInsertToolsAtTopChanged: ((Bool) -> Void)?
         var onContentLoaded: ((String) -> Void)?
@@ -304,6 +323,8 @@ struct RichTextEditorView: UIViewRepresentable {
         private var hidesSaveButton = false
         private var appliedHidesSaveButton: Bool?
         private var linkPreviews = LinkPreviewSupport.none
+        private var contentBlocks = false
+        private var appliedContentBlocks: Bool?
         private var appliedLinkPreviews: LinkPreviewSupport?
         private var taskStates = TaskStateWebConfig.plain
         private var appliedTaskStates: TaskStateWebConfig?
@@ -365,6 +386,20 @@ struct RichTextEditorView: UIViewRepresentable {
             setLinkPreviews(support)
         }
 
+        func syncContentBlocks(_ available: Bool) {
+            contentBlocks = available
+            guard appliedContentBlocks != available else { return }
+            setContentBlocks(available)
+        }
+
+        private func setContentBlocks(_ available: Bool) {
+            guard editorReady, let webView else { return }
+            appliedContentBlocks = available
+            webView.evaluateJavaScript("window.editorBridge.setContentBlockSupport(\(available))") { _, error in
+                if let error { Log.api.error("setContentBlockSupport failed: \(error)") }
+            }
+        }
+
         func syncTaskStates(_ config: TaskStateWebConfig) {
             taskStates = config
             guard appliedTaskStates != config else { return }
@@ -398,6 +433,7 @@ struct RichTextEditorView: UIViewRepresentable {
                 setInsertToolsAtTop(insertToolsAtTop)
                 setSaveButtonHidden(hidesSaveButton)
                 setLinkPreviews(linkPreviews)
+                setContentBlocks(contentBlocks)
                 setTaskStates(taskStates)
                 // A share-import attachment or photo inserted on load is an edit, so it mustn't end up in the
                 // baseline; nor may edits restored into a reloaded page.
@@ -534,10 +570,56 @@ struct RichTextEditorView: UIViewRepresentable {
             case "editorRequest":
                 guard let dict = Self.dictionaryFromScriptMessageBody(message.body),
                       let action = dict["action"] as? String else { break }
+                // A request comes from the live editor. The note screen's handle to it can be cleared while it stays
+                // open (a tab change as it appears), and then its menus and saves would find no editor: give it back.
+                if let binding = webViewBinding, let webView {
+                    DispatchQueue.main.async { [weak webView] in
+                        if let webView, binding.wrappedValue !== webView { binding.wrappedValue = webView }
+                    }
+                }
                 let callback = onEditorBridgeRequest
                 switch action {
                 case "pickIncludeNote":
                     DispatchQueue.main.async { callback?(.pickIncludeNote) }
+                case "pickBlockReference":
+                    let excerpt = (dict["excerpt"] as? Bool) == true
+                    DispatchQueue.main.async { callback?(.pickBlockReference(excerpt: excerpt)) }
+                case "pickMediaURL":
+                    DispatchQueue.main.async { callback?(.pickMediaURL) }
+                case "excerptMenu":
+                    if let pos = (dict["pos"] as? NSNumber)?.intValue, let nid = dict["noteId"] as? String,
+                       let raw = dict["raw"] as? String {
+                        func number(_ key: String) -> CGFloat { CGFloat((dict[key] as? NSNumber)?.doubleValue ?? 0) }
+                        let title = dict["title"] as? String ?? ""
+                        let canEdit = dict["canEdit"] as? Bool ?? false
+                        let isExcerpt = dict["isExcerpt"] as? Bool ?? false
+                        let rect = CGRect(x: number("x"), y: number("y"), width: number("width"), height: number("height"))
+                        DispatchQueue.main.async {
+                            callback?(.excerptMenu(pos: pos, noteId: nid, title: title, raw: raw, canEdit: canEdit, isExcerpt: isExcerpt, rect: rect))
+                        }
+                    }
+                case "excerptLoadFailed":
+                    DispatchQueue.main.async { callback?(.excerptLoadFailed) }
+                case "noteLinkToEmbed":
+                    if let from = (dict["from"] as? NSNumber)?.intValue, let href = dict["href"] as? String,
+                       let nid = dict["noteId"] as? String, !nid.isEmpty {
+                        let block = dict["block"] as? String ?? ""
+                        let title = dict["title"] as? String ?? ""
+                        DispatchQueue.main.async {
+                            callback?(.noteLinkToEmbed(from: from, href: href, noteId: nid, block: block, title: title))
+                        }
+                    }
+                case "excerptLoad":
+                    if let requestId = dict["requestId"] as? String, let nid = dict["noteId"] as? String,
+                       let block = dict["block"] as? String {
+                        DispatchQueue.main.async { callback?(.excerptLoad(requestId: requestId, noteId: nid, block: block)) }
+                    }
+                case "excerptSave":
+                    if let key = dict["key"] as? String, let nid = dict["noteId"] as? String,
+                       let block = dict["block"] as? String, let newBlock = dict["newBlock"] as? String,
+                       let html = dict["html"] as? String {
+                        DispatchQueue.main.async { callback?(.excerptSave(key: key, noteId: nid, block: block, newBlock: newBlock, html: html)) }
+                    }
                 case "pickInlineIcon":
                     DispatchQueue.main.async { callback?(.pickInlineIcon) }
                 case "resolveNoteTitle":
@@ -549,12 +631,14 @@ struct RichTextEditorView: UIViewRepresentable {
                         DispatchQueue.main.async { callback?(.openNote(noteId: nid)) }
                     }
                 case "includePreview":
-                    if let previewId = dict["previewId"] as? String, !previewId.isEmpty,
-                       let nid = dict["noteId"] as? String, !nid.isEmpty {
+                    // An embedded attachment has no note id; the stored embed says what to show.
+                    let nid = dict["noteId"] as? String ?? ""
+                    let rawEmbed = (dict["raw"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    if let previewId = dict["previewId"] as? String, !previewId.isEmpty, !nid.isEmpty || rawEmbed != nil {
                         let rawBox = (dict["boxSize"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         let boxSize = rawBox.isEmpty ? "medium" : rawBox
                         DispatchQueue.main.async {
-                            callback?(.includePreview(previewId: previewId, noteId: nid, boxSize: boxSize))
+                            callback?(.includePreview(previewId: previewId, noteId: nid, boxSize: boxSize, rawEmbed: rawEmbed))
                         }
                     }
                 case "renameAttachment":

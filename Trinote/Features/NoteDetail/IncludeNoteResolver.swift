@@ -27,14 +27,14 @@ struct IncludeNoteResolver {
         self.inlineAttachmentImages = inlineAttachmentImages
     }
 
-    /// Rewrites all top-level include-note sections. Nested includes inside text bodies recurse with
+    /// Rewrites all top-level embeds. Nested includes inside text bodies recurse with
     /// `nestingLevel` + 1 up to `maxNesting` (default 3).
     func resolve(html: String, seenNoteIds: Set<String>, nestingLevel: Int = 0, maxNesting: Int = 3) async -> String {
-        guard html.containsASCII("include-note") else { return html }
+        guard html.containsASCII("include-note") || html.containsASCII("data-trilium-embed") else { return html }
         var result = html
         while let block = Self.findNextIncludeBlock(in: result) {
             let replacement = await renderIncludeBlock(
-                openTag: block.openTag,
+                block: block,
                 seenNoteIds: seenNoteIds,
                 nestingLevel: nestingLevel,
                 maxNesting: maxNesting
@@ -46,55 +46,65 @@ struct IncludeNoteResolver {
 
     // MARK: - Block scan
 
-    private struct IncludeBlock {
+    struct IncludeBlock {
         let fullRange: Range<String.Index>
         let openTag: String
+        let innerHTML: String
     }
 
-    nonisolated private static func findNextIncludeBlock(in html: String) -> IncludeBlock? {
-        // Searched in `html` itself: indices from a lowercased copy drift where lowercasing changes a character's
-        // length ("İ"), and used on `html` they cut tags apart or run past its end.
-        var searchStart = html.startIndex
-        while searchStart < html.endIndex,
-              let open = html.range(of: "<section", options: .caseInsensitive, range: searchStart..<html.endIndex) {
-            let openStart = open.lowerBound
-            guard let gt = html[open.upperBound...].firstIndex(of: ">") else { return nil }
-            let openEnd = html.index(after: gt)
-            let openTag = String(html[openStart..<openEnd])
-            guard openTag.lowercased().contains("include-note") else {
-                searchStart = openEnd
-                continue
-            }
-            guard let closeRange = closingSectionRange(html: html, scanFrom: openEnd) else { return nil }
-            let fullEnd = closeRange.upperBound
-            return IncludeBlock(fullRange: openStart..<fullEnd, openTag: openTag)
+    nonisolated private static let embedOpenTagPattern = try! NSRegularExpression(pattern: #"(?i)<(section|figure)\b[^>]*>"#)
+
+    /// An embed: `include-note` among the classes (a style or data attribute can merely mention those words), or a
+    /// section naming a kind of embed this version doesn't know.
+    nonisolated private static func isEmbedOpenTag(_ openTag: String, tagName: String) -> Bool {
+        let classes = (ContentEmbedMarkup.attribute("class", in: openTag) ?? "").split(whereSeparator: \.isWhitespace)
+        if classes.contains("include-note") { return true }
+        return tagName == "section" && ContentEmbedMarkup.attribute("data-trilium-embed", in: openTag) != nil
+    }
+
+    /// Every replacement for what this finds has to drop the markup it matches, or `resolve` never ends.
+    nonisolated private static func findNextIncludeBlock(in html: String, from start: Int = 0) -> IncludeBlock? {
+        let ns = html as NSString
+        var position = start
+        while position < ns.length,
+              let open = embedOpenTagPattern.firstMatch(in: html, range: NSRange(location: position, length: ns.length - position)) {
+            let contentStart = NSMaxRange(open.range)
+            position = contentStart
+            let openTag = ns.substring(with: open.range)
+            let tagName = ns.substring(with: open.range(at: 1)).lowercased()
+            guard isEmbedOpenTag(openTag, tagName: tagName) else { continue }
+            guard let close = closingTagRange(of: tagName, in: html, from: contentStart),
+                  let fullRange = Range(NSRange(location: open.range.location, length: NSMaxRange(close) - open.range.location), in: html)
+            else { return nil }
+            let inner = ns.substring(with: NSRange(location: contentStart, length: close.location - contentStart))
+            return IncludeBlock(fullRange: fullRange, openTag: openTag, innerHTML: inner)
         }
         return nil
     }
 
-    nonisolated private static func closingSectionRange(html: String, scanFrom: String.Index) -> Range<String.Index>? {
-        let pattern = try! NSRegularExpression(
-            pattern: #"(?i)<section\b[^>]*>|</section>"#,
-            options: []
-        )
+    /// The embed at `index` among a note's embeds, counted as `resolve` counts them.
+    nonisolated static func embedBlock(at index: Int, in html: String) -> IncludeBlock? {
+        var position = 0
+        var current = 0
+        while let block = findNextIncludeBlock(in: html, from: position) {
+            if current == index { return block }
+            current += 1
+            position = NSRange(block.fullRange, in: html).upperBound
+        }
+        return nil
+    }
+
+    /// The closing tag that balances an already-open `tag`.
+    nonisolated private static func closingTagRange(of tag: String, in html: String, from start: Int) -> NSRange? {
+        guard let pattern = try? NSRegularExpression(pattern: "(?i)<\(tag)\\b[^>]*>|</\(tag)>") else { return nil }
         let ns = html as NSString
-        let utf16Start = scanFrom.utf16Offset(in: html)
         var depth = 1
-        var pos = utf16Start
-        while depth > 0, pos < ns.length {
-            let subRange = NSRange(location: pos, length: ns.length - pos)
-            guard let m = pattern.firstMatch(in: html, options: [], range: subRange) else { return nil }
-            let frag = ns.substring(with: m.range).lowercased()
-            if frag.hasPrefix("</section") {
-                depth -= 1
-                if depth == 0, let r = Range(m.range, in: html) { return r }
-                pos = NSMaxRange(m.range)
-            } else if frag.hasPrefix("<section") {
-                depth += 1
-                pos = NSMaxRange(m.range)
-            } else {
-                pos = NSMaxRange(m.range)
-            }
+        var position = start
+        while position < ns.length,
+              let match = pattern.firstMatch(in: html, range: NSRange(location: position, length: ns.length - position)) {
+            depth += ns.substring(with: match.range).hasPrefix("</") ? -1 : 1
+            if depth == 0 { return match.range }
+            position = NSMaxRange(match.range)
         }
         return nil
     }
@@ -102,21 +112,19 @@ struct IncludeNoteResolver {
     // MARK: - Render one block
 
     private func renderIncludeBlock(
-        openTag: String,
+        block: IncludeBlock,
         seenNoteIds: Set<String>,
         nestingLevel: Int,
         maxNesting: Int
     ) async -> String {
-        let noteId = Self.extractAttribute(from: openTag, name: "data-note-id")?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let boxRaw = Self.extractAttribute(from: openTag, name: "data-box-size")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let boxSize: String = {
-            switch boxRaw {
-            case "small", "medium", "full": return boxRaw!
-            default: return "full"
-            }
-        }()
+        let embed = ContentEmbedMarkup(openTag: block.openTag, innerHTML: block.innerHTML)
+        if embed.isUnknownKind { return Self.unknownEmbedCard(embed) }
+        if let attachmentId = embed.attachmentId {
+            return await renderAttachmentEmbed(attachmentId: attachmentId, embed: embed)
+        }
+        let boxSize = embed.boxSize
 
-        guard let nid = noteId, !nid.isEmpty else {
+        guard let nid = embed.noteId, !nid.isEmpty else {
             return Self.wrapErrorCard(
                 noteId: "invalid",
                 boxSize: boxSize,
@@ -125,13 +133,15 @@ struct IncludeNoteResolver {
             )
         }
 
-        if seenNoteIds.contains(nid) {
+        // An excerpt can quote the note it's in: its own embeds become links, so it can't repeat forever.
+        if embed.block == nil, seenNoteIds.contains(nid) {
             return Self.wrapCard(
                 noteId: nid,
                 boxSize: boxSize,
                 noteType: "text",
                 title: Self.cachedTitle(noteId: nid, persistence: persistence, profileId: profileId) ?? nid,
-                bodyHTML: Self.escapeHTML(String(localized: "Already included above (circular reference).", comment: "Include note cycle"))
+                bodyHTML: Self.escapeHTML(String(localized: "Already included above (circular reference).", comment: "Include note cycle")),
+                embed: embed
             )
         }
 
@@ -141,11 +151,15 @@ struct IncludeNoteResolver {
                 boxSize: boxSize,
                 noteType: "text",
                 title: Self.cachedTitle(noteId: nid, persistence: persistence, profileId: profileId) ?? nid,
-                bodyHTML: Self.escapeHTML(String(localized: "Maximum nesting depth reached.", comment: "Include note depth limit"))
+                bodyHTML: Self.escapeHTML(String(localized: "Maximum nesting depth reached.", comment: "Include note depth limit")),
+                embed: embed
             )
         }
 
-        await hydrateNoteFromServerIfNeeded(noteId: nid)
+        // A compact box is only a title row, so the body isn't needed.
+        if boxSize != "compact" {
+            await hydrateNoteFromServerIfNeeded(noteId: nid)
+        }
 
         let item = await fetchNoteItem(noteId: nid)
         guard let item else {
@@ -159,10 +173,14 @@ struct IncludeNoteResolver {
 
         let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nid : item.title
         let typeStr = item.type.rawValue
+        if boxSize == "compact" {
+            return Self.wrapCard(noteId: nid, boxSize: boxSize, noteType: typeStr, title: title, bodyHTML: "", embed: embed)
+        }
         var options = PreviewOptions()
         options.seenNoteIds = seenNoteIds
         options.nestingLevel = nestingLevel
         options.maxNesting = maxNesting
+        options.block = embed.block
         let bodyHTML: String
         switch await previewBody(for: item, options: options) {
         case .html(_, let html):
@@ -174,7 +192,82 @@ struct IncludeNoteResolver {
         case .noPreview:
             bodyHTML = Self.fallbackPreviewHTML(type: item.type)
         }
-        return Self.wrapCard(noteId: nid, boxSize: boxSize, noteType: typeStr, title: title, bodyHTML: bodyHTML)
+        return Self.wrapCard(noteId: nid, boxSize: boxSize, noteType: typeStr, title: title, bodyHTML: bodyHTML, embed: embed)
+    }
+
+    // MARK: - Attachments
+
+    private static func unknownEmbedCard(_ embed: ContentEmbedMarkup) -> String {
+        wrapCard(
+            noteId: "",
+            boxSize: "full",
+            noteType: "text",
+            title: String(localized: "Embedded content", comment: "Title of a card for an embed this version can't show"),
+            bodyHTML: "<p>" + escapeHTML(String(localized: "This embed needs a newer version of Trinote.", comment: "Card for an embed this version can't show")) + "</p>",
+            embed: embed
+        )
+    }
+
+    /// An embedded attachment: a picture, a canvas drawing through the picture its note keeps of it, a Mermaid diagram,
+    /// or a row that opens the attachment viewer.
+    private func renderAttachmentEmbed(attachmentId: String, embed: ContentEmbedMarkup) async -> String {
+        func card(type: String, title: String, body: String) -> String {
+            Self.wrapCard(noteId: "", boxSize: embed.boxSize, noteType: type, title: title, bodyHTML: body, embed: embed, attachmentId: attachmentId)
+        }
+        let fallbackTitle = String(localized: "Attachment", comment: "Title of an embedded attachment whose details aren't available")
+        let attachment: AttachmentResponse?
+        if isOnline, let client {
+            attachment = try? await client.getAttachment(attachmentId)
+        } else {
+            attachment = nil
+        }
+        guard let attachment else {
+            // Offline there's only the picture cache: nothing says what else this attachment is.
+            if embed.boxSize != "compact", let tag = await attachmentImageTag(attachmentId: attachmentId, ownerNoteId: nil) {
+                return card(type: "image", title: fallbackTitle, body: "<div class=\"trinote-include__inner trinote-include__inner--image\">\(tag)</div>")
+            }
+            let message = Self.escapeHTML(String(localized: "Not available offline.", comment: "Embedded attachment that can't be shown without a connection"))
+            return card(type: "file", title: fallbackTitle, body: "<p>\(message)</p>")
+        }
+
+        let title = attachment.title.isEmpty ? fallbackTitle : attachment.title
+        if embed.boxSize == "compact" { return card(type: "file", title: title, body: "") }
+
+        let mime = attachment.mime.lowercased()
+        if mime.hasPrefix("image/"), let tag = await attachmentImageTag(attachmentId: attachmentId, ownerNoteId: attachment.ownerId) {
+            return card(type: "image", title: title, body: "<div class=\"trinote-include__inner trinote-include__inner--image\">\(tag)</div>")
+        }
+        if mime == "application/vnd.excalidraw+json", let client,
+           let pictures = try? await client.getNoteAttachments(attachment.ownerId),
+           let picture = pictures.first(where: { $0.title == "\(attachmentId).svg" }),
+           let tag = await attachmentImageTag(attachmentId: picture.attachmentId, ownerNoteId: attachment.ownerId) {
+            return card(type: "canvas", title: title, body: "<div class=\"trinote-include__inner trinote-include__inner--image\">\(tag)</div>")
+        }
+        if mime == "text/vnd.mermaid", let client, let data = try? await client.getAttachmentContent(attachmentId) {
+            let diagram = Self.normalizedMermaidSource(String(decoding: data, as: UTF8.self))
+            if let svg = await MermaidRenderer.shared.render(source: diagram) {
+                return card(type: "mermaid", title: title, body: "<div class=\"trinote-include__inner trinote-include__inner--mermaid\">\(svg)</div>")
+            }
+            return card(type: "mermaid", title: title, body: "<div class=\"trinote-include__inner trinote-include__inner--mermaid\"><div class=\"mermaid\">\(Self.escapeHTML(diagram))</div></div>")
+        }
+        let href = "#root/\(Self.escapeHTML(attachment.ownerId))?viewMode=attachments&amp;attachmentId=\(Self.escapeHTML(attachmentId))"
+        let row = "<div class=\"trinote-include__inner trinote-include__inner--file\"><a class=\"trinote-include__filelink\" href=\"\(href)\">\(Self.escapeHTML(title))</a><div class=\"trinote-include__filemeta\">\(Self.escapeHTML(attachment.mime))</div></div>"
+        return card(type: "file", title: title, body: row)
+    }
+
+    private func attachmentImageTag(attachmentId: String, ownerNoteId: String?) async -> String? {
+        // Seeds the cache, so the scheme handler has the bytes as soon as the card paints.
+        let data = await TriliumInlineImageCaching.loadImageData(
+            routeType: "attachments",
+            entityId: attachmentId,
+            client: isOnline ? client : nil,
+            persistence: persistence,
+            serverProfileId: profileId,
+            sourceNoteId: ownerNoteId
+        )
+        guard data != nil else { return nil }
+        let src = TriliumImageScheme.url(routeType: "attachments", entityId: attachmentId)
+        return "<img class=\"trinote-include__img\" src=\"\(src)\" alt=\"\" />"
     }
 
     // MARK: - Previews
@@ -199,6 +292,8 @@ struct IncludeNoteResolver {
         var seenNoteIds: Set<String> = []
         var nestingLevel = 0
         var maxNesting = 3
+        /// Only these blocks of a text note show (`data-block`), trimmed in the page by `block-slice.js`.
+        var block: String? = nil
     }
 
     enum PreviewResult: Sendable, Equatable {
@@ -229,6 +324,10 @@ struct IncludeNoteResolver {
                 if options.trim {
                     expanded = Self.stripIncludeSections(Self.stripStyleTags(expanded))
                 }
+                if options.block != nil {
+                    // As Trilium does: an excerpt's own embeds are links, so the slice can't match blocks inside them.
+                    expanded = Self.replaceIncludeSectionsWithLinks(html: expanded)
+                }
                 if Self.isHTMLEmpty(expanded) {
                     if options.noChildrenList { return .html(kind: "text", html: "") }
                     let list = await childListHTML(parent: item, includeArchived: options.includeArchived)
@@ -237,6 +336,10 @@ struct IncludeNoteResolver {
                 if expanded.range(of: #"(?i)api/(attachments|images)/"#, options: .regularExpression) != nil
                     || expanded.range(of: #"(?i)<img\b"#, options: .regularExpression) != nil {
                     expanded = await inlineAttachmentImages(expanded)
+                }
+                if let block = options.block {
+                    let broken = String(localized: "The linked part of this note no longer exists.", comment: "Excerpt whose blocks were deleted")
+                    return .html(kind: "text", html: "<div class=\"trinote-include__inner trinote-include__inner--text\" data-trinote-block=\"\(Self.escapeHTML(block))\" data-trinote-block-broken=\"\(Self.escapeHTML(broken))\">\(expanded)</div>")
                 }
                 if !options.trim {
                     let childSeen = options.seenNoteIds.union([nid])
@@ -369,8 +472,12 @@ struct IncludeNoteResolver {
         var result = html
         while let block = findNextIncludeBlock(in: result) {
             let id = extractAttribute(from: block.openTag, name: "data-note-id")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let attachmentId = extractAttribute(from: block.openTag, name: "data-attachment-id")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let link: String
-            if id.isEmpty {
+            if !attachmentId.isEmpty {
+                let label = escapeHTML(String(localized: "Attachment", comment: "Title of an embedded attachment whose details aren't available"))
+                link = "<p><a href=\"#root/attachment?viewMode=attachments&amp;attachmentId=\(escapeHTML(attachmentId))\">\(label)</a></p>"
+            } else if id.isEmpty {
                 link = "<p><em>\(escapeHTML(String(localized: "Nested include (depth limit).", comment: "Include depth stub")))</em></p>"
             } else {
                 let t = escapeHTML(id)
@@ -631,15 +738,7 @@ struct IncludeNoteResolver {
     }
 
     private static func extractAttribute(from tag: String, name: String) -> String? {
-        let escaped = NSRegularExpression.escapedPattern(for: name)
-        let pattern = try! NSRegularExpression(
-            pattern: "\(escaped)\\s*=\\s*[\"']([^\"']*)[\"']",
-            options: [.caseInsensitive]
-        )
-        let ns = tag as NSString
-        guard let m = pattern.firstMatch(in: tag, range: NSRange(location: 0, length: ns.length)),
-              m.numberOfRanges >= 2 else { return nil }
-        return ns.substring(with: m.range(at: 1))
+        ContentEmbedMarkup.attribute(name, in: tag)
     }
 
     private func mimeToLanguageClass(_ mime: String) -> String {
@@ -661,18 +760,41 @@ struct IncludeNoteResolver {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    static func wrapCard(noteId: String, boxSize: String, noteType: String, title: String, bodyHTML: String) -> String {
+    /// - Parameters:
+    ///   - embed: How the stored embed wants to be shown: its position, size, caption and whether the title shows.
+    ///   - attachmentId: Set for an embedded attachment, which Open sends to the attachment viewer.
+    static func wrapCard(
+        noteId: String,
+        boxSize: String,
+        noteType: String,
+        title: String,
+        bodyHTML: String,
+        embed: ContentEmbedMarkup? = nil,
+        attachmentId: String? = nil
+    ) -> String {
         let escTitle = escapeHTML(title)
         let openLabel = escapeHTML(String(localized: "Open", comment: "Include note open button"))
+        var attributes = "class=\"trinote-include\" data-note-id=\"\(noteId)\" data-box-size=\"\(boxSize)\" data-note-type=\"\(escapeHTML(noteType))\""
+        if let attachmentId { attributes += " data-attachment-id=\"\(escapeHTML(attachmentId))\"" }
+        if let position = embed?.position { attributes += " data-position=\"\(position)\"" }
+        if embed?.isTitleHidden == true { attributes += " data-hide-title=\"true\"" }
+        var style = ""
+        if let width = embed?.width { style += "--trinote-include-width:\(width);" }
+        if let height = embed?.height { style += "--trinote-include-height:\(height);" }
+        if !style.isEmpty { attributes += " style=\"\(style)\"" }
+        let canOpen = !noteId.isEmpty || attachmentId != nil
+        let openButton = canOpen ? "<button type=\"button\" class=\"trinote-include__open\">\(openLabel)</button>" : ""
+        // A compact box is its title row alone.
+        let body = boxSize == "compact" ? "" : "<div class=\"trinote-include__body\" data-box-size=\"\(boxSize)\">\(bodyHTML)</div>"
+        let caption = embed?.captionHTML.map { "<div class=\"trinote-include__caption\">\($0)</div>" } ?? ""
         return """
-        <section class="trinote-include" data-note-id="\(noteId)" data-box-size="\(boxSize)" data-note-type="\(escapeHTML(noteType))">
+        <section \(attributes)>
           <header class="trinote-include__header">
             <span class="trinote-include__title">\(escTitle)</span>
-            <button type="button" class="trinote-include__open">\(openLabel)</button>
+            \(openButton)
           </header>
-          <div class="trinote-include__body" data-box-size="\(boxSize)">
-            \(bodyHTML)
-          </div>
+          \(body)
+          \(caption)
         </section>
         """
     }

@@ -615,6 +615,28 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(bodies[1], ["streamId": "s1", "toolCallId": "t2", "approved": false], "a denial has no scope")
     }
 
+    func testDuplicateUsesTriliumsOwnRouteAndSaysWhetherChildrenCome() async throws {
+        var requests: [(method: String?, path: String, body: Data)] = []
+        let client = try await clientForRouteTests(appInfo: v0107AppInfoJSON) { [self] request in
+            let path = request.url!.path
+            if path == "/api/notes/n1/duplicate/p1" {
+                requests.append((request.httpMethod, path, requestBody(request)))
+                return (200, #"{"note":{"noteId":"copy","title":"T (dup)"},"branch":{"branchId":"p1_copy","noteId":"copy","parentNoteId":"p1","prefix":null,"notePosition":25,"isExpanded":false}}"#)
+            }
+            if path == "/api/tree/load" {
+                return (200, #"{"notes":[{"noteId":"copy","title":"T (dup)","isProtected":false,"type":"text","mime":"text/html","blobId":"b1"}],"branches":[],"attributes":[]}"#)
+            }
+            return (200, #"{"noteId":"copy","title":"T (dup)","isProtected":false,"type":"text","mime":"text/html","blobId":"b1","utcDateModified":"2024-01-15T13:00:00.000Z"}"#)
+        }
+        let response = try await client.duplicateNoteAsChild(sourceNoteId: "n1", parentNoteId: "p1", withChildren: false)
+        XCTAssertEqual(response.note.noteId, "copy")
+        XCTAssertEqual(response.branch.branchId, "p1_copy")
+        XCTAssertEqual(response.branch.notePosition, 25)
+        XCTAssertEqual(requests.map(\.method), ["POST"])
+        let body = try JSONSerialization.jsonObject(with: try XCTUnwrap(requests.first?.body)) as? [String: Bool]
+        XCTAssertEqual(body, ["withChildren": false])
+    }
+
     func testMoveBranchSendsBranchListOnV0107() async throws {
         var requests: [(method: String?, path: String, body: Data)] = []
         let client = try await clientForRouteTests(appInfo: v0107AppInfoJSON) { [self] request in
@@ -744,6 +766,33 @@ final class TriliumClientTests: XCTestCase {
                 XCTAssertEqual(server.requests, 1)
             }
         }
+    }
+
+    // MARK: - Excerpts
+
+    func testNoteBlocksAreReadAndWrittenByTheirReference() async throws {
+        var requests: [(method: String?, url: String, body: Data?)] = []
+        MockURLProtocol.requestHandler = { [appInfoJSON] request in
+            let path = request.url!.path
+            func ok(_ json: String) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
+            }
+            if path.hasSuffix("/bootstrap") { return ok(#"{"csrfToken":"x","device":"desktop"}"#) }
+            if path.contains("/api/app-info") { return ok(appInfoJSON) }
+            requests.append((request.httpMethod, request.url!.absoluteString, self.requestBody(request)))
+            return ok(#"{"content":"<p>Body</p>"}"#)
+        }
+        let client = makeClient(persistedCookies: oidcSessionCookieData())
+        try await client.restoreSession()
+
+        let content = try await client.getNoteBlocks(noteId: "n1", block: "a:b")
+        XCTAssertEqual(content, "<p>Body</p>")
+        try await client.updateNoteBlocks(noteId: "n1", block: "a:b", content: "<p>New</p>")
+
+        XCTAssertEqual(requests.map(\.method), ["GET", "PUT"])
+        XCTAssertTrue(requests.allSatisfy { $0.url.hasSuffix("/api/notes/n1/blocks?block=a%3Ab") }, "\(requests.map(\.url))")
+        let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(requests.last?.body)) as? [String: Any])
+        XCTAssertEqual(sent["content"] as? String, "<p>New</p>")
     }
 
     // MARK: - Clone

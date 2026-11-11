@@ -18,7 +18,7 @@ enum LinkPreviewHTML {
     static func readingViewSnippet(forBody body: String) -> String {
         guard bodyHasLinkPreviews(body), let script = bundledScript else { return "" }
         let style = bundledStylesheet.map { "<style>\n\($0)\n</style>\n" } ?? ""
-        return style + "<script>\n" + script + "\ntrinoteLinkPreview.render(document.body);\n</script>"
+        return style + "<script>\n" + script + "\ntrinoteLinkPreview.render(document.body);\ntrinoteLinkPreview.enhanceMedia(document.body);\n</script>"
     }
 
     // MARK: - Plain text

@@ -6,6 +6,8 @@ struct GeoMapDetailPanel: View {
     let pin: GeoMapPin?
     let track: GeoMapTrack?
     var shape: GeoMapShape? = nil
+    /// On an image map positions are the map's own coordinates, and there's no place on the Earth to open.
+    var space: GeoMapSpace = .geo
     let pinHTML: String?
     let gpxStats: GeoMapGPXParser.Stats?
     let onClose: () -> Void
@@ -300,7 +302,7 @@ struct GeoMapDetailPanel: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: true, vertical: false)
                 Button {
-                    UIPasteboard.general.string = "\(lat), \(lng)"
+                    UIPasteboard.general.string = copiedCoordinateText(lat: lat, lng: lng)
                 } label: {
                     Image(systemName: "doc.on.doc")
                         .font(.caption)
@@ -396,6 +398,7 @@ struct GeoMapDetailPanel: View {
     }
 
     private var mapsCoordinate: (lat: Double, lng: Double)? {
+        guard !space.isImage else { return nil }
         switch selection.kind {
         case .pin:
             guard let pin else { return nil }
@@ -433,7 +436,13 @@ struct GeoMapDetailPanel: View {
     }
 
     private func coordinateText(lat: Double, lng: Double) -> String {
-        String(format: "%.5f, %.5f", lat, lng)
+        if case .image(let imageSpace) = space { return imageSpace.formatLocation(lat: lat, lng: lng) }
+        return String(format: "%.5f, %.5f", lat, lng)
+    }
+
+    private func copiedCoordinateText(lat: Double, lng: Double) -> String {
+        if case .image(let imageSpace) = space { return imageSpace.formatLocation(lat: lat, lng: lng, full: true) }
+        return "\(lat), \(lng)"
     }
 
     private func formatDistance(_ meters: Double) -> String {

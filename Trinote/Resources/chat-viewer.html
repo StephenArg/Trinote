@@ -76,7 +76,7 @@
     details.card > summary::before { content: ""; flex: none; width: 6px; height: 6px; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(-45deg); margin: 0 6px 0 2px; opacity: 0.7; transition: transform 0.15s ease; }
     details.card[open] > summary::before { transform: rotate(45deg); }
     details.card > .body { padding: 0 12px 10px; font-size: 14px; }
-    details.thinking > .body { white-space: pre-wrap; opacity: 0.85; }
+    details.thinking > .body { opacity: 0.85; }
     details.tool .tool-name { font-family: ui-monospace, Menlo, monospace; font-weight: 600; }
     details.tool.error > summary { color: var(--danger); }
     .tool-label { font-size: 12px; color: var(--muted); margin: 6px 0 3px; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -159,7 +159,7 @@
         case 'html':
             return '<div class="md">' + (block.html || '') + (streaming && isLast ? '<span class="cursor"></span>' : '') + '</div>';
         case 'thinking':
-            return card(key, 'thinking', esc(label('thoughtProcess')), esc(block.text || '') + (streaming ? '<span class="cursor"></span>' : ''));
+            return card(key, 'thinking', esc(label('thoughtProcess')), '<div class="md">' + (block.html != null ? block.html : esc(block.text || '')) + (streaming ? '<span class="cursor"></span>' : '') + '</div>');
         case 'tool':
             var toolKey = block.toolCallId ? 'tool:' + block.toolCallId : key;
             var status = toolStatus(block);
@@ -179,7 +179,7 @@
     function messageHTML(m) {
         var id = esc(m.id);
         if (m.kind === 'thinking') {
-            return '<div class="msg msg-assistant" data-id="' + id + '">' + blockHTML({ type: 'thinking', text: m.text }, false, false, 'thinking:' + m.id) + '</div>';
+            return '<div class="msg msg-assistant" data-id="' + id + '">' + blockHTML({ type: 'thinking', text: m.text, html: m.html }, false, false, 'thinking:' + m.id) + '</div>';
         }
         if (m.kind === 'error') {
             return '<div class="msg msg-assistant" data-id="' + id + '"><div class="error-card"><div class="title">' + esc(m.errorTitle) + '</div>'
@@ -220,7 +220,7 @@
         var s = state.streaming;
         if (!s) { streamingEl.innerHTML = ''; return; }
         var html = '';
-        if (s.thinking) { html += blockHTML({ type: 'thinking', text: s.thinking }, true, false, 'thinking:stream'); }
+        if (s.thinking) { html += blockHTML({ type: 'thinking', text: s.thinking, html: s.thinkingHTML }, true, false, 'thinking:stream'); }
         var blocks = s.blocks || [];
         html += '<div class="content">' + blocks.map(function (b, i) { return blockHTML(b, true, i === blocks.length - 1, 'stream:' + i); }).join('') + '</div>';
         if (s.status) { html += '<div class="status-wait">' + esc(s.status) + '</div>'; }
@@ -527,6 +527,12 @@ function trinoteRepairMermaid(source) {
         if (button) {
             event.preventDefault();
             post(button.getAttribute('data-action'));
+            return;
+        }
+        var image = event.target.closest('img[data-attachment-id]');
+        if (image && image.getAttribute('src')) {
+            event.preventDefault();
+            post('imageOpen', { attachmentId: image.getAttribute('data-attachment-id'), title: image.getAttribute('alt') || '' });
             return;
         }
         var anchor = event.target.closest('a[href]');

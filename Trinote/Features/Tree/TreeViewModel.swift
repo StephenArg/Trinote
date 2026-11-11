@@ -861,11 +861,16 @@ final class TreeViewModel {
         try? persistence.deleteCachedNotes(noteIds: noteIds, serverProfileId: profileId)
     }
 
-    /// Copies note content into a new sibling under the same parent (same placement as in the tree). Returns the new note for navigation.
-    func duplicateNote(sourceNoteId: String, parentNoteId: String) async -> NoteItem? {
+    /// Whether "Duplicate Without Children" can be offered for this server.
+    var canDuplicateWithoutChildren: Bool {
+        TriliumServerCompatibility.supportsDuplicateWithoutChildren(appState.serverAppInfo)
+    }
+
+    /// Duplicates a note as a new sibling under the same parent (same placement as in the tree). Returns the new note for navigation.
+    func duplicateNote(sourceNoteId: String, parentNoteId: String, withChildren: Bool = true) async -> NoteItem? {
         guard let client, sourceNoteId != "root" else { return nil }
         do {
-            let response = try await client.duplicateNoteAsChild(sourceNoteId: sourceNoteId, parentNoteId: parentNoteId)
+            let response = try await client.duplicateNoteAsChild(sourceNoteId: sourceNoteId, parentNoteId: parentNoteId, withChildren: withChildren)
             if let profileId = serverProfileId {
                 try? persistence.cacheNoteIfAllowed(from: response.note, serverProfileId: profileId, policy: cacheExclusion)
                 try? persistence.cacheBranchIfAllowed(

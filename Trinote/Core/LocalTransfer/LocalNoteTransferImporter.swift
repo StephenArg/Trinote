@@ -56,7 +56,8 @@ enum LocalNoteTransferImporter {
                 title: attachment.title,
                 position: attachment.position,
                 data: attachment.data,
-                serverProfileId: serverProfileId
+                serverProfileId: serverProfileId,
+                sourceAttachmentId: attachment.sourceAttachmentId
             )
         }
 

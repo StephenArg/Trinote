@@ -105,8 +105,15 @@ struct ChatOptionsSheet: View {
             }
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
-                if session.webSearchUnavailable {
-                    Text(String(localized: "Gemini can't use web search together with the note tools.", comment: "AI chat options: Google models can't combine the two tools"))
+                if let reason = session.webSearch.unavailable {
+                    switch reason {
+                    case .geminiWithNoteTools:
+                        Text(String(localized: "Gemini can't use web search together with the note tools.", comment: "AI chat options: Google models can't combine the two tools"))
+                    case .noBuiltInSearch:
+                        Text(String(localized: "This model has no built-in web search. Choose a search provider in Trilium’s AI options.", comment: "AI chat options: why web search is off for this model"))
+                    case .providerSearchesWithOwnTools:
+                        Text(String(localized: "This model’s provider searches the web with its own tools.", comment: "AI chat options: why web search is off for this model"))
+                    }
                 }
             }
         }

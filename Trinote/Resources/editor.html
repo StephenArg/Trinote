@@ -389,7 +389,9 @@ body { display: flex; flex-direction: column; }
   background: rgba(128,128,128,0.08); overflow: hidden; user-select: none;
   cursor: default; -webkit-tap-highlight-color: transparent;
 }
-.tiptap .ProseMirror-selectednode.tn-include-readonly {
+.tiptap .ProseMirror-selectednode.tn-include-readonly,
+.tiptap .tn-include-readonly.tn-embed-menu-target,
+.tiptap .tn-block-frame.tn-embed-menu-target {
   outline: 2px solid var(--btn-active); outline-offset: 1px;
 }
 .tiptap .tn-include-readonly__header {
@@ -488,6 +490,30 @@ body { display: flex; flex-direction: column; }
   font-weight: 400; border-radius: 6px;
 }
 .tiptap .tn-include-readonly-remove:active { opacity: 0.9; }
+/* Columns and tabs while editing: one framed block, with every column and tab open. */
+.tiptap .tn-block-frame { margin: 12px 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.tiptap .tn-block-frame__bar {
+  display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px;
+  border-bottom: 1px solid var(--border); background: rgba(128,128,128,0.08);
+  user-select: none; -webkit-user-select: none;
+}
+.tiptap .tn-block-frame__label { flex: 1; min-width: 0; font-size: 0.82em; font-weight: 600; opacity: 0.65; }
+.tiptap .tn-excerpt-edit__content { padding: 8px 12px; }
+.tiptap .tn-excerpt-edit__content > :first-child { margin-top: 0; }
+.tiptap .tn-excerpt-edit__content > :last-child { margin-bottom: 0; }
+.tiptap .tn-block-frame .trilium-multicolumn-layout { margin: 0; column-gap: 0; }
+.tiptap .tn-block-frame .trilium-multicolumn-column { padding: 8px 12px; }
+.tiptap .tn-block-frame .trilium-multicolumn-column + .trilium-multicolumn-column { border-inline-start: 1px solid var(--border); }
+@container multicolumn-layout (max-width: 500px) {
+  .tiptap .tn-block-frame .trilium-multicolumn-column + .trilium-multicolumn-column { border-inline-start: 0; border-top: 1px solid var(--border); }
+}
+.tiptap .tn-block-frame .trilium-tabs { margin: 0; border: 0; border-radius: 0; overflow: visible; }
+.tiptap .tn-tab-frame { position: relative; }
+.tiptap .tn-tab-frame + .tn-tab-frame { border-top: 1px solid var(--border); }
+.tiptap .tn-tab-frame__remove { position: absolute; top: 2px; right: 2px; z-index: 1; }
+.tiptap .tn-tab-frame .trilium-tab-title { margin: 0; padding: 8px 38px 2px 12px; }
+.tiptap .tn-tab-frame .trilium-tab-title:has(> br:only-child)::before { content: 'Tab title'; opacity: 0.4; font-weight: 400; pointer-events: none; }
+.tiptap .tn-tab-frame .trilium-tab-panel { padding: 2px 12px 10px; }
 .tiptap blockquote { border-left: 4px solid var(--border); margin: 0.5em 0; padding: 4px 16px; opacity: 0.85; }
 /* TriliumNext CKEditor admonitions: <aside class="admonition note">… — plus legacy div[data-callout-type] */
 .tiptap aside.admonition { margin: 0.65em 0; border-radius: 10px; padding: 10px 12px 10px 14px; border: 1px solid; background: rgba(128,128,128,0.06); display: block; }
@@ -902,6 +928,7 @@ body { display: flex; flex-direction: column; }
 </style>
 <link rel="stylesheet" href="vendor/katex/katex.min.css">
 <link rel="stylesheet" href="link-preview.css">
+<link rel="stylesheet" href="content-blocks.css">
 <link rel="stylesheet" href="task-states.css">
 <style id="tn-task-state-styles"></style>
 <script src="vendor/katex/katex.min.js"></script>
@@ -926,6 +953,9 @@ body { display: flex; flex-direction: column; }
 <script src="list-styles-extension.js"></script>
 <script src="indent-extension.js"></script>
 <script src="link-preview.js"></script>
+<script src="block-slice.js"></script>
+<script src="auto-sort.js"></script>
+<script src="content-blocks.js"></script>
 <script src="task-states.js"></script>
 <!-- vendor/mermaid.min.js (5 MB) loads on demand: see trinoteEnsureMermaid(). -->
 <script>
@@ -1050,7 +1080,61 @@ const FigureImage = Image.extend({
       // Set only while a picked photo is still uploading; `getContent()` strips these so a slot
       // can never reach a draft or a save. Cleared when the real image replaces the slot.
       photoSlot:      { default: null },
+      blockId:        { default: null },
     };
+  },
+  // Here because the bundle exports no `Extension`, and every extension's global attributes apply.
+  addGlobalAttributes() {
+    return [
+      {
+        // Trilium v0.107 block references point at these ids (`#root/note?block=id`), so they outlive any edit.
+        types: [
+          'paragraph', 'heading', 'blockquote', 'horizontalRule', 'callout', 'collapsible', 'collapsibleSummary',
+          'multicolumnLayout', 'multicolumnColumn', 'triliumTabs', 'triliumTab', 'triliumTabTitle', 'triliumTabPanel',
+        ],
+        attributes: {
+          blockId: {
+            default: null,
+            keepOnSplit: false,
+            parseHTML: (el) => el.getAttribute('data-trilium-block-id'),
+            renderHTML: (attrs) => attrs.blockId ? { 'data-trilium-block-id': attrs.blockId } : {},
+          },
+        },
+      },
+      {
+        // Everything on `<pre>`/`<code>` the schema has no place for: see `trinoteStashCodeAttrs`.
+        types: ['codeBlock'],
+        attributes: {
+          trinoteCodeAttrs: {
+            default: null,
+            keepOnSplit: false,
+            parseHTML: (el) => el.getAttribute('data-trinote-code-attrs'),
+            renderHTML: (attrs) => attrs.trinoteCodeAttrs ? { 'data-trinote-code-attrs': attrs.trinoteCodeAttrs } : {},
+          },
+        },
+      },
+      {
+        // The `<figure class="table">` attributes and the table's own style: see `trinoteStashTableAttrs`.
+        types: ['table'],
+        attributes: {
+          trinoteTableAttrs: {
+            default: null,
+            parseHTML: (el) => el.getAttribute('data-trinote-table-attrs'),
+            renderHTML: (attrs) => attrs.trinoteTableAttrs ? { 'data-trinote-table-attrs': attrs.trinoteTableAttrs } : {},
+          },
+        },
+      },
+      {
+        types: ['orderedList'],
+        attributes: {
+          reversed: {
+            default: false,
+            parseHTML: (el) => el.hasAttribute('reversed'),
+            renderHTML: (attrs) => attrs.reversed ? { reversed: '' } : {},
+          },
+        },
+      },
+    ];
   },
   parseHTML() {
     return [
@@ -1077,6 +1161,7 @@ const FigureImage = Image.extend({
             captionText: cap ? cap.textContent : '',
             originalSrc: img.getAttribute('data-trinote-original-src'),
             photoSlot: img.getAttribute('data-trinote-photo-slot'),
+            blockId: dom.getAttribute('data-trilium-block-id'),
           };
         },
       },
@@ -1100,6 +1185,7 @@ const FigureImage = Image.extend({
     if (HTMLAttributes.width) figClasses.push('image_resized');
     const figAttrs = { class: figClasses.join(' ') };
     if (HTMLAttributes.width) figAttrs.style = 'width:' + HTMLAttributes.width;
+    if (HTMLAttributes.blockId) figAttrs['data-trilium-block-id'] = HTMLAttributes.blockId;
     const imgAttrs = { src: HTMLAttributes.src };
     if (HTMLAttributes.alt) imgAttrs.alt = HTMLAttributes.alt;
     if (HTMLAttributes.title) imgAttrs.title = HTMLAttributes.title;
@@ -1112,7 +1198,925 @@ const FigureImage = Image.extend({
   },
 });
 
+/* Trilium v0.107 stores blocks this editor has no schema for: embeds as <figure class="include-note"> and embeds of
+   kinds added later. ProseMirror would flatten them on the first edit, and the server then erases any attachment the
+   body no longer names. So they are lifted out whole before parsing (`setContent`) and put back unchanged on save
+   (`_serializeEditorContent`); in between they are atoms carrying the original markup. */
+const RAW_BLOCK_SELECTOR = 'figure.include-note, figure.captioned-content-embed, section[data-trilium-embed]';
+const RAW_BLOCK_HINT = /include-note|captioned-content-embed|data-trilium-embed/;
+
+function trinoteRawBlockOuterHTML(el) {
+  const doc = document.implementation.createHTMLDocument('');
+  doc.body.appendChild(doc.importNode(el, true));
+  return serializeHtmlBodyPreservingTriliumMath(doc);
+}
+
+function trinoteRawBlockKind(el) {
+  if (el.matches('figure.include-note')) return 'attachment';
+  if (el.matches('figure.captioned-content-embed')) return 'media';
+  return 'embed';
+}
+
+/** Replaces each outermost block the schema can't hold with an empty placeholder holding its encoded markup. */
+function trinoteProtectRawBlocks(html) {
+  if (!html || !RAW_BLOCK_HINT.test(html)) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const blocks = Array.from(doc.body.querySelectorAll(RAW_BLOCK_SELECTOR))
+    .filter(el => !el.parentElement.closest(RAW_BLOCK_SELECTOR));
+  if (!blocks.length) return html;
+  blocks.forEach(el => {
+    let raw;
+    try { raw = encodeURIComponent(trinoteRawBlockOuterHTML(el)); } catch (e) { return; }
+    const placeholder = doc.createElement('div');
+    placeholder.setAttribute('data-trinote-raw', raw);
+    const noteId = el.matches('figure.include-note') && !el.hasAttribute('data-attachment-id') ? el.getAttribute('data-note-id') : null;
+    if (noteId) {
+      placeholder.setAttribute('data-note-id', noteId);
+      placeholder.setAttribute('data-box-size', el.getAttribute('data-box-size') || 'medium');
+    } else {
+      placeholder.setAttribute('data-trinote-raw-kind', trinoteRawBlockKind(el));
+    }
+    el.parentNode.replaceChild(placeholder, el);
+  });
+  return serializeHtmlBodyPreservingTriliumMath(doc);
+}
+
+/** Puts every protected block back. The last step of a save, so no other pass reads or rewrites their markup. */
+function trinoteRestoreRawBlocks(html) {
+  if (!html || html.indexOf('data-trinote-raw') === -1) return html;
+  return html.replace(/<div\b[^>]*?\bdata-trinote-raw="([^"]*)"[^>]*>\s*<\/div>/g, (match, encoded) => {
+    try { return decodeURIComponent(encoded); } catch (e) { return match; }
+  });
+}
+
+/** What a locked block's card says: a label and a short plain-text excerpt of what it holds. */
+function trinoteRawBlockSummary(encoded, kind) {
+  const labels = { attachment: 'Embedded file', media: 'Embedded media' };
+  const label = labels[kind] || 'Embedded content';
+  let text = '';
+  try {
+    const doc = new DOMParser().parseFromString(decodeURIComponent(encoded), 'text/html');
+    text = (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
+  } catch (e) {}
+  return { label, text: text.length > 180 ? text.slice(0, 179).trimEnd() + '…' : text };
+}
+
+const TrinoteRawBlock = Image.extend({
+  name: 'trinoteRawBlock',
+  group: 'block',
+  atom: true,
+  draggable: false,
+  selectable: true,
+  isolating: true,
+  inline: false,
+  addAttributes() {
+    return {
+      raw: { default: '' },
+      kind: { default: 'embed' },
+    };
+  },
+  parseHTML() {
+    return [{
+      tag: 'div[data-trinote-raw]',
+      getAttrs: (el) => ({
+        raw: el.getAttribute('data-trinote-raw') || '',
+        kind: el.getAttribute('data-trinote-raw-kind') || 'embed',
+      }),
+    }];
+  },
+  renderHTML({ node }) {
+    return ['div', { 'data-trinote-raw': node.attrs.raw, 'data-trinote-raw-kind': node.attrs.kind }];
+  },
+  addNodeView() {
+    return ({ node, editor, getPos }) => {
+      const summary = trinoteRawBlockSummary(node.attrs.raw, node.attrs.kind);
+      const root = document.createElement('div');
+      root.className = 'tn-include-readonly';
+      root.contentEditable = 'false';
+      const hdr = document.createElement('div');
+      hdr.className = 'tn-include-readonly__header';
+      const titleWrap = document.createElement('div');
+      titleWrap.style.display = 'flex';
+      titleWrap.style.alignItems = 'center';
+      titleWrap.style.minWidth = '0';
+      titleWrap.style.flex = '1';
+      const titleEl = document.createElement('span');
+      titleEl.className = 'tn-include-readonly__title';
+      titleEl.textContent = summary.label;
+      const sub = document.createElement('span');
+      sub.className = 'tn-include-readonly__subtitle';
+      sub.textContent = 'Edit in Trilium';
+      titleWrap.appendChild(titleEl);
+      titleWrap.appendChild(sub);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'tn-include-readonly-remove';
+      del.setAttribute('aria-label', 'Remove');
+      del.textContent = '\u00D7';
+      del.title = 'Remove';
+      del.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); });
+      del.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const pos = typeof getPos === 'function' ? getPos() : null;
+        if (pos == null) return;
+        editor.chain().focus().deleteRange({ from: pos, to: pos + node.nodeSize }).run();
+      });
+      hdr.appendChild(titleWrap);
+      hdr.appendChild(del);
+      root.appendChild(hdr);
+      const isAttachment = node.attrs.kind === 'attachment';
+      if (summary.text || isAttachment) {
+        const body = document.createElement('div');
+        body.className = 'tn-include-readonly__scroll';
+        body.textContent = summary.text;
+        root.appendChild(body);
+      }
+      if (isAttachment) {
+        // Native draws the attachment into the slot above, by this id.
+        const previewId = 'tnp_' + Math.random().toString(36).slice(2, 11);
+        root.setAttribute('data-tn-include-preview-id', previewId);
+        requestAnimationFrame(() => {
+          try {
+            window.webkit.messageHandlers.editorRequest.postMessage({ action: 'includePreview', previewId, noteId: '', boxSize: '', raw: node.attrs.raw });
+          } catch (e) {}
+        });
+      }
+      root.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.tn-include-readonly-remove')) return;
+        const pos = typeof getPos === 'function' ? getPos() : null;
+        if (pos == null) return;
+        e.preventDefault();
+        editor.chain().focus().setNodeSelection(pos).run();
+      });
+      return { dom: root };
+    };
+  },
+  // Image's `setImage` command and `![alt](src)` input rule would otherwise insert these.
+  addCommands() { return {}; },
+  addInputRules() { return []; },
+});
+
+/* Trilium v0.107 multicolumn layouts and tabs. `Image.extend` because the bundle exports no `Node`. `renderHTML` writes
+   exactly what Trilium stores; the frame, its label and its buttons exist only in the node views. Columns and panels are
+   isolating, so Backspace can't merge one into its neighbour. `+` rather than `{2,4}` in the content expressions: a
+   layout saved with another number of columns must not lose any. */
+function trinoteContainerNode(config) {
+  return Image.extend({
+    inline: false,
+    atom: false,
+    draggable: false,
+    selectable: false,
+    addAttributes() { return {}; },
+    addCommands() { return {}; },
+    addInputRules() { return []; },
+    ...config,
+  });
+}
+
+/**
+ * Enter on an empty last line leaves a column or tab panel, as an empty list item leaves its list: the line goes and the
+ * caret lands on a new line below the whole block. So two returns after some text get out, and a block at the end of a
+ * note can be written past. `outerLevels` is how far above the line that whole block is. A lone empty line stays, so one
+ * return in a new column doesn't leave it.
+ */
+function trinoteLeaveContainerOnEmptyLastLine(editor, containerName, outerLevels) {
+  const { state } = editor;
+  const { selection } = state;
+  const { $from } = selection;
+  if (!selection.empty || $from.parent.type.name !== 'paragraph' || $from.parent.content.size) return false;
+  const container = $from.node(-1);
+  if (container.type.name !== containerName || container.childCount < 2 || $from.index(-1) !== container.childCount - 1) return false;
+  const tr = state.tr.delete($from.before(), $from.after());
+  const below = tr.mapping.map($from.after($from.depth - outerLevels));
+  const next = tr.doc.nodeAt(below);
+  if (!next || next.type.name !== 'paragraph' || next.content.size) tr.insert(below, state.schema.nodes.paragraph.create());
+  tr.setSelection(selection.constructor.create(tr.doc, below + 1)).scrollIntoView();
+  editor.view.dispatch(tr);
+  return true;
+}
+
+/** Inserts `node` at the selection and puts the caret `depth` positions into it. */
+function trinoteInsertBlockAndEnter(node, depth) {
+  editor.chain().focus().insertContent(node.toJSON()).run();
+  const { doc, selection } = editor.state;
+  let target = null;
+  doc.nodesBetween(Math.max(0, selection.from - node.nodeSize - 2), Math.min(doc.content.size, selection.from), (child, pos) => {
+    if (child.type === node.type) target = pos;
+  });
+  if (target != null) editor.commands.setTextSelection(target + depth);
+}
+
+const TRINOTE_MEDIA_FILE_KINDS = {
+  mp4: 'video', m4v: 'video', webm: 'video', ogv: 'video', mov: 'video', mkv: 'video',
+  mp3: 'audio', m4a: 'audio', aac: 'audio', oga: 'audio', ogg: 'audio', opus: 'audio', wav: 'audio', flac: 'audio', weba: 'audio',
+};
+
+/** Whether `url` names a video or audio file by its extension, as Trilium's `getMediaFileTypeOfUrl` reads it. */
+function trinoteMediaFileKind(url) {
+  try {
+    const match = new URL(url).pathname.match(/\.([a-z0-9]+)$/i);
+    return (match && TRINOTE_MEDIA_FILE_KINDS[match[1].toLowerCase()]) || null;
+  } catch (e) { return null; }
+}
+
+function trinoteMediaFileTitle(url) {
+  try {
+    const parsed = new URL(url);
+    const segment = parsed.pathname.split('/').filter(Boolean).pop();
+    return segment ? decodeURIComponent(segment) : parsed.hostname;
+  } catch (e) { return url; }
+}
+
+function trinoteNewTab(title) {
+  const { paragraph, triliumTab, triliumTabTitle, triliumTabPanel } = editor.schema.nodes;
+  return triliumTab.create(null, [
+    triliumTabTitle.create(null, title ? editor.schema.text(title) : null),
+    triliumTabPanel.create(null, paragraph.create()),
+  ]);
+}
+
+/** A button in a layout's frame; pressing it doesn't take the caret or close the keyboard. */
+function trinoteFrameButton(label, text, onTap) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'tn-include-readonly-remove';
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.textContent = text;
+  button.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); });
+  button.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+  button.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onTap(); });
+  return button;
+}
+
+/** The frame a layout is edited in: a slim bar with a label and buttons above the node's content. */
+function trinoteLayoutFrame(label, buttons) {
+  const dom = document.createElement('div');
+  dom.className = 'tn-block-frame';
+  const bar = document.createElement('div');
+  bar.className = 'tn-block-frame__bar';
+  bar.contentEditable = 'false';
+  const title = document.createElement('span');
+  title.className = 'tn-block-frame__label';
+  title.textContent = label;
+  bar.appendChild(title);
+  buttons.forEach(button => bar.appendChild(button));
+  dom.appendChild(bar);
+  return { dom, bar };
+}
+
+const MultiColumnColumn = trinoteContainerNode({
+  name: 'multicolumnColumn',
+  group: '',
+  content: 'block+',
+  isolating: true,
+  defining: true,
+  parseHTML() { return [{ tag: 'div.trilium-multicolumn-column', priority: 60 }]; },
+  renderHTML({ HTMLAttributes }) { return ['div', { class: 'trilium-multicolumn-column', ...HTMLAttributes }, 0]; },
+  addKeyboardShortcuts() {
+    return { Enter: () => trinoteLeaveContainerOnEmptyLastLine(this.editor, 'multicolumnColumn', 2) };
+  },
+});
+
+const MultiColumnLayout = trinoteContainerNode({
+  name: 'multicolumnLayout',
+  group: 'block',
+  content: 'multicolumnColumn+',
+  isolating: true,
+  defining: true,
+  addAttributes() {
+    return {
+      ratios: {
+        default: null,
+        parseHTML: (el) => el.getAttribute('data-trilium-column-ratios'),
+        renderHTML: (attrs) => attrs.ratios ? { 'data-trilium-column-ratios': attrs.ratios } : {},
+      },
+    };
+  },
+  parseHTML() { return [{ tag: 'div.trilium-multicolumn-layout', priority: 60 }]; },
+  renderHTML({ HTMLAttributes }) { return ['div', { class: 'trilium-multicolumn-layout', ...HTMLAttributes }, 0]; },
+  addNodeView() {
+    return ({ node, getPos }) => {
+      let current = node;
+      const remove = trinoteFrameButton('Remove columns and their text', '×', () => {
+        const pos = getPos();
+        editor.view.dispatch(editor.state.tr.delete(pos, pos + current.nodeSize));
+      });
+      const frame = trinoteLayoutFrame('Columns', [remove]);
+      const content = document.createElement('div');
+      content.className = 'trilium-multicolumn-layout';
+      const applyRatios = () => {
+        if (current.attrs.ratios) content.setAttribute('data-trilium-column-ratios', current.attrs.ratios);
+        else content.removeAttribute('data-trilium-column-ratios');
+      };
+      applyRatios();
+      frame.dom.appendChild(content);
+      return {
+        dom: frame.dom,
+        contentDOM: content,
+        update(updated) {
+          if (updated.type.name !== 'multicolumnLayout') return false;
+          current = updated;
+          applyRatios();
+          return true;
+        },
+        ignoreMutation: (mutation) => !content.contains(mutation.target),
+        stopEvent: (event) => frame.bar.contains(event.target),
+      };
+    };
+  },
+});
+
+const TriliumTabTitle = trinoteContainerNode({
+  name: 'triliumTabTitle',
+  group: '',
+  content: 'inline*',
+  isolating: true,
+  defining: true,
+  // Ahead of Paragraph's `p` rule.
+  parseHTML() { return [{ tag: 'p.trilium-tab-title', priority: 60 }]; },
+  renderHTML({ HTMLAttributes }) { return ['p', { class: 'trilium-tab-title', ...HTMLAttributes }, 0]; },
+  addKeyboardShortcuts() {
+    return {
+      // A title is one line, so Enter moves on to the tab's content.
+      Enter: () => {
+        const { $from } = this.editor.state.selection;
+        if ($from.parent.type.name !== 'triliumTabTitle') return false;
+        return this.editor.commands.setTextSelection($from.after() + 2);
+      },
+    };
+  },
+});
+
+const TriliumTabPanel = trinoteContainerNode({
+  name: 'triliumTabPanel',
+  group: '',
+  content: 'block+',
+  isolating: true,
+  defining: true,
+  parseHTML() { return [{ tag: 'div.trilium-tab-panel', priority: 60 }]; },
+  renderHTML({ HTMLAttributes }) { return ['div', { class: 'trilium-tab-panel', ...HTMLAttributes }, 0]; },
+  addKeyboardShortcuts() {
+    return { Enter: () => trinoteLeaveContainerOnEmptyLastLine(this.editor, 'triliumTabPanel', 3) };
+  },
+});
+
+const TriliumTab = trinoteContainerNode({
+  name: 'triliumTab',
+  group: '',
+  content: 'triliumTabTitle triliumTabPanel',
+  isolating: true,
+  parseHTML() { return [{ tag: 'section.trilium-tab', priority: 60 }]; },
+  renderHTML({ HTMLAttributes }) { return ['section', { class: 'trilium-tab', ...HTMLAttributes }, 0]; },
+  addNodeView() {
+    return ({ node, getPos }) => {
+      let current = node;
+      const dom = document.createElement('div');
+      dom.className = 'tn-tab-frame';
+      const remove = trinoteFrameButton('Delete this tab', '×', () => {
+        const pos = getPos();
+        const $pos = editor.state.doc.resolve(pos);
+        // The last tab takes the whole block with it.
+        const [from, to] = $pos.parent.childCount > 1 ? [pos, pos + current.nodeSize] : [$pos.before(), $pos.after()];
+        editor.view.dispatch(editor.state.tr.delete(from, to));
+      });
+      remove.classList.add('tn-tab-frame__remove');
+      remove.contentEditable = 'false';
+      const content = document.createElement('section');
+      content.className = 'trilium-tab';
+      dom.appendChild(remove);
+      dom.appendChild(content);
+      return {
+        dom,
+        contentDOM: content,
+        update(updated) {
+          if (updated.type.name !== 'triliumTab') return false;
+          current = updated;
+          return true;
+        },
+        ignoreMutation: (mutation) => !content.contains(mutation.target),
+        stopEvent: (event) => remove.contains(event.target),
+      };
+    };
+  },
+});
+
+const TriliumTabs = trinoteContainerNode({
+  name: 'triliumTabs',
+  group: 'block',
+  content: 'triliumTab+',
+  isolating: true,
+  defining: true,
+  addAttributes() {
+    return {
+      alignment: {
+        default: null,
+        parseHTML: (el) => el.getAttribute('data-trilium-tab-alignment'),
+        renderHTML: (attrs) => attrs.alignment ? { 'data-trilium-tab-alignment': attrs.alignment } : {},
+      },
+    };
+  },
+  parseHTML() { return [{ tag: 'div.trilium-tabs', priority: 60 }]; },
+  renderHTML({ HTMLAttributes }) { return ['div', { class: 'trilium-tabs', ...HTMLAttributes }, 0]; },
+  addNodeView() {
+    return ({ node, getPos }) => {
+      let current = node;
+      const add = trinoteFrameButton('Add a tab', '+', () => {
+        const at = getPos() + current.nodeSize - 1;
+        let tr = editor.state.tr.insert(at, trinoteNewTab());
+        tr = tr.setSelection(editor.state.selection.constructor.near(tr.doc.resolve(at + 2)));
+        editor.view.dispatch(tr.scrollIntoView());
+        editor.view.focus();
+      });
+      const remove = trinoteFrameButton('Remove tabs and their text', '×', () => {
+        const pos = getPos();
+        editor.view.dispatch(editor.state.tr.delete(pos, pos + current.nodeSize));
+      });
+      const frame = trinoteLayoutFrame('Tabs', [add, remove]);
+      const content = document.createElement('div');
+      content.className = 'trilium-tabs';
+      frame.dom.appendChild(content);
+      return {
+        dom: frame.dom,
+        contentDOM: content,
+        update(updated) {
+          if (updated.type.name !== 'triliumTabs') return false;
+          current = updated;
+          return true;
+        },
+        ignoreMutation: (mutation) => !content.contains(mutation.target),
+        stopEvent: (event) => frame.bar.contains(event.target),
+      };
+    };
+  },
+});
+
 /* Trilium “include note” — stored as <section class="include-note" data-note-id> (separate schema node from images). */
+/* A note excerpt (a `figure.include-note` with `data-block`) in Editable mode: its blocks sit in this document, so the
+   toolbar and keyboard work on them as on the note's own text, and a change is written to the note they belong to. Saving
+   the note around it stores the figure unchanged: `renderHTML` writes the same placeholder an excerpt's card does, with no
+   content hole, so the blocks stay out of this note. Only `trinoteExcerptBodyHTML` asks for them. */
+const trinoteExcerptLoads = new Map();
+const trinoteExcerptEdits = new Map();
+const TRINOTE_EXCERPT_SAVE_DELAY = 1000;
+let trinoteSerializingExcerptBodies = false;
+/** Whether the server stores v0.107's embeds (`setContentBlockSupport`): included notes then have the ⋮ menu too. */
+let trinoteContentBlocksAvailable = false;
+/** Cards to redraw when that's learned, since it arrives after the note is drawn. */
+const trinoteEmbedCardRefreshers = new Set();
+// True while the code below changes an excerpt itself, which is not an edit to save.
+let trinoteExcerptSettling = false;
+
+function trinoteEditorRequest(message) {
+  try { window.webkit.messageHandlers.editorRequest.postMessage(message); } catch (e) {}
+}
+
+function trinoteRawFigure(encoded) {
+  try {
+    const doc = new DOMParser().parseFromString(decodeURIComponent(encoded || ''), 'text/html');
+    const first = doc.body.firstElementChild;
+    return first && first.matches('figure.include-note') ? first : null;
+  } catch (e) { return null; }
+}
+
+function trinoteEditedRawFigure(encoded, change) {
+  const figure = trinoteRawFigure(encoded);
+  if (!figure) return encoded;
+  change(figure);
+  return encodeURIComponent(trinoteRawBlockOuterHTML(figure));
+}
+
+function trinoteExcerptBlock(encoded) {
+  const figure = trinoteRawFigure(encoded);
+  return (figure && figure.getAttribute('data-block')) || null;
+}
+
+function trinoteIsExcerptNode(node) {
+  return !!node && node.type.name === 'includeNote' && !!trinoteExcerptBlock(node.attrs.rawHTML);
+}
+
+/** An embed of a note with the ⋮ menu: an excerpt, or a whole included note once the server stores v0.107's embeds. A
+    canvas or Mermaid picture shown as an include (`imageLinkOriginalSrc`) is really an image, and has none. */
+function trinoteHasEmbedMenu(node) {
+  if (!node || node.type.name !== 'includeNote' || !node.attrs.noteId) return false;
+  if (node.attrs.imageLinkOriginalSrc || node.attrs.imageLinkOriginalHTML) return false;
+  return trinoteIsExcerptNode(node) || trinoteContentBlocksAvailable;
+}
+
+/** The embed as stored, for the menu: a v0.107 figure, or an older `<section>`, which a change turns into a figure. */
+function trinoteEmbedRaw(node) {
+  if (node.attrs.rawHTML) {
+    try { return decodeURIComponent(node.attrs.rawHTML); } catch (e) {}
+  }
+  const section = document.createElement('section');
+  section.className = 'include-note';
+  section.setAttribute('data-note-id', node.attrs.noteId);
+  section.setAttribute('data-box-size', node.attrs.boxSize || 'medium');
+  section.innerHTML = '&nbsp;';
+  return section.outerHTML;
+}
+
+function trinoteEditKeyOfNote(noteId) {
+  let key = null;
+  editor.state.doc.descendants((node) => {
+    if (key) return false;
+    if (node.type.name === 'trinoteExcerptEdit') {
+      if (node.attrs.noteId === noteId) key = node.attrs.editKey;
+      return false;
+    }
+    return true;
+  });
+  return key;
+}
+
+function trinoteNewBlockId() {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  return Array.from(bytes, (byte) => characters[byte % characters.length]).join('');
+}
+
+function trinoteFindExcerptEdit(key) {
+  let found = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (found) return false;
+    if (node.type.name !== 'trinoteExcerptEdit') return true;
+    if (node.attrs.editKey === key) found = { node, pos };
+    return false;
+  });
+  return found;
+}
+
+/** The ⋮ button of an excerpt or included note. `canEdit` is false for one inside another being edited. The embed the
+    menu is for is selected and outlined while it's open, so it's clear which one the options change. */
+function trinoteAskForExcerptMenu(button, pos, node) {
+  const $pos = editor.state.doc.resolve(pos);
+  let canEdit = true;
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if ($pos.node(depth).type.name === 'trinoteExcerptEdit') canEdit = false;
+  }
+  trinoteClearEmbedMenuTarget();
+  if (node.type.name === 'includeNote') {
+    try { editor.commands.setNodeSelection(pos); } catch (e) {}
+  }
+  const dom = editor.view.nodeDOM(pos);
+  if (dom && dom.classList) dom.classList.add('tn-embed-menu-target');
+  const rect = button.getBoundingClientRect();
+  const isExcerpt = node.type.name === 'includeNote' ? trinoteIsExcerptNode(node) : !!trinoteExcerptBlock(node.attrs.rawHTML);
+  trinoteEditorRequest({
+    action: 'excerptMenu', pos, noteId: node.attrs.noteId, title: node.attrs.noteTitle || '',
+    raw: node.type.name === 'includeNote' ? trinoteEmbedRaw(node) : decodeURIComponent(node.attrs.rawHTML),
+    canEdit, isExcerpt,
+    x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+  });
+}
+
+function trinoteClearEmbedMenuTarget() {
+  document.querySelectorAll('.tn-embed-menu-target').forEach((el) => el.classList.remove('tn-embed-menu-target'));
+}
+
+/** Fetches what an embed shows and opens it for editing: an excerpt's blocks, or a whole included note (`block` ''). */
+function trinoteBeginExcerptEdit(pos, node, options) {
+  if (!node.attrs.rawHTML) return;
+  // Already being fetched (asked twice: the note opening, then the server's support arriving).
+  for (const load of trinoteExcerptLoads.values()) {
+    if (load.pos === pos && load.rawHTML === node.attrs.rawHTML) return;
+  }
+  const block = trinoteExcerptBlock(node.attrs.rawHTML) || '';
+  const requestId = 'xl' + Math.random().toString(36).slice(2, 11);
+  trinoteExcerptLoads.set(requestId, { pos, rawHTML: node.attrs.rawHTML, block, ...options });
+  trinoteEditorRequest({ action: 'excerptLoad', requestId, noteId: node.attrs.noteId, block });
+}
+
+/** A figure stored as Editable opens that way, as in Trilium. It stays a card when the blocks can't be had. */
+function trinoteEnterEditableExcerpts() {
+  const stored = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name !== 'includeNote') return true;
+    const figure = trinoteRawFigure(node.attrs.rawHTML);
+    if (figure && figure.getAttribute('data-editable') === 'true') stored.push({ node, pos });
+    return false;
+  });
+  stored.forEach(({ node, pos }) => {
+    if (trinoteHasEmbedMenu(node)) trinoteBeginExcerptEdit(pos, node, { silent: true });
+  });
+}
+
+/** Whether `html` holds a block id this document has: two excerpts over the same blocks would clear each other's. */
+function trinoteHasBlockIdInDocument(html) {
+  const incoming = new Set(Array.from(String(html).matchAll(/data-trilium-block-id=["']([^"']+)["']/g), (match) => match[1]));
+  if (!incoming.size) return false;
+  let shared = false;
+  editor.state.doc.descendants((node) => {
+    if (node.attrs && node.attrs.blockId && incoming.has(node.attrs.blockId)) shared = true;
+    return !shared;
+  });
+  return shared;
+}
+
+function trinoteEscapeAttribute(value) {
+  return String(value || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function trinoteApplyExcerptContent(requestId, html) {
+  const load = trinoteExcerptLoads.get(requestId);
+  if (!load) return;
+  trinoteExcerptLoads.delete(requestId);
+  const node = editor.state.doc.nodeAt(load.pos);
+  if (!node || node.type.name !== 'includeNote' || node.attrs.rawHTML !== load.rawHTML) return;
+  // One editable embed of a note at a time: two would overwrite each other's changes.
+  if (typeof html !== 'string' || trinoteHasBlockIdInDocument(html) || trinoteEditKeyOfNote(node.attrs.noteId)) {
+    if (load.markEditable) {
+      // The menu marked it Editable before asking; it isn't.
+      const rawHTML = trinoteEditedRawFigure(node.attrs.rawHTML, (figure) => figure.removeAttribute('data-editable'));
+      editor.view.dispatch(editor.state.tr.setNodeMarkup(load.pos, undefined, { ...node.attrs, rawHTML }).setMeta('addToHistory', false));
+    }
+    if (!load.silent) trinoteEditorRequest({ action: 'excerptLoadFailed' });
+    return;
+  }
+  const key = 'xe' + Math.random().toString(36).slice(2, 11);
+  const rawHTML = load.markEditable
+    ? trinoteEditedRawFigure(node.attrs.rawHTML, (figure) => figure.setAttribute('data-editable', 'true'))
+    : node.attrs.rawHTML;
+  const prepared = trinotePrepareEditorContent(html);
+  const wrapped = '<div data-trinote-excerpt-edit="' + key + '" data-trinote-excerpt-raw="' + rawHTML + '"'
+    + ' data-note-id="' + trinoteEscapeAttribute(node.attrs.noteId) + '"'
+    + ' data-box-size="' + trinoteEscapeAttribute(node.attrs.boxSize) + '"'
+    + ' data-trinote-excerpt-title="' + trinoteEscapeAttribute(node.attrs.noteTitle) + '">'
+    + (prepared.html || '<p></p>') + '</div>';
+  const state = { baseline: null, dirty: false, timer: null, sentBlock: load.block, savedBlock: load.block, pendingSaves: 0, closing: false };
+  trinoteExcerptEdits.set(key, state);
+  trinoteExcerptSettling = true;
+  try {
+    editor.chain().setMeta('addToHistory', false).insertContentAt(
+      { from: load.pos, to: load.pos + node.nodeSize },
+      wrapped,
+      { updateSelection: false, parseOptions: { preserveWhitespace: false } }
+    ).run();
+    // Now rather than at the first save, so the block being typed in isn't redrawn then. A whole note has no range.
+    if (load.block) trinoteGiveExcerptEdgeIds(key);
+  } finally {
+    trinoteExcerptSettling = false;
+  }
+  const found = trinoteFindExcerptEdit(key);
+  if (!found) { trinoteExcerptEdits.delete(key); return; }
+  state.baseline = found.node.content;
+  if (prepared.captionTexts.length) {
+    requestAnimationFrame(() => {
+      const dom = editor.view.nodeDOM(found.pos);
+      if (dom) trinoteShowTableCaptions(Array.from(dom.querySelectorAll('.tableWrapper')), prepared.captionTexts);
+    });
+  }
+}
+
+/* The blocks at one end of an excerpt, outermost first: a block quote starts with its first paragraph, as in Trilium's
+   `getEdgeBlocks`. Lists are looked through, since here their paragraphs hold the ids. */
+const TRINOTE_EDGE_THROUGH = new Set(['bulletList', 'orderedList', 'taskList', 'listItem', 'taskItem']);
+
+/** The child at one end of `node`. A photo still uploading isn't saved, so a reference must not end on it. */
+function trinoteExcerptEdgeChild(node, pos, edge) {
+  const children = [];
+  node.forEach((child, offset) => { if (!child.attrs.photoSlot) children.push({ node: child, pos: pos + 1 + offset }); });
+  return children.length ? children[edge === 'first' ? 0 : children.length - 1] : null;
+}
+
+function trinoteExcerptEdgeBlocks(container, containerPos, edge) {
+  const blocks = [];
+  let node = container;
+  let pos = containerPos;
+  for (;;) {
+    const edgeChild = trinoteExcerptEdgeChild(node, pos, edge);
+    if (!edgeChild || !edgeChild.node.isBlock) break;
+    const child = edgeChild.node;
+    if ('blockId' in child.attrs) blocks.push(edgeChild);
+    else if (!TRINOTE_EDGE_THROUGH.has(child.type.name)) break;
+    if (child.isTextblock || child.isAtom) break;
+    node = child;
+    pos = edgeChild.pos;
+  }
+  return blocks;
+}
+
+/** The first and the last block must have an id for the reference to find them again (`giveIdsToEdgeBlocks`). */
+function trinoteGiveExcerptEdgeIds(key) {
+  const found = trinoteFindExcerptEdit(key);
+  if (!found) return;
+  const tr = editor.state.tr;
+  ['first', 'last'].forEach((edge) => {
+    const blocks = trinoteExcerptEdgeBlocks(tr.doc.nodeAt(found.pos), found.pos, edge);
+    if (!blocks.length || blocks.some((block) => block.node.attrs.blockId)) return;
+    tr.setNodeMarkup(blocks[0].pos, undefined, { ...blocks[0].node.attrs, blockId: trinoteNewBlockId() });
+  });
+  if (tr.docChanged) editor.view.dispatch(tr.setMeta('addToHistory', false));
+}
+
+/** The reference to the blocks as they are now. An end that can't hold an id (a table, a code block) keeps its old one. */
+function trinoteExcerptRange(found, previous) {
+  const [previousStart, previousEnd] = previous.split(':');
+  const edgeId = (edge, preferred) => {
+    const ids = trinoteExcerptEdgeBlocks(found.node, found.pos, edge).map((block) => block.node.attrs.blockId).filter(Boolean);
+    return ids.includes(preferred) ? preferred : (ids[0] || preferred);
+  };
+  const start = edgeId('first', previousStart);
+  const end = edgeId('last', previousEnd || previousStart);
+  return start === end ? start : start + ':' + end;
+}
+
+/** One excerpt's blocks as Trilium stores them, through the same passes as a note's body. */
+function trinoteExcerptBodyHTML(key) {
+  trinoteSerializingExcerptBodies = true;
+  let html;
+  try { html = _serializeEditorContent(); } finally { trinoteSerializingExcerptBodies = false; }
+  const doc = new DOMParser().parseFromString(html || '', 'text/html');
+  const body = doc.querySelector('[data-trinote-excerpt-edit="' + key + '"]');
+  if (!body) return null;
+  doc.body.replaceChildren(...Array.from(body.childNodes));
+  return serializeHtmlBodyPreservingTriliumMath(doc);
+}
+
+function trinoteMarkExcerptDirty(key) {
+  const state = trinoteExcerptEdits.get(key);
+  if (!state) return;
+  state.dirty = true;
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => trinoteFlushExcerptAfterPause(key), TRINOTE_EXCERPT_SAVE_DELAY);
+}
+
+function trinoteFlushExcerptAfterPause(key) {
+  const state = trinoteExcerptEdits.get(key);
+  if (!state) return;
+  if (editor.view.composing) {
+    state.timer = setTimeout(() => trinoteFlushExcerptAfterPause(key), TRINOTE_EXCERPT_SAVE_DELAY);
+    return;
+  }
+  trinoteFlushExcerpt(key);
+}
+
+function trinoteSetExcerptReference(key, block) {
+  const found = trinoteFindExcerptEdit(key);
+  if (!found) return;
+  const previous = trinoteExcerptBlock(found.node.attrs.rawHTML);
+  if (previous === block) return;
+  const moved = (node) => ({ ...node.attrs, rawHTML: trinoteEditedRawFigure(node.attrs.rawHTML, (figure) => figure.setAttribute('data-block', block)) });
+  const tr = editor.state.tr.setNodeMarkup(found.pos, undefined, moved(found.node));
+  // Another card of the same blocks moves too: its old range may no longer exist.
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name !== 'includeNote') return true;
+    if (node.attrs.noteId === found.node.attrs.noteId && trinoteExcerptBlock(node.attrs.rawHTML) === previous) tr.setNodeMarkup(pos, undefined, moved(node));
+    return false;
+  });
+  editor.view.dispatch(tr.setMeta('addToHistory', false));
+}
+
+/**
+ * Sends an excerpt's unsaved changes. Each save names the range as the one before it left it, and native runs them in
+ * order, so a save can be sent while another is on its way. The figure gets the new reference now: the note around it can
+ * be saved and closed before the answer arrives.
+ */
+function trinoteFlushExcerpt(key) {
+  const state = trinoteExcerptEdits.get(key);
+  if (!state) return;
+  clearTimeout(state.timer);
+  state.timer = null;
+  const current = trinoteFindExcerptEdit(key);
+  if (!state.dirty || !current) return;
+  // Only photos still uploading: nothing to store yet, and the range needs a block to point at. They fill in as changes.
+  if (!trinoteExcerptEdgeChild(current.node, current.pos, 'first')) return;
+  trinoteExcerptSettling = true;
+  try {
+    // A whole included note has no range to keep track of.
+    if (state.sentBlock) trinoteGiveExcerptEdgeIds(key);
+    const block = state.sentBlock ? trinoteExcerptRange(trinoteFindExcerptEdit(key), state.sentBlock) : '';
+    const html = trinoteExcerptBodyHTML(key);
+    if (html == null) return;
+    if (block) trinoteSetExcerptReference(key, block);
+    const { node } = trinoteFindExcerptEdit(key);
+    trinoteEditorRequest({ action: 'excerptSave', key, noteId: node.attrs.noteId, block: state.sentBlock, newBlock: block, html });
+    state.sentBlock = block;
+    state.baseline = node.content;
+    state.dirty = false;
+    state.pendingSaves += 1;
+  } finally {
+    trinoteExcerptSettling = false;
+  }
+}
+
+function trinoteExcerptSaved(key, saved, newBlock) {
+  const state = trinoteExcerptEdits.get(key);
+  if (!state) return;
+  state.pendingSaves -= 1;
+  if (saved) {
+    state.savedBlock = newBlock;
+  } else {
+    // The server still has the previous range. The text stays here, to go with the next change or save.
+    state.sentBlock = state.savedBlock;
+    state.dirty = true;
+    state.closing = false;
+    if (state.savedBlock) {
+      trinoteExcerptSettling = true;
+      try { trinoteSetExcerptReference(key, state.savedBlock); } finally { trinoteExcerptSettling = false; }
+    }
+  }
+  if (state.closing && state.pendingSaves === 0) trinoteCloseExcerptEdit(key);
+}
+
+function trinoteCloseExcerptEdit(key) {
+  const found = trinoteFindExcerptEdit(key);
+  trinoteExcerptEdits.delete(key);
+  if (!found) return;
+  const { node, pos } = found;
+  const rawHTML = trinoteEditedRawFigure(node.attrs.rawHTML, (figure) => figure.removeAttribute('data-editable'));
+  const card = editor.schema.nodes.includeNote.create({ noteId: node.attrs.noteId, boxSize: node.attrs.boxSize, noteTitle: node.attrs.noteTitle, rawHTML });
+  editor.view.dispatch(editor.state.tr.replaceWith(pos, pos + node.nodeSize, card).setMeta('addToHistory', false));
+}
+
+/** Back to a card, once the changes are saved. If they can't be, the block stays so the text isn't lost. */
+function trinoteEndExcerptEdit(key) {
+  const state = trinoteExcerptEdits.get(key);
+  if (!state) return;
+  trinoteFlushExcerpt(key);
+  if (state.pendingSaves > 0) state.closing = true;
+  else trinoteCloseExcerptEdit(key);
+}
+
+const TrinoteExcerptEdit = trinoteContainerNode({
+  name: 'trinoteExcerptEdit',
+  group: 'block',
+  content: 'block+',
+  isolating: true,
+  defining: true,
+  addAttributes() {
+    return {
+      noteId: { default: '' },
+      boxSize: { default: 'full' },
+      noteTitle: { default: '' },
+      rawHTML: { default: '' },
+      editKey: { default: '' },
+    };
+  },
+  parseHTML() {
+    return [{
+      tag: 'div[data-trinote-excerpt-edit]',
+      priority: 70,
+      getAttrs: (el) => ({
+        noteId: el.getAttribute('data-note-id') || '',
+        boxSize: el.getAttribute('data-box-size') || 'full',
+        noteTitle: el.getAttribute('data-trinote-excerpt-title') || '',
+        rawHTML: el.getAttribute('data-trinote-excerpt-raw') || '',
+        editKey: el.getAttribute('data-trinote-excerpt-edit') || '',
+      }),
+    }];
+  },
+  renderHTML({ node }) {
+    if (trinoteSerializingExcerptBodies) return ['div', { 'data-trinote-excerpt-edit': node.attrs.editKey }, 0];
+    return ['div', { 'data-trinote-raw': node.attrs.rawHTML, 'data-note-id': node.attrs.noteId, 'data-box-size': node.attrs.boxSize }];
+  },
+  addKeyboardShortcuts() {
+    return { Enter: () => trinoteLeaveContainerOnEmptyLastLine(this.editor, 'trinoteExcerptEdit', 1) };
+  },
+  addNodeView() {
+    return ({ node, getPos }) => {
+      let current = node;
+      const key = node.attrs.editKey;
+      const more = trinoteFrameButton('More Actions', '⋮', () => {
+        trinoteFlushExcerpt(key);
+        const found = trinoteFindExcerptEdit(key);
+        if (found) trinoteAskForExcerptMenu(more, found.pos, found.node);
+      });
+      const remove = trinoteFrameButton('Remove excerpt', '×', () => {
+        trinoteFlushExcerpt(key);
+        const pos = getPos();
+        editor.view.dispatch(editor.state.tr.delete(pos, pos + current.nodeSize));
+      });
+      const frame = trinoteLayoutFrame('', [more, remove]);
+      frame.dom.classList.add('tn-excerpt-edit');
+      frame.dom.setAttribute('data-excerpt-key', key);
+      const label = frame.bar.querySelector('.tn-block-frame__label');
+      const showTitle = () => {
+        const title = current.attrs.noteTitle || current.attrs.noteId || '…';
+        label.textContent = (trinoteExcerptBlock(current.attrs.rawHTML) ? 'Excerpt of ' : 'Included: ') + title;
+      };
+      showTitle();
+      if (!node.attrs.noteTitle) trinoteEditorRequest({ action: 'resolveNoteTitle', noteId: node.attrs.noteId });
+      const content = document.createElement('div');
+      content.className = 'tn-excerpt-edit__content';
+      frame.dom.appendChild(content);
+      return {
+        dom: frame.dom,
+        contentDOM: content,
+        update(updated) {
+          if (updated.type.name !== 'trinoteExcerptEdit' || updated.attrs.editKey !== key) return false;
+          current = updated;
+          showTitle();
+          return true;
+        },
+        ignoreMutation: (mutation) => !content.contains(mutation.target),
+        stopEvent: (event) => frame.bar.contains(event.target),
+      };
+    };
+  },
+});
+
 const IncludeNote = Image.extend({
   name: 'includeNote',
   group: 'block',
@@ -1130,6 +2134,10 @@ const IncludeNote = Image.extend({
       // wrapper around a Trilium imageLink (canvas/mermaid) and the native `undecorateLinkedImagesFromEditor`
       // converts it back to `<img src="<imageLinkOriginalSrc>">` on save, preserving Trilium's imageLink schema.
       imageLinkOriginalSrc: { default: null },
+      // The whole `<figure>` that swap replaced, encoded, so its width, caption and block id come back too.
+      imageLinkOriginalHTML: { default: null },
+      // A v0.107 `<figure class="include-note">`, whole and encoded (see `trinoteProtectRawBlocks`).
+      rawHTML: { default: null },
     };
   },
   parseHTML() {
@@ -1144,11 +2152,29 @@ const IncludeNote = Image.extend({
           boxSize: el.getAttribute('data-box-size') || 'medium',
           noteTitle: '',
           imageLinkOriginalSrc: el.getAttribute('data-trinote-imagelink-original-src') || null,
+          imageLinkOriginalHTML: el.getAttribute('data-trinote-imagelink-original-html') || null,
         };
       },
+    }, {
+      tag: 'div[data-trinote-raw][data-note-id]',
+      // Ahead of TrinoteRawBlock's rule, which matches any protected block.
+      priority: 60,
+      getAttrs: (el) => ({
+        noteId: el.getAttribute('data-note-id'),
+        boxSize: el.getAttribute('data-box-size') || 'medium',
+        noteTitle: '',
+        rawHTML: el.getAttribute('data-trinote-raw'),
+      }),
     }];
   },
   renderHTML({ node }) {
+    if (node.attrs.rawHTML) {
+      return ['div', {
+        'data-trinote-raw': node.attrs.rawHTML,
+        'data-note-id': node.attrs.noteId,
+        'data-box-size': node.attrs.boxSize || 'medium',
+      }];
+    }
     const attrs = {
       class: 'include-note',
       'data-note-id': node.attrs.noteId,
@@ -1156,6 +2182,9 @@ const IncludeNote = Image.extend({
     };
     if (node.attrs.imageLinkOriginalSrc) {
       attrs['data-trinote-imagelink-original-src'] = node.attrs.imageLinkOriginalSrc;
+    }
+    if (node.attrs.imageLinkOriginalHTML) {
+      attrs['data-trinote-imagelink-original-html'] = node.attrs.imageLinkOriginalHTML;
     }
     // No content hole (`0`): `atom: true` means ProseMirror would throw
     // "Content hole not allowed in a leaf node spec" during `editor.getHTML()` serialization.
@@ -1200,6 +2229,18 @@ const IncludeNote = Image.extend({
       const scroll = document.createElement('div');
       scroll.className = 'tn-include-readonly__scroll';
       scroll.setAttribute('role', 'presentation');
+      let current = node;
+      const more = trinoteFrameButton('More Actions', '\u22EE', () => {
+        const pos = typeof getPos === 'function' ? getPos() : null;
+        if (pos != null) trinoteAskForExcerptMenu(more, pos, current);
+      });
+      const showKind = () => {
+        const isExcerpt = trinoteIsExcerptNode(current);
+        sub.textContent = isExcerpt ? 'Excerpt' : 'Included';
+        more.style.display = trinoteHasEmbedMenu(current) ? '' : 'none';
+      };
+      showKind();
+      trinoteEmbedCardRefreshers.add(showKind);
       let lastPreviewKey = '';
       let lastResolvedTitleId = '';
       function maybeResolveTitle(nid) {
@@ -1210,11 +2251,11 @@ const IncludeNote = Image.extend({
           window.webkit.messageHandlers.editorRequest.postMessage({ action: 'resolveNoteTitle', noteId: n });
         } catch (e0) {}
       }
-      function requestIncludePreview(noteId, boxSize) {
+      function requestIncludePreview(noteId, boxSize, raw) {
         const nid = (noteId || '').trim();
         if (!nid) return;
         const bs = boxSize || 'medium';
-        const key = nid + '\u0000' + bs;
+        const key = nid + '\u0000' + bs + '\u0000' + (raw || '');
         if (key === lastPreviewKey) return;
         lastPreviewKey = key;
         scroll.innerHTML = '';
@@ -1227,6 +2268,7 @@ const IncludeNote = Image.extend({
               previewId,
               noteId: nid,
               boxSize: bs,
+              raw: raw || '',
             });
           } catch (e) {
             try { window.webkit.messageHandlers.debugLog.postMessage('[INCLUDE] NodeView.request.postMessage failed: ' + e); } catch (_) {}
@@ -1234,6 +2276,7 @@ const IncludeNote = Image.extend({
         });
       }
       hdr.appendChild(titleWrap);
+      hdr.appendChild(more);
       hdr.appendChild(del);
       root.appendChild(hdr);
       root.appendChild(scroll);
@@ -1246,15 +2289,18 @@ const IncludeNote = Image.extend({
         editor.chain().focus().setNodeSelection(pos).run();
       });
       maybeResolveTitle(node.attrs.noteId);
-      requestIncludePreview(node.attrs.noteId, node.attrs.boxSize);
+      requestIncludePreview(node.attrs.noteId, node.attrs.boxSize, node.attrs.rawHTML);
       return {
         dom: root,
+        destroy: () => { trinoteEmbedCardRefreshers.delete(showKind); },
         update: (updated) => {
           if (updated.type.name !== 'includeNote') return false;
+          current = updated;
+          showKind();
           const t = (updated.attrs.noteTitle && updated.attrs.noteTitle.trim()) ? updated.attrs.noteTitle : (updated.attrs.noteId || '…');
           titleEl.textContent = t;
           maybeResolveTitle(updated.attrs.noteId);
-          requestIncludePreview(updated.attrs.noteId, updated.attrs.boxSize);
+          requestIncludePreview(updated.attrs.noteId, updated.attrs.boxSize, updated.attrs.rawHTML);
           return true;
         },
       };
@@ -1476,13 +2522,28 @@ const LinkEmbed = Image.extend({
   draggable: false,
   selectable: true,
   isolating: true,
-  addAttributes() { return linkPreviewAttributeSpecs(); },
+  addAttributes() {
+    return {
+      ...linkPreviewAttributeSpecs(),
+      // What v0.107 adds for videos and audio (box size, position, width, shape), kept as stored.
+      extraAttrs: {
+        default: null,
+        rendered: false,
+        parseHTML: (el) => {
+          const known = new Set(['class', ...trinoteLinkPreview.ATTRIBUTES.map(([, name]) => name)]);
+          const extra = {};
+          Array.from(el.attributes).forEach((a) => { if (!known.has(a.name)) extra[a.name] = a.value; });
+          return Object.keys(extra).length ? extra : null;
+        },
+      },
+    };
+  },
   parseHTML() {
     // Ahead of IncludeNote's bare `section` rule.
     return [{ tag: 'section.link-embed', priority: 100 }];
   },
   renderHTML({ node }) {
-    return ['section', linkPreviewStoredAttributes('link-embed', node.attrs)];
+    return ['section', { ...linkPreviewStoredAttributes('link-embed', node.attrs), ...(node.attrs.extraAttrs || {}) }];
   },
   addNodeView() { return makeLinkPreviewNodeView('linkEmbed', true); },
   addCommands() { return {}; },
@@ -1996,6 +3057,14 @@ const editorExtensions = [
   LinkEmbed,
   CustomLink.configure({ openOnClick: false, HTMLAttributes: { rel: null, target: null } }),
   IncludeNote,
+  TrinoteExcerptEdit,
+  TrinoteRawBlock,
+  MultiColumnLayout,
+  MultiColumnColumn,
+  TriliumTabs,
+  TriliumTab,
+  TriliumTabTitle,
+  TriliumTabPanel,
   TriliumAnchor,
   TriliumInlineIcon,
   TriliumMath,
@@ -2006,7 +3075,16 @@ const editorExtensions = [
   Superscript,
   FigureImage,
 ];
-if (CalloutExt) editorExtensions.push(CalloutExt);
+// Callout's own `renderHTML` writes only its class, so a block id has to be added to what it returns.
+if (CalloutExt) {
+  editorExtensions.push(CalloutExt.extend({
+    renderHTML(props) {
+      const out = this.parent(props);
+      if (props.node.attrs.blockId) out[1] = { ...out[1], 'data-trilium-block-id': props.node.attrs.blockId };
+      return out;
+    },
+  }));
+}
 if (CollapsibleSummaryExt) editorExtensions.push(CollapsibleSummaryExt);
 if (CollapsibleBlockExt) editorExtensions.push(CollapsibleBlockExt);
 if (FontSizeExt) editorExtensions.push(FontSizeExt);
@@ -2350,6 +3428,66 @@ const editor = new Editor({
   onTransaction() { scheduleToolbarUpdate(); },
 });
 
+editor.on('update', () => {
+  if (trinoteExcerptSettling || !trinoteExcerptEdits.size) return;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name !== 'trinoteExcerptEdit') return true;
+    const state = trinoteExcerptEdits.get(node.attrs.editKey);
+    if (state && state.baseline && !node.content.eq(state.baseline)) trinoteMarkExcerptDirty(node.attrs.editKey);
+    return false;
+  });
+});
+// An excerpt being fetched moves with the text around it.
+editor.on('transaction', ({ transaction }) => {
+  if (transaction.docChanged) trinoteExcerptLoads.forEach((load) => { load.pos = transaction.mapping.map(load.pos); });
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') trinoteExcerptEdits.forEach((state, key) => trinoteFlushExcerpt(key));
+});
+
+/* A block id must stay unique: a copy made by Enter or paste loses it, as in Trilium's `removeDuplicateBlockIds`.
+   After Enter at the start of a block the original is the empty half, and the id stays with the text. */
+(function registerBlockIdDedupe() {
+  const PluginClass = editor.state.plugins[0] && editor.state.plugins[0].constructor;
+  if (!PluginClass) return;
+  const collect = (doc) => {
+    const byId = new Map();
+    doc.descendants((node, pos) => {
+      const id = node.attrs && node.attrs.blockId;
+      if (id) {
+        if (!byId.has(id)) byId.set(id, []);
+        byId.get(id).push({ node, pos });
+      }
+      return !node.isTextblock;
+    });
+    return byId;
+  };
+  editor.registerPlugin(new PluginClass({
+    appendTransaction(transactions, oldState, newState) {
+      if (!transactions.some(t => t.docChanged)) return null;
+      const clashes = Array.from(collect(newState.doc)).filter(([, blocks]) => blocks.length > 1);
+      if (!clashes.length) return null;
+      const before = collect(oldState.doc);
+      let tr = newState.tr;
+      const clear = (block) => { tr = tr.setNodeMarkup(block.pos, undefined, { ...block.node.attrs, blockId: null }); };
+      clashes.forEach(([id, blocks]) => {
+        const old = before.get(id);
+        const mapped = old ? transactions.reduce((pos, t) => t.mapping.map(pos), old[0].pos) : -1;
+        const original = blocks.find(b => b.pos === mapped) || blocks[0];
+        const copies = blocks.filter(b => b !== original);
+        const withText = copies.find(b => b.node.content.size > 0);
+        if (original.node.isTextblock && original.node.content.size === 0 && withText) {
+          clear(original);
+          copies.filter(b => b !== withText).forEach(clear);
+        } else {
+          copies.forEach(clear);
+        }
+      });
+      return tr.docChanged ? tr : null;
+    },
+  }));
+})();
+
 // WKWebView / iOS: tapping the toolbar blurs the editor and collapses the DOM selection.
 // Keep the last ProseMirror ranged selection so color / highlight pickers can still apply.
 trinoteSetUpTaskStateMenu();
@@ -2641,6 +3779,81 @@ const HEADING_KINDS = [
   { id: 5, label: 'Heading 5', tag: 'h5', fontSize: '0.95em' },
   { id: 6, label: 'Heading 6', tag: 'h6', fontSize: '0.85em' },
 ];
+const INSERT_BLOCKS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M12 8.5v7M8.5 12h7"/></svg>';
+
+/** Trilium v0.107's new blocks. Hidden until native says the server stores them (`setContentBlockSupport`). */
+function makeInsertBlocksToolbar() {
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'none';
+  wrapper.style.alignItems = 'center';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.title = 'Insert';
+  b.classList.add('toolbar-btn-with-chevron');
+  b.style.cssText = 'flex-shrink:0;border:none;background:var(--btn-bg);color:var(--fg);height:34px;border-radius:6px;cursor:pointer;-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;justify-content:center;gap:2px;padding:0 6px;';
+  b.innerHTML = INSERT_BLOCKS_SVG + TOOLBAR_CHEVRON_SVG;
+  const popup = document.createElement('div');
+  popup.className = 'heading-popup';
+  popup._anchorButton = b;
+  const ask = (message) => {
+    try { window.webkit.messageHandlers.editorRequest.postMessage(message); } catch (e) {}
+  };
+  [
+    ['2 columns', () => window.editorBridge.insertColumns(2)],
+    ['3 columns', () => window.editorBridge.insertColumns(3)],
+    ['4 columns', () => window.editorBridge.insertColumns(4)],
+    ['Tabs', () => window.editorBridge.insertTabs()],
+    ['Video or audio\u2026', () => ask({ action: 'pickMediaURL' })],
+    ['Link to block\u2026', () => ask({ action: 'pickBlockReference', excerpt: false })],
+    ['Note excerpt\u2026', () => ask({ action: 'pickBlockReference', excerpt: true })],
+  ].forEach(([label, action]) => {
+    const row = document.createElement('div');
+    row.className = 'heading-popup-row';
+    const text = document.createElement('span');
+    text.textContent = label;
+    row.appendChild(text);
+    row.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      hideHeadingPopup(popup);
+      action();
+    }, true);
+    row.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    row.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); }, true);
+    popup.appendChild(row);
+  });
+  document.body.appendChild(popup);
+  b.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary) return;
+    if (!popup.classList.contains('visible')) markHeadingPopupJustOpened(popup);
+  }, true);
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const opening = !popup.classList.contains('visible');
+    document.querySelectorAll('.heading-popup.visible').forEach((p) => { if (p !== popup) hideHeadingPopup(p); });
+    if (opening) {
+      markHeadingPopupJustOpened(popup);
+      popup.classList.add('visible');
+      requestAnimationFrame(() => {
+        layoutCalloutPopup(b, popup);
+        requestAnimationFrame(() => layoutCalloutPopup(b, popup));
+      });
+    } else {
+      hideHeadingPopup(popup);
+    }
+  });
+  wrapper.appendChild(b);
+  appendToToolbarMount(wrapper);
+  b._isActive = () => false;
+  document.addEventListener('click', (e) => {
+    if (!popup.classList.contains('visible')) return;
+    if (performance.now() < (popup._ignoreOutsideUntil || 0)) return;
+    if (!wrapper.contains(e.target) && !popup.contains(e.target)) hideHeadingPopup(popup);
+  });
+  return wrapper;
+}
+
 function makeHeadingToolbar() {
   const wrapper = document.createElement('div');
   wrapper.style.display = 'inline-flex';
@@ -4039,6 +5252,86 @@ function convertLinkExplicitly(pending, meta) {
   return true;
 }
 
+/* Links to notes: what turning an embed into a link remembers, and how a link turns back into one. */
+const trinoteEmbedsTurnedIntoLinks = new Map();
+
+function trinoteFirstHref(html) {
+  const match = /href="([^"]*)"/.exec(String(html));
+  return match ? match[1].replace(/&amp;/g, '&') : null;
+}
+
+/** The note (and blocks) a `#root/…` link points at, or null for any other link, or one to an attachment. */
+function trinoteParseNoteHref(href) {
+  if (!href || href.indexOf('#root') !== 0) return null;
+  const query = href.indexOf('?');
+  const path = query === -1 ? href : href.slice(0, query);
+  const noteId = path.split('/').filter(Boolean).pop();
+  if (!noteId || noteId === '#root' || noteId === 'root') return null;
+  const params = new URLSearchParams(query === -1 ? '' : href.slice(query + 1));
+  if (params.get('viewMode') === 'attachments' || params.get('attachmentId')) return null;
+  return { noteId, block: params.get('block') || '' };
+}
+
+/** The link run with `href` nearest `pos`. */
+function trinoteLinkRunNear(pos, href) {
+  let best = null;
+  editor.state.doc.descendants((node, nodePos) => {
+    if (!node.isTextblock) return true;
+    linkRunsInTextblock(node, nodePos).forEach((run) => {
+      if (run.href !== href) return;
+      const distance = Math.abs(run.from - pos);
+      if (!best || distance < best.distance) best = Object.assign({ distance }, run);
+    });
+    return false;
+  });
+  return best;
+}
+
+/** Puts an embed of the linked note where the link was: in place of its paragraph when it's all the paragraph holds,
+    else just below it. `raw` is a figure, encoded; without one (an older server) the embed takes the older form. */
+function trinoteReplaceLinkWithEmbed(pos, href, raw, title, noteId) {
+  const run = trinoteLinkRunNear(pos, href);
+  if (!run) return false;
+  const figure = raw ? trinoteRawFigure(raw) : null;
+  const card = editor.schema.nodes.includeNote.create({
+    noteId: figure ? figure.getAttribute('data-note-id') : noteId,
+    boxSize: figure ? (figure.getAttribute('data-box-size') || 'full') : 'medium',
+    noteTitle: title || '',
+    rawHTML: raw || null,
+  });
+  const $from = editor.state.doc.resolve(run.from);
+  const paragraph = $from.parent;
+  let onlyText = true;
+  paragraph.forEach((child) => { if (!child.isText) onlyText = false; });
+  const alone = onlyText && paragraph.textContent.trim() === run.text.trim();
+  const tr = editor.state.tr;
+  if (alone) {
+    tr.replaceWith($from.before(), $from.after(), card);
+  } else {
+    tr.insert($from.after(), card);
+    tr.delete(run.from, run.to);
+  }
+  editor.view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+function trinoteConvertNoteLink(run) {
+  const target = trinoteParseNoteHref(run.href);
+  if (!target) return;
+  hideLinkMenu();
+  const remembered = trinoteEmbedsTurnedIntoLinks.get(run.href);
+  if (remembered) {
+    trinoteReplaceLinkWithEmbed(run.from, run.href, remembered, run.text, null);
+    return;
+  }
+  if (!trinoteContentBlocksAvailable) {
+    trinoteReplaceLinkWithEmbed(run.from, run.href, null, run.text, target.noteId);
+    return;
+  }
+  // The size depends on the note's type, which native knows.
+  trinoteEditorRequest({ action: 'noteLinkToEmbed', from: run.from, href: run.href, noteId: target.noteId, block: target.block, title: run.text });
+}
+
 function fillLinkMenu() {
   const run = linkMenuPopup._run;
   if (!run) { hideLinkMenu(); return; }
@@ -4065,6 +5358,23 @@ function fillLinkMenu() {
     row.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
     linkMenuPopup.appendChild(row);
   };
+  const note = trinoteParseNoteHref(run.href);
+  if (note) {
+    addLabel(note.block ? 'Link to Blocks' : 'Note Link');
+    addRow(icons.open + '<span>Open Note</span>', () => {
+      hideLinkMenu();
+      trinoteEditorRequest({ action: 'openNote', noteId: note.noteId });
+    });
+    // An excerpt needs v0.107; a whole note goes back in either form.
+    if (!note.block || trinoteContentBlocksAvailable || trinoteEmbedsTurnedIntoLinks.has(run.href)) {
+      addRow(icons.card + '<span>' + (note.block ? 'Convert to Excerpt' : 'Convert to Included Note') + '</span>', (r) => trinoteConvertNoteLink(r));
+    }
+    addRow(icons.remove + '<span>Remove Link</span>', (r) => {
+      hideLinkMenu();
+      linkPreviewChain().setTextSelection({ from: r.from, to: r.to }).unsetLink().setTextSelection(r.to).run();
+    });
+    return;
+  }
   addLabel('Link');
   addRow(icons.open + '<span>Open Link</span>', (r) => {
     hideLinkMenu();
@@ -4102,11 +5412,13 @@ function hideLinkMenu() {
   linkMenuPopup._run = null;
 }
 
-// Tapping a web link (not a preview, a note link or an attachment) opens its menu; the caret still lands in the link.
+// Tapping a web link or a link to a note (not a preview or an attachment) opens its menu; the caret still lands in the
+// link.
 document.getElementById('editor-container').addEventListener('click', function(e) {
   const a = e.target.closest && e.target.closest('.tiptap a[href]');
   if (!a || a.closest('[data-trinote-link-preview]') || a.closest('.tn-include-readonly')) return;
-  if (!trinoteLinkPreview.isHttpUrl(a.getAttribute('href'))) return;
+  const href = a.getAttribute('href');
+  if (!trinoteLinkPreview.isHttpUrl(href) && !trinoteParseNoteHref(href)) return;
   let pos;
   try { pos = editor.view.posAtDOM(a, 0); } catch (_) { return; }
   const run = linkRunAt(pos) || linkRunAt(pos + 1);
@@ -5483,7 +6795,7 @@ imageToolbarBtn.addEventListener('pointerdown', (e) => {
 makeLinkToolbar();
 btn('Include', '<span style="font-weight:800;font-size:14px;line-height:1">⊕</span>', () => {
   try { window.webkit.messageHandlers.editorRequest.postMessage({ action: 'pickIncludeNote' }); } catch(e) {}
-}, () => editor.isActive('includeNote'));
+}, () => editor.isActive('includeNote') && !trinoteIsExcerptNode(editor.state.selection.node));
 // The native icon picker blurs the editor, so the caret is frozen first (as for Image) and the icon lands there.
 const inlineIconToolbarBtn = btn('Icon', INLINE_ICON_TOOLBAR_SVG, () => {
   inlineIconReplacePos = null;
@@ -5495,6 +6807,7 @@ inlineIconToolbarBtn.addEventListener('pointerdown', (e) => {
   capturePendingMediaInsertPos();
 }, true);
 makeTableGridPicker();
+const insertBlocksWrapper = makeInsertBlocksToolbar();
 btn('Collapsible block', COLLAPSIBLE_TOOLBAR_SVG, () => insertOrWrapCollapsible(), () => editor.isActive('collapsible'));
 btn('Rule', '—', () => editor.chain().focus().setHorizontalRule().run(), () => false);
 btn('Quote', ic('foundation--quote.svg'), () => editor.chain().focus().toggleBlockquote().run(), () => editor.isActive('blockquote'));
@@ -5895,8 +7208,10 @@ function ckToTiptap(html) {
       li.setAttribute('data-type', 'taskItem');
       li.setAttribute('data-checked', checked);
 
+      // An item with a block id, or more than one paragraph, is stored without a description span:
+      // `<li><label class="… todo-list__label_without-description"><input></label><p …>text</p></li>`.
       const desc = li.querySelector('.todo-list__label__description');
-      const textHTML = desc ? desc.innerHTML : '';
+      const textHTML = desc ? desc.innerHTML : null;
 
       // Preserve nested sub-lists (indented items): CKEditor stores them as
       // <ul>/<ol> children of the <li>, sibling to the label. TipTap expects the
@@ -5906,8 +7221,10 @@ function ckToTiptap(html) {
       // Strip the entire CKEditor label; leave only plain inline text for TipTap to parse
       const label = li.querySelector('label.todo-list__label');
       if (label) label.remove();
-      li.innerHTML = textHTML;
-      nestedLists.forEach(n => li.appendChild(n));
+      if (textHTML !== null) {
+        li.innerHTML = textHTML;
+        nestedLists.forEach(n => li.appendChild(n));
+      }
     });
   });
 
@@ -5922,7 +7239,87 @@ function ckToTiptap(html) {
   ensureCollapsibleSummaries(doc);
   migrateTriliumMathForTiptap(doc);
   migrateCkColorMarkupForTiptap(doc);
+  doc.querySelectorAll('pre').forEach(trinoteStashCodeAttrs);
   return doc.body.innerHTML;
+}
+
+/** Keeps what's on a code block beyond its language (block id, box size, `extended-code-block`) in one attribute. */
+function trinoteStashCodeAttrs(pre) {
+  if (pre.hasAttribute('data-trinote-code-attrs')) return;
+  const preAttrs = {};
+  Array.from(pre.attributes).forEach(a => { preAttrs[a.name] = a.value; });
+  const codeAttrs = {};
+  const code = pre.querySelector(':scope > code');
+  if (code) {
+    Array.from(code.attributes).forEach(a => {
+      if (a.name !== 'class') { codeAttrs[a.name] = a.value; return; }
+      const rest = a.value.split(/\s+/).filter(c => c && !c.startsWith('language-')).join(' ');
+      if (rest) codeAttrs.class = rest;
+    });
+  }
+  if (!Object.keys(preAttrs).length && !Object.keys(codeAttrs).length) return;
+  pre.setAttribute('data-trinote-code-attrs', encodeURIComponent(JSON.stringify({ pre: preAttrs, code: codeAttrs })));
+}
+
+function trinoteRestoreCodeAttrs(pre) {
+  let saved = null;
+  try { saved = JSON.parse(decodeURIComponent(pre.getAttribute('data-trinote-code-attrs'))); } catch (e) {}
+  pre.removeAttribute('data-trinote-code-attrs');
+  if (!saved) return;
+  Object.entries(saved.pre || {}).forEach(([name, value]) => pre.setAttribute(name, value));
+  const code = pre.querySelector(':scope > code');
+  if (!code) return;
+  Object.entries(saved.code || {}).forEach(([name, value]) => {
+    if (name === 'class') value.split(/\s+/).forEach(c => code.classList.add(c));
+    else code.setAttribute(name, value);
+  });
+}
+
+/** Keeps a table's `<figure>` attributes and its own style, which the table node has no place for. */
+function trinoteStashTableAttrs(figure, table) {
+  const figureAttrs = {};
+  if (figure) Array.from(figure.attributes).forEach(a => { figureAttrs[a.name] = a.value; });
+  const style = table.getAttribute('style') || null;
+  const onlyPlainClass = Object.keys(figureAttrs).length === 1 && figureAttrs.class === 'table';
+  if (!style && (onlyPlainClass || !Object.keys(figureAttrs).length)) return;
+  table.setAttribute('data-trinote-table-attrs', encodeURIComponent(JSON.stringify({ figure: figureAttrs, style })));
+}
+
+function trinoteRestoreTableAttrs(table, figure) {
+  let saved = null;
+  try { saved = JSON.parse(decodeURIComponent(table.getAttribute('data-trinote-table-attrs'))); } catch (e) {}
+  table.removeAttribute('data-trinote-table-attrs');
+  if (!saved) return;
+  if (figure) Object.entries(saved.figure || {}).forEach(([name, value]) => figure.setAttribute(name, value));
+  if (saved.style) table.setAttribute('style', saved.style);
+}
+
+/** Saves each text, highlight and cell colour again as the variable v0.107's themes adapt (see `adaptive_colors`). */
+function trinoteAddAdaptiveColorVariables(doc) {
+  const value = (style, pattern) => { const m = style.match(pattern); return m ? m[1].trim() : null; };
+  const singleColor = /^(#[0-9a-f]+|rgba?\([^)]*\)|hsla?\([^)]*\)|transparent|[a-z]+)$/i;
+  const addTo = (el, additions) => {
+    const style = el.getAttribute('style') || '';
+    const extra = additions.filter(([, v]) => v).map(([name, v]) => name + ':' + v + ';').join('');
+    if (extra) el.setAttribute('style', style.replace(/;?\s*$/, ';') + extra);
+  };
+  doc.querySelectorAll('span[style]').forEach(span => {
+    const style = span.getAttribute('style') || '';
+    if (style.indexOf('--tn-') !== -1) return;
+    addTo(span, [
+      ['--tn-color', value(style, /(?:^|;)\s*color\s*:\s*([^;]+)/i)],
+      ['--tn-background', value(style, /background-color\s*:\s*([^;]+)/i)],
+    ]);
+  });
+  doc.querySelectorAll('td[style], th[style]').forEach(cell => {
+    const style = cell.getAttribute('style') || '';
+    if (style.indexOf('--tn-') !== -1) return;
+    const border = value(style, /border-color\s*:\s*([^;]+)/i);
+    addTo(cell, [
+      ['--tn-background', value(style, /background-color\s*:\s*([^;]+)/i)],
+      ['--tn-border-color', border && singleColor.test(border) ? border : null],
+    ]);
+  });
 }
 
 function tiptapToCk(html) {
@@ -5932,6 +7329,8 @@ function tiptapToCk(html) {
   normalizeCalloutsForTrilium(doc);
   normalizeCollapsiblesForTrilium(doc);
   tiptapMarkToCkSpans(doc);
+  trinoteAddAdaptiveColorVariables(doc);
+  doc.querySelectorAll('pre[data-trinote-code-attrs]').forEach(trinoteRestoreCodeAttrs);
 
   doc.querySelectorAll('ul[data-type="taskList"]').forEach(ul => {
     ul.removeAttribute('data-type');
@@ -5961,6 +7360,25 @@ function tiptapToCk(html) {
       // re-attach as direct children of the <li> (CKEditor / Trilium structure).
       let nestedLists = [];
       const contentDiv = li.querySelector(':scope > div');
+      // An id or a second paragraph needs CKEditor's other form: the checkbox alone in the label, blocks after it.
+      const blockHost = contentDiv || li;
+      const blocks = Array.from(blockHost.children).filter(c => c.tagName !== 'LABEL');
+      const paragraphs = blocks.filter(c => c.tagName === 'P');
+      if (paragraphs.length > 1 || paragraphs.some(c => c.hasAttribute('data-trilium-block-id'))) {
+        const tiptapBoxLabel = li.querySelector(':scope > label');
+        if (tiptapBoxLabel) tiptapBoxLabel.remove();
+        const bareLabel = doc.createElement('label');
+        bareLabel.className = 'todo-list__label todo-list__label_without-description';
+        const box = doc.createElement('input');
+        box.type = 'checkbox';
+        box.disabled = true;
+        if (checked) box.setAttribute('checked', 'checked');
+        bareLabel.appendChild(box);
+        li.innerHTML = '';
+        li.appendChild(bareLabel);
+        blocks.forEach(b => li.appendChild(b));
+        return;
+      }
       if (contentDiv) {
         const p = contentDiv.querySelector(':scope > p');
         textHTML = p ? p.innerHTML : '';
@@ -5995,11 +7413,14 @@ function tiptapToCk(html) {
 
   // CKEditor 5 / Trilium wraps ALL tables in <figure class="table">
   doc.querySelectorAll('table').forEach(tbl => {
-    if (tbl.parentElement && tbl.parentElement.tagName === 'FIGURE' && tbl.parentElement.classList.contains('table')) return;
-    const figure = doc.createElement('figure');
-    figure.className = 'table';
-    tbl.parentNode.insertBefore(figure, tbl);
-    figure.appendChild(tbl);
+    let figure = tbl.parentElement;
+    if (!(figure && figure.tagName === 'FIGURE' && figure.classList.contains('table'))) {
+      figure = doc.createElement('figure');
+      figure.className = 'table';
+      tbl.parentNode.insertBefore(figure, tbl);
+      figure.appendChild(tbl);
+    }
+    if (tbl.hasAttribute('data-trinote-table-attrs')) trinoteRestoreTableAttrs(tbl, figure);
   });
 
   return serializeHtmlBodyPreservingTriliumMath(doc);
@@ -6086,7 +7507,9 @@ function _serializeEditorContent() {
   let html = tiptapToCk(editor.getHTML());
   // tiptapToCk() already wraps all tables in <figure class="table">.
   // Now inject <figcaption> for tables that have a caption in the DOM.
-  const wrappers = document.querySelectorAll('.tiptap .tableWrapper');
+  // Tables in an excerpt being edited aren't in a save of this note, and `figures` below must line up with these.
+  const wrappers = Array.from(document.querySelectorAll('.tiptap .tableWrapper'))
+    .filter((w) => trinoteSerializingExcerptBodies || !w.closest('.tn-excerpt-edit'));
   const caps = [];
   wrappers.forEach((w, i) => {
     const cd = Array.from(w.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'));
@@ -6104,7 +7527,74 @@ function _serializeEditorContent() {
     });
     html = serializeHtmlBodyPreservingTriliumMath(doc);
   }
-  return stripPhotoSlotFigures(html);
+  return trinoteRestoreRawBlocks(stripPhotoSlotFigures(html));
+}
+
+/** Stored HTML made ready to parse, with the table captions ProseMirror would drop taken out. */
+function trinotePrepareEditorContent(html) {
+  // First, so the table and caption passes below can't touch the markup these blocks are stored back with.
+  html = trinoteProtectRawBlocks(html);
+  // Extract captions before ProseMirror parsing (PM would discard them).
+  // Supports CKEditor 5 format (<figure class="table">...<figcaption>) and standard <caption>.
+  const captionTexts = [];
+  if (html) {
+    const tempDoc = new DOMParser().parseFromString(html, 'text/html');
+
+    // CKEditor 5 format: mark tables that have figcaptions, then unwrap figures
+    tempDoc.querySelectorAll('figure.table').forEach(fig => {
+      const figcap = fig.querySelector('figcaption');
+      const tbl = fig.querySelector('table');
+      if (figcap && tbl) {
+        tbl.setAttribute('data-trinote-caption', figcap.textContent || '');
+        figcap.remove();
+      }
+      if (tbl) {
+        trinoteStashTableAttrs(fig, tbl);
+        fig.parentNode.insertBefore(tbl, fig);
+      }
+      fig.remove();
+    });
+    tempDoc.querySelectorAll('table:not([data-trinote-table-attrs])').forEach(tbl => trinoteStashTableAttrs(null, tbl));
+
+    // Standard HTML <caption> fallback
+    tempDoc.querySelectorAll('table > caption').forEach(cap => {
+      const tbl = cap.parentElement;
+      if (tbl && !tbl.hasAttribute('data-trinote-caption')) {
+        tbl.setAttribute('data-trinote-caption', cap.textContent || '');
+      }
+      cap.remove();
+    });
+
+    // Collect captions using correct global table indices, then clean up the marker
+    tempDoc.querySelectorAll('table').forEach((tbl, idx) => {
+      if (tbl.hasAttribute('data-trinote-caption')) {
+        captionTexts.push({ idx, text: tbl.getAttribute('data-trinote-caption') });
+        tbl.removeAttribute('data-trinote-caption');
+      }
+    });
+
+    // Same WebKit innerHTML issue as save: <script type="math/tex"> is dropped here unless we preserve it.
+    html = serializeHtmlBodyPreservingTriliumMath(tempDoc);
+  }
+  return { html: ckToTiptap(html), captionTexts };
+}
+
+/** Draws the captions `trinotePrepareEditorContent` took out, on those of `wrappers` they belong to. */
+function trinoteShowTableCaptions(wrappers, captionTexts) {
+  captionTexts.forEach(({ idx, text }) => {
+    const wrapper = wrappers[idx];
+    if (!wrapper) return;
+    const tableEl = wrapper.querySelector('table');
+    if (!tableEl) return;
+    if (Array.from(wrapper.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'))) return;
+    const capDiv = document.createElement('div');
+    capDiv.className = 'table-caption-box';
+    capDiv.contentEditable = 'true';
+    capDiv.textContent = text;
+    wrapper.insertBefore(capDiv, tableEl);
+    _setupCaptionInput(capDiv);
+    _captionStore.set(wrapper, text);
+  });
 }
 
 window.editorBridge = {
@@ -6159,69 +7649,19 @@ window.editorBridge = {
     style.textContent = css || '';
   },
   setContent(html) {
-    // Extract captions before ProseMirror parsing (PM would discard them).
-    // Supports CKEditor 5 format (<figure class="table">...<figcaption>) and standard <caption>.
-    const captionTexts = [];
-    if (html) {
-      const tempDoc = new DOMParser().parseFromString(html, 'text/html');
-
-      // CKEditor 5 format: mark tables that have figcaptions, then unwrap figures
-      tempDoc.querySelectorAll('figure.table').forEach(fig => {
-        const figcap = fig.querySelector('figcaption');
-        const tbl = fig.querySelector('table');
-        if (figcap && tbl) {
-          tbl.setAttribute('data-trinote-caption', figcap.textContent || '');
-          figcap.remove();
-        }
-        if (tbl) fig.parentNode.insertBefore(tbl, fig);
-        fig.remove();
-      });
-
-      // Standard HTML <caption> fallback
-      tempDoc.querySelectorAll('table > caption').forEach(cap => {
-        const tbl = cap.parentElement;
-        if (tbl && !tbl.hasAttribute('data-trinote-caption')) {
-          tbl.setAttribute('data-trinote-caption', cap.textContent || '');
-        }
-        cap.remove();
-      });
-
-      // Collect captions using correct global table indices, then clean up the marker
-      tempDoc.querySelectorAll('table').forEach((tbl, idx) => {
-        if (tbl.hasAttribute('data-trinote-caption')) {
-          captionTexts.push({ idx, text: tbl.getAttribute('data-trinote-caption') });
-          tbl.removeAttribute('data-trinote-caption');
-        }
-      });
-
-      // Same WebKit innerHTML issue as save: <script type="math/tex"> is dropped here unless we preserve it.
-      html = serializeHtmlBodyPreservingTriliumMath(tempDoc);
-    }
-    editor.commands.setContent(ckToTiptap(html) || '', false);
+    const prepared = trinotePrepareEditorContent(html);
+    editor.commands.setContent(prepared.html || '', false);
     _lastTriliumMathNodeCount = trinoteCountTriliumMathNodes(editor);
-    if (captionTexts.length > 0) {
+    if (prepared.captionTexts.length > 0) {
       requestAnimationFrame(() => {
-        const wrappers = document.querySelectorAll('.tiptap .tableWrapper');
-        captionTexts.forEach(({ idx, text }) => {
-          const wrapper = wrappers[idx];
-          if (!wrapper) return;
-          const tableEl = wrapper.querySelector('table');
-          if (!tableEl) return;
-          if (Array.from(wrapper.children).find(ch => ch.classList && ch.classList.contains('table-caption-box'))) return;
-          const capDiv = document.createElement('div');
-          capDiv.className = 'table-caption-box';
-          capDiv.contentEditable = 'true';
-          capDiv.textContent = text;
-          wrapper.insertBefore(capDiv, tableEl);
-          _setupCaptionInput(capDiv);
-          _captionStore.set(wrapper, text);
-        });
+        trinoteShowTableCaptions(Array.from(document.querySelectorAll('.tiptap .tableWrapper')), prepared.captionTexts);
         // Only now does reading the editor give back the captions too.
         _hasLoadedContent = true;
       });
     } else {
       _hasLoadedContent = true;
     }
+    trinoteEnterEditableExcerpts();
   },
   /** The body as Trilium stores it. Sends a pending `contentChanged` first instead of dropping it. */
   getContent() {
@@ -6328,14 +7768,14 @@ window.editorBridge = {
     const label = (title != null && String(title).trim()) ? String(title).trim() : nid;
     const hits = [];
     editor.state.doc.descendants((node, pos) => {
-      if (node.type.name === 'includeNote' && node.attrs.noteId === nid) hits.push(pos);
+      if ((node.type.name === 'includeNote' || node.type.name === 'trinoteExcerptEdit') && node.attrs.noteId === nid) hits.push(pos);
     });
     if (!hits.length) return;
     hits.sort((a, b) => b - a);
     let tr = editor.state.tr;
     for (const pos of hits) {
       const node = tr.doc.nodeAt(pos);
-      if (node && node.type.name === 'includeNote') {
+      if (node && (node.type.name === 'includeNote' || node.type.name === 'trinoteExcerptEdit')) {
         tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, noteTitle: label });
       }
     }
@@ -6353,6 +7793,151 @@ window.editorBridge = {
     if (window.trinoteTaskStates) window.trinoteTaskStates.configure(config);
     const style = document.getElementById('tn-task-state-styles');
     if (style && typeof css === 'string') style.textContent = css;
+  },
+  /** Native: whether the server stores v0.107's blocks, which is what the Insert menu adds. */
+  setContentBlockSupport(available) {
+    insertBlocksWrapper.style.display = available ? 'inline-flex' : 'none';
+    const learned = !!available && !trinoteContentBlocksAvailable;
+    trinoteContentBlocksAvailable = !!available;
+    trinoteEmbedCardRefreshers.forEach((refresh) => { try { refresh(); } catch (e) {} });
+    // Whole included notes stored as Editable open now: when the note loaded, it wasn't known that they could.
+    if (learned && _hasLoadedContent) trinoteEnterEditableExcerpts();
+  },
+  /** The ⋮ menu closed: the embed it was for is no longer outlined. */
+  embedMenuClosed() { trinoteClearEmbedMenuTarget(); },
+  /** A layout with `count` equal columns at the selection, which moves into the first column as on desktop. */
+  insertColumns(count) {
+    const { multicolumnLayout, multicolumnColumn, paragraph } = editor.schema.nodes;
+    const { selection } = editor.state;
+    let first = paragraph.create();
+    if (!selection.empty) {
+      const content = selection.content().content;
+      first = content.firstChild && content.firstChild.isBlock ? content : paragraph.create(null, content);
+    }
+    const columns = [];
+    for (let i = 0; i < count; i++) columns.push(multicolumnColumn.create(null, i === 0 ? first : paragraph.create()));
+    const ratios = new Array(count).fill('1').join('-');
+    trinoteInsertBlockAndEnter(multicolumnLayout.create({ ratios }, columns), 3);
+  },
+  /** Two tabs with the default titles, the caret in the first title. */
+  insertTabs() {
+    const { triliumTabs } = editor.schema.nodes;
+    trinoteInsertBlockAndEnter(triliumTabs.create(null, [trinoteNewTab('Tab 1'), trinoteNewTab('Tab 2')]), 2);
+  },
+  /** The note's headings and paragraphs, for the block picker. */
+  blockOutlineJSON() {
+    const rows = [];
+    editor.state.doc.descendants((node, pos) => {
+      const name = node.type.name;
+      if (name === 'triliumTabTitle' || name === 'collapsibleSummary' || name === 'table' || name === 'codeBlock' || name === 'trinoteExcerptEdit') return false;
+      if (name === 'paragraph' || name === 'heading') {
+        const text = node.textContent.trim();
+        if (text) rows.push({ pos, level: name === 'heading' ? node.attrs.level : null, text, blockId: node.attrs.blockId || null });
+        return false;
+      }
+      return true;
+    });
+    return JSON.stringify(rows);
+  },
+  /** The id of the block at `pos`, giving it one if it has none. */
+  assignBlockId(pos) {
+    const node = editor.state.doc.nodeAt(pos);
+    if (!node || !('blockId' in node.attrs)) return '';
+    if (node.attrs.blockId) return node.attrs.blockId;
+    const id = trinoteNewBlockId();
+    editor.view.dispatch(editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, blockId: id }));
+    return id;
+  },
+  insertBlockLink(noteId, blockId, label) {
+    const link = document.createElement('a');
+    link.className = 'reference-link';
+    link.setAttribute('href', '#root/' + noteId + '?block=' + blockId.split(':').map(encodeURIComponent).join(':'));
+    link.textContent = label;
+    editor.chain().focus().insertContent(link.outerHTML + ' ').run();
+  },
+  insertBlockExcerpt(noteId, blockId, title) {
+    const embed = document.createElement('figure');
+    embed.className = 'include-note';
+    embed.setAttribute('data-note-id', noteId);
+    embed.setAttribute('data-block', blockId);
+    embed.setAttribute('data-box-size', 'full');
+    editor.chain().focus().insertContent({
+      type: 'includeNote',
+      attrs: { noteId, boxSize: 'full', noteTitle: title || noteId, rawHTML: encodeURIComponent(embed.outerHTML) },
+    }).run();
+  },
+  /** Editable on or off, from the excerpt's ⋮ menu. */
+  setExcerptEditing(pos, isOn) {
+    const node = editor.state.doc.nodeAt(pos);
+    if (!node) return;
+    if (isOn && trinoteHasEmbedMenu(node)) trinoteBeginExcerptEdit(pos, node, { markEditable: true });
+    else if (!isOn && node.type.name === 'trinoteExcerptEdit') trinoteEndExcerptEdit(node.attrs.editKey);
+  },
+  applyExcerptContent(requestId, html) { trinoteApplyExcerptContent(requestId, html); },
+  /** The note a picture or file added at the insert point belongs to: an excerpt's own, or '' for the note being edited. */
+  excerptNoteAtInsertPoint() {
+    const { doc, selection } = editor.state;
+    const saved = pendingMediaInsertPos;
+    let pos = doc.content.size;
+    if (saved && typeof saved.from === 'number') pos = Math.min(saved.from, typeof saved.to === 'number' ? saved.to : saved.from);
+    else if (editor.view.hasFocus()) pos = selection.from;
+    const $pos = doc.resolve(clampInsertPos(pos, doc.content.size));
+    for (let depth = $pos.depth; depth > 0; depth -= 1) {
+      if ($pos.node(depth).type.name === 'trinoteExcerptEdit') return $pos.node(depth).attrs.noteId;
+    }
+    return '';
+  },
+  excerptSaved(key, saved, newBlock) { trinoteExcerptSaved(key, saved, newBlock); },
+  /** Sends what hasn't been saved of the excerpts being edited; native calls this before reading the note. */
+  flushExcerptEdits() { trinoteExcerptEdits.forEach((state, key) => trinoteFlushExcerpt(key)); },
+  /** A size, position, title or caption change from the ⋮ menu: `raw` is the whole figure. */
+  setIncludeEmbedRaw(pos, raw) {
+    const node = editor.state.doc.nodeAt(pos);
+    if (!node || !(trinoteHasEmbedMenu(node) || node.type.name === 'trinoteExcerptEdit')) return;
+    const rawHTML = encodeURIComponent(raw);
+    const figure = trinoteRawFigure(rawHTML);
+    const boxSize = (figure && figure.getAttribute('data-box-size')) || node.attrs.boxSize;
+    editor.view.dispatch(editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, rawHTML, boxSize }));
+  },
+  /** Deletes an excerpt from this note, or turns it into `html` (Convert to Link). The note it shows is left alone. */
+  replaceIncludeEmbed(pos, html) {
+    const node = editor.state.doc.nodeAt(pos);
+    if (!node || !(trinoteHasEmbedMenu(node) || node.type.name === 'trinoteExcerptEdit')) return;
+    if (node.type.name === 'trinoteExcerptEdit') trinoteFlushExcerpt(node.attrs.editKey);
+    const range = { from: pos, to: pos + node.nodeSize };
+    const href = html && trinoteFirstHref(html);
+    if (href) {
+      // Turned into a link: kept, so turning it back restores its size, position and caption.
+      const raw = node.attrs.rawHTML || encodeURIComponent(trinoteEmbedRaw(node));
+      trinoteEmbedsTurnedIntoLinks.set(href, trinoteEditedRawFigure(raw, (figure) => figure.removeAttribute('data-editable')));
+    }
+    if (html) editor.chain().focus().insertContentAt(range, html).run();
+    else editor.chain().focus().deleteRange(range).run();
+  },
+  /** Native's answer to `noteLinkToEmbed`: the embed (`raw`, a figure) for the note link at about `pos`. */
+  convertNoteLinkToEmbed(pos, href, raw, title) {
+    trinoteReplaceLinkWithEmbed(pos, href, encodeURIComponent(raw), title, null);
+  },
+  /** A player for a video or audio file; a YouTube link or any other page goes through the server's preview. */
+  insertMediaEmbed(rawUrl) {
+    const url = String(rawUrl || '').trim();
+    if (!trinoteLinkPreview.isHttpUrl(url) || /\s/.test(url)) return false;
+    const kind = trinoteMediaFileKind(url);
+    if (kind) {
+      editor.chain().focus().insertContent({ type: 'linkEmbed', attrs: { url, embedType: kind, title: trinoteMediaFileTitle(url) } }).run();
+      return true;
+    }
+    const pos = editor.state.selection.from;
+    editor.chain().focus()
+      .setMeta('trinoteNoLinkPreview', true)
+      .insertContent({ type: 'text', text: url, marks: [{ type: 'link', attrs: { href: url } }] })
+      .unsetMark('link')
+      .run();
+    requestExplicitLinkPreview(
+      { href: url, from: pos, to: pos + url.length, text: url },
+      trinoteLinkPreview.youTubeVideoId(url) ? 'video' : 'card'
+    );
+    return true;
   },
   setLinkPreviewSupport(available, auto) {
     linkPreviewsAvailable = !!available;
@@ -6431,6 +8016,8 @@ window.editorBridge = {
           return;
         }
         retrySlot.innerHTML = rawHtml;
+        try { trinoteBlockSlice.apply(retrySlot); } catch (_) {}
+        try { trinoteContentBlocks.apply(retrySlot); } catch (_) {}
         try { trinoteLinkPreview.render(retrySlot); } catch (_) {}
         requestAnimationFrame(() => trinoteRunMermaidInSlot(retrySlot));
       });
@@ -6442,6 +8029,8 @@ window.editorBridge = {
       return;
     }
     slot.innerHTML = rawHtml;
+    try { trinoteBlockSlice.apply(slot); } catch (_) {}
+    try { trinoteContentBlocks.apply(slot); } catch (_) {}
     try { trinoteLinkPreview.render(slot); } catch (_) {}
     requestAnimationFrame(() => trinoteRunMermaidInSlot(slot));
   },
@@ -6799,16 +8388,111 @@ const _colDropdown = makeTableCtxDropdownMenu(_colDropdownBtn, [
   { label: 'Insert column after', action: () => editor.chain().focus().addColumnAfter().run() },
   { label: 'Delete column', action: () => editor.chain().focus().deleteColumn().run(), danger: true },
   { label: 'Toggle header column', action: () => editor.chain().focus().toggleHeaderColumn().run() },
+  { label: 'Sort rows ascending', action: () => trinoteSortTableRows(false) },
+  { label: 'Sort rows descending', action: () => trinoteSortTableRows(true) },
 ]);
 // Build row dropdown
 const _rowDropdownBtn = makeTableCtxBtn(TABLE_ICONS.rowBefore + '<span style="font-size:11px;margin-left:2px">Row</span>', 'Row', (b) => showTableCtxDropdown(b, _rowDropdown));
 _rowDropdownBtn.style.width = 'auto'; _rowDropdownBtn.style.padding = '0 6px';
 const _rowDropdown = makeTableCtxDropdownMenu(_rowDropdownBtn, [
-  { label: 'Insert row above', action: () => editor.chain().focus().addRowBefore().run() },
-  { label: 'Insert row below', action: () => editor.chain().focus().addRowAfter().run() },
-  { label: 'Delete row', action: () => editor.chain().focus().deleteRow().run(), danger: true },
+  { label: 'Insert rows above', action: () => trinoteInsertTableRows(true) },
+  { label: 'Insert rows below', action: () => trinoteInsertTableRows(false) },
+  { label: 'Delete rows', action: () => { applyRealCellSelection(); editor.chain().focus().deleteRow().run(); }, danger: true },
   { label: 'Toggle header row', action: () => editor.chain().focus().toggleHeaderRow().run() },
 ]);
+// As many rows as are selected, one with only a caret, as desktop's insert does.
+function trinoteSelectedTableRowCount() {
+  const positions = window._getSelectedPositions ? window._getSelectedPositions() : new Set();
+  const table = findTableAroundPos(editor.state.selection.from);
+  if (positions.size < 2 || !table) return 1;
+  const rows = new Set();
+  _buildTableMap(table).forEach((cell) => {
+    if (positions.has(cell.pos)) for (let r = 0; r < cell.rowspan; r++) rows.add(cell.row + r);
+  });
+  return Math.max(rows.size, 1);
+}
+
+function trinoteInsertTableRows(above) {
+  const count = trinoteSelectedTableRowCount();
+  applyRealCellSelection();
+  for (let i = 0; i < count; i++) {
+    if (above) editor.chain().focus().addRowBefore().run();
+    else editor.chain().focus().addRowAfter().run();
+  }
+}
+
+/**
+ * Sorts the table's body rows by the caret's column, as Trilium's table sort does: every body row for a caret, the
+ * selected rows for a selection within one column. Header rows never move, and rows tied by merged cells move together.
+ */
+function trinoteSortTableRows(descending) {
+  const from = editor.state.selection.from;
+  const table = findTableAroundPos(from);
+  const caretCell = findCellAtPos(from);
+  if (!table || !caretCell) return;
+  const map = _buildTableMap(table);
+  const rowCount = table.node.childCount;
+  const positions = window._getSelectedPositions ? window._getSelectedPositions() : new Set();
+  const selected = positions.size > 1 ? map.filter((cell) => positions.has(cell.pos)) : [];
+  if (selected.length && selected.some((cell) => cell.col !== selected[0].col)) {
+    showEditorToast('Select cells in one column to sort by it.', 2500);
+    return;
+  }
+  const anchor = selected[0] || map.find((cell) => cell.pos === caretCell.pos);
+  if (!anchor) return;
+  const column = anchor.col;
+
+  // Leading rows of nothing but header cells.
+  let headerRows = 0;
+  while (headerRows < rowCount && map.filter((cell) => cell.row === headerRows).every((cell) => cell.node.type.name === 'tableHeader')) headerRows++;
+  let first = headerRows;
+  let last = rowCount - 1;
+  if (selected.length) {
+    first = Math.max(first, Math.min(...selected.map((cell) => cell.row)));
+    last = Math.min(last, Math.max(...selected.map((cell) => cell.row + cell.rowspan - 1)));
+  }
+  if (first >= last) return;
+  if (map.some((cell) => (cell.row < first && cell.row + cell.rowspan > first) || (cell.row <= last && cell.row + cell.rowspan > last + 1))) {
+    showEditorToast('Merged cells reach outside these rows, so they can\'t be sorted.', 2500);
+    return;
+  }
+
+  const cellAt = (row) => map.find((cell) => cell.row <= row && row < cell.row + cell.rowspan && cell.col <= column && column < cell.col + cell.colspan);
+  const groups = [];
+  let groupFirst = first;
+  let reach = first;
+  for (let row = first; row <= last; row++) {
+    map.forEach((cell) => { if (cell.row === row) reach = Math.max(reach, row + cell.rowspan - 1); });
+    if (row === reach) {
+      const cell = cellAt(groupFirst);
+      const distinct = new Set();
+      for (let r = groupFirst; r <= row; r++) distinct.add(cellAt(r));
+      groups.push({ first: groupFirst, last: row, text: cell ? cell.node.textBetween(0, cell.node.content.size, ' ', ' ') : '', tied: distinct.size > 1 });
+      groupFirst = row + 1;
+      reach = row + 1;
+    }
+  }
+  if (groups.length < 2) return;
+  const sorted = trinoteAutoSort(groups, (group) => group.text, { locale: navigator.language, isDescending: !!descending });
+  if (sorted.every((group, index) => group === groups[index])) return;
+
+  const rows = [];
+  table.node.forEach((row) => rows.push(row));
+  const out = rows.slice(0, first);
+  sorted.forEach((group) => { for (let r = group.first; r <= group.last; r++) out.push(rows[r]); });
+  out.push(...rows.slice(last + 1));
+
+  // The caret stays in the cell it was in, wherever its row went.
+  const startOfRow = (list, index) => table.start + 1 + list.slice(0, index).reduce((sum, row) => sum + row.nodeSize, 0);
+  const caretRow = anchor.row;
+  const caretOffset = from - startOfRow(rows, caretRow);
+  editor.view.dispatch(editor.state.tr.replaceWith(table.start + 1, table.end - 1, out));
+  try { editor.commands.setTextSelection(startOfRow(out, out.indexOf(rows[caretRow])) + caretOffset); } catch (e) {}
+  if (groups.some((group) => group.tied)) {
+    showEditorToast('Some rows were sorted together because merged cells tie them to each other.', 3000);
+  }
+}
+
 // Helper: create a real ProseMirror CellSelection from visual selection
 function applyRealCellSelection() {
   const positions = window._getSelectedPositions ? window._getSelectedPositions() : new Set();
@@ -7208,6 +8892,8 @@ function _setupCaptionInput(capDiv) {
   capDiv.addEventListener('input', () => {
     const wrapper = capDiv.closest('.tableWrapper');
     if (wrapper) _captionStore.set(wrapper, capDiv.textContent || '');
+    const excerpt = capDiv.closest('.tn-excerpt-edit');
+    if (excerpt) trinoteMarkExcerptDirty(excerpt.getAttribute('data-excerpt-key'));
     clearTimeout(_contentTimer);
     _contentTimer = setTimeout(() => {
       try { _postContentChanged(); } catch(e) {}

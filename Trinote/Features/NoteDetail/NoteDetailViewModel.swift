@@ -77,6 +77,9 @@ final class NoteDetailViewModel {
     var saveError: String?
     var showSaveError = false
     var hasDraft = false
+    /// The waiting draft lacks embedded notes, files or block ids the saved note has. It may have been stored
+    /// by an editor that couldn't keep them, so resuming it needs a warning.
+    private(set) var draftMayLackEmbeddedContent = false
     /// Short-lived hint after offline save (e.g. queued for upload).
     var transientEditorMessage: String?
     @ObservationIgnored private var transientEditorMessageTask: Task<Void, Never>?
@@ -90,6 +93,9 @@ final class NoteDetailViewModel {
     @ObservationIgnored private(set) var hasAutosavedThisSession = false
     /// The session began by restoring a draft, so its first autosave writes that draft.
     @ObservationIgnored private(set) var editSessionStartedFromDraft = false
+    /// While a resumed draft is open: the body as it opened, and as the editor tidied it. Opening a draft
+    /// isn't an edit, so it's only uploaded once it differs from these, or when the user taps Save.
+    @ObservationIgnored private var resumedDraftBodies: Set<String> = []
     /// Stored body when editing began; what Cancel restores after an autosave.
     @ObservationIgnored private var editSessionOriginalBody: String?
     /// The server the edit began on. Nothing is autosaved after a switch, and drafts stay with that server.
@@ -313,6 +319,80 @@ final class NoteDetailViewModel {
 
     /// Notes by id through batched `tree/load` (plus their dates), 100 per request, instead of one `getNote` each.
     /// Chunks that fail are logged and skipped.
+    /// A text note's body as stored: from the server when online, otherwise from the cache.
+    func storedHTML(ofNote targetId: String) async -> String? {
+        if isOnline, let client, let data = try? await client.getNoteContent(targetId) {
+            return String(data: data, encoding: .utf8)
+        }
+        guard let profileId = serverProfileId,
+              let data = (try? persistence.fetchCachedNotes(ids: [targetId], serverProfileId: profileId))?[targetId]?.content else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// The id of a block in another note, giving it one if it has none, as Trilium does when a reference is copied.
+    /// Only the attribute is added to that note's body, and only if the body is still what the outline was read from.
+    func ensureBlockId(_ block: NoteBlock, inNote targetId: String, storedHTML html: String) async -> String? {
+        if let id = block.blockId { return id }
+        guard isOnline, let client, let offset = block.tagOffset else { return nil }
+        let id = NoteBlockOutline.newBlockId()
+        guard let updated = NoteBlockOutline.html(html, assigning: id, atTagOffset: offset),
+              let latest = try? await client.getNoteContent(targetId),
+              String(data: latest, encoding: .utf8) == html else { return nil }
+        let body = Data(updated.utf8)
+        do {
+            try await client.updateNoteContent(targetId, content: body, contentType: "text/html")
+        } catch {
+            Log.api.error("Couldn't give a block an id: \(error)")
+            return nil
+        }
+        if let profileId = serverProfileId {
+            try? persistence.cacheNoteContentIfAllowed(
+                targetId, content: body, parentNoteIds: parentNoteIdsForCache(noteId: targetId),
+                serverProfileId: profileId, policy: cacheExclusion
+            )
+            try? persistence.commitBatch()
+        }
+        return id
+    }
+
+    /// What a saved search note found on its last run.
+    struct SavedSearchResults: Equatable, Sendable {
+        var noteIds: [String]
+        var highlightTerms: [String]
+        var error: String?
+
+        init(noteIds: [String], highlightTerms: [String], error: String?) {
+            self.noteIds = noteIds
+            self.highlightTerms = highlightTerms
+            self.error = error
+        }
+
+        init(_ response: SavedSearchResponse) {
+            let message = response.error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            self.init(
+                noteIds: response.searchResultNoteIds,
+                highlightTerms: response.highlightedTokens ?? [],
+                error: message.isEmpty ? nil : message
+            )
+        }
+    }
+
+    /// Runs this saved search note on the server.
+    func runSavedSearch() async throws -> SavedSearchResults {
+        guard let client else { throw APIError.noToken }
+        return SavedSearchResults(try await client.runSavedSearch(noteId: noteId))
+    }
+
+    /// The notes for some search results, in the server's order. A note that can't be loaded is left out.
+    func savedSearchNotes(ids: [String]) async -> [NoteItem] {
+        guard let client else { return [] }
+        let byId = Dictionary(
+            await fetchNotesBatched(ids, client: client).map { ($0.noteId, NoteItem(from: $0)) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return ids.compactMap { byId[$0] }
+    }
+
     func fetchNotesBatched(_ noteIds: [String], client: any TriliumClientProtocol) async -> [NoteResponse] {
         var responses: [NoteResponse] = []
         for chunk in noteIds.chunked(into: Self.noteBatchSize) {
@@ -981,8 +1061,9 @@ final class NoteDetailViewModel {
         guard imgUTF16Location > 0, imgUTF16Location <= htmlNS.length else { return false }
         let prefix = htmlNS.substring(with: NSRange(location: 0, length: imgUTF16Location))
         let prefixNS = prefix as NSString
-        let openPattern = try! NSRegularExpression(
-            pattern: #"(?i)<section\b[^>]*\bclass=["'][^"']*\btrinote-include\b[^"']*["'][^>]*>"#,
+        let openPattern = try! NSRegularExpression(pattern: #"(?i)<section\b[^>]*>"#, options: [])
+        let cardPattern = try! NSRegularExpression(
+            pattern: #"(?i)\bclass=["'][^"']*\btrinote-include\b[^"']*["']"#,
             options: []
         )
         let closePattern = try! NSRegularExpression(pattern: #"(?i)</section>"#, options: [])
@@ -1002,7 +1083,11 @@ final class NoteDetailViewModel {
                 pos = NSMaxRange(cMatch.range)
             } else {
                 guard let oMatch = o else { break }
-                depth += 1
+                // Inside a card every section counts, or a tab or link preview in it would seem to close the card.
+                let tag = prefixNS.substring(with: oMatch.range)
+                if depth > 0 || cardPattern.firstMatch(in: tag, range: NSRange(location: 0, length: (tag as NSString).length)) != nil {
+                    depth += 1
+                }
                 pos = NSMaxRange(oMatch.range)
             }
         }
@@ -1103,8 +1188,10 @@ final class NoteDetailViewModel {
                 let escSrc = originalSrc
                     .replacingOccurrences(of: "&", with: "&amp;")
                     .replacingOccurrences(of: "\"", with: "&quot;")
-                let section = "<section class=\"include-note\" data-note-id=\"\(escId)\" data-box-size=\"medium\" data-trinote-imagelink-original-src=\"\(escSrc)\"></section>"
                 let replaceRange = Self.expandImageLinkFigureNSRange(html: htmlNS, imgRange: match.range)
+                // The figure itself travels with the swap, so saving brings back its width, caption and block id.
+                let originalHTML = htmlNS.substring(with: replaceRange).addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+                let section = "<section class=\"include-note\" data-note-id=\"\(escId)\" data-box-size=\"medium\" data-trinote-imagelink-original-src=\"\(escSrc)\" data-trinote-imagelink-original-html=\"\(originalHTML)\"></section>"
                 ms.replaceCharacters(in: replaceRange, with: section)
                 continue
             }
@@ -1237,6 +1324,10 @@ final class NoteDetailViewModel {
             // rewritten as an `<img>`.
             let lower = combined.lowercased()
             guard lower.contains("class=") && lower.contains("include-note") else { continue }
+            if let original = imageLinkOriginalFigure(inAttributes: combined) {
+                ms.replaceCharacters(in: match.range, with: original)
+                continue
+            }
             let storedSrc = htmlNS.substring(with: match.range(at: 3))
             let originalSrc = storedSrc
                 .replacingOccurrences(of: "&quot;", with: "\"")
@@ -1248,6 +1339,15 @@ final class NoteDetailViewModel {
             ms.replaceCharacters(in: match.range, with: img)
         }
         return ms as String
+    }
+
+    /// The `<figure>` a canvas or Mermaid `~imageLink` swap replaced, from the section's attributes.
+    private static func imageLinkOriginalFigure(inAttributes attributes: String) -> String? {
+        let pattern = try! NSRegularExpression(pattern: #"data-trinote-imagelink-original-html\s*=\s*"([^"]*)""#, options: [.caseInsensitive])
+        let ns = attributes as NSString
+        guard let match = pattern.firstMatch(in: attributes, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        let original = ns.substring(with: match.range(at: 1)).removingPercentEncoding
+        return original?.isEmpty == false ? original : nil
     }
 
     /// Reverses `decorateLinkedImagesForEditor`: for every `<img>` carrying `data-trinote-original-src`, restore
@@ -1414,7 +1514,12 @@ final class NoteDetailViewModel {
     }
 
     /// HTML for one `<section class="include-note">` placeholder (used by the rich-text editor NodeView preview).
-    func resolvedIncludePreviewHTML(noteId: String, boxSize: String) async -> String {
+    /// - Parameter rawEmbed: The stored embed itself, percent-encoded by the editor, for one that says more than a
+    ///   note and a size: a v0.107 figure with a caption or an excerpt, or an embedded attachment.
+    func resolvedIncludePreviewHTML(noteId: String, boxSize: String, rawEmbed: String? = nil) async -> String {
+        if let fragment = rawEmbed?.removingPercentEncoding, !fragment.isEmpty {
+            return await resolveIncludeNotesInHTML(fragment, rootNoteId: self.noteId)
+        }
         let includedId = noteId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !includedId.isEmpty else { return "" }
         let box = Self.normalizedIncludeBoxSize(boxSize)
@@ -1641,6 +1746,108 @@ final class NoteDetailViewModel {
         saveNoteBodyChange(newRaw)
     }
 
+    // MARK: - Note excerpts edited in place
+
+    /// The last excerpt save asked for. Each waits for the one before, because it names the range that one leaves.
+    private var lastExcerptSave: Task<Bool, Never>?
+    private var excerptsChangedThisSession = false
+
+    /// What an embed shows, ready for the editor: an excerpt's blocks, or a whole included note when `block` is empty.
+    /// `nil` when it can't be edited here.
+    func excerptContentForEditor(noteId excerptNoteId: String, block: String) async -> String? {
+        guard isOnline, excerptNoteId != noteId, let client else { return nil }
+        let html: String?
+        if block.isEmpty {
+            html = (try? await client.getNoteContent(excerptNoteId)).flatMap { String(data: $0, encoding: .utf8) }
+        } else {
+            html = try? await client.getNoteBlocks(noteId: excerptNoteId, block: block)
+        }
+        guard let html else { return nil }
+        return await decorateLinkedImagesForEditor(in: html)
+    }
+
+    /// An included note's type, for its ⋮ menu: from the device's copy, else the server.
+    func includedNoteType(_ includedNoteId: String) async -> String? {
+        if let profileId = serverProfileId, let cached = try? persistence.fetchCachedNote(id: includedNoteId, serverProfileId: profileId) {
+            return cached.noteType
+        }
+        guard isOnline, let client else { return nil }
+        return try? await client.getNote(includedNoteId).type
+    }
+
+    /// Writes an excerpt's blocks back to the note they belong to. `block` is the range as the server knows it,
+    /// `newBlock` the one it leaves.
+    func saveExcerpt(noteId excerptNoteId: String, block: String, newBlock: String, html: String) async -> Bool {
+        excerptsChangedThisSession = true
+        let previous = lastExcerptSave
+        let save = Task { @MainActor in
+            _ = await previous?.value
+            return await writeExcerpt(noteId: excerptNoteId, block: block, newBlock: newBlock, html: html)
+        }
+        lastExcerptSave = save
+        return await save.value
+    }
+
+    private func writeExcerpt(noteId excerptNoteId: String, block: String, newBlock: String, html: String) async -> Bool {
+        guard let client else { return false }
+        do {
+            let content = Self.undecorateLinkedImagesFromEditor(in: html)
+            if block.isEmpty {
+                // A whole included note.
+                try await client.updateNoteContent(excerptNoteId, content: Data(content.utf8), contentType: "text/html")
+            } else {
+                try await client.updateNoteBlocks(noteId: excerptNoteId, block: block, content: content)
+            }
+            if let profileId = serverProfileId, let body = try? await client.getNoteContent(excerptNoteId) {
+                cacheNoteContentIfAllowed(excerptNoteId, content: body, profileId: profileId)
+                try? persistence.commitBatch()
+            }
+            if newBlock != block { moveExcerptReference(of: excerptNoteId, from: block, to: newBlock) }
+            return true
+        } catch {
+            Log.api.error("Couldn't save an excerpt: \(error)")
+            saveError = block.isEmpty
+                ? String(localized: "The included note couldn’t be saved. Check your connection and try again.", comment: "Editing an included note in place: the save failed")
+                : String(localized: "The excerpt couldn’t be saved. Check your connection and try again.", comment: "Editing a note excerpt in place: the save failed")
+            showSaveError = true
+            return false
+        }
+    }
+
+    /// The blocks have already changed in their own note and no Cancel undoes that, so this note's copies follow now
+    /// instead of waiting for it to be saved: the stored body, and what Cancel and autosave compare with.
+    private func moveExcerptReference(of excerptNoteId: String, from block: String, to newBlock: String) {
+        func moved(_ html: String) -> String {
+            ContentEmbedEdit.movingExcerpts(of: excerptNoteId, from: block, to: newBlock, in: html)
+        }
+        editSessionOriginalBody = editSessionOriginalBody.map(moved)
+        autosaveBaseline = autosaveBaseline.map(moved)
+        resumedDraftBodies = Set(resumedDraftBodies.map(moved))
+        let stored = richTextEditorSeedHTML
+        let updated = moved(stored)
+        guard updated != stored, let note, saveNoteBodyChange(updated, mime: Self.editorBodyMime(for: note)) else { return }
+        rawContentString = updated
+        serverContentHash = updated.hashValue
+    }
+
+    /// Reading view holds this note with its excerpts already drawn, so after an excerpt changed it's drawn again,
+    /// even when the note around it wasn't saved.
+    private func redrawExcerptsAfterEditing() {
+        guard excerptsChangedThisSession else { return }
+        excerptsChangedThisSession = false
+        let lastSave = lastExcerptSave
+        Task { [weak self] in
+            _ = await lastSave?.value
+            guard let self, !self.isEditing, let stored = self.rawContentString else { return }
+            self.contentString = stored
+            await self.refreshResolvedTextNoteDisplayAfterSave()
+        }
+    }
+
+    func reportExcerptCannotBeEdited() {
+        showTransientEditorMessage(String(localized: "This excerpt can’t be edited here. Check your connection, or edit it in its own note.", comment: "Turning on Editable for a note excerpt failed"))
+    }
+
     // MARK: - Markdown Task States
 
     /// Sets the `index`-th Markdown to-do item to `stateName` by writing its symbol (`[ ]`, `[x]`, `[/]` …) into the
@@ -1789,6 +1996,8 @@ final class NoteDetailViewModel {
             if draft.content != canonicalForDraft {
                 self.hasDraft = true
                 self.editableContent = draft.content
+                self.draftMayLackEmbeddedContent = self.note?.type == .text
+                    && Self.draftLacksEmbeddedContent(draft: draft.content, saved: canonicalForDraft ?? "")
             } else {
                 try? self.persistence.deleteDraft(noteId: nid, serverProfileId: profileId)
                 self.hasDraft = false
@@ -1811,6 +2020,13 @@ final class NoteDetailViewModel {
         try? self.persistence.deleteDraft(noteId: self.noteId, serverProfileId: profileId)
         self.hasDraft = false
         self.editableContent = self.richTextEditorSeedHTML
+    }
+
+    /// The jump a link left for this note, once.
+    func consumePendingNoteJump() -> NoteJumpTarget? {
+        guard let pending = appState.pendingNoteJump, pending.noteId == noteId else { return nil }
+        appState.pendingNoteJump = nil
+        return pending.target
     }
 
     /// Called from the rich text editor's JS bridge on every debounced keystroke.
@@ -1839,6 +2055,10 @@ final class NoteDetailViewModel {
     func startEditing() {
         // The server refuses changes to a note it keeps read-only; every way into the editor ends here.
         guard note?.isContentWritable != false else { return }
+        if hasDraft && draftMayLackEmbeddedContent {
+            showDiscardDraft = true
+            return
+        }
         _pendingEditorHTML = nil
         if !hasDraft {
             editableContent = richTextEditorSeedHTML
@@ -1917,6 +2137,22 @@ final class NoteDetailViewModel {
         endEditSession()
     }
 
+    /// Back without saving: the editor closes and the note shows as last saved. Whatever was typed stays as a
+    /// draft, which the note's banner offers back.
+    func closeEditorKeepingDraft(freshHTML: String? = nil) {
+        guard isEditing else { return }
+        if let freshHTML { receiveEditorUpdate(freshHTML) }
+        draftAutoSaveTask?.cancel()
+        saveDraftLocally()
+        isEditing = false
+        hasDraft = false
+        editableContent = richTextEditorSeedHTML
+        editorDisplayContent = nil
+        _editorPrepGeneration &+= 1
+        endEditSession()
+        checkForDraft()
+    }
+
     /// Cancel would put back the note from before editing because an autosave already saved part of the
     /// edit; the view asks first.
     var cancelEditingNeedsConfirmation: Bool {
@@ -1959,7 +2195,31 @@ final class NoteDetailViewModel {
         flushPendingEditorContent()
         // A server switch mid-edit mustn't file the draft under the new server.
         guard let profileId = editSessionProfileId ?? self.serverProfileId else { return }
+        // Nothing has been typed: this is only the editor's copy of the saved note, and a draft of it would be
+        // offered back later and could upload whatever the editor couldn't keep.
+        if isEditing, !editSessionStartedFromDraft, bodyMatchesSavedNote(self.editableContent) {
+            try? self.persistence.deleteDraft(noteId: self.noteId, serverProfileId: profileId)
+            return
+        }
         try? self.persistence.saveDraft(noteId: self.noteId, content: self.editableContent, serverProfileId: profileId)
+    }
+
+    /// Whether `body` is the note as last saved: the editor's copy of it, or the stored body before any autosave.
+    private func bodyMatchesSavedNote(_ body: String) -> Bool {
+        body == autosaveBaseline || (!hasAutosavedThisSession && body == editSessionOriginalBody)
+    }
+
+    /// Note, attachment and block ids in a text note's HTML: what an editor that drops unknown blocks would lose.
+    nonisolated static func embeddedContentIDs(in html: String) -> Set<String> {
+        let pattern = try! NSRegularExpression(pattern: #"data-(?:note-id|attachment-id|trilium-block-id)="([^"]+)""#)
+        let range = NSRange(html.startIndex..., in: html)
+        return Set(pattern.matches(in: html, range: range).compactMap { match in
+            Range(match.range(at: 1), in: html).map { String(html[$0]) }
+        })
+    }
+
+    nonisolated static func draftLacksEmbeddedContent(draft: String, saved: String) -> Bool {
+        !embeddedContentIDs(in: saved).isSubset(of: embeddedContentIDs(in: draft))
     }
 
     /// Saves in-progress edits when leaving the screen or backgrounding the app.
@@ -1977,15 +2237,18 @@ final class NoteDetailViewModel {
         editSessionProfileId = serverProfileId
         editSessionStartedFromDraft = fromDraft
         autosaveBaseline = fromDraft ? nil : original
+        resumedDraftBodies = fromDraft ? [editableContent] : []
         latestEditorBody = nil
         hasAutosavedThisSession = false
         autosaveStatus = fromDraft ? .edited : .idle
     }
 
     private func endEditSession() {
+        redrawExcerptsAfterEditing()
         editSessionOriginalBody = nil
         editSessionProfileId = nil
         editSessionStartedFromDraft = false
+        resumedDraftBodies = []
         autosaveBaseline = nil
         latestEditorBody = nil
         hasAutosavedThisSession = false
@@ -1996,9 +2259,13 @@ final class NoteDetailViewModel {
     /// updates it makes by itself (include titles) fire change events without changing the body, so edits
     /// are compared with this rather than the stored HTML; otherwise an untouched note would be re-saved.
     func setAutosaveBaselineFromEditor(_ html: String) {
-        guard isEditing, !editSessionStartedFromDraft, !hasAutosavedThisSession else { return }
+        guard isEditing, !hasAutosavedThisSession else { return }
         let undecorated = Self.undecorateLinkedImagesFromEditor(in: html)
         guard !undecorated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if editSessionStartedFromDraft {
+            resumedDraftBodies.insert(undecorated)
+            return
+        }
         autosaveBaseline = undecorated
         // A change event before this was compared with the stored HTML, which the editor tidies.
         if latestEditorBody == undecorated { markEditsSaved() }
@@ -2029,10 +2296,11 @@ final class NoteDetailViewModel {
     /// Saves the open editor's body the way Save does (device cache plus the upload queue) but keeps the
     /// editor open. Leaves `contentString`, `editorDisplayContent` and `isEditing` alone so neither the editor
     /// nor the hidden read-only view reloads; read mode picks the body up when the session ends.
+    /// - Parameter userRequested: The user tapped Save, so a resumed draft goes up even if it's unchanged.
     /// - Returns: Whether anything was written. Nothing is while photos are still uploading, after a server
-    ///   switch, or when the body matches what was last saved.
+    ///   switch, when the body matches what was last saved, or for a resumed draft nobody has changed.
     @discardableResult
-    func autosaveEditedBody(_ body: String) -> Bool {
+    func autosaveEditedBody(_ body: String, userRequested: Bool = false) -> Bool {
         guard isEditing, let note, mediaUploadStatus == nil,
               let profileId = serverProfileId, profileId == editSessionProfileId
         else { return false }
@@ -2040,12 +2308,14 @@ final class NoteDetailViewModel {
             markEditsSaved()
             return false
         }
+        if !userRequested, resumedDraftBodies.contains(body) { return false }
         guard saveNoteBodyChange(body, mime: Self.editorBodyMime(for: note)) else { return false }
         rawContentString = body
         serverContentHash = body.hashValue
         editableContent = body
         if _pendingEditorHTML == body { _pendingEditorHTML = nil }
         autosaveBaseline = body
+        resumedDraftBodies = []
         hasAutosavedThisSession = true
         try? persistence.deleteDraft(noteId: noteId, serverProfileId: profileId)
         hasDraft = false
@@ -2054,9 +2324,21 @@ final class NoteDetailViewModel {
         return true
     }
 
+    /// Whether the open session is a resumed draft no one has changed yet, so leaving needn't send it (Save
+    /// still does) and it stays a draft. Canvas, mind map and spreadsheet bodies live in their web views.
+    var resumedDraftIsUnchanged: Bool {
+        guard isEditing, editSessionStartedFromDraft, !hasAutosavedThisSession else { return false }
+        switch note?.type {
+        case .text?, .code?, .markdown?, .mermaid?:
+            return resumedDraftBodies.contains(latestEditorBody ?? editableContent)
+        default:
+            return false
+        }
+    }
+
     /// Autosave with HTML just read from the rich text editor (`nil` when that failed).
     @discardableResult
-    func autosaveRichText(freshHTML html: String?) -> Bool {
+    func autosaveRichText(freshHTML html: String?, userRequested: Bool = false) -> Bool {
         if let html {
             let undecorated = Self.undecorateLinkedImagesFromEditor(in: html)
             if !undecorated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2066,7 +2348,7 @@ final class NoteDetailViewModel {
             }
         }
         guard let body = latestEditorBody ?? (editSessionStartedFromDraft ? editableContent : nil) else { return false }
-        return autosaveEditedBody(body)
+        return autosaveEditedBody(body, userRequested: userRequested)
     }
 
     @discardableResult
@@ -2145,7 +2427,8 @@ final class NoteDetailViewModel {
         showSaveError = false
         defer { isSaving = false }
         do {
-            if !isAlreadySaved(editableContent) {
+            let alreadySaved = isAlreadySaved(editableContent)
+            if !alreadySaved {
                 cacheNoteContentIfAllowed(nid, content: data, profileId: profileId)
                 try persistence.upsertPendingNoteBodyUpload(
                     noteId: nid,
@@ -2155,10 +2438,14 @@ final class NoteDetailViewModel {
                     baseUtcDateModified: nil
                 )
             }
-            content = data
-            contentString = editableContent
-            rawContentString = editableContent
-            serverContentHash = editableContent.hashValue
+            // An untouched save keeps the stored body: the editor's copy is only its own tidied version.
+            // After an autosave the body is the edited one, which read mode still has to pick up.
+            if !alreadySaved || hasAutosavedThisSession {
+                content = data
+                contentString = editableContent
+                rawContentString = editableContent
+                serverContentHash = editableContent.hashValue
+            }
             try? persistence.deleteDraft(noteId: nid, serverProfileId: profileId)
             isEditing = false
             hasDraft = false
@@ -2176,6 +2463,9 @@ final class NoteDetailViewModel {
             saveDraftLocally()
         }
     }
+
+    /// The canvas as last saved here, for reading view (see `SavedCanvasPreview`).
+    private(set) var savedCanvasPreview: SavedCanvasPreview?
 
     /// Saves canvas content (Excalidraw JSON body + SVG preview attachment).
     func saveCanvasContent(json: String, svg: String) {
@@ -2208,6 +2498,11 @@ final class NoteDetailViewModel {
             contentString = json
             rawContentString = json
             serverContentHash = json.hashValue
+            savedCanvasPreview = SavedCanvasPreview(
+                json: json,
+                svg: svg.isEmpty ? nil : Data(svg.utf8),
+                generation: (savedCanvasPreview?.generation ?? 0) + 1
+            )
             try? persistence.deleteDraft(noteId: nid, serverProfileId: profileId)
             isEditing = false
             hasDraft = false
@@ -3134,7 +3429,7 @@ final class NoteDetailViewModel {
     }
 
     /// Duplicate this note as a sibling under the same parent (first parent if cloned). Opens via navigation from the view.
-    func duplicateNote() async -> (noteId: String, title: String)? {
+    func duplicateNote(withChildren: Bool = true) async -> (noteId: String, title: String)? {
         let nid = self.noteId
         guard let client, let note else {
             self.saveError = "Cannot duplicate while offline."
@@ -3151,7 +3446,7 @@ final class NoteDetailViewModel {
         defer { self.isSaving = false }
 
         do {
-            let response = try await client.duplicateNoteAsChild(sourceNoteId: nid, parentNoteId: parentId)
+            let response = try await client.duplicateNoteAsChild(sourceNoteId: nid, parentNoteId: parentId, withChildren: withChildren)
             if let profileId = serverProfileId {
                 try? persistence.cacheNoteIfAllowed(from: response.note, serverProfileId: profileId, policy: cacheExclusion)
                 try? persistence.cacheBranchIfAllowed(
@@ -3742,8 +4037,9 @@ final class NoteDetailViewModel {
         return .failed(apiError.localizedDescription)
     }
 
-    func uploadAttachment(data: Data, filename: String, mime: String) async -> AttachmentItem? {
-        let nid = self.noteId
+    /// - Parameter ownerNoteId: Another note to attach it to: the one whose excerpt is being edited at the caret.
+    func uploadAttachment(data: Data, filename: String, mime: String, ownerNoteId: String? = nil) async -> AttachmentItem? {
+        let nid = ownerNoteId ?? self.noteId
         guard let client else {
             self.saveError = "Cannot upload while offline."
             self.showSaveError = true
@@ -3759,9 +4055,11 @@ final class NoteDetailViewModel {
                 filename: filename,
                 contentType: mime
             )
-            await self.loadAttachments()
-            if let refreshed = attachments.first(where: { $0.attachmentId == attachmentId }) {
-                return refreshed
+            if ownerNoteId == nil {
+                await self.loadAttachments()
+                if let refreshed = attachments.first(where: { $0.attachmentId == attachmentId }) {
+                    return refreshed
+                }
             }
             let response = try await client.getAttachment(attachmentId)
             return AttachmentItem(from: response)
@@ -3780,8 +4078,11 @@ final class NoteDetailViewModel {
     /// Uploads run one at a time so the photos appear in the order they were picked. A photo whose
     /// upload fails falls back to a full-size inline data URI, so nothing is ever lost — that note just
     /// pays the old cost for that one image.
+    ///
+    /// - Parameter ownerNoteId: Another note to attach them to: the one whose excerpt is being edited at the caret.
     func uploadPhotosAsAttachments(
         _ images: [PhotoLibraryImage],
+        ownerNoteId: String? = nil,
         onReady: (EditorImageInsert) -> Void
     ) async {
         guard !images.isEmpty else { return }
@@ -3790,7 +4091,7 @@ final class NoteDetailViewModel {
         for (index, image) in images.enumerated() {
             mediaUploadStatus = Self.photoUploadStatus(index: index, total: images.count)
             let filename = "photo-\(stamp)-\(index + 1).\(Self.photoFileExtension(mime: image.mime))"
-            if let attachmentId = await uploadPhotoAttachment(image: image, filename: filename) {
+            if let attachmentId = await uploadPhotoAttachment(image: image, filename: filename, noteId: ownerNoteId ?? noteId) {
                 uploaded += 1
                 seedImageCache(attachmentId: attachmentId, data: image.data)
                 onReady(
@@ -3804,7 +4105,7 @@ final class NoteDetailViewModel {
             }
         }
         mediaUploadStatus = nil
-        if uploaded > 0 {
+        if uploaded > 0, ownerNoteId == nil {
             await loadAttachments()
         }
         if uploaded < images.count {
@@ -3817,7 +4118,7 @@ final class NoteDetailViewModel {
         }
     }
 
-    private func uploadPhotoAttachment(image: PhotoLibraryImage, filename: String) async -> String? {
+    private func uploadPhotoAttachment(image: PhotoLibraryImage, filename: String, noteId: String) async -> String? {
         guard let client, isOnline else { return nil }
         do {
             return try await client.uploadNoteAttachment(
@@ -4230,38 +4531,37 @@ final class NoteDetailViewModel {
 
     /// The map's labels that decide which notes under it it draws (`#includeArchived`, `#maxNestingDepth`), read
     /// the way Trilium reads them, inherited and template labels included.
-    private func geoMapSubtreeOptions(mapNoteId: String, resolver: TriliumLabelResolver) -> GeoMapSubtree.Options {
+    private func subtreeOptions(rootNoteId: String, resolver: TriliumLabelResolver) -> GeoMapSubtree.Options {
         GeoMapSubtree.Options(
-            includeArchived: CollectionNoteModels.isTruthyLabel(resolver.value(of: "includeArchived", noteId: mapNoteId)),
-            maxDepth: CollectionNoteModels.maxNestingDepth(label: resolver.value(of: "maxNestingDepth", noteId: mapNoteId))
+            includeArchived: CollectionNoteModels.isTruthyLabel(resolver.value(of: "includeArchived", noteId: rootNoteId)),
+            maxDepth: CollectionNoteModels.maxNestingDepth(label: resolver.value(of: "maxNestingDepth", noteId: rootNoteId))
         )
     }
 
-    private static func hasOwnArchivedLabel(_ attributes: [AttributeItem]) -> Bool {
-        attributes.contains { $0.type == .label && $0.name == "archived" }
+    /// What was read of a note's subtree from SwiftData.
+    private struct CachedSubtree {
+        var notes: [String: CachedNote] = [:]
+        var attributes: [String: [AttributeItem]] = [:]
+        var children: [String: [String]] = [:]
+        var contexts: [String: TriliumLabelResolver.NoteContext] = [:]
     }
 
-    /// Pins (`#geolocation`), shapes (`#geoShape`) and GPX tracks anywhere under the map, from SwiftData. Used
-    /// offline or when the API is unavailable. The subtree is read a level at a time in batched queries, then walked
-    /// in Trilium's order (see `GeoMapSubtree`).
-    func geoMapLayersFromCache() -> (pins: [GeoMapPin], shapes: [GeoMapShape], tracks: [GeoMapTrack]) {
-        guard let profileId = serverProfileId else { return ([], [], []) }
-        let mapId = noteId
+    /// The subtree under `rootId` within `options`, read a level at a time in batched queries.
+    private func cachedSubtree(
+        rootId: String,
+        rootChildren: [String],
+        options: GeoMapSubtree.Options,
+        profileId: String
+    ) -> CachedSubtree {
         let ghosts = GhostNoteTracker.shared.all(serverProfileId: profileId)
-        var contexts: [String: TriliumLabelResolver.NoteContext] = [:]
-        if let map = note, map.noteId == mapId {
-            contexts[mapId] = TriliumLabelResolver.NoteContext(attributes: map.attributes, parentNoteIds: map.parentNoteIds)
-        }
-        let options = geoMapSubtreeOptions(mapNoteId: mapId, resolver: labelResolver(contexts: contexts))
-
         let limit = GeoMapSubtree.noteLimit
         var notes: [String: CachedNote] = [:]
         var attributes: [String: [AttributeItem]] = [:]
-        var children: [String: [String]] = [mapId: resolvedChildNoteIdsForDetail()]
+        var children: [String: [String]] = [rootId: rootChildren]
         var parents: [String: [String]] = [:]
-        var queued: Set<String> = [mapId]
-        var level = children[mapId] ?? []
-        for id in level { parents[id, default: []].append(mapId) }
+        var queued: Set<String> = [rootId]
+        var level = children[rootId] ?? []
+        for id in level { parents[id, default: []].append(rootId) }
         var depth = 0
         while !level.isEmpty, notes.count < limit {
             let wanted = Array(level.filter { queued.insert($0).inserted }.prefix(limit - notes.count))
@@ -4300,11 +4600,67 @@ final class NoteDetailViewModel {
             depth += 1
         }
 
+        var contexts: [String: TriliumLabelResolver.NoteContext] = [:]
         for (id, row) in notes {
             var parentIds = row.parentNoteIds
             for parentId in parents[id] ?? [] where !parentIds.contains(parentId) { parentIds.append(parentId) }
             contexts[id] = TriliumLabelResolver.NoteContext(attributes: attributes[id] ?? [], parentNoteIds: parentIds)
         }
+        return CachedSubtree(notes: notes, attributes: attributes, children: children, contexts: contexts)
+    }
+
+    /// The subtree under `rootId` within `options`, loaded a level at a time in batches.
+    private func serverSubtree(
+        rootId: String,
+        firstLevel: [String],
+        options: GeoMapSubtree.Options,
+        client: any TriliumClientProtocol
+    ) async -> [String: NoteResponse] {
+        let limit = GeoMapSubtree.noteLimit
+        var loaded: [String: NoteResponse] = [:]
+        var queued: Set<String> = [rootId]
+        var level = firstLevel
+        var depth = 0
+        while !level.isEmpty, loaded.count < limit {
+            let wanted = Array(level.filter { queued.insert($0).inserted }.prefix(limit - loaded.count))
+            guard !wanted.isEmpty else { break }
+            for response in await fetchNotesBatched(wanted, client: client) where loaded[response.noteId] == nil {
+                loaded[response.noteId] = response
+            }
+            guard options.descends(below: depth) else { break }
+            // An archived folder's notes are left out anyway, so they aren't loaded.
+            level = wanted.flatMap { id -> [String] in
+                guard let response = loaded[id] else { return [] }
+                let item = NoteItem(from: response)
+                guard options.includeArchived || !Self.hasOwnArchivedLabel(item.attributes) else { return [] }
+                return item.childNoteIds
+            }
+            depth += 1
+        }
+        return loaded
+    }
+
+    private static func hasOwnArchivedLabel(_ attributes: [AttributeItem]) -> Bool {
+        attributes.contains { $0.type == .label && $0.name == "archived" }
+    }
+
+    /// Pins (`#geolocation`), shapes (`#geoShape`) and GPX tracks anywhere under the map, from SwiftData. Used
+    /// offline or when the API is unavailable. The subtree is read a level at a time in batched queries, then walked
+    /// in Trilium's order (see `GeoMapSubtree`).
+    func geoMapLayersFromCache(space: GeoMapSpace = .geo) -> (pins: [GeoMapPin], shapes: [GeoMapShape], tracks: [GeoMapTrack]) {
+        guard let profileId = serverProfileId else { return ([], [], []) }
+        let mapId = noteId
+        var contexts: [String: TriliumLabelResolver.NoteContext] = [:]
+        if let map = note, map.noteId == mapId {
+            contexts[mapId] = TriliumLabelResolver.NoteContext(attributes: map.attributes, parentNoteIds: map.parentNoteIds)
+        }
+        let options = subtreeOptions(rootNoteId: mapId, resolver: labelResolver(contexts: contexts))
+
+        let tree = cachedSubtree(rootId: mapId, rootChildren: resolvedChildNoteIdsForDetail(), options: options, profileId: profileId)
+        let notes = tree.notes
+        let attributes = tree.attributes
+        let children = tree.children
+        contexts.merge(tree.contexts) { _, new in new }
         let resolver = labelResolver(contexts: contexts)
         let ordered = GeoMapSubtree.noteIds(
             mapNoteId: mapId,
@@ -4326,7 +4682,7 @@ final class NoteDetailViewModel {
             let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
             let title = trimmedTitle.isEmpty ? childId : trimmedTitle
             let color = attrs.first(where: { $0.type == .label && $0.name.caseInsensitiveCompare("color") == .orderedSame })?.value
-            if let geoVal = label("geolocation"), let (lat, lng) = GeoMapCoordinateParser.parse(geoVal) {
+            if let position = label(space.locationLabel), let (lat, lng) = space.parseLocation(position) {
                 let iconClass = GeoMapMarkerIconClass.forNote(
                     type: cached.parsedType ?? .text,
                     mime: cached.mime,
@@ -4336,11 +4692,12 @@ final class NoteDetailViewModel {
                 )
                 pins.append(GeoMapPin(noteId: childId, title: title, lat: lat, lng: lng, iconClass: iconClass, color: color))
             }
-            if let value = label(GeoMapShape.label),
-               let shape = GeoMapShape(noteId: childId, title: title, value: value, color: color) {
+            if let value = label(space.shapeLabel),
+               let shape = space.shape(noteId: childId, title: title, value: value, color: color) {
                 shapes.append(shape)
             }
-            if cached.mime == GeoMapDisplaySettings.gpxMIME,
+            // On an image a GPX note is a marker like any other: only a world map draws the file.
+            if !space.isImage, cached.mime == GeoMapDisplaySettings.gpxMIME,
                let body = cached.content,
                let xml = String(data: body, encoding: .utf8) {
                 let iconClass = GeoMapMarkerIconClass.forNote(
@@ -4360,32 +4717,54 @@ final class NoteDetailViewModel {
     /// Pins (`#geolocation`), shapes (`#geoShape`) and GPX tracks anywhere under the map, from the server: the
     /// subtree is loaded a level at a time in batches (bodies only for tracks), then walked in Trilium's order (see
     /// `GeoMapSubtree`). Empty when there is no client or the app is offline.
-    func fetchGeoMapLayersFromServer(note: NoteItem) async -> (pins: [GeoMapPin], shapes: [GeoMapShape], tracks: [GeoMapTrack]) {
+    /// The picture an image map is drawn over, and the coordinate space its natural size makes. `fresh` asks the server
+    /// even when the picture is on the device (the map's refresh button).
+    func loadGeoMapImage(_ request: GeoMapImageRequest, fresh: Bool = false) async -> GeoMapImageState {
+        let imageId = request.imageNoteId
+        let profileId = serverProfileId ?? ""
+        let onlineClient = isOnline ? client : nil
+        var mime = (try? persistence.fetchCachedNotes(ids: [imageId], serverProfileId: profileId))?[imageId]?.mime
+        if mime == nil, let onlineClient {
+            mime = (try? await onlineClient.getNote(imageId))?.mime
+        }
+        // WebKit's image decoder for map textures refuses SVG, as Trilium's does.
+        if mime?.lowercased() == "image/svg+xml" { return .unavailable(isSVG: true) }
+
+        var bytes: Data?
+        if fresh, let onlineClient, let body = try? await onlineClient.getNoteContent(imageId), body.isPlausibleInlineImagePayload {
+            bytes = body
+            try? persistence.cacheImageIfAllowed(
+                entityId: imageId, entityType: "images", data: body, mime: mime ?? "image/png", sourceNoteId: noteId,
+                parentNoteIds: parentNoteIdsForCache(noteId: noteId), serverProfileId: profileId, policy: cacheExclusion
+            )
+        }
+        if bytes == nil { bytes = await loadImageBytes(routeType: "images", entityId: imageId) }
+        // A map kept off this device doesn't have its picture stored, so it's fetched each time.
+        if bytes == nil, let onlineClient { bytes = try? await onlineClient.getNoteContent(imageId) }
+
+        guard let bytes else { return .unavailable(isSVG: false) }
+        let decoded = await Task.detached(priority: .userInitiated) { GeoMapImageDecoder.decode(bytes) }.value
+        guard let decoded,
+              let space = GeoMapImageSpace(width: decoded.width, height: decoded.height, extent: request.extent)
+        else { return .unavailable(isSVG: false) }
+        let extent = request.extent.map { "\($0.left),\($0.top),\($0.right),\($0.bottom)" } ?? ""
+        return .image(GeoMapImage(
+            key: "\(imageId)|\(decoded.digest)|\(extent)|\(request.darkLabels)",
+            dataURL: decoded.dataURL,
+            space: space,
+            darkLabels: request.darkLabels
+        ))
+    }
+
+    func fetchGeoMapLayersFromServer(note: NoteItem, space: GeoMapSpace = .geo) async -> (pins: [GeoMapPin], shapes: [GeoMapShape], tracks: [GeoMapTrack]) {
         guard let client, isOnline else { return ([], [], []) }
         let mapId = note.noteId
         let map = (try? await client.getNote(mapId)).map { NoteItem(from: $0) } ?? note
         var contexts = [mapId: TriliumLabelResolver.NoteContext(attributes: map.attributes, parentNoteIds: map.parentNoteIds)]
-        let options = geoMapSubtreeOptions(mapNoteId: mapId, resolver: labelResolver(contexts: contexts))
+        let options = subtreeOptions(rootNoteId: mapId, resolver: labelResolver(contexts: contexts))
 
-        let limit = GeoMapSubtree.noteLimit
-        var loaded: [String: NoteItem] = [:]
-        var queued: Set<String> = [mapId]
-        var level = map.childNoteIds
-        var depth = 0
-        while !level.isEmpty, loaded.count < limit {
-            let wanted = Array(level.filter { queued.insert($0).inserted }.prefix(limit - loaded.count))
-            guard !wanted.isEmpty else { break }
-            for response in await fetchNotesBatched(wanted, client: client) where loaded[response.noteId] == nil {
-                loaded[response.noteId] = NoteItem(from: response)
-            }
-            guard options.descends(below: depth) else { break }
-            // An archived folder's notes are left out anyway, so they aren't loaded.
-            level = wanted.flatMap { id -> [String] in
-                guard let item = loaded[id], options.includeArchived || !Self.hasOwnArchivedLabel(item.attributes) else { return [] }
-                return item.childNoteIds
-            }
-            depth += 1
-        }
+        let loaded = await serverSubtree(rootId: mapId, firstLevel: map.childNoteIds, options: options, client: client)
+            .mapValues { NoteItem(from: $0) }
 
         for (id, item) in loaded {
             contexts[id] = TriliumLabelResolver.NoteContext(attributes: item.attributes, parentNoteIds: item.parentNoteIds)
@@ -4404,8 +4783,8 @@ final class NoteDetailViewModel {
         var tracks: [GeoMapTrack] = []
         for childId in ordered {
             guard let childItem = loaded[childId] else { continue }
-            if let shapeAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == GeoMapShape.label }),
-               let shape = GeoMapShape(
+            if let shapeAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == space.shapeLabel }),
+               let shape = space.shape(
                    noteId: childId,
                    title: childItem.title,
                    value: shapeAttr.value,
@@ -4413,8 +4792,8 @@ final class NoteDetailViewModel {
                ) {
                 shapes.append(shape)
             }
-            if let geoAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == "geolocation" }) {
-                if let (lat, lng) = GeoMapCoordinateParser.parse(geoAttr.value) {
+            if let positionAttr = childItem.attributes.first(where: { $0.type == .label && $0.name == space.locationLabel }) {
+                if let (lat, lng) = space.parseLocation(positionAttr.value) {
                     pins.append(GeoMapPin(
                         noteId: childId,
                         title: childItem.title,
@@ -4425,7 +4804,7 @@ final class NoteDetailViewModel {
                     ))
                 }
             }
-            if childItem.mime == GeoMapDisplaySettings.gpxMIME,
+            if !space.isImage, childItem.mime == GeoMapDisplaySettings.gpxMIME,
                let content = try? await client.getNoteContent(childId),
                let xml = String(data: content, encoding: .utf8),
                let track = GeoMapTrack.make(
@@ -4568,10 +4947,14 @@ final class NoteDetailViewModel {
         let groupBy = KanbanBoardModels.GroupBy(kanbanGroupByAttributeName(for: note))
         let showArchived = KanbanBoardModels.showsArchived(note.attributes)
         let showInbox = KanbanBoardModels.showsInbox(note.attributes)
-        let cacheCards = kanbanCardsFromCache(groupBy: groupBy, showInbox: showInbox)
+        let config = await loadBoardConfig(for: note)
+        lastKanbanConfig = config
+        let nestedInbox = config?.columns(forKey: kanbanColumnsKey(for: groupBy, config: config))?
+            .first(where: { $0.value == KanbanBoardModels.inboxColumnValue })?.fields["nested"] == .bool(true)
+        let cacheCards = kanbanCardsFromCache(groupBy: groupBy, showInbox: showInbox, nestedInbox: nestedInbox)
         var cards: [KanbanBoardModels.Card]
         if client != nil, isOnline {
-            let serverCards = await fetchKanbanCardsFromServer(note: note, groupBy: groupBy, showInbox: showInbox)
+            let serverCards = await fetchKanbanCardsFromServer(note: note, groupBy: groupBy, showInbox: showInbox, nestedInbox: nestedInbox)
             var byId: [String: KanbanBoardModels.Card] = [:]
             for card in serverCards { byId[card.noteId] = card }
             for card in cacheCards where byId[card.noteId] == nil {
@@ -4581,8 +4964,6 @@ final class NoteDetailViewModel {
         } else {
             cards = cacheCards
         }
-        let config = await loadBoardConfig(for: note)
-        lastKanbanConfig = config
 
         // v0.106 "filter" narrows the board with a search. Offline, the board shows unfiltered.
         let filterQuery = config?.fields["filterQuery"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4622,7 +5003,8 @@ final class NoteDetailViewModel {
             relationTitles: relationTitles,
             boardSort: boardSort,
             showsArchived: showArchived,
-            groupingOptions: KanbanBoardModels.groupingOptions(boardAttributes: note.attributes, current: groupBy)
+            groupingOptions: KanbanBoardModels.groupingOptions(boardAttributes: note.attributes, current: groupBy),
+            hidesAddColumn: KanbanBoardModels.hidesAddColumn(note.attributes)
         )
     }
 
@@ -4664,28 +5046,36 @@ final class NoteDetailViewModel {
         return titled
     }
 
-    func kanbanCardsFromCache(groupBy: KanbanBoardModels.GroupBy, showInbox: Bool) -> [KanbanBoardModels.Card] {
+    func kanbanCardsFromCache(groupBy: KanbanBoardModels.GroupBy, showInbox: Bool, nestedInbox: Bool = false) -> [KanbanBoardModels.Card] {
         guard let profileId = serverProfileId else { return [] }
+        let boardId = noteId
+        var contexts: [String: TriliumLabelResolver.NoteContext] = [:]
+        if let board = note, board.noteId == boardId {
+            contexts[boardId] = TriliumLabelResolver.NoteContext(attributes: board.attributes, parentNoteIds: board.parentNoteIds)
+        }
+        let options = subtreeOptions(rootNoteId: boardId, resolver: labelResolver(contexts: contexts))
+        let direct = resolvedChildNoteIdsForDetail()
+        let tree = cachedSubtree(rootId: boardId, rootChildren: direct, options: options, profileId: profileId)
+        contexts.merge(tree.contexts) { _, new in new }
+        let resolver = labelResolver(contexts: contexts)
+        let candidates = KanbanBoardModels.subtreeCandidates(
+            boardNoteId: boardId,
+            options: options,
+            children: { id in id == boardId ? direct : (tree.notes[id] == nil ? nil : tree.children[id] ?? []) },
+            isArchived: { resolver.value(of: "archived", noteId: $0) != nil },
+            isSearch: { tree.notes[$0]?.noteType == NoteType.search.rawValue }
+        )
+
         var cards: [KanbanBoardModels.Card] = []
-        for childId in resolvedChildNoteIdsForDetail() {
-            guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
-            let attrs = ((try? persistence.fetchCachedAttributes(noteId: childId, serverProfileId: profileId)) ?? []).map { a in
-                AttributeItem(
-                    attributeId: a.attributeId,
-                    noteId: a.noteId,
-                    type: AttributeItem.AttributeKind(rawValue: a.type) ?? .label,
-                    name: a.name,
-                    value: a.value,
-                    position: a.position,
-                    isInheritable: a.isInheritable
-                )
-            }
-            guard let column = KanbanBoardModels.columnValue(from: attrs, groupBy: groupBy)
-                ?? (showInbox ? KanbanBoardModels.inboxColumnValue : nil)
+        for (index, candidate) in candidates.enumerated() {
+            let childId = candidate.noteId
+            guard let cached = tree.notes[childId] else { continue }
+            let attrs = tree.attributes[childId] ?? []
+            guard !KanbanBoardModels.isTemplate(attrs),
+                  let column = KanbanBoardModels.cardColumn(attributes: attrs, groupBy: groupBy, showInbox: showInbox, nestedInbox: nestedInbox, depth: candidate.depth)
             else { continue }
-            let branch = try? persistence.fetchCachedBranch(noteId: childId, parentNoteId: noteId, serverProfileId: profileId)
+            let branch = try? persistence.fetchCachedBranch(noteId: childId, parentNoteId: candidate.parentNoteId, serverProfileId: profileId)
             let branchId = branch?.branchId ?? ""
-            let position = branch?.notePosition ?? 0
             let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
             let icon = persistence.tabRowIconContext(
                 noteId: childId,
@@ -4698,24 +5088,24 @@ final class NoteDetailViewModel {
                 branchId: branchId,
                 title: trimmedTitle.isEmpty ? childId : trimmedTitle,
                 columnValue: column,
-                notePosition: position,
+                notePosition: index,
                 iconClass: icon.iconClass,
                 fallbackNoteType: icon.fallbackNoteType,
                 colorLabel: persistence.cachedNoteColorLabel(noteId: childId, serverProfileId: profileId),
                 labels: maps.labels,
                 relations: maps.relations,
-                parentNoteCount: max(1, cached.parentNoteIds.count)
+                parentNoteCount: max(1, cached.parentNoteIds.count),
+                parentNoteId: candidate.depth == 0 ? nil : candidate.parentNoteId
             ))
         }
         return cards
     }
 
-    private static let kanbanCardBatchSize = 100
-
     func fetchKanbanCardsFromServer(
         note: NoteItem,
         groupBy: KanbanBoardModels.GroupBy,
-        showInbox: Bool
+        showInbox: Bool,
+        nestedInbox: Bool = false
     ) async -> [KanbanBoardModels.Card] {
         guard let client, isOnline else { return [] }
         var cards: [KanbanBoardModels.Card] = []
@@ -4733,47 +5123,57 @@ final class NoteDetailViewModel {
                 }
                 try? persistence.commitBatch()
             }
-            // Cards load in batches (one tree/load, plus one metadata call on Trilium 0.106+) rather than a request per card.
+            let board = NoteItem(from: parentResp)
+            let boardId = note.noteId
             let orderedBranches = liveBranches.sorted(by: { $0.notePosition < $1.notePosition })
-            let childIds = orderedBranches.map(\.noteId)
-            var responses: [String: NoteResponse] = [:]
-            for start in stride(from: 0, to: childIds.count, by: Self.kanbanCardBatchSize) {
-                let chunk = Array(childIds[start..<min(start + Self.kanbanCardBatchSize, childIds.count)])
-                for entry in try await client.fullSyncFetchTreeBatch(noteIds: chunk) {
-                    responses[entry.note.noteId] = entry.note
-                }
+            let direct = orderedBranches.map(\.noteId)
+            var contexts = [boardId: TriliumLabelResolver.NoteContext(attributes: board.attributes, parentNoteIds: board.parentNoteIds)]
+            let options = subtreeOptions(rootNoteId: boardId, resolver: labelResolver(contexts: contexts))
+            // Cards load in batches (one tree/load, plus one metadata call on Trilium 0.106+) rather than a request per card.
+            let responses = await serverSubtree(rootId: boardId, firstLevel: direct, options: options, client: client)
+            let loaded = responses.mapValues { NoteItem(from: $0) }
+            for (id, item) in loaded {
+                contexts[id] = TriliumLabelResolver.NoteContext(attributes: item.attributes, parentNoteIds: item.parentNoteIds)
             }
-            for branch in orderedBranches {
-                guard let childResp = responses.removeValue(forKey: branch.noteId) else { continue }
-                let childItem = NoteItem(from: childResp)
+            let resolver = labelResolver(contexts: contexts)
+            let candidates = KanbanBoardModels.subtreeCandidates(
+                boardNoteId: boardId,
+                options: options,
+                children: { id in id == boardId ? direct : loaded[id]?.childNoteIds },
+                isArchived: { resolver.value(of: "archived", noteId: $0) != nil },
+                isSearch: { loaded[$0]?.type == .search }
+            )
+            let directBranches = Dictionary(orderedBranches.map { ($0.noteId, $0) }, uniquingKeysWith: { first, _ in first })
+            for (index, candidate) in candidates.enumerated() {
+                guard let childResp = responses[candidate.noteId], let childItem = loaded[candidate.noteId] else { continue }
                 if let profileId = serverProfileId {
                     persistNoteResponse(childResp, profileId: profileId)
                 }
-                guard let column = KanbanBoardModels.columnValue(from: childItem.attributes, groupBy: groupBy)
-                    ?? (showInbox ? KanbanBoardModels.inboxColumnValue : nil)
-                else {
-                    continue
-                }
+                guard !KanbanBoardModels.isTemplate(childItem.attributes),
+                      let column = KanbanBoardModels.cardColumn(attributes: childItem.attributes, groupBy: groupBy, showInbox: showInbox, nestedInbox: nestedInbox, depth: candidate.depth)
+                else { continue }
                 let maps = KanbanBoardModels.Card.attributeMaps(childItem.attributes)
                 cards.append(KanbanBoardModels.Card(
                     noteId: childItem.noteId,
-                    branchId: branch.branchId,
+                    // Trilium's branch ids are `parent_note`; the board's own children come with theirs.
+                    branchId: directBranches[candidate.noteId]?.branchId ?? "\(candidate.parentNoteId)_\(candidate.noteId)",
                     title: childItem.title,
                     columnValue: column,
-                    notePosition: branch.notePosition,
+                    notePosition: index,
                     iconClass: effectiveIconClass(for: childItem),
                     fallbackNoteType: childItem.iconFallbackNoteType,
                     colorLabel: childItem.colorLabelValue,
                     creationDate: childResp.utcDateCreated,
                     labels: maps.labels,
                     relations: maps.relations,
-                    parentNoteCount: max(1, childResp.parentNoteIds.count)
+                    parentNoteCount: max(1, childResp.parentNoteIds.count),
+                    parentNoteId: candidate.depth == 0 ? nil : candidate.parentNoteId
                 ))
             }
             try? persistence.commitBatch()
         } catch {
             Log.api.error("fetchKanbanCardsFromServer failed: \(error)")
-            return kanbanCardsFromCache(groupBy: groupBy, showInbox: showInbox)
+            return kanbanCardsFromCache(groupBy: groupBy, showInbox: showInbox, nestedInbox: nestedInbox)
         }
         return cards
     }
@@ -5271,6 +5671,7 @@ final class NoteDetailViewModel {
         guard let profileId = serverProfileId else { return [] }
         var horizontal: [(noteId: String, branchId: String, title: String, html: String, background: String?)] = []
         var verticalByParent: [String: [(noteId: String, branchId: String, title: String, html: String, background: String?)]] = [:]
+        var kinds: [String: PresentationModels.SlideKind] = [:]
 
         for childId in resolvedChildNoteIdsForDetail() {
             guard let cached = try? persistence.fetchCachedNote(id: childId, serverProfileId: profileId) else { continue }
@@ -5288,6 +5689,7 @@ final class NoteDetailViewModel {
             let background = attrs.first(where: {
                 $0.type == .label && $0.name.caseInsensitiveCompare("slide:background") == .orderedSame
             })?.value
+            kinds[childId] = Self.presentationSlideKind(type: cached.parsedType, attributes: attrs)
             let branch = try? persistence.fetchCachedBranch(noteId: childId, parentNoteId: noteId, serverProfileId: profileId)
             let html = cached.content.flatMap { String(data: $0, encoding: .utf8) } ?? ""
             let trimmedTitle = cached.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5317,6 +5719,7 @@ final class NoteDetailViewModel {
                 let gBg = gAttrs.first(where: {
                     $0.type == .label && $0.name.caseInsensitiveCompare("slide:background") == .orderedSame
                 })?.value
+                kinds[grandId] = Self.presentationSlideKind(type: gCached.parsedType, attributes: gAttrs)
                 let gBranch = try? persistence.fetchCachedBranch(noteId: grandId, parentNoteId: childId, serverProfileId: profileId)
                 let gHtml = gCached.content.flatMap { String(data: $0, encoding: .utf8) } ?? ""
                 let gTitle = gCached.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5332,7 +5735,28 @@ final class NoteDetailViewModel {
                 verticalByParent[childId] = vertical
             }
         }
-        return PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent)
+        return PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent, kinds: kinds)
+    }
+
+    private static func presentationSlideKind(type: NoteType?, attributes: [AttributeItem]) -> PresentationModels.SlideKind {
+        func label(_ name: String) -> String? {
+            attributes.first { $0.type == .label && $0.name == name }?.value
+        }
+        let template = attributes.first { $0.type == .relation && $0.name == "template" }?.value
+        return PresentationModels.slideKind(
+            type: type,
+            viewType: label("viewType") ?? template.flatMap { TriliumBuiltinTemplateLabels.viewType(ofTemplate: $0) },
+            webViewSrc: label("webViewSrc")
+        )
+    }
+
+    /// A note shown inside a presentation slide: the note and its children, without counting as a visit to it.
+    func loadForSlide() async {
+        loadFromCache()
+        if isOnline, let client, let response = try? await client.getNote(noteId) {
+            note = NoteItem(from: response)
+        }
+        await loadChildNotes()
     }
 
     /// Slides plus the presentation's `#presentation:theme` as the server has it (`nil` when the fetch fell back to cache).
@@ -5352,7 +5776,16 @@ final class NoteDetailViewModel {
             let verticalIds = horizontalBranches.flatMap { verticalBranchesByParent[$0.noteId]?.map(\.noteId) ?? [] }
             let verticalEntries = try await fetchTreeEntriesBatched(verticalIds, client: client)
             let slideNotes = horizontalEntries.merging(verticalEntries) { first, _ in first }.mapValues(\.note)
-            let bodies = await fetchBodies(Array(slideNotes.keys), client: client)
+            let kinds = slideNotes.mapValues { response -> PresentationModels.SlideKind in
+                let item = NoteItem(from: response)
+                return PresentationModels.slideKind(
+                    type: item.type,
+                    viewType: item.resolvedViewTypeLabelValue,
+                    webViewSrc: item.attributes.first { $0.type == .label && $0.name == "webViewSrc" }?.value
+                )
+            }
+            // What a web page, board or table slide shows doesn't come from its body.
+            let bodies = await fetchBodies(slideNotes.keys.filter { kinds[$0] == .content }, client: client)
 
             if let profileId = serverProfileId {
                 persistNoteResponse(parentResp, profileId: profileId)
@@ -5393,7 +5826,7 @@ final class NoteDetailViewModel {
                     verticalByParent[branch.noteId] = vertical
                 }
             }
-            return (PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent), serverTheme)
+            return (PresentationModels.buildSlides(horizontal: horizontal, verticalByParent: verticalByParent, kinds: kinds), serverTheme)
         } catch {
             Log.api.error("fetchPresentationSlidesFromServer failed: \(error)")
             return (await presentationSlidesFromCache(), nil)

@@ -88,6 +88,8 @@ struct GeoMapEditorView: UIViewRepresentable {
     let tracks: [GeoMapTrack]
     var shapes: [GeoMapShape] = []
     let settingsJSON: String
+    /// An image map's picture and camera limits (`GeoMapImage.bridgeJSON`); read once, when the map is built.
+    var imageJSON: String = "null"
     let bridge: GeoMapEditorBridge
     var onCreatePin: ((_ lat: Double, _ lng: Double) -> Void)?
     var onMovePin: ((_ noteId: String, _ lat: Double, _ lng: Double) -> Void)?
@@ -108,6 +110,7 @@ struct GeoMapEditorView: UIViewRepresentable {
             tracks: tracks,
             shapes: shapes,
             settingsJSON: settingsJSON,
+            imageJSON: imageJSON,
             onCreatePin: onCreatePin,
             onMovePin: onMovePin,
             onRemovePin: onRemovePin,
@@ -231,6 +234,7 @@ struct GeoMapEditorView: UIViewRepresentable {
         var latestTracks: [GeoMapTrack]
         var latestShapes: [GeoMapShape]
         var latestSettingsJSON: String
+        let imageJSON: String
         private var lastSyncedMarkersFingerprint = ""
         private var lastSyncedTracksFingerprint = ""
         private var lastSyncedShapes: [GeoMapShape] = []
@@ -240,6 +244,7 @@ struct GeoMapEditorView: UIViewRepresentable {
         private var lastInvalidateBounds: CGRect = .null
 
         init(viewportJSON: String, markers: [GeoMapPin], tracks: [GeoMapTrack], shapes: [GeoMapShape], settingsJSON: String,
+             imageJSON: String,
              onCreatePin: ((_ lat: Double, _ lng: Double) -> Void)?,
              onMovePin: ((_ noteId: String, _ lat: Double, _ lng: Double) -> Void)?,
              onRemovePin: ((_ noteId: String) -> Void)?,
@@ -253,6 +258,7 @@ struct GeoMapEditorView: UIViewRepresentable {
             self.latestTracks = tracks
             self.latestShapes = shapes
             self.latestSettingsJSON = settingsJSON
+            self.imageJSON = imageJSON
             self.onCreatePin = onCreatePin
             self.onMovePin = onMovePin
             self.onRemovePin = onRemovePin
@@ -495,7 +501,7 @@ struct GeoMapEditorView: UIViewRepresentable {
                 return
             }
             let js = """
-            window.geoMapEditor.init(\(latestViewportJSON), \(latestSettingsJSON));
+            window.geoMapEditor.init(\(latestViewportJSON), \(latestSettingsJSON), \(imageJSON));
             window.geoMapEditor.loadMarkersData(\(markersJSON));
             window.geoMapEditor.loadTracksData(\(tracksJSON));
             window.geoMapEditor.loadShapesData(\(shapesJSON));

@@ -180,6 +180,8 @@ enum KanbanBoardModels {
         var relations: [String: String] = [:]
         /// How many parents the note has; more than one means it is also cloned elsewhere in the tree.
         var parentNoteCount: Int = 1
+        /// Set when the card comes from deeper in the board's subtree than its own children.
+        var parentNoteId: String? = nil
 
         var id: String { noteId }
 
@@ -520,10 +522,7 @@ enum KanbanBoardModels {
             let parts = attribute.name.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2, parts[0] == "label" || parts[0] == "relation", !parts[1].isEmpty,
                   !defined.contains(where: { $0.property.name == parts[1] }) else { continue }
-            let alias = attribute.value.split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .first { $0.hasPrefix("alias=") }
-                .map { String($0.dropFirst("alias=".count)) }
+            let alias = PromotedAttributeDefinition(parsing: attribute.value).promotedAlias
                 .flatMap { $0.isEmpty ? nil : $0 }
             let isRelation = parts[0] == "relation"
             defined.append((CardProperty(name: parts[1], title: alias ?? parts[1], isRelation: isRelation), isRelation))
@@ -566,7 +565,7 @@ enum KanbanBoardModels {
             let parts = attribute.name.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2, parts[0] == "label", !parts[1].isEmpty else { continue }
             let tokens = attribute.value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            let alias = tokens.first { $0.hasPrefix("alias=") }.map { String($0.dropFirst("alias=".count)) }
+            let alias = PromotedAttributeDefinition(parsing: attribute.value).promotedAlias
             if parts[1] == defaultGroupByAttribute {
                 if let alias, !alias.isEmpty { defaultTitle = alias }
                 continue
@@ -596,6 +595,8 @@ enum KanbanBoardModels {
         /// `#includeArchived`: archived columns and cards are on the board.
         var showsArchived: Bool = false
         var groupingOptions: [GroupingOption] = []
+        /// `#board:hideAddColumn`: columns are still added from a column's menu.
+        var hidesAddColumn: Bool = false
     }
 
     // MARK: - Card templates
@@ -762,6 +763,67 @@ enum KanbanBoardModels {
             $0.type == .label && $0.name.caseInsensitiveCompare(includeArchivedLabel) == .orderedSame
         }) else { return false }
         return label.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "false"
+    }
+
+    static func hidesAddColumn(_ attributes: [AttributeItem]) -> Bool {
+        guard let label = attributes.first(where: { $0.type == .label && $0.name == "board:hideAddColumn" }) else { return false }
+        return label.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "false"
+    }
+
+    /// A note the board can make a card of, and where it sits.
+    struct SubtreeCandidate: Equatable, Sendable {
+        let noteId: String
+        let parentNoteId: String
+        /// 0 for the board's own children.
+        let depth: Int
+    }
+
+    /// The notes a board collects cards from, in Trilium's order (`recursiveGroupBy`): its whole subtree, within
+    /// `#maxNestingDepth`, a note's children coming before it. An archived note goes with everything under it, a
+    /// search note's results aren't walked, and a note cloned into several places counts once.
+    static func subtreeCandidates(
+        boardNoteId: String,
+        options: GeoMapSubtree.Options,
+        limit: Int = GeoMapSubtree.noteLimit,
+        children: (String) -> [String]?,
+        isArchived: (String) -> Bool,
+        isSearch: (String) -> Bool
+    ) -> [SubtreeCandidate] {
+        var result: [SubtreeCandidate] = []
+        var seen: Set<String> = []
+        var path: Set<String> = [boardNoteId]
+        func visit(_ parent: String, depth: Int) {
+            for id in children(parent) ?? [] where result.count < limit {
+                if !options.includeArchived && isArchived(id) { continue }
+                if options.descends(below: depth), !isSearch(id), path.insert(id).inserted {
+                    visit(id, depth: depth + 1)
+                    path.remove(id)
+                }
+                if seen.insert(id).inserted, children(id) != nil {
+                    result.append(SubtreeCandidate(noteId: id, parentNoteId: parent, depth: depth))
+                }
+            }
+        }
+        visit(boardNoteId, depth: 0)
+        return result
+    }
+
+    /// A template is what a card is made from, not a card.
+    static func isTemplate(_ attributes: [AttributeItem]) -> Bool {
+        attributes.contains { $0.type == .label && $0.name == "template" }
+    }
+
+    /// The column a note's card goes in, or `nil` for no card. A note with no value goes in the inbox if the board
+    /// has one and reaches this deep: below the board's own children, only when the inbox column collects nested notes.
+    static func cardColumn(
+        attributes: [AttributeItem],
+        groupBy: GroupBy,
+        showInbox: Bool,
+        nestedInbox: Bool,
+        depth: Int
+    ) -> String? {
+        columnValue(from: attributes, groupBy: groupBy)
+            ?? (showInbox && (depth == 0 || nestedInbox) ? inboxColumnValue : nil)
     }
 
     static func showsInbox(_ attributes: [AttributeItem]) -> Bool {

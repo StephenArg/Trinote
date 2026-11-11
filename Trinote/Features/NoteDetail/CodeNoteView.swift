@@ -22,6 +22,8 @@ struct CodeNoteView: View {
     var findControl: FindOnPageControl?
     /// Opens a Trilium note when a rendered Markdown internal hash link is tapped.
     var onNoteLinkTapped: ((String) -> Void)?
+    /// A rendered Markdown link pointing inside a note (a block or a bookmark).
+    var onNoteJumpLinkTapped: ((String, NoteJumpTarget) -> Void)?
     /// Loads attachment bytes for Markdown hash links that target `viewMode=attachments`.
     var loadAttachmentPreview: ((String) async -> AttachmentPreviewItem?)?
     /// Called when the user picks a new language from the MIME pill.
@@ -42,100 +44,106 @@ struct CodeNoteView: View {
     @State private var viewportHeight: CGFloat = 160
     @State private var renderedHTML: String = ""
     @State private var showLanguagePicker = false
-    /// Trilium v0.103+ treats Markdown as a first-class code variant with preview. Mirror the
-    /// rendered/source toggle on iOS for `text/markdown` notes; defaults to rendered since
-    /// reading is the primary use case in the mobile reader.
-    @State private var markdownShowSource = false
+    /// Source, Split or Preview for Markdown notes, remembered across notes. Preview first, since reading is what this
+    /// view is for.
+    @AppStorage("markdownReadingViewMode") private var markdownModeRaw = MarkdownViewMode.preview.rawValue
     /// Last markdown we fully converted into `renderedHTML` (for state-change-only skip).
     @State private var lastConvertedMarkdown: String?
     /// The task states `renderedHTML` was converted with.
     @State private var lastConvertedStates: [TaskStateDefinition]?
+    /// What's visible from the top of this view down, with the note at the top, and the controls' height: Split fills
+    /// what's left, so both halves are on screen together.
+    @State private var spaceBelow: CGFloat = 0
+    @State private var controlsHeight: CGFloat = 0
 
     private var isMarkdown: Bool {
         CodeNoteLanguage.isMarkdownMime(mime)
     }
 
+    private var markdownMode: MarkdownViewMode {
+        MarkdownViewMode.stored(markdownModeRaw, offering: MarkdownViewMode.readingModes, fallback: .preview)
+    }
+
+    private var markdownModeBinding: Binding<MarkdownViewMode> {
+        Binding(get: { markdownMode }, set: { markdownModeRaw = $0.rawValue })
+    }
+
+    /// What the body shows: always the source for code.
+    private var shownMode: MarkdownViewMode {
+        isMarkdown ? markdownMode : .source
+    }
+
+    /// Split's height: the visible space below the controls, so the two halves fit on screen together.
+    private var splitHeight: CGFloat {
+        guard spaceBelow > 1 else { return 480 }
+        return max(320, spaceBelow - controlsHeight)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Button {
-                    showLanguagePicker = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(CodeNoteLanguage.displayTitle(for: mime))
-                            .font(.caption.weight(.medium))
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2.weight(.semibold))
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .accessibilityLabel(String(localized: "Code language", comment: "Accessibility: code note language pill"))
-                .accessibilityHint(String(localized: "Changes the note’s language", comment: "Accessibility hint for language pill"))
-                Spacer()
-                if isMarkdown {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
                     Button {
-                        markdownShowSource.toggle()
+                        showLanguagePicker = true
                     } label: {
-                        Label(
-                            markdownShowSource
-                                ? String(localized: "Rendered", comment: "Markdown note: switch back to rendered view")
-                                : String(localized: "Source", comment: "Markdown note: switch to raw source view"),
-                            systemImage: markdownShowSource ? "doc.richtext" : "chevron.left.forwardslash.chevron.right"
-                        )
-                        .font(.caption)
+                        HStack(spacing: 4) {
+                            Text(CodeNoteLanguage.displayTitle(for: mime))
+                                .font(.caption.weight(.medium))
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2.weight(.semibold))
+                        }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
-                    .accessibilityLabel(String(localized: "Toggle Markdown rendering", comment: "Accessibility label for Markdown preview toggle"))
-                }
-                Button {
-                    UIPasteboard.general.string = content
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                        .font(.caption)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .accessibilityLabel("Copy code to clipboard")
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-
-            if isMarkdown && !markdownShowSource {
-                // Reuse the text-note WKWebView pipeline (tables, Mermaid, todo-list CSS, find-on-page).
-                HTMLNoteView(
-                    html: renderedHTML.isEmpty ? "<p></p>" : renderedHTML,
-                    baseURL: baseURL,
-                    checkboxOnlyRevision: checkboxOnlyRevision,
-                    onNoteLinkTapped: onNoteLinkTapped,
-                    onTaskStateSet: onTaskStateSet,
-                    onEditTaskStates: onEditTaskStates,
-                    onTaskStateMenuShown: onTaskStateMenuShown,
-                    loadAttachmentPreview: loadAttachmentPreview,
-                    findControl: findControl,
-                    listInteractionEnabled: onTaskStateSet != nil,
-                    taskStates: taskStates,
-                    allowListReorder: false,
-                    allowCollapsibleReorder: false
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(.secondarySystemGroupedBackground))
-            } else {
-                CodeReadonlyTextView(
-                    text: content,
-                    mime: mime,
-                    darkMode: colorScheme == .dark,
-                    findControl: findControl
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: viewportHeight)
-                .background {
-                    GeometryReader { g in
-                        Color.clear.preference(key: CodeNoteTextWidthKey.self, value: g.size.width)
+                    .accessibilityLabel(String(localized: "Code language", comment: "Accessibility: code note language pill"))
+                    .accessibilityHint(String(localized: "Changes the note’s language", comment: "Accessibility hint for language pill"))
+                    Spacer()
+                    Button {
+                        UIPasteboard.general.string = content
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .font(.caption)
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .accessibilityLabel("Copy code to clipboard")
                 }
-                .background(Color(.secondarySystemGroupedBackground))
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
+                if isMarkdown {
+                    MarkdownViewModePicker(mode: markdownModeBinding, modes: MarkdownViewMode.readingModes)
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                if abs(height - controlsHeight) > 0.5 { controlsHeight = height }
+            }
+
+            switch shownMode {
+            case .preview:
+                renderedView(findControl: findControl)
+            case .source:
+                sourceView(findControl: findControl)
+            case .split:
+                // Find on page searches the rendered side, as in Preview.
+                MarkdownSplitLayout(sourceScrollsItself: false) {
+                    sourceView(findControl: nil, fillsHeight: true)
+                } preview: {
+                    ScrollView {
+                        renderedView(findControl: findControl)
+                    }
+                    .background(Color(.secondarySystemGroupedBackground))
+                }
+                .frame(height: splitHeight)
+            }
+        }
+        .background {
+            if shownMode == .split {
+                NoteSpaceBelowReader { space in
+                    if abs(space - spaceBelow) > 0.5 { spaceBelow = space }
+                }
             }
         }
         .task(id: MarkdownRenderKey(content: content, states: taskStates.states)) {
@@ -153,20 +161,20 @@ struct CodeNoteView: View {
                 return
             }
             // Convert on the calling executor so the first paint is real HTML (async left a blank flash).
-            let html = MarkdownToNoteHTML.convert(source, options: .preview(taskStates: states))
+            let html = MarkdownToNoteHTML.convert(source, options: .markdownNote(taskStates: states))
             renderedHTML = html
             lastConvertedMarkdown = source
             lastConvertedStates = states
         }
-        .onChange(of: markdownShowSource) { _, showSource in
+        .onChange(of: markdownModeRaw) { _, _ in
             // State changes leave `renderedHTML` intentionally stale (live DOM already matches). Reconvert
-            // when returning to rendered mode so a remounted WebView shows the saved markers.
-            guard isMarkdown, !showSource else { return }
+            // when the rendered side comes back so a remounted WebView shows the saved markers.
+            guard isMarkdown, markdownMode != .source else { return }
             let source = content
             let states = taskStates.states
             Task {
                 let html = await Task.detached(priority: .userInitiated) {
-                    MarkdownToNoteHTML.convert(source, options: .preview(taskStates: states))
+                    MarkdownToNoteHTML.convert(source, options: .markdownNote(taskStates: states))
                 }.value
                 renderedHTML = html
                 lastConvertedMarkdown = source
@@ -190,6 +198,48 @@ struct CodeNoteView: View {
                 }
             )
         }
+    }
+
+    /// The Markdown rendered through the text-note web view (tables, Mermaid, to-do styles, find on page).
+    private func renderedView(findControl: FindOnPageControl?) -> some View {
+        HTMLNoteView(
+            html: renderedHTML.isEmpty ? "<p></p>" : renderedHTML,
+            baseURL: baseURL,
+            checkboxOnlyRevision: checkboxOnlyRevision,
+            onNoteLinkTapped: onNoteLinkTapped,
+            onNoteJumpLinkTapped: onNoteJumpLinkTapped,
+            onTaskStateSet: onTaskStateSet,
+            onEditTaskStates: onEditTaskStates,
+            onTaskStateMenuShown: onTaskStateMenuShown,
+            loadAttachmentPreview: loadAttachmentPreview,
+            findControl: findControl,
+            listInteractionEnabled: onTaskStateSet != nil,
+            taskStates: taskStates,
+            allowListReorder: false,
+            allowCollapsibleReorder: false
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+    }
+
+    /// - Parameter fillsHeight: In Split the text view takes its pane's height and scrolls inside it; otherwise it's as
+    ///   tall as its text, and the note scrolls.
+    private func sourceView(findControl: FindOnPageControl?, fillsHeight: Bool = false) -> some View {
+        CodeReadonlyTextView(
+            text: content,
+            mime: mime,
+            darkMode: colorScheme == .dark,
+            findControl: findControl
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: fillsHeight ? nil : viewportHeight)
+        .frame(maxHeight: fillsHeight ? .infinity : nil)
+        .background {
+            GeometryReader { g in
+                Color.clear.preference(key: CodeNoteTextWidthKey.self, value: g.size.width)
+            }
+        }
+        .background(Color(.secondarySystemGroupedBackground))
     }
 
     /// Width from `GeometryReader` is often `0` on the first pass; using that for measurement forces a ~`minH` frame until a second pass, which can never arrive. Fall back to the window width (minus a typical inset) for **measurement** only; the real width still applies once layout settles.

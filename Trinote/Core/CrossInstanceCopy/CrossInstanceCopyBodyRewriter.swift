@@ -10,6 +10,17 @@ enum CrossInstanceCopyBodyRewriter {
         pattern: #"trinote-img://(attachments|images)/([a-zA-Z0-9_-]+)"#,
         options: []
     )
+    /// How v0.107 embeds and attachment links name an attachment: by its id alone, not by URL. The server schedules
+    /// any attachment the body doesn't name for erasure, so a copy has to name the new ones.
+    private static let embeddedAttachmentPattern = try! NSRegularExpression(
+        pattern: #"(data-attachment-id="|attachmentId=)([a-zA-Z0-9_]+)"#,
+        options: []
+    )
+    /// The note in an attachment link: `#root/a/b?viewMode=attachments&attachmentId=…`.
+    private static let attachmentLinkNotePattern = try! NSRegularExpression(
+        pattern: #"#root/(?:[a-zA-Z0-9_]+/)*([a-zA-Z0-9_]+)(\?[^"'\s<>]*attachmentId=)"#,
+        options: []
+    )
 
     static func referencedEntityIDs(in data: Data) -> (attachmentIds: Set<String>, imageNoteIds: Set<String>) {
         guard let text = String(data: data, encoding: .utf8) else {
@@ -36,6 +47,7 @@ enum CrossInstanceCopyBodyRewriter {
         guard var text = String(data: data, encoding: .utf8) else { return data }
         text = normalizeTrinoteImageScheme(text)
         text = applyPrefixMap(text, pathPrefix: "api/attachments/", map: attachmentIdMap)
+        text = rewriteEmbeddedAttachmentReferences(text, attachmentIdMap: attachmentIdMap, noteIdMap: imageNoteIdMap)
         text = rewriteImageRoutes(
             text,
             imageNoteIdMap: imageNoteIdMap,
@@ -43,6 +55,34 @@ enum CrossInstanceCopyBodyRewriter {
         )
         guard let out = text.data(using: .utf8) else { return data }
         return out
+    }
+
+    /// The drawing whose stored picture is called `title` (`<attachmentId>.svg`), if it's one of `sourceIds`.
+    static func drawingPictureOwner(title: String, among sourceIds: Set<String>) -> String? {
+        guard title.hasSuffix(".svg") else { return nil }
+        let owner = String(title.dropLast(4))
+        return sourceIds.contains(owner) ? owner : nil
+    }
+
+    private static func rewriteEmbeddedAttachmentReferences(
+        _ text: String,
+        attachmentIdMap: [String: String],
+        noteIdMap: [String: String]
+    ) -> String {
+        guard !attachmentIdMap.isEmpty, text.contains("data-attachment-id") || text.contains("attachmentId=") else { return text }
+        var ns = text as NSString
+        for match in embeddedAttachmentPattern.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
+            guard let newId = attachmentIdMap[ns.substring(with: match.range(at: 2))] else { continue }
+            ns = ns.replacingCharacters(in: match.range(at: 2), with: newId) as NSString
+        }
+        let result = ns as String
+        guard !noteIdMap.isEmpty else { return result }
+        for match in attachmentLinkNotePattern.matches(in: result, range: NSRange(location: 0, length: ns.length)).reversed() {
+            guard let newId = noteIdMap[ns.substring(with: match.range(at: 1))] else { continue }
+            let suffix = ns.substring(with: match.range(at: 2))
+            ns = ns.replacingCharacters(in: match.range, with: "#root/\(newId)\(suffix)") as NSString
+        }
+        return ns as String
     }
 
     static func attachmentImageSrc(attachmentId: String, filename: String) -> String {

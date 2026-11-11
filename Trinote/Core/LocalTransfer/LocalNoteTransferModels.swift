@@ -91,6 +91,8 @@ struct LocalTransferAttachmentPayload: Codable, Equatable, Sendable {
     var title: String
     var position: Int
     var data: Data
+    /// The id on the sending server, which embeds in the body name it by. Absent from older apps' bundles.
+    var sourceAttachmentId: String? = nil
 }
 
 struct NoteTransferBundle: Codable, Equatable, Sendable {

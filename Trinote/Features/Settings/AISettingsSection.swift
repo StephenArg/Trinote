@@ -254,6 +254,7 @@ enum LlmProviderTypeNames {
         case "openai": return "OpenAI"
         case "google": return "Google Gemini"
         case "deepseek": return "DeepSeek"
+        case "openrouter": return "OpenRouter"
         case "claude-agent": return "Claude Code"
         case "copilot-agent": return "GitHub Copilot"
         case "antigravity-agent": return "Google Antigravity"

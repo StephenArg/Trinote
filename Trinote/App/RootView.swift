@@ -43,6 +43,18 @@ struct RootView: View {
             }
         }
         .alert(
+            String(localized: "Signed Out", comment: "Alert title: the server ended this session"),
+            isPresented: Binding(
+                get: { appState.sessionEndedByServer && appState.isAuthenticated },
+                set: { if !$0 { appState.sessionEndedByServer = false } }
+            )
+        ) {
+            Button(String(localized: "Sign In", comment: "Alert button: go to the sign-in screen")) { appState.signInAgainAfterSessionEnded() }
+            Button(String(localized: "Not Now", comment: "Alert button: keep using cached notes"), role: .cancel) {}
+        } message: {
+            Text(String(localized: "The server ended this session, which usually means its password changed. Sign in again to keep syncing. Your notes stay on this device until you do.", comment: "Alert message when the server ended the session"))
+        }
+        .alert(
             String(localized: "Changes Not Saved", comment: "Alert title: the server refused offline changes to notes it keeps read-only"),
             isPresented: Binding(
                 get: { !appState.refusedChangesNoteTitles.isEmpty },

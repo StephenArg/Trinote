@@ -110,4 +110,18 @@ final class PromotedAttributeDefinitionTests: XCTestCase {
             XCTAssertEqual(parse(value).serialized(for: type), value)
         }
     }
+
+    func testAliasIsUnescapedAsTriliumStoresIt() {
+        let definition = PromotedAttributeDefinition(parsing: "promoted,alias=Cost%2C net (100%25),single,text")
+        XCTAssertEqual(definition.promotedAlias, "Cost, net (100%)")
+    }
+
+    func testAliasIsEscapedWhenWritten() {
+        var definition = PromotedAttributeDefinition()
+        definition.isPromoted = true
+        definition.promotedAlias = "Cost, net (100%)"
+        let stored = definition.serialized(for: .label)
+        XCTAssertTrue(stored.contains("alias=Cost%2C net (100%25)"), stored)
+        XCTAssertEqual(PromotedAttributeDefinition(parsing: stored).promotedAlias, "Cost, net (100%)")
+    }
 }

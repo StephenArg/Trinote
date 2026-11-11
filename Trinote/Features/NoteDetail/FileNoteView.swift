@@ -15,6 +15,7 @@ struct FileNoteView: View {
     /// Parsed body of a PDF file note; nil for other files or a PDF that can't be shown inline.
     @State private var pdfDocument: PDFDocument?
     @State private var pdfPageIndex = 0
+    @State private var drawingHeight: CGFloat = 300
     @State private var pdfWidth: CGFloat = 0
     /// Visible height of the note `ScrollView`, so a tall page never fills more than the screen.
     @State private var viewportHeight: CGFloat = 0
@@ -29,7 +30,13 @@ struct FileNoteView: View {
 
     /// Trilium's `pdfHistory.json` is viewer state, not something the user attached.
     private var visibleAttachments: [AttachmentItem] {
-        attachments.filter { !$0.isPDFViewerState }
+        attachments.userVisible
+    }
+
+    /// The file's text when it's a kind Trinote can draw: a canvas drawing or a Mermaid diagram.
+    private func fileText(ifMIME mime: String) -> String? {
+        guard note.mime.lowercased() == mime, let data = viewModel.content, !data.isEmpty else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     var body: some View {
@@ -39,6 +46,11 @@ struct FileNoteView: View {
                 officePreviewSection
             } else if let pdfDocument {
                 pdfSection(pdfDocument)
+            } else if let scene = fileText(ifMIME: AttachmentItem.drawingMIME) {
+                ExcalidrawReadOnlyWebView(json: scene, onHeightChanged: { drawingHeight = $0 })
+                    .frame(height: max(drawingHeight, 300))
+            } else if let source = fileText(ifMIME: AttachmentItem.mermaidMIME) {
+                MermaidNoteView(source: source)
             } else {
                 legacyHeader
             }
@@ -49,7 +61,7 @@ struct FileNoteView: View {
                 }
             }
 
-            if !isOfficeFile, note.mime.hasPrefix("text/"), let content = viewModel.contentString {
+            if !isOfficeFile, note.mime.hasPrefix("text/"), note.mime.lowercased() != AttachmentItem.mermaidMIME, let content = viewModel.contentString {
                 ScrollView(.horizontal) {
                     Text(content)
                         .font(.system(.caption, design: .monospaced))
@@ -70,6 +82,10 @@ struct FileNoteView: View {
         .onChange(of: viewModel.content, initial: true) { _, data in
             pdfDocument = Self.inlinePDFDocument(mime: note.mime, data: data)
             pdfPageIndex = 0
+            // A link to a page of this PDF (Trilium v0.107).
+            if let document = pdfDocument, let page = viewModel.consumePendingNoteJump()?.page, page <= document.pageCount {
+                pdfPageIndex = page - 1
+            }
         }
         .fullScreenCover(item: $previewItem) { item in
             AttachmentPreviewView(item: item) {

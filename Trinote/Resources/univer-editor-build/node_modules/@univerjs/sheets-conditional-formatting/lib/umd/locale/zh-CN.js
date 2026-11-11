@@ -1,0 +1,1 @@
+(function(e,t){typeof exports==`object`&&typeof module<`u`?module.exports=t():typeof define==`function`&&define.amd?define([],t):(e=typeof globalThis<`u`?globalThis:e||self,e.UniverSheetsConditionalFormattingZhCN=t())})(this,function(){return{"sheets-conditional-formatting":{iconSet:{direction:`方向`,shape:`形状`,mark:`标记`,rank:`等级`}}}});

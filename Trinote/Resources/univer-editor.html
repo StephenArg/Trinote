@@ -53,7 +53,8 @@
             expand chevron — desktop relies on hover to reveal it.
         */
         @media (hover: none), (pointer: coarse) {
-            .univer-z-10.univer-size-0 .univer-flex.univer-items-center.univer-gap-2 {
+            /* Found by its icon: the chip's wrapper classes changed in Univer 1.x. */
+            div:has(> svg.univerjs-icon-autofill-double-icon) {
                 min-height: 36px;
                 min-width: 36px;
                 padding: 8px 10px !important;
@@ -61,8 +62,12 @@
                 border-radius: 8px;
                 box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
             }
-            .univer-z-10.univer-size-0 svg.univer-fill-primary-600 + svg {
+            svg.univerjs-icon-autofill-double-icon + svg {
                 display: inline-block !important;
+            }
+            /* The options themselves, big enough to tap. */
+            [role="menuitemradio"] {
+                min-height: 40px;
             }
         }
     </style>
