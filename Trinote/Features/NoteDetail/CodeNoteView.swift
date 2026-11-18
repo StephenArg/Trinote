@@ -216,7 +216,8 @@ struct CodeNoteView: View {
             listInteractionEnabled: onTaskStateSet != nil,
             taskStates: taskStates,
             allowListReorder: false,
-            allowCollapsibleReorder: false
+            allowCollapsibleReorder: false,
+            detectsData: true
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground))

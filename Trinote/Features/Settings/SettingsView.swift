@@ -22,6 +22,8 @@ struct SettingsView: View {
 
     @AppStorage("noteEditorLongPressToEdit") private var noteEditorLongPressToEdit: Bool = false
     @AppStorage("noteCheckboxReorderEnabled") private var noteCheckboxReorderEnabled: Bool = true
+    @AppStorage(DetectedDataSettings.enabledKey) private var detectedDataEnabled: Bool = DetectedDataSettings.enabledDefault
+    @AppStorage(DetectedDataSettings.mapsAppKey) private var detectedDataMapsApp: String = DetectedDataSettings.MapsApp.apple.rawValue
     /// When true, Image–Code insert tools sit in a top bar below the nav header instead of the bottom formatting toolbar.
     @AppStorage("noteEditorInsertToolsAtTop") private var noteEditorInsertToolsAtTop: Bool = true
     @AppStorage(NoteEditorSaving.autosaveKey) private var noteEditorAutosave = false
@@ -31,6 +33,7 @@ struct SettingsView: View {
     @AppStorage("showNoteTabsBar") private var showNoteTabsBar: Bool = false
     @AppStorage(TreeView.showCollapseAllButtonKey) private var showCollapseAllButton = true
     @AppStorage(TreeView.showRowAddButtonKey) private var showRowAddButton = true
+    @AppStorage(TreeDisplayDensity.storageKey) private var treeDisplayDensity: TreeDisplayDensity = .relaxed
     @AppStorage(NoteContentWidth.storageKey) private var noteMaxContentWidth: Int = 0
     /// The iPad split layout's own tab strip setting (see `NoteDetailView.showNoteTabsBar`).
     @AppStorage("showNoteTabsBarPad") private var showNoteTabsBarPad: Bool = true
@@ -71,6 +74,7 @@ struct SettingsView: View {
                 appearanceSection
                 treeViewSection
                 noteEditorSection
+                detectedDataSection
             case .account:
                 securitySection
                 instancesSection
@@ -263,6 +267,20 @@ struct SettingsView: View {
 
     private var treeViewSection: some View {
         Section(String(localized: "Tree View", comment: "Settings section")) {
+            LabeledContent(String(localized: "Display Density", comment: "Settings: how tightly the note tree's rows are packed")) {
+                Picker(
+                    String(localized: "Display Density", comment: "Settings: how tightly the note tree's rows are packed"),
+                    selection: $treeDisplayDensity
+                ) {
+                    ForEach(TreeDisplayDensity.allCases) { density in
+                        Text(density.label).tag(density)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+
             Toggle(
                 String(localized: "Show tab bar", comment: "Settings: show open-note tab strip at bottom of tree"),
                 isOn: noteWorkspace != nil ? $showNoteTabsBarPad : $showNoteTabsBar
@@ -472,6 +490,40 @@ struct SettingsView: View {
                 ))
             }
         }
+    }
+
+    private var detectedDataSection: some View {
+        Section {
+            Toggle(
+                String(localized: "Phone Numbers, Addresses & Tracking", comment: "Settings toggle: underline phone numbers, street addresses and parcel tracking numbers in notes and make them tappable"),
+                isOn: $detectedDataEnabled
+            )
+            if detectedDataEnabled {
+                Picker(
+                    String(localized: "Open Addresses In", comment: "Settings picker: which maps app a tapped address in a note opens"),
+                    selection: detectedDataMapsAppBinding
+                ) {
+                    ForEach(DetectedDataSettings.MapsApp.allCases) { app in
+                        Text(app.title).tag(app)
+                    }
+                }
+            }
+        } header: {
+            Text(String(localized: "Detected Details", comment: "Settings section header: phone numbers, addresses and tracking numbers found in notes"))
+        } footer: {
+            Text(String(
+                localized: "Underlines phone numbers, addresses and package tracking numbers when reading a note. Tap a phone number to call it, an address to open it in Maps, or a tracking number to open the carrier's tracking page.",
+                comment: "Settings footer: Phone Numbers, Addresses & Tracking"
+            ))
+        }
+    }
+
+    /// Shows Apple Maps for a stored value that isn't one of the options.
+    private var detectedDataMapsAppBinding: Binding<DetectedDataSettings.MapsApp> {
+        Binding(
+            get: { DetectedDataSettings.MapsApp(rawValue: detectedDataMapsApp) ?? .apple },
+            set: { detectedDataMapsApp = $0.rawValue }
+        )
     }
 
     /// Shows the default for a stored delay that isn't one of the options.

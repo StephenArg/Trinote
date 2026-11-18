@@ -2340,6 +2340,8 @@ final class PersistenceManager {
     /// Removes inline attachment/image rows referenced in cached HTML bodies for the given notes.
     func deleteCachedImagesReferencedInBodies(noteIds: Set<String>, serverProfileId: String) throws {
         let profileId = serverProfileId
+        // Relative server-file images (`/media/x.png`) resolve against the profile's server.
+        let serverBase = (try? fetchServerProfiles())?.first { $0.id == profileId }?.url
         for noteId in noteIds {
             let nid = noteId
             guard let note = try fetchCachedNote(id: noteId, serverProfileId: profileId),
@@ -2349,6 +2351,7 @@ final class PersistenceManager {
             else { continue }
 
             let refs = TriliumInlineImageCaching.extractImageReferences(from: html)
+                .union(TriliumInlineImageCaching.extractServerFileReferences(from: html, serverBase: serverBase))
             for ref in refs {
                 let compositeId = "\(profileId):\(ref.routeType):\(ref.entityId)"
                 var descriptor = FetchDescriptor<CachedImageData>(predicate: #Predicate { $0.id == compositeId })

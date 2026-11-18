@@ -36,6 +36,20 @@ enum TriliumImageScheme {
     static func reference(fromURLString string: String) -> (routeType: String, entityId: String)? {
         reference(from: URL(string: string))
     }
+
+    /// Like `reference(from:)`, but also accepts `ServerFileImageURLs` references, as
+    /// `(ServerFileImageURLs.route, "/path/on/server")`. Only for code that hands the pair straight to a byte
+    /// provider: `reference(from:)` stays limited to Trilium entities because spreadsheet code turns its result
+    /// back into `api/…` URLs.
+    static func anyReference(from url: URL?) -> (routeType: String, entityId: String)? {
+        if let reference = reference(from: url) { return reference }
+        guard let path = ServerFileImageURLs.path(from: url) else { return nil }
+        return (ServerFileImageURLs.route, path)
+    }
+
+    static func anyReference(fromURLString string: String) -> (routeType: String, entityId: String)? {
+        anyReference(from: URL(string: string))
+    }
 }
 
 /// Answers `trinote-img://` image requests from the read-only note view, using the same cache-then-server
@@ -60,7 +74,7 @@ final class TriliumImageSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
         let key = ObjectIdentifier(urlSchemeTask)
         liveTasks[key] = urlSchemeTask
-        guard let reference = TriliumImageScheme.reference(from: urlSchemeTask.request.url) else {
+        guard let reference = TriliumImageScheme.anyReference(from: urlSchemeTask.request.url) else {
             respond(key: key, with: nil)
             return
         }

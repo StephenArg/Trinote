@@ -236,6 +236,26 @@ final class NoteDetailViewModel {
     var isOnline: Bool { appState.isOnline }
     var serverBaseURL: URL? { (appState.client as? TriliumClient)?.baseURL }
 
+    /// Pull-to-refresh count for images on the server's own domain outside Trilium (`ServerFileImageURLs`). Goes
+    /// into their `trinote-img://server` URLs so the web view asks for them again after a pull.
+    @ObservationIgnored private var serverImageGeneration = 0
+    /// Server images downloaded again since the last pull; later loads come from the cache.
+    @ObservationIgnored private var refetchedServerImagePaths: Set<String> = []
+
+    /// Whether `html` has images the read-only view must rewrite: Trilium's own, or same-origin server files.
+    private func bodyNeedsImageRewrite(_ html: String) -> Bool {
+        TriliumInlineImageCaching.hasResolvableInlineImageURLs(in: html)
+            || ServerFileImageURLs.containsCandidates(in: html, serverBase: serverBaseURL)
+    }
+
+    /// The note's pull-to-refresh gesture: like `refresh(force: true)`, and its server-hosted images (which change
+    /// without Trilium knowing) are downloaded again. Other refreshes keep serving those from the cache.
+    func refreshFromPull() async {
+        serverImageGeneration += 1
+        refetchedServerImagePaths = []
+        await refresh(force: true)
+    }
+
     private func parentNoteIdsForCache(noteId: String, response: NoteResponse? = nil) -> [String] {
         if let response { return response.parentNoteIds }
         if note?.noteId == noteId { return note?.parentNoteIds ?? [] }
@@ -589,7 +609,7 @@ final class NoteDetailViewModel {
         // Cached HTML still points at `api/images` / `api/attachments`; rewrite those to `trinote-img://`
         // before publishing so the read-only WebView never paints a broken `api/…` URL.
         if let raw = self.rawContentString,
-           TriliumInlineImageCaching.hasResolvableInlineImageURLs(in: raw),
+           bodyNeedsImageRewrite(raw),
            self.note?.type == .text || self.contentString == nil {
             let hideBodyUntilInlined = self.contentString == nil
             if hideBodyUntilInlined {
@@ -686,8 +706,7 @@ final class NoteDetailViewModel {
             self.rawContentString = htmlString
 
             var displayHTML = htmlString
-            if let html = displayHTML,
-               html.containsASCII("api/attachments/") || html.containsASCII("api/images/") {
+            if let html = displayHTML, bodyNeedsImageRewrite(html) {
                 displayHTML = await self.inlineAttachmentImages(in: html)
             }
 
@@ -757,7 +776,9 @@ final class NoteDetailViewModel {
             persistence: persistence,
             serverProfileId: profileId,
             sourceNoteId: noteId,
-            parentNoteIds: parentNoteIdsForCache(noteId: noteId)
+            parentNoteIds: parentNoteIdsForCache(noteId: noteId),
+            serverFileBase: serverBaseURL,
+            serverFileVersion: serverImageGeneration
         )
         return Self.dedupeTrinoteImageNoteIdAttributesInHTML(inlined)
     }
@@ -771,6 +792,12 @@ final class NoteDetailViewModel {
     func loadImageBytes(routeType: String, entityId: String) async -> Data? {
         let profileId = serverProfileId ?? ""
         let clientForLoad: (any TriliumClientProtocol)? = isOnline ? client : nil
+        // After a pull-to-refresh, each server-hosted image is downloaded once more (keeping the cached copy if
+        // that fails); everything else, and those images afterwards, is cache first.
+        var refetch = false
+        if routeType == ServerFileImageURLs.route, serverImageGeneration > 0, clientForLoad != nil {
+            refetch = refetchedServerImagePaths.insert(entityId).inserted
+        }
         return await TriliumInlineImageCaching.loadImageData(
             routeType: routeType,
             entityId: entityId,
@@ -778,7 +805,8 @@ final class NoteDetailViewModel {
             persistence: persistence,
             serverProfileId: profileId,
             sourceNoteId: noteId,
-            parentNoteIds: parentNoteIdsForCache(noteId: noteId)
+            parentNoteIds: parentNoteIdsForCache(noteId: noteId),
+            refetch: refetch
         )
     }
 
@@ -850,7 +878,7 @@ final class NoteDetailViewModel {
         guard let display = contentString, Self.displayHTMLContainsMermaidPreview(display) else { return }
         guard let raw = rawContentString else { return }
 
-        if TriliumInlineImageCaching.hasResolvableInlineImageURLs(in: raw) {
+        if bodyNeedsImageRewrite(raw) {
             let inlined = await inlineAttachmentImages(in: raw)
             guard !isEditing else { return }
             contentString = inlined
@@ -879,7 +907,8 @@ final class NoteDetailViewModel {
         }
         // Include resolution can embed nested HTML with new api/images URLs — inline again.
         guard var after = contentString else { return }
-        if after.containsASCII("api/images") || after.containsASCII("api/attachments") {
+        if after.containsASCII("api/images") || after.containsASCII("api/attachments")
+            || ServerFileImageURLs.containsCandidates(in: after, serverBase: serverBaseURL) {
             let inlined = await inlineAttachmentImages(in: after)
             if inlined != after {
                 contentString = inlined
@@ -1144,6 +1173,18 @@ final class NoteDetailViewModel {
     /// `originalSrc` attribute added in `editor.html`), so `undecorateLinkedImagesFromEditor` can restore the
     /// canonical Trilium HTML before saving or storing drafts.
     private func decorateLinkedImagesForEditor(in html: String) async -> String {
+        let decorated = await decorateTriliumImagesForEditor(in: html)
+        // Same-origin images outside Trilium (`/media/x.png`) would resolve against the editor's bundle page; they
+        // load through the scheme handler instead, and keep their written `src` in `data-trinote-original-src`.
+        return ServerFileImageURLs.rewriteImageSources(
+            in: decorated,
+            serverBase: serverBaseURL,
+            version: serverImageGeneration,
+            keepingOriginal: true
+        )
+    }
+
+    private func decorateTriliumImagesForEditor(in html: String) async -> String {
         guard html.containsASCIICaseInsensitive("api/images")
                 || html.containsASCIICaseInsensitive("api/attachments") else { return html }
 
@@ -1432,7 +1473,8 @@ final class NoteDetailViewModel {
     private func refreshResolvedTextNoteDisplayAfterSave() async {
         guard note?.type == .text else { return }
         guard var s = contentString, !s.isEmpty else { return }
-        if s.containsASCII("api/images") || s.containsASCII("api/attachments") {
+        if s.containsASCII("api/images") || s.containsASCII("api/attachments")
+            || ServerFileImageURLs.containsCandidates(in: s, serverBase: serverBaseURL) {
             let inlined = await inlineAttachmentImages(in: s)
             if inlined != s {
                 contentString = inlined
@@ -1617,9 +1659,7 @@ final class NoteDetailViewModel {
             // open. Re-publish from cache so the WKWebView picks it up — without this, the
             // user has to back out and re-enter the note to see the new content (`load()`
             // does the same `loadContentFromCache()` call on entry).
-            if let raw = self.rawContentString,
-               raw.containsASCIICaseInsensitive("api/attachments/")
-                   || raw.containsASCIICaseInsensitive("api/images/") {
+            if let raw = self.rawContentString, bodyNeedsImageRewrite(raw) {
                 self.contentString = await self.inlineAttachmentImages(in: raw)
             }
             await applyIncludeNoteResolutionIfNeeded()
@@ -1677,8 +1717,7 @@ final class NoteDetailViewModel {
         self.rawContentString = fetchedHTML
 
         var displayHTML = fetchedHTML
-        if let html = displayHTML,
-           html.containsASCII("api/attachments/") || html.containsASCII("api/images/") {
+        if let html = displayHTML, bodyNeedsImageRewrite(html) {
             displayHTML = await self.inlineAttachmentImages(in: html)
         }
         self.contentString = displayHTML
@@ -6205,8 +6244,7 @@ final class NoteDetailViewModel {
             let isTextHTMLNote = NoteType(rawValue: cached.noteType) == .text
             let needsDeferredBody: Bool = {
                 guard isTextHTMLNote, let h = html else { return false }
-                return h.containsASCIICaseInsensitive("api/attachments/")
-                    || h.containsASCIICaseInsensitive("api/images/")
+                return self.bodyNeedsImageRewrite(h)
             }()
             // Defer publishing HTML with unresolved Trilium image URLs so the read-only web view does not paint broken `<img>`s before the `trinote-img://` rewrite runs.
             if needsDeferredBody {

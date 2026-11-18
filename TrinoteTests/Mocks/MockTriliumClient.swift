@@ -25,6 +25,8 @@ actor MockTriliumClient: TriliumClientProtocol {
     var attachmentsByNoteId: [String: [AttachmentResponse]] = [:]
     var attachmentContentResult: Result<Data, Error>?
     var attachmentContentById: [String: Data] = [:]
+    var serverFileResults: [String: Result<Data, Error>] = [:]
+    var serverFileCalls: [String] = []
     var createAttachmentResult: Result<AttachmentResponse, Error>?
     var convertAttachmentToNoteResult: Result<ConvertAttachmentToNoteResponse, Error>?
     var attachmentOCRTextResult: Result<AttachmentOCRTextResponse, Error>?
@@ -93,6 +95,10 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func setAttachments(noteId: String, _ list: [AttachmentResponse]) {
         attachmentsByNoteId[noteId] = list
+    }
+
+    func setServerFileResult(path: String, _ result: Result<Data, Error>) {
+        serverFileResults[path] = result
     }
 
     func setAttachmentBytes(id: String, _ data: Data) {
@@ -802,6 +808,12 @@ actor MockTriliumClient: TriliumClientProtocol {
 
     func getAttachment(_ attachmentId: String) async throws -> AttachmentResponse {
         attachmentResponsesById[attachmentId] ?? TestFixtures.attachmentResponse(attachmentId: attachmentId)
+    }
+
+    func getServerFile(path: String) async throws -> Data {
+        serverFileCalls.append(path)
+        if let result = serverFileResults[path] { return try result.get() }
+        throw APIError.notFound(path)
     }
 
     func getAttachmentContent(_ attachmentId: String) async throws -> Data {

@@ -98,6 +98,11 @@ struct RichTextEditorView: UIViewRepresentable {
     var contentBlocks: Bool = false
     /// The to-do task states the editor draws and offers, and what a tap sets.
     var taskStates: TaskStateWebConfig = .plain
+    /// iPhone sideways with the on-screen keyboard up: one toolbar row with a Hide Keyboard button at its end.
+    var landscapeTyping: Bool = false
+    /// The on-screen keyboard came up for this editor (`true`) or went down or moved elsewhere (`false`). A hardware
+    /// keyboard's shortcut bar doesn't count.
+    var onHoldsKeyboardChanged: ((Bool) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -206,6 +211,8 @@ struct RichTextEditorView: UIViewRepresentable {
         coordinator.syncLinkPreviews(linkPreviews)
         coordinator.syncContentBlocks(contentBlocks)
         coordinator.syncTaskStates(taskStates)
+        coordinator.onHoldsKeyboardChanged = onHoldsKeyboardChanged
+        coordinator.syncLandscapeTyping(landscapeTyping)
         Self.applyEditorSurfaceColors(to: webView)
 
         let sv = webView.scrollView
@@ -328,6 +335,10 @@ struct RichTextEditorView: UIViewRepresentable {
         private var appliedLinkPreviews: LinkPreviewSupport?
         private var taskStates = TaskStateWebConfig.plain
         private var appliedTaskStates: TaskStateWebConfig?
+        var onHoldsKeyboardChanged: ((Bool) -> Void)?
+        private var holdsKeyboard = false
+        private var landscapeTyping = false
+        private var appliedLandscapeTyping: Bool?
 
         /// Visual gap between HTML formatting toolbar and keyboard (CSS px ≈ points in WKWebView).
         private static let keyboardToolbarGapPoints: CGFloat = 10
@@ -406,6 +417,38 @@ struct RichTextEditorView: UIViewRepresentable {
             setTaskStates(config)
         }
 
+        func syncLandscapeTyping(_ on: Bool) {
+            landscapeTyping = on
+            guard appliedLandscapeTyping != on else { return }
+            setLandscapeTyping(on)
+        }
+
+        private func setLandscapeTyping(_ on: Bool) {
+            guard editorReady, let webView else { return }
+            appliedLandscapeTyping = on
+            webView.evaluateJavaScript("window.editorBridge.setLandscapeTyping(\(on))") { _, error in
+                if let error { Log.api.error("setLandscapeTyping failed: \(error)") }
+            }
+        }
+
+        /// Reports whether the on-screen keyboard is up for this editor: it's up, and the page (or a field in it)
+        /// has the focus rather than a prompt or sheet over the note.
+        /// `keyboardFrameEnd` is nil when the keyboard is going down.
+        private func reportHoldsKeyboard(keyboardFrameEnd: CGRect?) {
+            var holds = false
+            if let webView, LandscapeTyping.softwareKeyboardRaised(keyboardFrameEnd: keyboardFrameEnd) {
+                holds = Self.containsFirstResponder(webView)
+            }
+            guard holds != holdsKeyboard else { return }
+            holdsKeyboard = holds
+            onHoldsKeyboardChanged?(holds)
+        }
+
+        @MainActor
+        private static func containsFirstResponder(_ view: UIView) -> Bool {
+            view.isFirstResponder || view.subviews.contains(where: containsFirstResponder)
+        }
+
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "editorReady":
@@ -431,6 +474,7 @@ struct RichTextEditorView: UIViewRepresentable {
                     scrollToFraction(initialScrollFraction)
                 }
                 setInsertToolsAtTop(insertToolsAtTop)
+                setLandscapeTyping(landscapeTyping)
                 setSaveButtonHidden(hidesSaveButton)
                 setLinkPreviews(linkPreviews)
                 setContentBlocks(contentBlocks)
@@ -839,12 +883,19 @@ struct RichTextEditorView: UIViewRepresentable {
             let center = NotificationCenter.default
             keyboardToolbarGapObservers.append(
                 center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] note in
-                    self?.syncKeyboardToolbarGap(notification: note)
+                    let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+                    MainActor.assumeIsolated {
+                        self?.syncKeyboardToolbarGap(keyboardFrameEnd: frame)
+                        self?.reportHoldsKeyboard(keyboardFrameEnd: frame)
+                    }
                 }
             )
             keyboardToolbarGapObservers.append(
                 center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
-                    self?.setKeyboardToolbarGap(0)
+                    MainActor.assumeIsolated {
+                        self?.setKeyboardToolbarGap(0)
+                        self?.reportHoldsKeyboard(keyboardFrameEnd: nil)
+                    }
                 }
             )
         }
@@ -856,9 +907,8 @@ struct RichTextEditorView: UIViewRepresentable {
             webView.evaluateJavaScript("window.editorBridge.setKeyboardToolbarGap(0)", completionHandler: nil)
         }
 
-        private func syncKeyboardToolbarGap(notification: Notification) {
-            guard let webView else { return }
-            guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+        private func syncKeyboardToolbarGap(keyboardFrameEnd: CGRect?) {
+            guard let webView, let frame = keyboardFrameEnd else { return }
             let keyboardInWebView = webView.convert(frame, from: nil)
             let overlap = webView.bounds.intersection(keyboardInWebView).height
             let gap = overlap > Self.keyboardOverlapThreshold ? Self.keyboardToolbarGapPoints : 0

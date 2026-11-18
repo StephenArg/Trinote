@@ -150,6 +150,10 @@ protocol TriliumClientProtocol: Actor, Sendable {
     func getNoteAttachments(_ noteId: String) async throws -> [AttachmentResponse]
     func getAttachment(_ attachmentId: String) async throws -> AttachmentResponse
     func getAttachmentContent(_ attachmentId: String) async throws -> Data
+    /// Bytes of a file on the server's own origin outside Trilium (e.g. `/media/x.png` served by a reverse proxy),
+    /// fetched with this session's cookies and Cloudflare Access headers. `path` is percent-encoded, starts with
+    /// `/`, may carry `?query`, and is taken from the origin, not under the base URL's path.
+    func getServerFile(path: String) async throws -> Data
     func uploadAttachmentContent(_ attachmentId: String, data: Data, contentType: String) async throws
     func uploadNoteAttachment(noteId: String, data: Data, filename: String, contentType: String) async throws -> String
     func createAttachment(_ request: CreateAttachmentRequest) async throws -> AttachmentResponse
@@ -1877,6 +1881,39 @@ actor TriliumClient: TriliumClientProtocol {
         let (data, response) = try await session.data(for: req)
         try validateResponse(response, data: data)
         return data
+    }
+
+    func getServerFile(path: String) async throws -> Data {
+        let url = try Self.serverFileURL(baseURL: baseURL, path: path)
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        applyAccessHeaders(to: &req)
+        let (data, response) = try await session.data(for: req)
+        // Not `validateResponse`: a 401 or 404 from whatever serves this file says nothing about the Trilium
+        // session, so it must not mark the session invalid or touch CSRF state.
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            throw APIError.serverError(statusCode: http.statusCode, message: nil)
+        }
+        return data
+    }
+
+    /// `path` on `baseURL`'s origin (scheme, host and port), ignoring the base's own path, the way a browser
+    /// resolves `/media/x.png` on Trilium's page. Throws unless the result is still on that origin.
+    static func serverFileURL(baseURL: URL, path: String) throws -> URL {
+        guard path.hasPrefix("/"), !path.hasPrefix("//"),
+              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        else { throw APIError.invalidURL }
+        components.percentEncodedPath = ""
+        components.percentEncodedQuery = nil
+        components.fragment = nil
+        guard let origin = components.url?.absoluteString,
+              let url = URL(string: origin + path),
+              ServerFileImageURLs.isSameOrigin(url, as: baseURL)
+        else { throw APIError.invalidURL }
+        return url
     }
 
     func uploadAttachmentContent(_ attachmentId: String, data: Data, contentType: String) async throws {

@@ -194,4 +194,99 @@ final class TriliumInlineImageCachingTests: XCTestCase {
         )
         XCTAssertEqual(rewritten, Self.linkPreviewBody)
     }
+
+    // MARK: - Server files (issue #40)
+
+    private static let serverPNG = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00])
+    private static let newerServerPNG = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01])
+
+    private func loadServerFile(
+        _ path: String,
+        client: MockTriliumClient?,
+        refetch: Bool = false
+    ) async -> Data? {
+        await TriliumInlineImageCaching.loadImageData(
+            routeType: ServerFileImageURLs.route,
+            entityId: path,
+            client: client,
+            persistence: persistence,
+            serverProfileId: "s1",
+            sourceNoteId: "hostNote",
+            parentNoteIds: ["root"],
+            refetch: refetch
+        )
+    }
+
+    func testInlineRewritesServerFilesOnlyWithABase() async {
+        let html = #"<p><img src="/media/a.png"><img src="https://other.test/b.png"></p>"#
+        let without = await TriliumInlineImageCaching.inlineAttachmentImages(
+            in: html, client: nil, persistence: persistence,
+            serverProfileId: "s1", sourceNoteId: "n", parentNoteIds: []
+        )
+        XCTAssertEqual(without, html)
+
+        let with = await TriliumInlineImageCaching.inlineAttachmentImages(
+            in: html, client: nil, persistence: persistence,
+            serverProfileId: "s1", sourceNoteId: "n", parentNoteIds: [],
+            serverFileBase: URL(string: "https://notes.example.com")!, serverFileVersion: 2
+        )
+        XCTAssertEqual(
+            with,
+            #"<p><img src="trinote-img://server/file?path=/media/a.png&amp;v=2"><img src="https://other.test/b.png"></p>"#
+        )
+    }
+
+    func testServerFileIsDownloadedOnceThenServedFromTheCache() async throws {
+        let client = MockTriliumClient()
+        await client.setServerFileResult(path: "/media/a.png", .success(Self.serverPNG))
+
+        let first = await loadServerFile("/media/a.png", client: client)
+        XCTAssertEqual(first, Self.serverPNG)
+        let row = try XCTUnwrap(
+            try persistence.fetchCachedImage(entityId: "/media/a.png", entityType: "server", serverProfileId: "s1")
+        )
+        XCTAssertEqual(row.data, Self.serverPNG)
+
+        await client.setServerFileResult(path: "/media/a.png", .success(Self.newerServerPNG))
+        let second = await loadServerFile("/media/a.png", client: client)
+        XCTAssertEqual(second, Self.serverPNG)
+        let offline = await loadServerFile("/media/a.png", client: nil)
+        XCTAssertEqual(offline, Self.serverPNG)
+        let calls = await client.serverFileCalls
+        XCTAssertEqual(calls, ["/media/a.png"])
+    }
+
+    func testServerFileLoginPageIsNotCached() async throws {
+        let client = MockTriliumClient()
+        await client.setServerFileResult(path: "/media/a.png", .success(Data("<!DOCTYPE html><title>Sign in</title>".utf8)))
+        let data = await loadServerFile("/media/a.png", client: client)
+        XCTAssertNil(data)
+        XCTAssertNil(try persistence.fetchCachedImage(entityId: "/media/a.png", entityType: "server", serverProfileId: "s1"))
+    }
+
+    func testServerFileRefetchReplacesTheCachedCopyAndKeepsItOnFailure() async throws {
+        let client = MockTriliumClient()
+        await client.setServerFileResult(path: "/media/a.png", .success(Self.serverPNG))
+        _ = await loadServerFile("/media/a.png", client: client)
+
+        await client.setServerFileResult(path: "/media/a.png", .success(Self.newerServerPNG))
+        let refreshed = await loadServerFile("/media/a.png", client: client, refetch: true)
+        XCTAssertEqual(refreshed, Self.newerServerPNG)
+        XCTAssertEqual(
+            try persistence.fetchCachedImage(entityId: "/media/a.png", entityType: "server", serverProfileId: "s1")?.data,
+            Self.newerServerPNG
+        )
+
+        await client.setServerFileResult(path: "/media/a.png", .failure(APIError.serverError(statusCode: 502, message: nil)))
+        let failed = await loadServerFile("/media/a.png", client: client, refetch: true)
+        XCTAssertEqual(failed, Self.newerServerPNG)
+    }
+
+    func testExtractServerFileReferences() {
+        let refs = TriliumInlineImageCaching.extractServerFileReferences(
+            from: #"<img src="/media/a.png"><img src="api/images/n1/x.png">"#,
+            serverBase: URL(string: "https://notes.example.com")!
+        )
+        XCTAssertEqual(refs, [.init(routeType: "server", entityId: "/media/a.png")])
+    }
 }

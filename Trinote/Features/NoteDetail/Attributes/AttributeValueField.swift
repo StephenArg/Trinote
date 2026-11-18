@@ -247,9 +247,7 @@ struct AttributeValueField: View {
     }
 
     static func phoneURL(_ value: String) -> URL? {
-        let digits = value.filter { $0.isASCII && ($0.isNumber || $0 == "+") }
-        guard digits.contains(where: \.isNumber) else { return nil }
-        return URL(string: "tel:\(digits)")
+        DetectedDataScanner.phoneURL(value)
     }
 }
 

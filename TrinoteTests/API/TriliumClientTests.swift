@@ -481,6 +481,22 @@ final class TriliumClientTests: XCTestCase {
         XCTAssertEqual(url.absoluteString, "https://trilium.test/sub/api/notes/a%20b")
     }
 
+    /// Server files (issue #40) live on the origin, not under the base path, as a browser resolves `/media/x.png`.
+    func testServerFileURLUsesTheOrigin() throws {
+        let sub = URL(string: "https://trilium.test/sub")!
+        XCTAssertEqual(
+            try TriliumClient.serverFileURL(baseURL: sub, path: "/media/x%20y.png?a=1&b=2").absoluteString,
+            "https://trilium.test/media/x%20y.png?a=1&b=2"
+        )
+        XCTAssertEqual(
+            try TriliumClient.serverFileURL(baseURL: URL(string: "http://10.0.0.2:8080")!, path: "/m.png").absoluteString,
+            "http://10.0.0.2:8080/m.png"
+        )
+        XCTAssertThrowsError(try TriliumClient.serverFileURL(baseURL: sub, path: "media/x.png"))
+        XCTAssertThrowsError(try TriliumClient.serverFileURL(baseURL: sub, path: "//evil.test/x.png"))
+        XCTAssertEqual(try TriliumClient.serverFileURL(baseURL: sub, path: "/@evil.test/x.png").host, "trilium.test")
+    }
+
     /// Query values are encoded as `encodeURIComponent` encodes them; a bare `+` would reach Express as a space.
     func testMakeURLEncodesQueryValuesLikeEncodeURIComponent() throws {
         let url = try TriliumClient.makeURL(

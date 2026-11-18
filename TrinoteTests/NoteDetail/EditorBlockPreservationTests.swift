@@ -403,4 +403,18 @@ final class EditorBlockPreservationTests: XCTestCase {
             """) as? String
         XCTAssertFalse(try XCTUnwrap(out).contains("att123"))
     }
+
+    /// Issue #40: a server-hosted image shows through the scheme handler in the editor and saves with its written URL.
+    func testServerHostedImageKeepsItsWrittenURL() async throws {
+        let body = #"<p>x</p><figure class="image"><img src="/media/image/x.png?a=1&amp;b=2" alt="pic"></figure>"#
+        let plain = try await roundTrip(body)
+        XCTAssertTrue(plain.contains(#"src="/media/image/x.png?a=1&amp;b=2""#), plain)
+
+        let decorated = ServerFileImageURLs.rewriteImageSources(
+            in: body, serverBase: URL(string: "https://notes.example.com")!, version: 1, keepingOriginal: true
+        )
+        let shown = try await roundTrip(decorated)
+        XCTAssertTrue(shown.contains("trinote-img://server/file"), shown)
+        XCTAssertEqual(NoteDetailViewModel.undecorateLinkedImagesFromEditor(in: shown), plain)
+    }
 }

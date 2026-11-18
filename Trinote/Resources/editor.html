@@ -154,6 +154,24 @@ body { display: flex; flex-direction: column; }
   padding-top: 0;
   padding-bottom: 2px;
 }
+/* Bottom row: the scrolling toolbar, then the hide-keyboard button pinned at its end (iPhone sideways typing). */
+.toolbar-row { display: flex; align-items: center; }
+.toolbar-row > .toolbar { flex: 1 1 auto; min-width: 0; }
+.toolbar-hide-keyboard {
+  display: none; flex-shrink: 0; align-items: center; justify-content: center;
+  width: 44px; min-height: 30px; margin: 0 4px 0 0; padding: 0;
+  border: none; border-left: 1px solid var(--toolbar-border); border-radius: 0;
+  background: transparent; color: var(--fg); cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  -webkit-user-select: none; user-select: none;
+}
+.toolbar-hide-keyboard:active { opacity: 0.6; }
+.toolbar-hide-keyboard svg { width: 24px; height: 24px; }
+/* Sideways typing on iPhone: one toolbar row (the insert tools come down from the top row) and a way to lower
+   the keyboard, as the note's top bar (with Back) is hidden until it's down. */
+body.landscape-typing .toolbar-hide-keyboard { display: flex; }
+body.landscape-typing #toolbar-swap,
+body.landscape-typing #toolbar-swap-sep { display: none; }
 /* Insert tools wrapper — holds Image…Code block when pinned to top toolbar */
 .toolbar-insert-tools {
   display: flex;
@@ -943,7 +961,16 @@ body { display: flex; flex-direction: column; }
   <div id="editor" style="display:none"></div>
 </div>
 <div class="toolbar-wrap" id="toolbar-wrap" style="display:none">
-  <div class="toolbar" id="toolbar"></div>
+  <div class="toolbar-row">
+    <div class="toolbar" id="toolbar"></div>
+    <button type="button" class="toolbar-hide-keyboard" id="toolbar-hide-keyboard" title="Hide Keyboard" aria-label="Hide Keyboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2.75" y="3.75" width="18.5" height="11.5" rx="2"/>
+        <path d="M6 7.5h.01M9 7.5h.01M12 7.5h.01M15 7.5h.01M18 7.5h.01M6 10.5h.01M18 10.5h.01M8.5 12.25h7"/>
+        <path d="M9 18.5l3 2.5 3-2.5"/>
+      </svg>
+    </button>
+  </div>
 </div>
 
 <script src="tiptap-bundle.min.js"></script>
@@ -3552,6 +3579,11 @@ function unwrapInsertToolsIntoToolbar() {
   }
 }
 let _insertToolsAtTop = false;
+/* Where the person keeps the insert tools (Settings, swap button). Sideways typing shows them in the bottom row
+   without changing this, and puts them back when it ends. */
+let _insertToolsPreferredAtTop = false;
+/* iPhone sideways typing with the on-screen keyboard up (native `setLandscapeTyping`). */
+let _landscapeTyping = false;
 let _sepBeforeInsert = null;
 let _sepAfterInsert = null;
 let _insertToolsEl = null;
@@ -4171,7 +4203,8 @@ editor.on('focus', function () {
 (function trackKeyboardAndBodyHeight() {
   const vv = window.visualViewport;
   if (!vv) return;
-  const GAP = 10;
+  // Space between the toolbar and the keyboard; sideways there's too little height to spare it.
+  function gap() { return _landscapeTyping ? 0 : 10; }
   var baseline = Math.max(vv.height, window.innerHeight, screen.height * 0.6);
   let scheduled = false;
   const tw = document.getElementById('toolbar-wrap');
@@ -4180,7 +4213,7 @@ editor.on('focus', function () {
     const h = vv.height;
     if (h > baseline) baseline = h;
     const kbOpen = h < baseline - 90;
-    const bodyH = kbOpen ? h - GAP : h;
+    const bodyH = kbOpen ? h - gap() : h;
     document.body.style.height = bodyH + 'px';
     document.body.style.minHeight = bodyH + 'px';
     if (tw) tw.style.paddingBottom = kbOpen ? '0px' : 'env(safe-area-inset-bottom, 0px)';
@@ -4192,6 +4225,7 @@ editor.on('focus', function () {
   }
   vv.addEventListener('resize', schedule);
   window.addEventListener('resize', schedule);
+  window._refreshKeyboardBodyHeight = schedule;
   editor.on('focus', function () { setTimeout(schedule, 120); setTimeout(schedule, 350); setTimeout(schedule, 700); });
   editor.on('blur', function () { setTimeout(schedule, 120); setTimeout(schedule, 350); });
   update();
@@ -6852,6 +6886,7 @@ function applyInsertToolsPlacement(atTop) {
 
 function toggleInsertToolsAtTop() {
   applyInsertToolsPlacement(!_insertToolsAtTop);
+  _insertToolsPreferredAtTop = _insertToolsAtTop;
   try {
     window.webkit.messageHandlers.insertToolsAtTopChanged.postMessage(_insertToolsAtTop);
   } catch (e) {}
@@ -6859,7 +6894,7 @@ function toggleInsertToolsAtTop() {
 
 function initToolbarSwapButton() {
   if (_toolbarSwapBtn) return;
-  sep();
+  sep().id = 'toolbar-swap-sep';
   const b = document.createElement('button');
   b.type = 'button';
   b.id = 'toolbar-swap';
@@ -7600,7 +7635,19 @@ function trinoteShowTableCaptions(wrappers, captionTexts) {
 window.editorBridge = {
   setKeyboardToolbarGap(px) {},
   setInsertToolsAtTop(atTop) {
-    applyInsertToolsPlacement(!!atTop);
+    _insertToolsPreferredAtTop = !!atTop;
+    if (!_landscapeTyping) applyInsertToolsPlacement(_insertToolsPreferredAtTop);
+  },
+  // iPhone sideways with the on-screen keyboard up: one toolbar row and a Hide Keyboard button (the note's top bar
+  // is hidden meanwhile), no gap above the keys.
+  setLandscapeTyping(on) {
+    on = !!on;
+    if (on === _landscapeTyping) return;
+    _landscapeTyping = on;
+    document.body.classList.toggle('landscape-typing', on);
+    applyInsertToolsPlacement(on ? false : _insertToolsPreferredAtTop);
+    if (window._refreshKeyboardBodyHeight) window._refreshKeyboardBodyHeight();
+    if (on) setTimeout(scrollEditorRangeIntoView, 60);
   },
   setFloatingChipScrollClearance(px) {
     const n = Math.max(0, Number(px) || 0);
@@ -9548,6 +9595,21 @@ document.addEventListener('click', (e) => {
   }
   attachToolbarPointerCapture(tb);
   attachToolbarPointerCapture(tw);
+})();
+
+// Hide Keyboard (sideways typing): blurring the editor lowers the keyboard, and the note's top bar comes back.
+// The press mustn't take focus first, or iOS would move the caret before the blur.
+(function installHideKeyboardButton() {
+  const b = document.getElementById('toolbar-hide-keyboard');
+  if (!b) return;
+  b.addEventListener('mousedown', function (e) { e.preventDefault(); });
+  b.addEventListener('click', function (e) {
+    e.preventDefault();
+    editor.view.dom.blur();
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+    }
+  });
 })();
 
 try { window.webkit.messageHandlers.editorReady.postMessage('ready'); } catch(e) {}

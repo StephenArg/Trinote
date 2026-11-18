@@ -52,6 +52,13 @@ enum TriliumInlineImageCaching {
         return refs
     }
 
+    /// Same-origin images outside Trilium (`ServerFileImageURLs`) referenced by `<img src>` in `html`.
+    nonisolated static func extractServerFileReferences(from html: String, serverBase: URL?) -> Set<Reference> {
+        Set(ServerFileImageURLs.paths(in: html, serverBase: serverBase).map {
+            Reference(routeType: ServerFileImageURLs.route, entityId: $0)
+        })
+    }
+
     /// Rewrites Trilium image attributes into URLs the read-only `WKWebView` can actually load.
     ///
     /// Attachments become `trinote-img://` references served by `TriliumImageSchemeHandler`, which needs no
@@ -60,7 +67,40 @@ enum TriliumInlineImageCaching {
     /// content is not image bytes, and the read-only view card-wraps those instead of rendering them, a
     /// decision that can only be made with the bytes in hand. Those are still resolved (once per reference,
     /// a bounded number of fetches in flight) and rewritten to `trinote-img://` off the main actor.
+    ///
+    /// With `serverFileBase`, same-origin images outside Trilium (`/media/x.png`) become `trinote-img://server/…`
+    /// references too, loaded lazily like attachments; `serverFileVersion` is the pull-to-refresh generation.
+    /// Without it (local transfer bundles), those `src` values are left as written.
     static func inlineAttachmentImages(
+        in html: String,
+        client: (any TriliumClientProtocol)?,
+        persistence: PersistenceManager,
+        serverProfileId: String,
+        sourceNoteId: String,
+        parentNoteIds: [String],
+        serverFileBase: URL? = nil,
+        serverFileVersion: Int = 0
+    ) async -> String {
+        let rewritten = await inlineTriliumImages(
+            in: html,
+            client: client,
+            persistence: persistence,
+            serverProfileId: serverProfileId,
+            sourceNoteId: sourceNoteId,
+            parentNoteIds: parentNoteIds
+        )
+        guard let serverFileBase, rewritten.containsASCIICaseInsensitive("<img") else { return rewritten }
+        return await Task.detached(priority: .userInitiated) {
+            ServerFileImageURLs.rewriteImageSources(
+                in: rewritten,
+                serverBase: serverFileBase,
+                version: serverFileVersion,
+                keepingOriginal: false
+            )
+        }.value
+    }
+
+    private static func inlineTriliumImages(
         in html: String,
         client: (any TriliumClientProtocol)?,
         persistence: PersistenceManager,
@@ -229,14 +269,17 @@ enum TriliumInlineImageCaching {
         persistence: PersistenceManager,
         serverProfileId: String,
         sourceNoteId: String? = nil,
-        parentNoteIds: [String] = []
+        parentNoteIds: [String] = [],
+        refetch: Bool = false
     ) async -> Data? {
-        if let cached = plausibleCachedImage(
+        let cached = plausibleCachedImage(
             entityId: entityId,
             entityType: routeType,
             serverProfileId: serverProfileId,
             persistence: persistence
-        ) {
+        )
+        // `refetch` (pull-to-refresh on server files) downloads first and keeps the cached copy if that fails.
+        if let cached, !(refetch && client != nil) {
             Log.api.debug("Image cache hit: \(routeType)/\(entityId)")
             return cached
         }
@@ -247,7 +290,7 @@ enum TriliumInlineImageCaching {
             parentNoteIds: parentNoteIds,
             serverProfileId: serverProfileId
         ) {
-            return nil
+            return cached
         }
 
         if let data = await downloadAndCache(
@@ -261,7 +304,7 @@ enum TriliumInlineImageCaching {
         ) {
             return data
         }
-        return nil
+        return cached
     }
 
     /// Downloads and caches a single reference when not already cached. Returns true when plausible bytes are stored.
@@ -421,6 +464,23 @@ enum TriliumInlineImageCaching {
         maxBytes: Int? = nil
     ) async -> Data? {
         do {
+            if routeType.lowercased() == ServerFileImageURLs.route {
+                let data = try await client.getServerFile(path: entityId)
+                // A login page or error document is not image bytes, so it is neither cached nor shown.
+                guard data.isPlausibleInlineImagePayload else { return nil }
+                persistPlausibleImage(
+                    entityId: entityId,
+                    entityType: ServerFileImageURLs.route,
+                    data: data,
+                    serverProfileId: serverProfileId,
+                    persistence: persistence,
+                    sourceNoteId: sourceNoteId,
+                    parentNoteIds: parentNoteIds,
+                    maxBytes: maxBytes
+                )
+                return data
+            }
+
             if routeType.lowercased() == "attachments" {
                 let data = try await client.getAttachmentContent(entityId)
                 persistPlausibleImage(

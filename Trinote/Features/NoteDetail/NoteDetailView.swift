@@ -126,6 +126,7 @@ struct NoteDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.noteWorkspace) private var noteWorkspace
     @Environment(\.opensNotesOnNotesTab) private var opensNotesOnNotesTab
     @State private var activeNoteId: String
@@ -245,6 +246,11 @@ struct NoteDetailView: View {
     @State private var editorSaveCancelScrollBaselineReady = false
     /// True while the table context toolbar is visible in the editor.
     @State private var editorTableToolsVisible = false
+    /// The text editor has the on-screen keyboard (it says so; a hardware keyboard doesn't count).
+    @State private var richTextEditorHoldsKeyboard = false
+    /// The on-screen keyboard is up while a Code or Markdown note is being edited.
+    @State private var codeEditorKeyboardRaised = false
+    @FocusState private var codeEditorFocused: Bool
     /// After typing activity, show the save chip again after this delay (unless scroll/table logic overrides).
     @State private var editorSaveChipIdleWorkItem: DispatchWorkItem?
     /// Ignore `editorTypingActivity` until this time (avoids hiding the chip from ProseMirror init updates).
@@ -1108,6 +1114,18 @@ struct NoteDetailView: View {
         NoteEditorSaving.savesWhenLeaving(autosave: noteEditorAutosave, backButtonSaves: noteEditorBackButtonSaves)
     }
 
+    /// Typing sideways on an iPhone with the on-screen keyboard up, in the text, Code or Markdown editor: the note's
+    /// top bar is hidden (the keyboard leaves only a strip of note above it) until the keyboard goes down.
+    private var isLandscapeTyping: Bool {
+        guard LandscapeTyping.appliesTo(verticalSizeClass: verticalSizeClass),
+              let vm = viewModel, vm.isEditing, !vm.needsProtectedSession, let note = vm.note else { return false }
+        switch note.type {
+        case .text: return richTextEditorHoldsKeyboard
+        case .code, .markdown: return codeEditorFocused && codeEditorKeyboardRaised
+        default: return false
+        }
+    }
+
     /// Interactive back-swipe fights pan/zoom on full-bleed canvases (mind map, geo map) and edit surfaces.
     private var shouldBlockNavigationPopGesture: Bool {
         if isTabBarReordering { return true }
@@ -1499,6 +1517,7 @@ struct NoteDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationBarBackButtonHidden(viewModel?.isEditing == true)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(isLandscapeTyping ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
             if viewModel?.isEditing == true, onClose == nil {
                 ToolbarItem(placement: .topBarLeading) {
@@ -2159,7 +2178,7 @@ struct NoteDetailView: View {
             }
         }
         .animation(.easeInOut(duration: 0.22), value: findControl.isPresented)
-        .refreshable { await vm.refresh(force: true) }
+        .refreshable { await vm.refreshFromPull() }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if findControl.isPresented {
                 FindOnPageBar(control: findControl)
@@ -2731,6 +2750,7 @@ struct NoteDetailView: View {
         }
     }
 
+    /// The note's path above its title. Each ancestor opens that note, like a link; the note itself is the last crumb.
     @ViewBuilder
     private func breadcrumbsBar(_ vm: NoteDetailViewModel) -> some View {
         // Drop synthetic "Root" — it’s on every note. Hide entirely for top-level notes (only self left).
@@ -2740,21 +2760,32 @@ struct NoteDetailView: View {
                 HStack(spacing: 4) {
                     ForEach(crumbs) { crumb in
                         if crumb.noteId != vm.noteId {
-                            Text(crumb.title)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Button {
+                                openLinkedNote(crumb.noteId)
+                            } label: {
+                                Text(crumb.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    // The bar's full height (and a little to each side) takes the tap, not just the text.
+                                    .padding(.vertical, 6)
+                                    .padding(.horizontal, 2)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .hoverEffect(.highlight)
                             Image(systemName: "chevron.right")
                                 .font(.caption2)
                                 .foregroundStyle(.quaternary)
+                                .accessibilityHidden(true)
                         } else {
                             Text(crumb.title)
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.primary)
+                                .padding(.vertical, 6)
                         }
                     }
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 6)
             }
             .background(.bar)
         }
@@ -2954,7 +2985,8 @@ struct NoteDetailView: View {
                 },
                 findControl: findControl,
                 taskStates: TaskStateWebConfig.forNote(store: appState.taskStates, isMarkdown: false),
-                layoutCacheKey: vm.serverProfileId.map { "\($0)/\(note.noteId)" }
+                layoutCacheKey: vm.serverProfileId.map { "\($0)/\(note.noteId)" },
+                detectsData: true
             ))
         case .mermaid:
             guard let source = vm.contentString else { return AnyView(EmptyView()) }
@@ -3521,7 +3553,11 @@ struct NoteDetailView: View {
                 hidesSaveButton: !showsEditorSaveButton(vm),
                 linkPreviews: vm.linkPreviewSupport,
                 contentBlocks: TriliumServerCompatibility.supportsContentBlocks(appState.serverAppInfo),
-                taskStates: TaskStateWebConfig.forNote(store: appState.taskStates, isMarkdown: false)
+                taskStates: TaskStateWebConfig.forNote(store: appState.taskStates, isMarkdown: false),
+                landscapeTyping: isLandscapeTyping,
+                onHoldsKeyboardChanged: { holds in
+                    withAnimation(.easeInOut(duration: 0.25)) { richTextEditorHoldsKeyboard = holds }
+                }
             )
             // Fill remaining height so the WKWebView isn’t vertically compressed in a way that clips
             // the HTML toolbar when the keyboard steals space (minHeight: 400 overflowed the layout).
@@ -3582,6 +3618,8 @@ struct NoteDetailView: View {
         }
         .onDisappear {
             cancelEditorSaveChipIdleShowTask()
+            // The editor's gone with whatever keyboard it had; the reading view keeps its top bar.
+            richTextEditorHoldsKeyboard = false
         }
         .fileImporter(
             isPresented: $showEditorFilePicker,
@@ -4550,7 +4588,7 @@ struct NoteDetailView: View {
             }
         }
         .refreshable {
-            await vm.refresh(force: true)
+            await vm.refreshFromPull()
             geoMapLayersRevision &+= 1
             loadGeoMapData(vm: vm, note: mapParentNote, force: true)
         }
@@ -5045,7 +5083,8 @@ struct NoteDetailView: View {
         let mode = isMarkdown ? markdownEditorMode : .source
         ZStack(alignment: .bottomTrailing) {
             VStack(spacing: 0) {
-                if isMarkdown {
+                // Sideways with the keyboard up the picker would take a third of what's left; it's back with the keyboard down.
+                if isMarkdown && !isLandscapeTyping {
                     MarkdownViewModePicker(mode: markdownEditorModeBinding, modes: MarkdownViewMode.editingModes)
                         .padding(.horizontal)
                         .padding(.vertical, 8)
@@ -5072,9 +5111,27 @@ struct NoteDetailView: View {
                     .transition(.scale(scale: 0.88).combined(with: .opacity))
                     .zIndex(2)
             }
+
+            // The top bar (Back, ⋯) is hidden while typing sideways; lowering the keyboard brings it back.
+            if isLandscapeTyping {
+                HideKeyboardButton { codeEditorFocused = false }
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 10)
+                    .transition(.opacity)
+                    .zIndex(3)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(Self.editorSaveButtonAnimation, value: showsEditorSaveButton(vm))
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            let raised = LandscapeTyping.softwareKeyboardRaised(after: note)
+            guard raised != codeEditorKeyboardRaised else { return }
+            withAnimation(.easeInOut(duration: 0.25)) { codeEditorKeyboardRaised = raised }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            guard codeEditorKeyboardRaised else { return }
+            withAnimation(.easeInOut(duration: 0.25)) { codeEditorKeyboardRaised = false }
+        }
         .onAppear {
             editorSaveCancelScrollBaselineReady = false
             lastEditorScrollOffsetY = 0
@@ -5086,6 +5143,7 @@ struct NoteDetailView: View {
         }
         .onDisappear {
             cancelEditorSaveChipIdleShowTask()
+            codeEditorKeyboardRaised = false
         }
         .onChange(of: vm.editableContent) { _, body in
             handleEditorSaveChipTypingActivity()
@@ -5099,6 +5157,7 @@ struct NoteDetailView: View {
         return ZStack(alignment: .topLeading) {
             TextEditor(text: $vm.editableContent)
                 .font(.system(.body, design: .monospaced))
+                .focused($codeEditorFocused)
                 .padding(.horizontal, 8)
                 .scrollContentBackground(.hidden)
                 .contentMargins(

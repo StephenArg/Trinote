@@ -6,6 +6,32 @@ private struct SubTreeTarget: Hashable {
     let title: String
 }
 
+/// Settings → Tree View → Display Density, as in Trilium's tree settings. Relaxed (the default) is the tree as it
+/// always was: separator lines and roomy rows. Dense drops the lines and most of the space above and below each title.
+enum TreeDisplayDensity: String, CaseIterable, Identifiable {
+    case relaxed
+    case dense
+
+    static let storageKey = "treeDisplayDensity"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .relaxed: String(localized: "Relaxed", comment: "Settings: tree display density with roomy rows and separator lines")
+        case .dense: String(localized: "Dense", comment: "Settings: tree display density with tight rows and no separator lines")
+        }
+    }
+
+    /// Space above and below a row's content.
+    var rowVerticalInset: CGFloat { self == .dense ? 2 : 8 }
+    /// Height of a row's chevron and + buttons, which set the row's height.
+    var rowButtonHeight: CGFloat { self == .dense ? 28 : 32 }
+    /// The List's minimum row height (its default is 44, taller than a dense row).
+    var minimumRowHeight: CGFloat { self == .dense ? 28 : 44 }
+    var showsSeparators: Bool { self == .relaxed }
+}
+
 private struct NoteEditTarget: Hashable {
     let noteId: String
     let title: String
@@ -178,6 +204,7 @@ struct TreeView: View {
         }
     }
     @AppStorage("highlightCurrentNoteInTree") private var highlightCurrentNoteInTree: Bool = true
+    @AppStorage(TreeDisplayDensity.storageKey) private var displayDensity: TreeDisplayDensity = .relaxed
     @AppStorage("useCustomTreeColors") private var useCustomTreeColors: Bool = false
     @AppStorage("useTriliumNoteColors") private var useTriliumNoteColors: Bool = true
     @AppStorage("treeLightTextColor") private var treeLightTextColor: String = "#1c1c1e"
@@ -1607,6 +1634,7 @@ struct TreeView: View {
                 }
             }
             .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, displayDensity.minimumRowHeight)
             .scrollContentBackground(.hidden)
             .refreshable { await refreshWithSync() }
             .background(treeChromeBackground)
@@ -1719,6 +1747,7 @@ struct TreeView: View {
             isSelectMode: isSelectMode,
             isSelected: selectedIds.contains(noteId),
             forceInlineExpand: isSelectMode,
+            buttonHeight: displayDensity.rowButtonHeight,
             onSelect: { note, parentBranchId in
                 if isSelectMode {
                     toggleNoteSelection(note.noteId)
@@ -1809,8 +1838,14 @@ struct TreeView: View {
         .if(paneWorkspace != nil && !isSelectMode && flat.node.note.noteId != TriliumTreeConstants.rootNoteId) { view in
             view.itemProvider { treeNoteDrag(for: flat).itemProvider() }
         }
-        .listRowInsets(EdgeInsets(top: 8, leading: leading, bottom: 8, trailing: 16))
+        .listRowInsets(EdgeInsets(
+            top: displayDensity.rowVerticalInset,
+            leading: leading,
+            bottom: displayDensity.rowVerticalInset,
+            trailing: 16
+        ))
         .listRowBackground(treeRowBackground(isHighlighted: isHighlighted))
+        .listRowSeparator(displayDensity.showsSeparators ? .automatic : .hidden)
         .listRowSeparatorTint(Color(.separator))
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
     }
@@ -1863,6 +1898,8 @@ struct TreeNodeRow: View {
     var isSelected: Bool = false
     /// When true, expand/collapse inline even past `TriliumTreeConstants.maxInlineDepth` (used by tree multi-select).
     var forceInlineExpand: Bool = false
+    /// Height of the chevron and + buttons, which set the row's height (`TreeDisplayDensity.rowButtonHeight`).
+    var buttonHeight: CGFloat = TreeDisplayDensity.relaxed.rowButtonHeight
     let onSelect: (NoteItem, String) -> Void
     let onDrillDown: (String, String) -> Void
     /// Set to show a "+" at the row's trailing edge that makes a child of this note (Trilium's hover button);
@@ -1909,7 +1946,7 @@ struct TreeNodeRow: View {
                     Image(systemName: "plus.circle")
                         .font(.body)
                         .foregroundStyle(.tertiary)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 32, height: buttonHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
@@ -1918,7 +1955,7 @@ struct TreeNodeRow: View {
                 Image(systemName: "chevron.right")
                     .font(.caption2)
                     .foregroundStyle(.quaternary)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 32, height: buttonHeight)
             }
         }
     }
@@ -1947,7 +1984,7 @@ struct TreeNodeRow: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .frame(width: 32, height: 32)
+                .frame(width: 32, height: buttonHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)

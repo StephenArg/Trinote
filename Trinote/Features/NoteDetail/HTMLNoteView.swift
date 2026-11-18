@@ -48,6 +48,9 @@ struct HTMLNoteView: View {
     var collectionRowExpand: ((String) async -> String?)? = nil
     /// A collection list row was opened or closed in the page.
     var onCollectionRowToggled: ((_ noteId: String, _ expanded: Bool) -> Void)? = nil
+    /// Underline phone numbers, addresses and tracking numbers and make them open the phone, Maps or the carrier's
+    /// page, when the reader's setting is on (see `DetectedDataSettings`).
+    var detectsData: Bool = false
 
     /// Height the body starts at until the page reports its own, when no remembered height fits.
     static let placeholderHeight: CGFloat = 200
@@ -69,7 +72,14 @@ struct HTMLNoteView: View {
     @AppStorage("customLightTextColor") private var customLightTextColor: String = "#1c1c1e"
     @AppStorage("customDarkTextColor") private var customDarkTextColor: String = "#aaaaaa"
     @AppStorage("noteCheckboxReorderEnabled") private var noteCheckboxReorderEnabled: Bool = true
+    @AppStorage(DetectedDataSettings.enabledKey) private var detectedDataEnabled: Bool = DetectedDataSettings.enabledDefault
+    @AppStorage(DetectedDataSettings.mapsAppKey) private var detectedDataMapsApp: String = DetectedDataSettings.MapsApp.apple.rawValue
     @Environment(\.colorScheme) private var colorScheme
+
+    private var dataDetection: DataDetectionConfig? {
+        guard detectsData, detectedDataEnabled else { return nil }
+        return DataDetectionConfig(mapsApp: DetectedDataSettings.MapsApp(rawValue: detectedDataMapsApp) ?? .apple)
+    }
 
     private var themeColors: HTMLThemeColors {
         if let themeOverride { return themeOverride }
@@ -125,7 +135,8 @@ struct HTMLNoteView: View {
             onImagePreview: { payload in fullScreenImage = payload },
             inPlaceRevision: inPlaceRevision,
             collectionRowExpand: collectionRowExpand,
-            onCollectionRowToggled: onCollectionRowToggled
+            onCollectionRowToggled: onCollectionRowToggled,
+            dataDetection: dataDetection
         )
         .fullScreenCover(item: $fullScreenImage) { payload in
             FullScreenImageViewer(image: payload.image, title: payload.title) {
@@ -200,6 +211,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
     var inPlaceRevision: Int = 0
     var collectionRowExpand: ((String) async -> String?)?
     var onCollectionRowToggled: ((_ noteId: String, _ expanded: Bool) -> Void)?
+    var dataDetection: DataDetectionConfig? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -235,6 +247,9 @@ struct HTMLNoteWebView: UIViewRepresentable {
         contentController.add(handler, name: "debugLog")
         contentController.add(handler, name: "imagePreview")
         contentController.add(handler, name: "collectionRow")
+        contentController.addScriptMessageHandler(
+            DetectedDataMessageHandler(), contentWorld: .page, name: DataDetectionHTML.messageHandlerName
+        )
 
         let config = WKWebViewConfiguration()
         config.userContentController = contentController
@@ -280,6 +295,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
         handler.collectionRowExpand = collectionRowExpand
         handler.onCollectionRowToggled = onCollectionRowToggled
         handler.findControl = findControl
+        handler.dataDetection = dataDetection
         handler.lastAppliedColorScheme = colorScheme
         webView.applyTrinoteAppearanceMode()
         let wrapped = Self.wrapHTML(
@@ -289,7 +305,8 @@ struct HTMLNoteWebView: UIViewRepresentable {
             listInteractionEnabled: listInteractionEnabled,
             taskStates: taskStates,
             collapsibleReorderEnabled: collapsibleReorderEnabled,
-            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
+            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
+            dataDetection: dataDetection
         )
         handler.beginPage(wrapped, layoutCacheKey: layoutCacheKey)
         handler.lastSizedReportedHeight = reportedHeight
@@ -342,11 +359,13 @@ struct HTMLNoteWebView: UIViewRepresentable {
             || collapsibleReorderEnabled != coordinator.collapsibleReorderEnabled
         let listInteractionChanged = listInteractionEnabled != coordinator.listInteractionEnabled
         let cycleChanged = taskStates != coordinator.taskStates
-        guard htmlChanged || themeChanged || reorderChanged || listInteractionChanged || cycleChanged else { return }
+        let detectionChanged = dataDetection != coordinator.dataDetection
+        guard htmlChanged || themeChanged || reorderChanged || listInteractionChanged || cycleChanged || detectionChanged
+        else { return }
 
         // A collection list row opened or closed in the page: the page already shows `html`, so take it as
         // loaded (theme changes and process recovery then reload the rows as they are) without reloading now.
-        if htmlChanged, !themeChanged, !reorderChanged, !listInteractionChanged, !cycleChanged,
+        if htmlChanged, !themeChanged, !reorderChanged, !listInteractionChanged, !cycleChanged, !detectionChanged,
            inPlaceRevision != coordinator.inPlaceRevision {
             coordinator.loadedHTML = html
             coordinator.inPlaceRevision = inPlaceRevision
@@ -354,7 +373,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
             if coordinator.layoutCacheKey != nil {
                 let theme = themeColors
                 let options = (checkboxReorderEnabled, listInteractionEnabled, taskStates,
-                               collapsibleReorderEnabled, collapsibleTogglePersistEnabled)
+                               collapsibleReorderEnabled, collapsibleTogglePersistEnabled, dataDetection)
                 DispatchQueue.main.async { [weak coordinator] in
                     guard let coordinator, coordinator.loadedHTML == html else { return }
                     let page = Self.wrapHTML(
@@ -364,7 +383,8 @@ struct HTMLNoteWebView: UIViewRepresentable {
                         listInteractionEnabled: options.1,
                         taskStates: options.2,
                         collapsibleReorderEnabled: options.3,
-                        collapsibleTogglePersistEnabled: options.4
+                        collapsibleTogglePersistEnabled: options.4,
+                        dataDetection: options.5
                     )
                     coordinator.pageChangedInPlace(page)
                 }
@@ -376,7 +396,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
         // note would collapse `.frame(height:)` while images decode again. The view model bumps
         // `checkboxOnlyRevision` for those patches so this stays O(1).
         let revisionChanged = checkboxOnlyRevision != coordinator.checkboxOnlyRevision
-        if htmlChanged, !themeChanged, !reorderChanged, !listInteractionChanged, !cycleChanged, revisionChanged,
+        if htmlChanged, !themeChanged, !reorderChanged, !listInteractionChanged, !cycleChanged, !detectionChanged, revisionChanged,
            let previous = coordinator.loadedHTML,
            Self.lengthChangeFitsTaskStateChange(previous: previous, incoming: html) {
             coordinator.loadedHTML = html
@@ -385,7 +405,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
                 // The page now matches `html` without reloading; key its remembered height to that, off the toggle's path.
                 let theme = themeColors
                 let options = (checkboxReorderEnabled, listInteractionEnabled, taskStates,
-                               collapsibleReorderEnabled, collapsibleTogglePersistEnabled)
+                               collapsibleReorderEnabled, collapsibleTogglePersistEnabled, dataDetection)
                 DispatchQueue.main.async { [weak coordinator] in
                     guard let coordinator, coordinator.loadedHTML == html else { return }
                     let page = Self.wrapHTML(
@@ -395,7 +415,8 @@ struct HTMLNoteWebView: UIViewRepresentable {
                         listInteractionEnabled: options.1,
                         taskStates: options.2,
                         collapsibleReorderEnabled: options.3,
-                        collapsibleTogglePersistEnabled: options.4
+                        collapsibleTogglePersistEnabled: options.4,
+                        dataDetection: options.5
                     )
                     coordinator.pageChangedInPlace(page)
                 }
@@ -413,6 +434,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
         coordinator.taskStates = taskStates
         coordinator.checkboxOnlyRevision = checkboxOnlyRevision
         coordinator.inPlaceRevision = inPlaceRevision
+        coordinator.dataDetection = dataDetection
         let wrapped = Self.wrapHTML(
             TriliumServerAssetURLs.resolving(in: html, serverBase: baseURL),
             theme: themeColors,
@@ -420,7 +442,8 @@ struct HTMLNoteWebView: UIViewRepresentable {
             listInteractionEnabled: listInteractionEnabled,
             taskStates: taskStates,
             collapsibleReorderEnabled: collapsibleReorderEnabled,
-            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
+            collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
+            dataDetection: dataDetection
         )
         coordinator.beginPage(wrapped, layoutCacheKey: layoutCacheKey)
         container.invalidateIntrinsicContentSize()
@@ -467,6 +490,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
         uc.removeScriptMessageHandler(forName: "debugLog")
         uc.removeScriptMessageHandler(forName: "imagePreview")
         uc.removeScriptMessageHandler(forName: "collectionRow")
+        uc.removeScriptMessageHandler(forName: DataDetectionHTML.messageHandlerName, contentWorld: .page)
     }
 
     /// Guards the revision signal: setting one item's state changes its `checked` and the `<li>`'s state attribute and
@@ -483,7 +507,8 @@ struct HTMLNoteWebView: UIViewRepresentable {
         listInteractionEnabled: Bool = true,
         taskStates: TaskStateWebConfig = .plain,
         collapsibleReorderEnabled: Bool = false,
-        collapsibleTogglePersistEnabled: Bool = false
+        collapsibleTogglePersistEnabled: Bool = false,
+        dataDetection: DataDetectionConfig? = nil
     ) -> String {
         """
         <!DOCTYPE html>
@@ -977,6 +1002,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
         \(LinkPreviewHTML.readingViewSnippet(forBody: body))
         \(CollectionNoteWebStyles.script(forHTML: body))
         \(TaskStateWebConfig.bundledScript.map { "<script>\n\($0)\ntrinoteTaskStates.configure(\(taskStates.json));\n</script>" } ?? "")
+        \(DataDetectionHTML.readingViewSnippet(dataDetection))
         <script>
         window.__trinoteFind = (function() {
             var HIGHLIGHT = 'trinote-find-hit';
@@ -2224,6 +2250,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
         var collectionRowExpand: ((String) async -> String?)?
         var onCollectionRowToggled: ((_ noteId: String, _ expanded: Bool) -> Void)?
         weak var findControl: FindOnPageControl?
+        var dataDetection: DataDetectionConfig?
         var lastAppliedColorScheme: ColorScheme?
         var onNoteLinkTapped: ((String) -> Void)?
         var onNoteJumpLinkTapped: ((String, NoteJumpTarget) -> Void)?
@@ -2369,7 +2396,8 @@ struct HTMLNoteWebView: UIViewRepresentable {
                 listInteractionEnabled: listInteractionEnabled,
                 taskStates: taskStates,
                 collapsibleReorderEnabled: collapsibleReorderEnabled,
-                collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled
+                collapsibleTogglePersistEnabled: collapsibleTogglePersistEnabled,
+                dataDetection: dataDetection
             )
             webView.loadHTMLString(
                 page,
@@ -2504,7 +2532,7 @@ struct HTMLNoteWebView: UIViewRepresentable {
                 // canvas is cross-origin tainted, and re-encoding a full-resolution photo to PNG just to
                 // pass it back over the bridge cost tens of megabytes per tap.
                 if let ref = dict["ref"] as? String,
-                   let reference = TriliumImageScheme.reference(fromURLString: ref) {
+                   let reference = TriliumImageScheme.anyReference(fromURLString: ref) {
                     guard let imageBytes else { return }
                     Task { [weak self] in
                         guard let data = await imageBytes(reference.routeType, reference.entityId),

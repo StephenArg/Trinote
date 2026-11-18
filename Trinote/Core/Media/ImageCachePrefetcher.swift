@@ -63,6 +63,7 @@ final class ImageCachePrefetcher {
         }
 
         let maxImageBytes = OfflineCacheSettings.load(profileId: profileId).maxMediaBodyBytes
+        let serverBase = await client.baseURL
         do {
             let bodies = try persistence.cachedNoteBodies(serverProfileId: profileId)
             var refs: [(TriliumInlineImageCaching.Reference, String, [String])] = []
@@ -77,6 +78,10 @@ final class ImageCachePrefetcher {
                 }
                 guard let html = String(data: content, encoding: .utf8) else { continue }
                 for ref in TriliumInlineImageCaching.extractImageReferences(from: html) {
+                    refs.append((ref, noteId, parentNoteIds))
+                }
+                // Same-origin images outside Trilium (`/media/x.png`), served through the same session.
+                for ref in TriliumInlineImageCaching.extractServerFileReferences(from: html, serverBase: serverBase) {
                     refs.append((ref, noteId, parentNoteIds))
                 }
             }
