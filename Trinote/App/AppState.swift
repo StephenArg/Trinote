@@ -119,7 +119,168 @@ final class AppState {
     /// uploads need). Uploads still running then carry on in the background time left.
     static let backgroundUploadWaitSeconds: Double = 10
 
-    var isOnline: Bool { networkMonitor.isConnected }
+    /// The phone has a network (Wi-Fi, cellular, …). Says nothing about the server.
+    var hasNetwork: Bool { networkMonitor.isConnected }
+
+    /// Whether the active server answered when last checked. False while the phone has a network but the server
+    /// can't be reached (a VPN that is off, a server that is down): the app then works from its cache, as it does
+    /// with no network. Set by the session checks (`checkServerAndCatchUp`, launch, `refreshTriliumSession`).
+    private(set) var serverReachable = true
+
+    /// The phone has a network and the server is answering.
+    var isOnline: Bool { hasNetwork && serverReachable }
+
+    /// How long a session check waits for the server before calling it unreachable.
+    static let serverCheckSeconds: TimeInterval = 12
+    /// Seconds before each re-check while the server can't be reached and the app is open; the last one repeats.
+    static var serverRetryDelays: [TimeInterval] = [5, 10, 20, 40, 60]
+
+    @ObservationIgnored private var isCheckingServer = false
+    /// Bumped to end the running retry loop (a loop only carries on while it holds the current value).
+    @ObservationIgnored private var serverRetryGeneration = 0
+    @ObservationIgnored private var serverRetryLoopRunning = false
+    @ObservationIgnored private var isInBackground = false
+    @ObservationIgnored private var pathCheckDebounce: Task<Void, Never>?
+
+    /// The server answered (even with an error): leave cache-only mode.
+    func markServerReachable() {
+        stopServerRetryLoop()
+        if let profileId = activeProfile?.id {
+            ServerReachabilityMemory.remember(unreachable: false, profileId: profileId)
+        }
+        guard !serverReachable else { return }
+        serverReachable = true
+        Log.auth.info("Server is answering again")
+        // Both are skipped while the server can't be reached, so a launch that began that way has neither.
+        if isAuthenticated {
+            Task { await self.refreshAIConfig() }
+            Task { await self.refreshTaskStates() }
+        }
+    }
+
+    /// A session check couldn't connect: work from the cache until a later check gets an answer.
+    func markServerUnreachable() {
+        if let profileId = activeProfile?.id {
+            ServerReachabilityMemory.remember(unreachable: true, profileId: profileId)
+        }
+        if serverReachable {
+            serverReachable = false
+            Log.auth.info("Server can't be reached; working from the cache")
+        }
+        startServerRetryLoopIfNeeded()
+    }
+
+    /// Starts from what the last check of this server found (see `ServerReachabilityMemory`).
+    private func resetServerReachability(profileId: String) {
+        stopServerRetryLoop()
+        serverReachable = !ServerReachabilityMemory.wasUnreachable(profileId: profileId)
+    }
+
+    /// Records a failed session check: a connection error means the server can't be reached, an answer (a refused
+    /// sign-in, an HTTP error) means it can. Anything else leaves things as they are.
+    private func noteServerCheckFailed(_ apiError: APIError) {
+        if apiError.isNetworkError {
+            markServerUnreachable()
+        } else if apiError.isAnswerFromServer {
+            markServerReachable()
+        }
+    }
+
+    private func stopServerRetryLoop() {
+        serverRetryGeneration &+= 1
+        serverRetryLoopRunning = false
+    }
+
+    /// While the server can't be reached and the app is open, asks again after `serverRetryDelays`.
+    private func startServerRetryLoopIfNeeded() {
+        guard !serverRetryLoopRunning, !isInBackground, !serverReachable else { return }
+        serverRetryLoopRunning = true
+        serverRetryGeneration &+= 1
+        let generation = serverRetryGeneration
+        // Not cancelled to stop it: a check that succeeds stops the loop from inside it, and cancelling would also
+        // cancel the uploads and sync that check goes on to run.
+        Task { @MainActor [weak self] in
+            var attempt = 0
+            while true {
+                let delays = Self.serverRetryDelays
+                let delay = delays.isEmpty ? 60 : delays[min(attempt, delays.count - 1)]
+                attempt += 1
+                try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
+                guard let self, generation == self.serverRetryGeneration, !self.serverReachable else { return }
+                await self.checkServerAndCatchUp()
+            }
+        }
+    }
+
+    /// Asks the server whether the session still stands (`serverCheckSeconds` at most) and records whether it
+    /// answered. An answer after it couldn't be reached, or any answer with `alwaysCatchUp`, is followed by what a
+    /// return to the foreground does: queued changes go up, a quick sync runs and live updates reconnect.
+    /// One check at a time; a call during another returns what is known so far.
+    @discardableResult
+    func checkServerAndCatchUp(alwaysCatchUp: Bool = false) async -> Bool {
+        guard isAuthenticated, let client, let profile = activeProfile else { return false }
+        guard hasNetwork else { return false }
+        guard !isCheckingServer else { return serverReachable }
+        isCheckingServer = true
+        defer { isCheckingServer = false }
+        let wasReachable = serverReachable
+        do {
+            if let tc = client as? TriliumClient {
+                try await restoreSessionWithTimeout(client: tc, seconds: Self.serverCheckSeconds)
+            } else {
+                try await TriliumSessionFactory.restoreSession(of: client, timeout: Self.serverCheckSeconds)
+            }
+            guard activeProfile?.id == profile.id else { return serverReachable }
+            markServerReachable()
+            connectionError = nil
+            lastRefreshed = .now
+            if let tc = client as? TriliumClient {
+                await saveSessionCookies(of: tc, profileId: profile.id, reason: "server check")
+            }
+            if alwaysCatchUp || !wasReachable {
+                await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
+                await runIncrementalSync(maxWaitSeconds: 15)
+                startRealtimeIfPossible()
+            }
+            return true
+        } catch {
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError { return serverReachable }
+            guard activeProfile?.id == profile.id else { return serverReachable }
+            // Still unreachable: the message from when that was found stays.
+            if wasReachable || connectionError == nil || !apiError.isNetworkError {
+                connectionError = apiError.localizedDescription
+            }
+            if apiError.isAuthError { sessionEndedByServer = true }
+            noteServerCheckFailed(apiError)
+            return false
+        }
+    }
+
+    /// A request to the server just failed. When that looks like the server having gone away, check now instead of
+    /// waiting for the next launch, return to the foreground or network change.
+    func serverRequestFailed(_ error: Error) {
+        guard APIError.from(error).isNetworkError else { return }
+        checkServerAfterFailure()
+    }
+
+    private func checkServerAfterFailure() {
+        guard serverReachable, hasNetwork, isAuthenticated, !isCheckingServer else { return }
+        Task { @MainActor in await self.checkServerAndCatchUp() }
+    }
+
+    /// The network changed while staying connected (a VPN turned on or off, Wi-Fi to cellular): the server may have
+    /// come into reach or gone out of it. Waits a moment for the network to settle, then checks.
+    func networkPathChanged() {
+        guard isAuthenticated else { return }
+        pathCheckDebounce?.cancel()
+        pathCheckDebounce = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled, let self else { return }
+            // Its own task: a later network change cancels only the wait above, not a check and catch-up under way.
+            Task { @MainActor in await self.checkServerAndCatchUp() }
+        }
+    }
 
     /// A server search that timed out or couldn't connect: until `until`, search looks on this device first so each
     /// keystroke doesn't wait out another timeout (issue #29).
@@ -146,6 +307,8 @@ final class AppState {
             until: .now.addingTimeInterval(Self.serverSearchBackoffDuration),
             message: message
         )
+        // The search couldn't connect: find out whether the server is gone for everything else too.
+        checkServerAfterFailure()
     }
 
     func clearServerSearchBackoff() {
@@ -178,11 +341,14 @@ final class AppState {
     /// Called when the app enters background.
     /// Starts a short background execution window if a sync is running, and persists cookies.
     func onBackground() async {
+        // No re-checking a server that can't be reached while in the background; the return to the foreground checks.
+        isInBackground = true
+        stopServerRetryLoop()
         localTransfer.onBackground()
         syncManager.beginBackgroundTimeExtensionIfNeeded()
         imageCachePrefetcher.beginBackgroundTimeExtensionIfNeeded()
         // Notes saved as the app left go up before the protected session ends: a protected note can't be saved without it.
-        if isAuthenticated, networkMonitor.isConnected, let pid = activeProfile?.id, hasPendingLocalChanges(serverProfileId: pid) {
+        if isAuthenticated, isOnline, let pid = activeProfile?.id, hasPendingLocalChanges(serverProfileId: pid) {
             beginUploadBackgroundTime()
             await flushPendingLocalChanges(waitingAtMost: Self.backgroundUploadWaitSeconds)
             endUploadBackgroundTime()
@@ -217,7 +383,7 @@ final class AppState {
     /// Reads `protectedSessionTimeout` from the server (`GET /api/options`) and remembers it for the profile.
     @discardableResult
     func refreshServerProtectedSessionTimeout() async -> TimeInterval? {
-        guard networkMonitor.isConnected, isAuthenticated, let client, let profile = activeProfile else {
+        guard isOnline, isAuthenticated, let client, let profile = activeProfile else {
             return serverProtectedSessionTimeout
         }
         do {
@@ -373,7 +539,7 @@ final class AppState {
     /// batched `tree/load` requests, writes them to the cache and redraws the tree. Sync stores these titles
     /// encrypted, and unlocking used to refresh only the notes around the one the password was entered for.
     func refreshProtectedNoteTitles(noteIds: [String]? = nil) async {
-        guard protectedSessionActive, networkMonitor.isConnected, let client, let profileId = activeProfile?.id else { return }
+        guard protectedSessionActive, isOnline, let client, let profileId = activeProfile?.id else { return }
         let ids = noteIds ?? ((try? persistence.cachedProtectedNoteIds(serverProfileId: profileId)) ?? [])
         guard !ids.isEmpty else { return }
         var titles: [String: String] = [:]
@@ -423,7 +589,7 @@ final class AppState {
     /// Waits until the sync task finishes or `maxWaitSeconds` elapses so callers (e.g. tree reload) see fresh data.
     /// - Parameter downloadChangedBodies: Pass `false` for pull-to-refresh / tree toolbar: metadata updates only; bodies load on note open.
     func runIncrementalSync(maxWaitSeconds: TimeInterval = 180, downloadChangedBodies: Bool = true) async {
-        guard networkMonitor.isConnected else { return }
+        guard isOnline else { return }
         guard let client, let profile = activeProfile else { return }
         guard let iid = try? await keychain.loadTriliumInstanceId(forServer: profile.id) else { return }
         self.syncManager.incrementalSync(
@@ -437,7 +603,7 @@ final class AppState {
 
     /// Vault-wide tree walk + body download (same as Settings → Full Sync). Used on cold launch.
     func runFullSync(maxWaitSeconds: TimeInterval = 0) async {
-        guard networkMonitor.isConnected else { return }
+        guard isOnline else { return }
         guard let client, let profile = activeProfile else { return }
         let instanceId = try? await keychain.loadTriliumInstanceId(forServer: profile.id)
         imageCachePrefetcher.cancel()
@@ -459,6 +625,7 @@ final class AppState {
             } else {
                 try await client.restoreSession()
             }
+            markServerReachable()
             connectionError = nil
             lastRefreshed = .now
             if let tc = client as? TriliumClient, let profile = activeProfile {
@@ -469,6 +636,7 @@ final class AppState {
             let apiError = APIError.from(error)
             if case .cancelled = apiError { return false }
             connectionError = apiError.localizedDescription
+            noteServerCheckFailed(apiError)
             Log.auth.warning("Trilium session refresh failed: \(error)")
             return false
         }
@@ -595,7 +763,7 @@ final class AppState {
     }
 
     func flushPendingNoteCreationsIfPossible(assumeSessionIsReady: Bool = false) async {
-        guard networkMonitor.isConnected,
+        guard isOnline,
               let client,
               let profile = activeProfile
         else { return }
@@ -827,7 +995,7 @@ final class AppState {
 
     /// Pushes queued title changes (`PendingNotePatch`) to the server.
     func flushPendingNotePatchesIfPossible(assumeSessionIsReady: Bool = false) async {
-        guard networkMonitor.isConnected,
+        guard isOnline,
               let client,
               let profile = activeProfile
         else { return }
@@ -900,7 +1068,7 @@ final class AppState {
 
     /// Pushes queued note deletions (`PendingNoteDeletion`) to the server. Treats 404 (already gone) as success.
     func flushPendingNoteDeletionsIfPossible(assumeSessionIsReady: Bool = false) async {
-        guard networkMonitor.isConnected,
+        guard isOnline,
               let client,
               let profile = activeProfile
         else { return }
@@ -954,7 +1122,7 @@ final class AppState {
 
     /// Applies queued tree moves (`PendingBranchMove`) after offline note creations (branch ids may remap).
     func flushPendingBranchMovesIfPossible(assumeSessionIsReady: Bool = false) async {
-        guard networkMonitor.isConnected,
+        guard isOnline,
               let client,
               let profile = activeProfile
         else { return }
@@ -1002,7 +1170,7 @@ final class AppState {
     /// Pushes bodies queued while offline (`PendingNoteBodyUpload`) after `restoreSession` has obtained CSRF.
     /// - Parameter assumeSessionIsReady: Set `true` when this is called immediately after `restoreSession` / login so we don’t repeat a network round-trip.
     func flushPendingNoteBodyUploadsIfPossible(assumeSessionIsReady: Bool = false) async {
-        guard networkMonitor.isConnected,
+        guard isOnline,
               let client,
               let profile = activeProfile
         else { return }
@@ -1207,7 +1375,7 @@ final class AppState {
 
     /// Uploads attachments queued from local note transfer after the owning note has a server id.
     func flushPendingAttachmentImportsIfPossible(assumeSessionIsReady: Bool = false) async {
-        guard networkMonitor.isConnected,
+        guard isOnline,
               let client,
               let profile = activeProfile
         else { return }
@@ -1462,7 +1630,7 @@ final class AppState {
     /// Re-reads the server's version (`/api/app-info`) for the `TriliumServerCompatibility` gates, which otherwise
     /// only refresh with the session. A server upgraded while Trinote stays open is picked up here.
     func refreshServerAppInfo() async {
-        guard networkMonitor.isConnected, let client else { return }
+        guard isOnline, let client else { return }
         do {
             let info = try await client.getAppInfo()
             if info.appVersion != serverAppInfo?.appVersion {
@@ -1490,7 +1658,7 @@ final class AppState {
     /// after every option write. A failed read keeps the last reading. API keys never leave the parse.
     @discardableResult
     func refreshAIConfig() async -> TriliumAIConfig? {
-        guard networkMonitor.isConnected, isAuthenticated, let client, let profile = activeProfile else { return aiConfig }
+        guard isOnline, isAuthenticated, let client, let profile = activeProfile else { return aiConfig }
         do {
             let options = try await client.getOptions()
             guard activeProfile?.id == profile.id else { return aiConfig }
@@ -1510,7 +1678,7 @@ final class AppState {
         observeTaskStatesChangedIfNeeded()
         guard let profile = activeProfile else { return }
         taskStates.activate(profileId: profile.id)
-        guard networkMonitor.isConnected, isAuthenticated, let client else { return }
+        guard isOnline, isAuthenticated, let client else { return }
         await taskStates.refresh(client: client, serverInfo: serverAppInfo, profileId: profile.id)
     }
 
@@ -1580,6 +1748,9 @@ final class AppState {
             return
         }
 
+        // Before `isAuthenticated`: a server that couldn't be reached last time starts this launch from the cache
+        // (no waiting on it while the check below runs), and the work `isAuthenticated` starts sees that.
+        resetServerReachability(profileId: profile.id)
         self.isAuthenticated = true
         self.connectionError = nil
         try? persistence.setActiveProfile(profile)
@@ -1601,7 +1772,16 @@ final class AppState {
     private func finishOnlineProfileActivationAfterLaunch(profile: ServerProfile, hadPersistedSessionCookies: Bool) async {
         guard let client = self.client as? TriliumClient else { return }
         do {
-            try await restoreSessionWithTimeout(client: client, seconds: 12)
+            // This is the launch's server check: one set off by a network change meanwhile would only repeat it.
+            isCheckingServer = true
+            do {
+                try await restoreSessionWithTimeout(client: client, seconds: Self.serverCheckSeconds)
+                isCheckingServer = false
+            } catch {
+                isCheckingServer = false
+                throw error
+            }
+            markServerReachable()
             await resumeOrEndProtectedSessionAfterLaunch(profileId: profile.id)
             self.connectionError = nil
             self.lastRefreshed = .now
@@ -1627,6 +1807,8 @@ final class AppState {
             if case .cancelled = apiError { return }
             let canUseCacheOffline = hadPersistedSessionCookies && !apiError.isAuthError && apiError.isNetworkError
             if canUseCacheOffline {
+                // The phone has a network but the server didn't answer: cache only, until a later check reaches it.
+                markServerUnreachable()
                 await enterOfflineCacheMode(profile: profile)
             } else {
                 self.isAuthenticated = false
@@ -1672,6 +1854,7 @@ final class AppState {
             self.client = newClient
             self.activeProfile = profile
             self.protectedSessionActive = false
+            resetServerReachability(profileId: profile.id)
             syncManager.restoreSyncState(profileId: profile.id)
             await enterOfflineCacheMode(profile: profile)
             return
@@ -1682,6 +1865,7 @@ final class AppState {
             self.client = newClient
             self.activeProfile = profile
             self.protectedSessionActive = false
+            markServerReachable()
             await endServerProtectedSessionAndPersistCookies()
             self.isAuthenticated = true
             self.connectionError = nil
@@ -1714,6 +1898,11 @@ final class AppState {
                 self.client = newClient
                 self.activeProfile = profile
                 self.protectedSessionActive = false
+                if apiError.isNetworkError, networkMonitor.isConnected {
+                    markServerUnreachable()
+                } else {
+                    resetServerReachability(profileId: profile.id)
+                }
                 syncManager.restoreSyncState(profileId: profile.id)
                 await enterOfflineCacheMode(profile: profile)
                 return
@@ -1869,6 +2058,8 @@ final class AppState {
         self.client = newClient
         self.activeProfile = profile
         self.protectedSessionActive = false
+        // The sign-in just went through, so the server is answering.
+        markServerReachable()
         self.isAuthenticated = true
         self.connectionError = nil
         self.lastRefreshed = .now
@@ -1926,6 +2117,9 @@ final class AppState {
         lastRefreshed = nil
         serverAppInfo = nil
         aiConfig = nil
+        // Signed out, nothing is checked; the next sign-in or server starts from its own answer.
+        stopServerRetryLoop()
+        serverReachable = true
     }
 
     func signOutAndRemoveProfile(_ profile: ServerProfile) async {
@@ -1938,6 +2132,7 @@ final class AppState {
         }
         try? await keychain.deleteCloudflareAccessCredentials(forServer: profile.id)
         OfflineCacheSettings.remove(profileId: profile.id)
+        ServerReachabilityMemory.forget(profileId: profile.id)
         ProtectedSessionTimeout.forgetServerValue(profileId: profile.id)
         TaskStateStore.forget(profileId: profile.id)
         do {
@@ -1966,27 +2161,11 @@ final class AppState {
         syncManager.endBackgroundTimeExtension()
         shareImport.checkForPendingPayload()
         await enforceProtectedSessionTimeoutIfNeeded()
-        guard isAuthenticated, let client, let profile = activeProfile else { return }
-        guard networkMonitor.isConnected else { return }
-        do {
-            if let tc = client as? TriliumClient {
-                try await restoreSessionWithTimeout(client: tc, seconds: 12)
-            } else {
-                try await client.restoreSession()
-            }
-            connectionError = nil
-            lastRefreshed = .now
-            if let tc = client as? TriliumClient {
-                await saveSessionCookies(of: tc, profileId: profile.id, reason: "foreground")
-            }
-            await flushPendingLocalChangesIfPossible(assumeSessionIsReady: true)
-            await runIncrementalSync(maxWaitSeconds: 15)
-            startRealtimeIfPossible()
-        } catch {
-            let apiError = APIError.from(error)
-            connectionError = apiError.localizedDescription
-            if apiError.isAuthError { sessionEndedByServer = true }
-        }
+        isInBackground = false
+        // Checks the session; an answer is followed by the queued uploads, a quick sync and live updates.
+        await checkServerAndCatchUp(alwaysCatchUp: true)
+        // Stopped while in the background: keep asking if the server is still out of reach.
+        startServerRetryLoopIfNeeded()
     }
 
     /// The server said sessions are ending; only a refused request shows that this one did.

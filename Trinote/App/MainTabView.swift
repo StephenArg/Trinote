@@ -362,6 +362,11 @@ struct MainShellModifiers: ViewModifier {
                     await appState.runIncrementalSync(maxWaitSeconds: 120, downloadChangedBodies: false)
                 }
             }
+            // Still connected, but over a different network (a VPN turned on or off, Wi-Fi to cellular): ask the
+            // server again, since it may only be reachable over one of them.
+            .onChange(of: appState.networkMonitor.pathRevision) { _, _ in
+                appState.networkPathChanged()
+            }
             .onChange(of: appState.shareImport.activationToken) { _, _ in
                 if appState.shareImport.phase != .idle {
                     onShareImportActivated()

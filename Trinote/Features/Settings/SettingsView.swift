@@ -807,14 +807,15 @@ struct SettingsView: View {
     private var connectionSection: some View {
         Section(String(localized: "Connection", comment: "Settings section")) {
             HStack {
-                Label(String(localized: "Network", comment: "Settings connection row"), systemImage: appState.isOnline ? "wifi" : "wifi.slash")
+                // The phone's own network; whether the server answers over it is the row below.
+                Label(String(localized: "Network", comment: "Settings connection row"), systemImage: appState.hasNetwork ? "wifi" : "wifi.slash")
                 Spacer()
                 Text(
-                    appState.isOnline
+                    appState.hasNetwork
                         ? String(localized: "Online (\(appState.networkMonitor.connectionType.rawValue))", comment: "Network status with type")
                         : String(localized: "Offline", comment: "Network status")
                 )
-                    .foregroundStyle(appState.isOnline ? .green : .red)
+                    .foregroundStyle(appState.hasNetwork ? .green : .red)
                     .font(.callout)
             }
 

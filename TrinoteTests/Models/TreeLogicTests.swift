@@ -762,6 +762,18 @@ final class TreeLogicTests: XCTestCase {
         if case .cancelled = APIError.from(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)) {} else {
             XCTFail("Expected cancelled")
         }
+
+        // A connection dropped mid-request and a failed DNS lookup both mean the server can't be reached.
+        XCTAssertTrue(APIError.from(NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)).isNetworkError)
+        XCTAssertTrue(APIError.from(NSError(domain: NSURLErrorDomain, code: NSURLErrorDNSLookupFailed)).isNetworkError)
+    }
+
+    func testOnlyAnswersFromTheServerCountAsReachingIt() {
+        XCTAssertTrue(APIError.unauthorized.isAnswerFromServer)
+        XCTAssertTrue(APIError.serverError(statusCode: 502, message: nil).isAnswerFromServer)
+        XCTAssertFalse(APIError.timeout.isAnswerFromServer)
+        XCTAssertFalse(APIError.noToken.isAnswerFromServer)
+        XCTAssertFalse(APIError.unknown("TLS").isAnswerFromServer)
     }
 
     // MARK: - Helpers

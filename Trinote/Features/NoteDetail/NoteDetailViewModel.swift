@@ -587,6 +587,8 @@ final class NoteDetailViewModel {
                 return
             }
             Log.api.error("Failed to load note: \(error)")
+            // A connection failure here may be the server going out of reach; a check settles it for every screen.
+            appState.serverRequestFailed(error)
             if !hadCachedNote {
                 self.error = apiError.localizedDescription
             }

@@ -244,7 +244,7 @@ final class ShareImportCoordinator {
             let noteType = SharedImportImporter.noteTypeChoices(for: kind).contains(requestedType) ? requestedType : .text
             let needsAttachmentUpload = kind == .file && noteType == .text
             if needsAttachmentUpload {
-                guard appState.networkMonitor.isConnected, appState.client != nil else {
+                guard appState.isOnline, appState.client != nil else {
                     phase = .failed(String(localized: "Cannot upload while offline.", comment: "Share import error"))
                     bumpActivation()
                     return

@@ -115,7 +115,19 @@ actor MockTriliumClient: TriliumClientProtocol {
         isSessionValid = true
     }
 
+    var restoreSessionCalls = 0
+    /// Seconds a session check waits before answering (a slow or unreachable server).
+    var restoreSessionDelaySeconds: TimeInterval = 0
+
+    func setRestoreSessionDelaySeconds(_ seconds: TimeInterval) {
+        restoreSessionDelaySeconds = seconds
+    }
+
     func restoreSession() async throws {
+        restoreSessionCalls += 1
+        if restoreSessionDelaySeconds > 0 {
+            try await Task.sleep(nanoseconds: UInt64(restoreSessionDelaySeconds * 1_000_000_000))
+        }
         _ = try appInfoResult.get()
         isSessionValid = true
     }

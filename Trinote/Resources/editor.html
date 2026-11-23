@@ -2978,6 +2978,7 @@ const TriliumTaskItem = TaskItem.extend({
         li.removeAttribute('title');
       };
       syncState(props.node);
+      let latestNode = props.node;
       li._trinoteGetPos = props.getPos;
       const checkbox = li.querySelector(':scope > label input[type="checkbox"]');
       if (checkbox) {
@@ -2985,6 +2986,10 @@ const TriliumTaskItem = TaskItem.extend({
         checkbox.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopImmediatePropagation();
+          // Once this cancelled click is dispatched, WebKit puts `checked` back to its value from before the tap,
+          // undoing what the node view's update just set, so the box (drawn from `:checked`) would keep showing
+          // the old state. Set it again from the node afterwards.
+          setTimeout(() => { checkbox.checked = !!latestNode.attrs.checked; }, 0);
           if (!props.editor.isEditable || typeof props.getPos !== 'function') return;
           const pos = props.getPos();
           const node = typeof pos === 'number' ? props.editor.state.doc.nodeAt(pos) : null;
@@ -2997,7 +3002,10 @@ const TriliumTaskItem = TaskItem.extend({
       const parentUpdate = view.update;
       view.update = (node, ...rest) => {
         const ok = parentUpdate ? parentUpdate(node, ...rest) : false;
-        if (ok) syncState(node);
+        if (ok) {
+          latestNode = node;
+          syncState(node);
+        }
         return ok;
       };
       return view;

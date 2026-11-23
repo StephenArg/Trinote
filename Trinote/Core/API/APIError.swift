@@ -80,6 +80,17 @@ enum APIError: LocalizedError, Sendable {
         }
     }
 
+    /// The server itself replied, if only to refuse: it can be reached. (`noToken` is raised on the device, and
+    /// `unknown` covers connection failures that have no case of their own.)
+    var isAnswerFromServer: Bool {
+        switch self {
+        case .unauthorized, .notFound, .serverError, .invalidResponse, .decodingFailed, .rejected, .totpRequired, .totpInvalid:
+            return true
+        default:
+            return false
+        }
+    }
+
     var isRetryable: Bool {
         switch self {
         case .timeout, .networkUnavailable, .connectionRefused:
@@ -105,14 +116,15 @@ enum APIError: LocalizedError, Sendable {
                 return .cancelled
             case NSURLErrorNotConnectedToInternet, NSURLErrorDataNotAllowed:
                 return .networkUnavailable
-            case NSURLErrorTimedOut:
+            // A connection that dropped mid-request (a VPN going off does that) is the server going out of reach.
+            case NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost:
                 return .timeout
             case NSURLErrorServerCertificateUntrusted,
                  NSURLErrorServerCertificateHasBadDate,
                  NSURLErrorServerCertificateNotYetValid,
                  NSURLErrorServerCertificateHasUnknownRoot:
                 return .certificateError
-            case NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost:
+            case NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed:
                 return .connectionRefused
             default:
                 break

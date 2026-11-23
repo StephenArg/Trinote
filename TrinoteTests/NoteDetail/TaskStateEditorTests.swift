@@ -113,4 +113,24 @@ final class TaskStateEditorTests: XCTestCase {
         XCTAssertTrue(out.contains("<li data-trilium-task-state=\"doing\" title=\"Doing\"><label class=\"todo-list__label\"><input type=\"checkbox\" disabled=\"\"><span class=\"todo-list__label__description\">a</span>"), "None → the tap state: \(out)")
         XCTAssertTrue(out.contains("<li><label class=\"todo-list__label\"><input type=\"checkbox\" disabled=\"\"><span class=\"todo-list__label__description\">b</span>"), "the tap state → None: \(out)")
     }
+
+    /// The box is drawn from the input's `checked`. The tap handler cancels the click, and WebKit then puts `checked`
+    /// back to its value from before the click, after the node view has already set the new one, so the box kept
+    /// showing the old state (a ticked box stayed ticked after unticking).
+    func testTappedBoxShowsTheNewState() async throws {
+        try await loadEditor()
+        let html = "<ul class=\"todo-list\">" + item("a") + item("b", checked: true) + "</ul>"
+        _ = try await call("editorBridge.setContent(html);", ["html": html])
+
+        let tap = """
+        const boxes = document.querySelectorAll('.tiptap ul[data-type="taskList"] > li > label input[type="checkbox"]');
+        boxes.forEach((box) => box.click());
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return Array.from(boxes).map((box) => `${box.checked}/${box.closest('li').dataset.checked}`).join(',');
+        """
+        let first = try await call(tap) as? String
+        XCTAssertEqual(first, "true/true,false/false", "unticked → ticked, ticked → unticked")
+        let second = try await call(tap) as? String
+        XCTAssertEqual(second, "false/false,true/true", "and back")
+    }
 }

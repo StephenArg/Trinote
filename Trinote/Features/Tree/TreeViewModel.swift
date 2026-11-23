@@ -33,6 +33,12 @@ final class TreeViewModel {
     @ObservationIgnored private var noteCache: [String: NoteItem] = [:]
     @ObservationIgnored private var branchCache: [String: BranchItem] = [:]
     private var expandedBranches: Set<String> = []
+    /// The tap that last opened each expanded row, by branch id. An answer from the server applies only while its
+    /// tap is still the row's current one, so a late answer to an earlier tap can't reopen or close the row.
+    @ObservationIgnored private var expandRequests: [String: UUID] = [:]
+    /// How long the tree waits for the server before going on with what it has: a row's sub-notes when none are
+    /// held on this device, the check after a row opens, and the session check before a reload.
+    var serverWaitSeconds: TimeInterval = 15
     private var _rootChildren: [TreeNode] = []
     /// When true, `rootChildren` updates rebuild `visibleNodes` without animation (reveal-in-tree).
     private var suppressVisibleNodeAnimation = false
@@ -317,7 +323,8 @@ final class TreeViewModel {
 
         do {
             // Cold launch runs this in parallel with bootstrap’s `restoreSession`; tree APIs need CSRF (`postJSON` csrf: true) or they throw `noToken` while cookies are valid.
-            try await client.restoreSession()
+            // Bounded: a server that can't be reached would otherwise hold the reload (and pull-to-refresh) for minutes.
+            try await TriliumSessionFactory.restoreSession(of: client, timeout: serverWaitSeconds)
             let (parentNote, children) = try await loadTreeFromServerWithTimeout(client: client, seconds: 120)
             error = nil
             rootChildren = children
@@ -346,6 +353,7 @@ final class TreeViewModel {
 
             self.error = apiError.localizedDescription
             Log.api.error("Failed to load tree: \(error)")
+            appState.serverRequestFailed(error)
 
             // Server fetch failed — show the latest cached data (sync may have
             // applied deletions that the stale in-memory tree doesn't reflect).
@@ -530,55 +538,108 @@ final class TreeViewModel {
         let branchId = node.branch.branchId
         if expandedBranches.contains(branchId) {
             expandedBranches.remove(branchId)
+            expandRequests[branchId] = nil
             rootChildren = collapseNode(branchId: branchId, in: rootChildren)
             return
         }
 
         expandedBranches.insert(branchId)
-        rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = true }
+        let request = UUID()
+        expandRequests[branchId] = request
 
-        // Prefer SwiftData (updated by incremental sync) like Trilium’s local Becca/Froca read path.
-        // When online, verify cached branch IDs match the live API so server-deleted children do not reappear.
-        var cached = loadCachedChildren(parentNoteId: node.note.noteId)
-        if let client, appState.isOnline, !cached.isEmpty {
-            if let (_, liveBranches) = try? await client.getNoteWithBranches(node.note.noteId) {
-                let liveBranchIds = Set(liveBranches.map(\.branchId))
-                let cachedBranchIds = Set(cached.map { $0.branch.branchId })
-                if cachedBranchIds != liveBranchIds, let profileId = serverProfileId {
-                    try? persistence.pruneStaleBranchesUnderParent(
-                        parentNoteId: node.note.noteId,
-                        liveBranchIds: liveBranchIds,
-                        serverProfileId: profileId,
-                        hiddenNoteIds: Self.hiddenNoteIds
-                    )
-                    cached = loadCachedChildren(parentNoteId: node.note.noteId)
-                }
-            }
-        }
+        // Sub-notes Trinote already holds (SwiftData, kept current by sync) go on screen at once, as on the note
+        // screen. The server is asked afterwards, so one that is slow or out of reach holds nothing up.
+        let cached = loadCachedChildren(parentNoteId: node.note.noteId)
         if !cached.isEmpty {
             rootChildren = setNodeState(branchId: branchId, in: rootChildren) {
                 $0.children = cached
                 $0.isLoading = false
             }
+            checkExpandedChildrenWithServer(parentNoteId: node.note.noteId, branchId: branchId, request: request)
             return
         }
 
-        guard let client else {
-            expandedBranches.remove(branchId)
-            rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = false }
+        // Nothing held for this row: only the server has its sub-notes.
+        guard let client, appState.isOnline else {
+            closeRowAfterFailedExpand(branchId: branchId, request: request)
             return
         }
 
+        rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = true }
         do {
-            let children = try await loadChildren(of: node.note, client: client)
+            let note = node.note
+            let children = try await withTimeout(seconds: serverWaitSeconds) { @MainActor [self] in
+                try await loadChildren(of: note, client: client)
+            }
+            // Collapsed, or collapsed and opened again, while this was loading: that tap's own load decides.
+            guard expandRequests[branchId] == request else { return }
             rootChildren = setNodeState(branchId: branchId, in: rootChildren) {
                 $0.children = children
                 $0.isLoading = false
             }
         } catch {
             Log.api.error("Failed to expand node: \(error)")
-            expandedBranches.remove(branchId)
-            rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = false }
+            guard expandRequests[branchId] == request else { return }
+            closeRowAfterFailedExpand(branchId: branchId, request: request)
+            let apiError = APIError.from(error)
+            if case .cancelled = apiError { return }
+            self.error = apiError.localizedDescription
+            appState.serverRequestFailed(error)
+        }
+    }
+
+    /// Collapses a row whose sub-notes couldn't be loaded, unless a later tap has taken it over.
+    private func closeRowAfterFailedExpand(branchId: String, request: UUID) {
+        guard expandRequests[branchId] == request else { return }
+        expandRequests[branchId] = nil
+        expandedBranches.remove(branchId)
+        rootChildren = setNodeState(branchId: branchId, in: rootChildren) { $0.isLoading = false }
+    }
+
+    /// After a row opened from the cache: asks the server for its sub-notes and takes out any it no longer has, so
+    /// ones deleted on the server don't stay. Runs on its own; no answer in `serverWaitSeconds` changes nothing.
+    private func checkExpandedChildrenWithServer(parentNoteId: String, branchId: String, request: UUID) {
+        guard let client, appState.isOnline, let profileId = serverProfileId else { return }
+        let seconds = serverWaitSeconds
+        Task { @MainActor [weak self] in
+            guard let (_, liveBranches) = try? await withTimeout(seconds: seconds, operation: {
+                try await client.getNoteWithBranches(parentNoteId)
+            }) else { return }
+            guard let self, self.expandRequests[branchId] == request, self.serverProfileId == profileId else { return }
+            let liveBranchIds = Set(liveBranches.map(\.branchId))
+            let cachedBranchIds = Set(self.loadCachedChildren(parentNoteId: parentNoteId).map { $0.branch.branchId })
+            guard cachedBranchIds != liveBranchIds else { return }
+            _ = try? self.persistence.pruneStaleBranchesUnderParent(
+                parentNoteId: parentNoteId,
+                liveBranchIds: liveBranchIds,
+                serverProfileId: profileId,
+                hiddenNoteIds: Self.hiddenNoteIds
+            )
+            let fresh = self.loadCachedChildren(parentNoteId: parentNoteId)
+            let shown = Self.findTreeNode(branchId: branchId, in: self.rootChildren)?.children ?? []
+            guard fresh.map(\.branch.branchId) != shown.map(\.branch.branchId) else { return }
+            if fresh.isEmpty {
+                // Every sub-note is gone from the server.
+                self.expandRequests[branchId] = nil
+                self.expandedBranches.remove(branchId)
+                self.rootChildren = self.collapseNode(branchId: branchId, in: self.rootChildren)
+                return
+            }
+            self.rootChildren = self.setNodeState(branchId: branchId, in: self.rootChildren) {
+                $0.children = Self.keepingOpenRows(from: $0.children ?? [], in: fresh)
+            }
+        }
+    }
+
+    /// `fresh` rows, each keeping the open sub-rows and spinner of the row it replaces in `old` (same branch).
+    nonisolated static func keepingOpenRows(from old: [TreeNode], in fresh: [TreeNode]) -> [TreeNode] {
+        let oldByBranch = Dictionary(old.map { ($0.branch.branchId, $0) }, uniquingKeysWith: { first, _ in first })
+        return fresh.map { row in
+            guard let before = oldByBranch[row.branch.branchId] else { return row }
+            var kept = row
+            kept.children = before.children
+            kept.isLoading = before.isLoading
+            return kept
         }
     }
 
@@ -595,6 +656,7 @@ final class TreeViewModel {
     func collapseAllExpanded() {
         guard !expandedBranches.isEmpty else { return }
         expandedBranches = []
+        expandRequests.removeAll()
         rootChildren = rootChildren.map {
             TreeNode(branch: $0.branch, note: $0.note, children: nil, isLoading: false)
         }
@@ -948,6 +1010,7 @@ final class TreeViewModel {
         let nodes = loadCachedChildren(parentNoteId: parentNoteId)
         guard !nodes.isEmpty else {
             expandedBranches = []
+            expandRequests.removeAll()
             _rootChildren = []
             rebuildVisibleNodes(animated: false)
             isFromCache = false
@@ -1115,6 +1178,8 @@ final class TreeViewModel {
         for i in result.indices {
             if result[i].branch.branchId == branchId {
                 result[i].children = nil
+                // A row collapsed while its sub-notes were loading must not keep its spinner.
+                result[i].isLoading = false
                 return result
             }
             if let children = result[i].children {

@@ -39,6 +39,10 @@ struct ShortcutSession {
             guard appState.isAuthenticated, let client = appState.client, appState.activeProfile?.id == profileId else {
                 throw ShortcutError.notSignedIn
             }
+            // "Can't be reached" may be old news (found before the app went to the background): ask once first.
+            if appState.hasNetwork, !appState.serverReachable {
+                await appState.checkServerAndCatchUp()
+            }
             guard appState.isOnline else { throw ShortcutError.offline }
             return ShortcutSession(client: client, profileId: profileId, appState: appState)
         }
